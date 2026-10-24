@@ -1,0 +1,64 @@
+# 忽略规则
+# 本项目为 MV3 浏览器扩展（WXT + TypeScript）
+# 详见 docs/04-project-structure.md §〇
+
+# ---------- 依赖 ----------
+node_modules/
+.pnpm-store/
+
+# ---------- 构建产物 ----------
+.output/
+.wxt/
+dist/
+build/
+*.zip
+*.crx
+*.pem
+
+# 本项目只发源码，不发预编译包（docs/03-open-questions.md Q16）
+# 若误提交产物会导致"提供可用侵权工具"的观感，务必保持忽略
+
+# ---------- 测试与覆盖 ----------
+coverage/
+.vitest/
+
+# ---------- 日志与临时文件 ----------
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-error.log*
+*.tsbuildinfo
+
+# ---------- 编辑器 / IDE ----------
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 本地凭据（绝不可提交）----------
+# 注意：不要用 *cookie* 这类宽泛通配去"防凭据"——
+#   1. 会误伤正常代码/文档（例如 docs/decisions/0002-dnr-to-replace-cookie-header.md）
+#   2. 真正泄漏的凭据通常叫 backup.json / export.txt，通配拦不住
+# 防凭据泄漏应靠：代码审查 + 不落盘明文 + pre-commit 扫描，而不是 .gitignore
+*.secret
+.env
+.env.*
+!.env.example
+
+# ---------- AI 工具本地状态 ----------
+# 记忆文件是开发过程中的工作记录，属于本地产物，不入库
+.workbuddy-ai/
+.wbapp_*
+
+# ---------- 本地备份 ----------
+*.bak
+*.orig
