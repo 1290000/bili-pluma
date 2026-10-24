@@ -14,7 +14,7 @@
 
 **不是**破解，不是切 cookie，不是冒充会员。
 
-**当前状态**：设计完成，**代码尚未开始**。唯一阻塞项是 Q2（DNR 并发安全）。
+**当前状态**：设计完成，Q2 已实测通过，**代码尚未开始**（只有 `poc/`）。下一步是 P1-a 脚手架。
 
 ---
 
@@ -55,15 +55,15 @@
 
 ---
 
-## 3. 动手前必须验证的事
+## 3. 动手前必须知道的事
 
-### 3.1 唯一阻塞项：Q2
+### 3.1 Q2 已实测通过，架构不再有阻塞项
 
-**在 Q2 验证通过之前，不要写任何业务代码。**
+**2026-10-25 实测结论：DNR 并发安全。** 180 个并发请求，串号 0，规则残留 0。更重要的发现是**不需要 per-request nonce** —— 白名单请求全都该用同一个播放账号，值全局一致。所以 `dnr.ts` 用**按路径的常驻 session 规则**，不要规则 ID 池、不要每请求 add/remove、不要在 URL 上加 nonce 参数。见 [ADR 0006](./docs/decisions/0006-no-per-request-nonce.md)。
 
-Q2 = DNR 临时规则在并发下会不会用错账号凭据。验证方式：`poc/q2-dnr-concurrency/` 独立扩展，`Promise.all` 并发 20 个不同 Cookie 的请求，检查响应里的凭据标记是否与预期一一对应。**PoC 代码已写完**，怎么加载、怎么判读、结论往哪写，全在该目录的 `README.md` 里。
+**三条硬性配套**（不做就不算实现完）：总开关（凭据失效时能一键停用，否则所有 playurl 一起变未登录）、SW 启动自愈（`sessionRules` 重启即清空）、POST 例外（`/ogv/player/playview` 的 csrf 在 body 里，DNR 改不了，必须 JS 拦截重建）。
 
-**P0 不用 WXT**、不建 `src/`、不引入任何依赖。就是手写 `manifest.json` + `background.js` + `lab.html` / `lab.js` / `lab.css`（MV3 禁止内联 `<script>`，所以逻辑必须拆成独立文件）。
+`poc/q2-dnr-concurrency/` **保留为常驻回归测试**，改 `dnr.ts` 必跑。它不用 WXT、不建 `src/`、零依赖，手写 `manifest.json` + `background.js` + `lab.html`/`lab.js`/`lab.css`（MV3 禁止内联 `<script>`）。
 
 ### 3.2 必须先读再动手的清单
 
@@ -104,8 +104,9 @@ entrypoints/*  →  src/background、src/content  →  src/core  →  src/shared
 ### 4.4 DNR 相关
 
 - 所有 DNR 代码只在 `platform/http/dnr.ts`，对外只暴露 `withCookieFor()`。
-- 加规则 → 请求 → 删规则，**必须包在 `try/finally`**。
-- 每条规则带唯一 nonce，绝不复用。
+- **按白名单路径各建一条常驻 session 规则，不带 nonce。** 不要写成每请求 add/remove，也不要加规则 ID 池（ADR 0006）。
+- 必须实现总开关 + SW 启动自愈重建，否则凭据失效时所有 playurl 一起变未登录。
+- `/ogv/player/playview` 是 POST、csrf 在 body 里，DNR 改不了 —— 它走 JS 拦截重建，不走这里。
 - 改动这个文件后**必须重跑 `poc/q2-dnr-concurrency/`**。
 
 ---

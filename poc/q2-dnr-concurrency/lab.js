@@ -11,11 +11,17 @@ const $ = (sel) => document.querySelector(sel);
 
 const STRATEGY_META = {
   'pool-random-id': { label: 'S1 规则 ID 池 + 随机 nonce', order: 1 },
-  'persistent-id': { label: 'S2 规则 ID 常驻', order: 2 },
+  'persistent-id': { label: 'S2 规则 ID 常驻 + nonce', order: 2 },
   'single-shared': { label: 'S3 全局单条共享规则', order: 3 },
+  'no-nonce-persistent': { label: 'S4 常驻规则 · 无 nonce', order: 4 },
 };
 
-const ALL_STRATEGIES = ['pool-random-id', 'persistent-id', 'single-shared'];
+const ALL_STRATEGIES = [
+  'pool-random-id',
+  'persistent-id',
+  'single-shared',
+  'no-nonce-persistent',
+];
 
 /* ============================================================
  * 基础设施
@@ -273,6 +279,7 @@ function buildVerdict(report) {
   const s1 = s['pool-random-id'];
   const s2 = s['persistent-id'];
   const s3 = s['single-shared'];
+  const s4 = s['no-nonce-persistent'];
   const leak = report.leakedRulesAfter?.count ?? 0;
 
   const ok = (x) => x?.verdict === 'PASS';
@@ -281,49 +288,50 @@ function buildVerdict(report) {
 
   let level, title, body;
 
-  if (noEffect(s1)) {
+  if (noEffect(s1) && noEffect(s4)) {
     level = 'fail';
     title = '结论：DNR 没有生效，需要先修 L1';
     body = [
-      'S1 的回显里完全没有我们的标记，说明规则根本没作用到请求上。',
-      '先点上面的「① 先测 L1」定位问题，不要往下看并发结论 —— 现在这个数字没有意义。',
-      '常见原因：host_permissions 写错、resourceTypes 漏了 xmlhttprequest、httpbin 限流。',
+      '回显里完全没有我们的标记，说明规则根本没作用到请求上。这个数字现在没有意义。',
+      '先点上面的「① 先测 L1」定位问题。常见原因：host_permissions 写错、resourceTypes 漏了 xmlhttprequest、回声服务限流。',
     ];
-  } else if (mismatch(s1) || mismatch(s2)) {
+  } else if (mismatch(s1) || mismatch(s2) || mismatch(s4)) {
     level = 'fail';
     title = '结论：DNR 并发不安全，架构要改';
     body = [
-      '出现了串号 —— 某个请求拿到了别的请求的 Cookie。这是 Pluma 绝对不能接受的：那等于把 B 账号的凭据发给了 A 账号的请求，或者反过来。',
-      '可选出路：① 请求串行化（每次只允许一个代理请求在飞）—— 简单但会拖慢页面；② 放弃 DNR，改用 chrome.debugger 拦截（代价是页面上方常驻"正在调试"提示）；③ 退回本地服务方案。',
+      '出现了串号 —— 某个请求拿到了别的请求的 Cookie。这是 Pluma 绝对不能接受的。',
+      '可选出路：① 请求串行化；② 改用 chrome.debugger 拦截（页面上方会常驻"正在调试"提示）；③ 退回本地服务方案。',
       '无论选哪条，ADR 0002 都要重写，platform/http/dnr.ts 的设计要重做。',
     ];
-  } else if (ok(s1) && mismatch(s3)) {
+  } else if (ok(s4)) {
+    // 关键分支：不用 nonce 也能过，那就不该引入 nonce 的复杂度
     level = 'pass';
-    title = '结论：架构成立，用 S1';
+    title = '结论：架构成立，而且比原设计更简单 —— 用 S4';
     body = [
-      'S1（nonce 化 urlFilter + 规则 ID 池）在并发下没有串号，S3（全局单条共享规则）如预期失败。',
-      '这说明：DNR 的规则匹配是精确的，安全性完全取决于「每条规则只可能命中一个请求」这个前提。所以 dnr.ts 必须强制 nonce 化，并且禁止出现共享 ruleId 的写法 —— 这条要写进代码审查清单。',
-      '下一步：把 S1 的写法固化成 dnr.ts 的 withCookieFor()，并把这套并发测试搬成 CI 里的手工回归用例（它无法用 Vitest 跑）。',
-    ];
-  } else if (ok(s1)) {
-    level = 'pass';
-    title = '结论：架构成立，用 S1';
-    body = [
-      'S1 在并发下没有串号。S3 的结果和预期不同（未出现串号），说明 httpbin 的响应太快，共享规则的改写窗口没被撞上 —— 这不能作为「S3 安全」的证据，只说明 S3 的风险是概率性的，更不该用。',
-      'dnr.ts 采用 S1：nonce 化 urlFilter + 规则 ID 池 + 响应后立即删除。',
+      'S4（一条常驻规则匹配整个路径、值固定、不带 nonce）在并发下全部对号。这说明 per-request nonce 并非必需。',
+      '为什么可以：Pluma 的白名单请求全都该用同一个播放账号，规则的值在整个会话内是全局一致的 —— 不存在"这条规则该给谁"的问题。nonce 原本是为了在多个不同目标之间做区分，而我们没有多个目标。',
+      '所以 dnr.ts 可以砍掉规则 ID 池、砍掉每请求的 add/remove、砍掉 S1 那一整类并发风险。只需要：按白名单路径各建一条常驻 session 规则，凭据刷新时改值，SW 启动时做一次自愈清理。',
+      'S3 的结果也印证了这个方向：共享单条规则时，每轮 20 个请求里只有 1 个拿到凭据、其余 19 个什么也没拿到 —— 失败方式是"静默降级成未登录"，不是"串号"。这个失败模式比串号安全，但仍然不可接受，所以不能省到只剩一条规则。',
     ];
   } else if (ok(s2)) {
-    level = 'partial';
-    title = '结论：改用 S2';
+    level = 'pass';
+    title = '结论：架构成立，用 S2';
     body = [
-      'S1 没拿到干净结果，但 S2（规则常驻、只替换内容）通过了。',
-      'S2 的问题是规则数量写死、必须显式清理，且并发上限等于池大小。如果走这条路，dnr.ts 要在启动时按最大并发预建规则，并在 SW 重启时恢复。',
+      'S4 没过但 S2（规则常驻 + nonce）过了。',
+      'S2 的问题是规则数量写死、必须显式清理。如果走这条路，dnr.ts 要在启动时按最大并发预建规则，并在 SW 重启时恢复。',
+    ];
+  } else if (ok(s1)) {
+    level = 'partial';
+    title = '结论：只有 S1 过，架构成立但要接受复杂度';
+    body = [
+      'S1（nonce 化 urlFilter + 规则 ID 池）通过了，但它最复杂：每次请求都要 addRules / removeRuleIds，还得处理清理失败和 ID 回收。',
+      'S4 没过而 S1 过了，说明这里的规则确实需要 per-request 区分 —— 但这与 Pluma 的语义不符，建议先复测 S4 排除偶然因素。',
     ];
   } else {
     level = 'partial';
     title = '结论：结果不干净，需要复测';
     body = [
-      '没有出现串号，但也没有一个策略拿到全对号的结果。多半是 httpbin 限流或无回显导致的 missing，不是 DNR 的问题。',
+      '没有出现串号，但也没有一个策略拿到全对号的结果。多半是回声服务限流或无回显导致的 missing，不是 DNR 的问题。',
       '先看明细里 verdict 为 missing / unparsable 的条目，再决定是否换 postman-echo 重跑。',
     ];
   }
@@ -465,16 +473,25 @@ async function runStrategy(strategy, { full = false, reset = false } = {}) {
   const t0 = Date.now();
 
   try {
-    const data = await send({ type: 'q2/run', strategies: [strategy], reset });
+    const resp = await send({ type: 'q2/run', strategies: [strategy], reset });
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
+
+    // background 返回的是整份报告，这里要取出本策略那一段
+    const data = resp?.strategies?.[strategy] ?? null;
+    if (!data) {
+      renderStrategyResult(strategy, { error: '报告里没有这个策略的结果' });
+      log(`${STRATEGY_META[strategy].label} 返回了空结果`, 'err');
+      return null;
+    }
+
     renderStrategyResult(strategy, data);
-    const summary = data?.summary ?? {};
+    const summary = data.summary ?? {};
     log(
       `${STRATEGY_META[strategy].label} → ${data.verdict}（对号 ${summary.totalOk}，串号 ${summary.totalMismatch}，` +
         `无回显 ${summary.totalMissing}，报错 ${summary.totalErrored}）· ${secs}s`,
       data.verdict === 'PASS' ? 'ok' : 'err',
     );
-    return data;
+    return resp;
   } catch (e) {
     renderStrategyResult(strategy, { error: e.message });
     log(`${STRATEGY_META[strategy].label} 出错：${e.message}`, 'err');
@@ -513,10 +530,11 @@ async function actionRunAll() {
     // 逐个策略串行跑 —— 并发测并发会让结果无法解读
     for (let i = 0; i < ALL_STRATEGIES.length; i++) {
       const strategy = ALL_STRATEGIES[i];
-      const data = await runStrategy(strategy, { full: true, reset: i === 0 });
-      if (data) {
-        report.strategies[strategy] = data;
-        if (data.config) report.config = data.config;
+      const resp = await runStrategy(strategy, { full: true, reset: i === 0 });
+      if (resp) {
+        const sub = resp.strategies?.[strategy];
+        if (sub) report.strategies[strategy] = sub;
+        if (resp.config) report.config = resp.config;
       }
       await sleep(300);
     }

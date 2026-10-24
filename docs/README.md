@@ -29,10 +29,11 @@
 | ADR | 决策 |
 | --- | --- |
 | [0001](./decisions/0001-use-mv3-pure-extension.md) | 纯 MV3 扩展，不做桌面端（撤回三进程方案） |
-| [0002](./decisions/0002-dnr-to-replace-cookie-header.md) | 用 DNR 换 Cookie 头，不用 debugger（**待 Q2 验证**） |
+| [0002](./decisions/0002-dnr-to-replace-cookie-header.md) | 用 DNR 换 Cookie 头，不用 debugger（✅ Q2 已验证） |
 | [0003](./decisions/0003-gplv3-with-additional-terms.md) | GPL-3.0-only + 第 7 条附加条款 |
 | [0004](./decisions/0004-request-level-identity-proxy.md) | 请求级身份代理，不切 Cookie |
 | [0005](./decisions/0005-adopt-wxt-conventions.md) | 接入 WXT 约定，放弃自定 `src/content/` 结构 |
+| [0006](./decisions/0006-no-per-request-nonce.md) | **不用 per-request nonce**，改为按路径的常驻 DNR 规则 |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 
@@ -63,11 +64,11 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 | 技术选型 | ✅ WXT + TS `^5.9` + Preact（仅 UI）+ 原生 CSS 变量 + Vitest + pnpm |
 | 目录结构 | ✅ 已定（v1.1，遵循 WXT `entrypoints/` 约定） |
 | 实施路线 | ✅ 已定（P0 半天 → P1 骨架 → P2 可用 → P3 完善） |
-| **Q2 DNR 并发验证** | 🟡 **PoC 代码已写完，待跑（`poc/q2-dnr-concurrency/`）** |
+| **Q2 DNR 并发验证** | ✅ **已实测通过**：180 并发请求串号 0、残留 0；结论是**不需要 nonce**（[ADR 0006](./decisions/0006-no-per-request-nonce.md)） |
 | **Q4 番剧边界验证** | ❌ **未做，第二优先级** |
 | 代码 | ❌ 尚未开始（仅 `poc/`） |
 
-**下一步：把 `poc/q2-dnr-concurrency/` 加载进浏览器跑一遍。** 唯一可能推翻架构的未知数，成本约半天，且**独立于主项目**——Q2 失败时沉没成本为零。操作步骤与判读标准见 [`poc/q2-dnr-concurrency/README.md`](../poc/q2-dnr-concurrency/README.md)。
+**下一步：P1-a 脚手架。** Q2 已通过，架构不再有阻塞项。P1 分三个里程碑（脚手架 → 扫码存副账号 → 端到端取流），详见 [`03-open-questions.md`](./03-open-questions.md) 末尾的实施顺序。
 
 ---
 

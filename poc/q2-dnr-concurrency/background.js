@@ -47,7 +47,17 @@ const STRATEGIES = {
   POOL_RANDOM_ID: 'pool-random-id',
   PERSISTENT_ID: 'persistent-id',
   SINGLE_SHARED: 'single-shared',
+  // 探索性：完全不用 nonce，一条常驻规则匹配整个路径，值在一轮内固定不变。
+  // 如果这个能过，说明 per-request nonce 并非必需 —— 那 dnr.ts 可以大幅简化。
+  NO_NONCE_PERSISTENT: 'no-nonce-persistent',
 };
+
+// 默认跑的三个（带 nonce 的对照实验）
+const DEFAULT_STRATEGIES = [
+  STRATEGIES.POOL_RANDOM_ID,
+  STRATEGIES.PERSISTENT_ID,
+  STRATEGIES.SINGLE_SHARED,
+];
 
 // ============================================================
 // 工具
@@ -307,11 +317,81 @@ async function strategySingleShared(tasks) {
   return results;
 }
 
+/**
+ * S4：不用 nonce 的常驻规则（探索性）
+ *
+ * 一条规则匹配整个路径，值在一轮内**固定不变**（所有请求共用同一个凭据）。
+ * 这正好对应 Pluma 的真实情况：白名单里的请求全都该用同一个播放账号，
+ * 值在整个会话内是全局一致的 —— 那就没有"这条规则该给谁"的问题。
+ *
+ * 如果这个能过，per-request nonce 就不是必需品，dnr.ts 可以砍掉规则池、
+ * 砍掉每请求的 add/remove、砍掉 L2 那类并发风险。
+ *
+ * 判据和别的策略不同：所有请求都必须拿到**同一个**固定凭据，所以 index 恒为 0。
+ */
+async function strategyNoNoncePersistent(tasks) {
+  const { concurrency, batch } = tasks;
+  const RULE_ID = 4001;
+
+  // 一轮内只有一个值，所有请求共用
+  const cookie = fakeCookie(batch, 0);
+  const url = `${CFG.ECHO_HOST}${CFG.ECHO_PATH}`;
+
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: [RULE_ID],
+    addRules: [{
+      id: RULE_ID,
+      priority: 1,
+      action: {
+        type: 'modifyHeaders',
+        requestHeaders: [{ header: 'cookie', operation: 'set', value: cookie }],
+      },
+      condition: {
+        // 注意：没有 nonce，只匹配路径
+        urlFilter: `||${ECHO_DOMAIN}${CFG.ECHO_PATH}`,
+        requestDomains: ALLOWED_DOMAINS,
+        resourceTypes: ['xmlhttprequest', 'other'],
+      },
+    }],
+  });
+
+  const runOne = async (index) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), CFG.REQUEST_TIMEOUT_MS);
+    let echoed = null;
+    let error = null;
+    try {
+      // URL 上仍然带一个唯一参数，但那只是给服务端区分用的，规则并不看它
+      const u = withNonce(url, `s4-${batch}-${index}`);
+      const res = await fetch(u, { credentials: CFG.CREDENTIALS, signal: ctrl.signal });
+      const json = await res.json();
+      echoed = extractEchoedCookie(json);
+    } catch (e) {
+      error = e.name === 'AbortError' ? 'timeout' : String(e);
+    } finally {
+      clearTimeout(timer);
+    }
+    // index 恒为 0 —— 所有请求的期望值都是同一个
+    return { index: 0, expect: cookie, echoed, parsed: parseMarker(echoed), error, ruleId: RULE_ID };
+  };
+
+  const results = await Promise.all(
+    Array.from({ length: concurrency }, (_, i) => runOne(i)),
+  );
+
+  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [RULE_ID] });
+  return results;
+}
+
 const STRATEGY_IMPL = {
   [STRATEGIES.POOL_RANDOM_ID]: strategyPoolRandomId,
   [STRATEGIES.PERSISTENT_ID]: strategyPersistentId,
   [STRATEGIES.SINGLE_SHARED]: strategySingleShared,
+  [STRATEGIES.NO_NONCE_PERSISTENT]: strategyNoNoncePersistent,
 };
+
+/** 常驻型策略跑完必须清，否则会污染下一个策略和 L3 判据 */
+const PERSISTENT_TYPES = new Set([STRATEGIES.PERSISTENT_ID, STRATEGIES.NO_NONCE_PERSISTENT]);
 
 // ============================================================
 // 判定
@@ -360,7 +440,7 @@ function judge(results, batch) {
 
 let running = false;
 
-async function runAll(strategies = Object.values(STRATEGIES), { reset = false } = {}) {
+async function runAll(strategies = DEFAULT_STRATEGIES, { reset = false } = {}) {
   if (running) return { error: 'already running' };
   running = true;
 
@@ -385,8 +465,8 @@ async function runAll(strategies = Object.values(STRATEGIES), { reset = false } 
         const results = await impl({ concurrency: CFG.CONCURRENCY, batch });
         rounds.push({ round: batch, stats: judge(results, batch) });
 
-        // S2 不主动删规则，这里显式清一次，避免影响下一轮
-        if (s === STRATEGIES.PERSISTENT_ID) await clearAllSessionRules();
+        // 常驻型策略不主动删规则，这里显式清一次，避免影响下一轮
+        if (PERSISTENT_TYPES.has(s)) await clearAllSessionRules();
         await sleep(200);
       }
 
@@ -439,7 +519,7 @@ async function persistReport(report, { reset = false } = {}) {
   };
 
   // 三个策略都到齐了，才算一次完整会话
-  merged.complete = Object.values(STRATEGIES).every((k) => k in merged.strategies);
+  merged.complete = DEFAULT_STRATEGIES.every((k) => k in merged.strategies);
 
   await chrome.storage.local.set({ lastReport: merged });
 }

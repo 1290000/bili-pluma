@@ -33,33 +33,67 @@ L1 不过，L2 的数字没有意义 —— 先测 L1。
 
 ---
 
-## 3. 三个策略，为什么要测三个
+## 3. 四个策略，为什么要测四个
 
-同一件事有三种写法，并发安全性不同。测完才知道 `dnr.ts` 该用哪种。
+同一件事有四种写法，并发安全性不同。测完才知道 `dnr.ts` 该用哪种。
 
 | 策略 | 写法 | 预期 |
 | --- | --- | --- |
-| **S1** `pool-random-id` | 每次请求前 `addRules` 一条新规则（唯一 ID + 唯一 nonce），响应后立刻删 | **通过**。架构想用的就是它 |
-| **S2** `persistent-id` | 规则 ID 常驻，只替换内容不新增删除 | 通过。代价是规则数写死、必须显式清理 |
-| **S3** `single-shared` | 全局只保留一条规则，每次请求前改写它 | **失败**。这是反例，用来量化"图省事的写法"有多危险 |
+| **S1** `pool-random-id` | 每次请求前 `addRules` 一条新规则（唯一 ID + 唯一 nonce），响应后立刻删 | 通过。最复杂，原设计想用它 |
+| **S2** `persistent-id` | 规则 ID 常驻 + nonce，只替换内容不新增删除 | 通过 |
+| **S3** `single-shared` | 全局只保留一条规则，每次请求前改写它 | **失败**。对照组 |
+| **S4** `no-nonce-persistent` | 一条常驻规则匹配整个路径，**不带 nonce**，值固定 | 通过。**实测后采用的就是它** |
 
-S3 不是候选方案，是**对照组**。没有它，S1 通过只能说明"S1 能用"，不能说明"为什么不能用更简单的写法"。
+S3 是**对照组**。没有它，"S1 通过"只能说明"S1 能用"，不能说明"为什么不能用更简单的写法"。
 
-### 关键设计：nonce 化 urlFilter
+S4 是**关键实验**。它的假设是：Pluma 的白名单请求全都该用同一个播放账号，规则的值在整个会话内全局一致，所以不存在"这条规则该给谁"的问题 —— 那就不需要 per-request nonce。
 
-S1/S2 的安全性完全建立在一条规则只可能命中一个请求上：
+### 两种 urlFilter 的区别
+
+带 nonce（S1/S2/S3）：
 
 ```js
 condition: {
-  urlFilter: `||httpbin.org/anything*pluma_nonce=${nonce}`,  // nonce 每次唯一
+  urlFilter: `||httpbin.org/anything*pluma_nonce=${nonce}`,  // 每次唯一
   requestDomains: ['httpbin.org'],
   resourceTypes: ['xmlhttprequest', 'other'],
 }
 ```
 
-规则靠 URL 里的 nonce 精确锁定单个请求，而不是靠"这条规则刚好在某个时间窗口内存在"。这个约束如果丢了，S1 就退化成了 S3。
+不带 nonce（S4）：
 
-**这条要写进代码审查清单**：`dnr.ts` 里不允许出现不带 nonce 的 urlFilter。
+```js
+condition: {
+  urlFilter: `||httpbin.org/anything`,   // 匹配整个路径
+  requestDomains: ['httpbin.org'],
+  resourceTypes: ['xmlhttprequest', 'other'],
+}
+```
+
+nonce 的作用是**把规则锁定到单个请求**。它解决的是"多个目标之间如何区分"。如果只有一个目标（所有请求都用同一个播放账号），这个区分就没有意义 —— 实测也证明了这一点。
+
+---
+
+## 3.1 实测结果（2026-10-25，Edge，20 并发 × 3 轮）
+
+| 策略 | 对号 | 串号 | 无回显 | 判定 |
+| --- | --- | --- | --- | --- |
+| L1 功能探测（`omit` / `include`） | — | — | — | ✅ 两种模式都能改 |
+| S1 `pool-random-id` | 60/60 | 0 | 0 | ✅ PASS |
+| S2 `persistent-id` | 60/60 | 0 | 0 | ✅ PASS |
+| S3 `single-shared` | 3/60 | **0** | 57 | ⚠️ 每轮仅 1 个请求拿到凭据 |
+| **S4 `no-nonce-persistent`** | **60/60** | **0** | **0** | ✅ **PASS** |
+| L3 回收 | — | — | — | ✅ 0 条残留 |
+
+**结论：不需要 per-request nonce。** 见 [`docs/decisions/0006-no-per-request-nonce.md`](../../docs/decisions/0006-no-per-request-nonce.md)。
+
+S3 的失败方式值得记住：nonce 被并发覆盖后规则对不上任何请求，于是 19/20 的请求**什么凭据都没拿到**，而不是拿错。**nonce 让"串号"结构上不可能发生，代价是规则被覆盖时静默降级成未登录。** 这个失败模式比串号安全，但仍然不可接受。
+
+### 这个 PoC 没有证明的事
+
+- **没测页面发起的请求** —— 所有 fetch 都来自 Service Worker。DNR 的匹配条件是 URL + resourceType，与发起方无关，理论上等价，但没实测。
+- **没测真实 B站 接口**（无登录态、无 WBI、无 POST）。
+- **没测"值在请求飞行途中被改"** —— S4 的值在一轮内固定。凭据刷新时改值会不会影响在途请求，没测。
 
 ---
 
@@ -80,7 +114,7 @@ condition: {
 在测试页上：
 
 1. 点 **「① 先测 L1（单请求）」** —— 只发一个请求，确认 DNR 生效
-2. L1 通过后，点 **「② 跑完整测试（3 策略 × 3 轮）」** —— 180 个请求，约 1-2 分钟
+2. L1 通过后，点 **「② 跑完整测试（4 策略 × 3 轮）」** —— 240 个请求，约 1-2 分钟
 3. 页面会自动生成结论和明细表
 
 也可以点单个策略的按钮分开跑，方便排查。
@@ -118,7 +152,7 @@ httpbin 有速率限制（429）。连续跑多轮容易撞上，撞上了会记
 | `INCLUDE_ONLY` | 只有 include 能改 | **omit 会把整个 Cookie 头连同 DNR 设的值一起剥掉**。`dnr.ts` 只能用 include，并接受"浏览器先带 A 的 cookie、再被 `set` 覆盖"。这条要写进架构文档 |
 | `NONE` | 都不行 | 先修 L1，别往下测 |
 
-如果 L1 显示 `INCLUDE_ONLY`，把 `background.js` 里 `CFG.CREDENTIALS` 改成 `'include'` 再跑并发测试 —— 否则三个策略都会显示 `FAIL_NO_EFFECT`，那个结论是假的。
+如果 L1 显示 `INCLUDE_ONLY`，把 `background.js` 里 `CFG.CREDENTIALS` 改成 `'include'` 再跑并发测试 —— 否则四个策略都会显示 `FAIL_NO_EFFECT`，那个结论是假的。
 
 ### 如果 S1 是 FAIL_MISMATCH
 
@@ -147,7 +181,7 @@ httpbin 有速率限制（429）。连续跑多轮容易撞上，撞上了会记
 跑完把结论写进 `docs/03-open-questions.md` 的 Q2 条目，包含：
 
 - 日期、浏览器版本（`chrome://version`）
-- 三个策略的判定
+- 四个策略的判定（尤其 S4 —— 它决定了 `dnr.ts` 要不要 nonce）
 - 如果有串号：串号数 / 总数、复现轮次
 - 结论对架构的影响（成立 / 需改哪一条 ADR）
 

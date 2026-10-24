@@ -1,7 +1,7 @@
 # ADR 0002. 用 DNR 规则替换 Cookie 请求头，而非 chrome.debugger
 
 日期：2026-10-24
-状态：已采纳（**待 Q2 验证**）
+状态：已采纳（Q2 已验证通过，2026-10-25）· **实现细节已被 [ADR 0006](./0006-no-per-request-nonce.md) 修正：去掉 per-request nonce**
 风险等级：高 —— 这是唯一可能推翻整体方案的决策
 
 ## 背景
@@ -60,6 +60,8 @@ const res = await fetch(`${url}${sep}nonce=${nonce}`, { credentials: 'omit' });
 
 ## 已知风险（Q2）
 
+> **本节已由实测更新。** 原设计的缓解措施（规则 ID 池、nonce、定时回收）在 [ADR 0006](./0006-no-per-request-nonce.md) 中被整体撤掉——实测证明不需要 per-request 区分。下面保留原始记录，作为"当初担心什么"的存档。
+
 **MV3 的 DNR 规则是全局的，不是 per-request 的。** 潜在问题：
 
 1. **规则 ID 冲突**：多条规则不能同时用同一个 ID
@@ -67,27 +69,24 @@ const res = await fetch(`${url}${sep}nonce=${nonce}`, { credentials: 'omit' });
 3. **规则泄漏**：`fetch` 抛异常未删规则，残留规则会影响后续请求
 4. **并发容量**：规则数有上限（`MAX_NUMBER_OF_SESSION_RULES`），并发高时可能触顶
 
-**缓解设计**：
-- 规则 ID 池（预分配 32 个，轮转复用）
-- nonce 用 `crypto.randomUUID()`
-- 加规则 → 请求 → 删规则整段包在 `try/finally` 里
-- 每条规则带时间戳，定时回收超时规则
-- 池满时降级：排队等待，或直接退回主账号身份（不影响可播性）
+**原缓解设计**（已废弃，见 ADR 0006）：
 
-## 待验证（阻塞发布）
+- ~~规则 ID 池（预分配 32 个，轮转复用）~~
+- ~~nonce 用 `crypto.randomUUID()`~~
+- ~~加规则 → 请求 → 删规则整段包在 `try/finally` 里~~
+- ~~每条规则带时间戳，定时回收超时规则~~
+- ~~池满时降级：排队等待，或直接退回主账号身份~~
 
-**Q2 是唯一可能推翻整个方案的未知数。** 验证方法：
+## 验证结果
 
-> 写一个最小扩展，`Promise.all` 并发 20 个请求，每个用不同的假 Cookie，检查响应里的账号特征字段（`mid`）是否与预期一一对应。若有任何一个"串号"，本 ADR 作废。
+**Q2 已通过（2026-10-25）。** 180 个并发请求，串号数 0，规则残留 0。数据见 [`docs/03-open-questions.md`](../03-open-questions.md) §2，工具见 `poc/q2-dnr-concurrency/`。
 
-**若 Q2 失败**，退路：
-1. 回到油猴脚本形态（放弃扩展）
-2. 用 `chrome.debugger`（接受提示条）
-3. 引入本地服务（回到三进程，见 ADR 0001）
+**退路不再需要**：串行化 / `chrome.debugger` / 本地服务三条备选方案均未启用。
 
 ## 相关
 
 - 技术方案：`docs/01-architecture.md` §4.2
-- 待确认问题：**Q2（阻塞）**
+- 待确认问题：**Q2（已实测通过）**
+- 实现细节修正：[ADR 0006](./0006-no-per-request-nonce.md)
 - 代码位置：`src/platform/http/dnr.ts`（本决策的唯一实现点）
 - 目录规范：`docs/04-project-structure.md` §5

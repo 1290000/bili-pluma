@@ -58,9 +58,9 @@
 
   <!-- ============ 三个策略 ============ -->
   <section class="card">
-    <h2>三个策略，依次跑</h2>
+    <h2>四个策略，依次跑</h2>
     <p class="sub">
-      同一件事有三种写法，并发安全性不同。测试结果决定 <code>dnr.ts</code> 采用哪一种。
+      同一件事有四种写法，并发安全性不同。测试结果决定 <code>dnr.ts</code> 采用哪一种。
     </p>
 
     <div class="strategies">
@@ -115,13 +115,34 @@
           这是"图省事"的实现方式。
         </p>
         <p class="expect">
-          预期：<strong class="bad-txt">失败</strong>。它存在的意义是给出一条实测证据 ——
-          B站页面同时发多个取流请求时，只维护一条规则会发生什么。
+          预期：<strong class="bad-txt">失败</strong>，但失败的方式值得注意 —— nonce 被并发覆盖后，
+          规则对不上任何请求，于是<em>大多数请求什么凭据都拿不到</em>，而不是拿错。
+          它存在的意义是给出一条实测证据：B站页面同时发多个取流请求时，只维护一条规则会发生什么。
         </p>
         <div class="actions">
           <button class="btn btn-run" data-run="single-shared">单独跑 S3</button>
         </div>
         <div class="result" id="res-single-shared"></div>
+      </article>
+
+      <article class="strategy" data-strategy="no-nonce-persistent">
+        <header>
+          <span class="sid">S4</span>
+          <h3>常驻规则 · 无 nonce</h3>
+          <span class="badge badge-pick">推荐</span>
+        </header>
+        <p class="desc">
+          一条规则匹配整个路径，值在一轮内固定不变。不带 nonce，不新增删除，所有请求共用同一个凭据。
+        </p>
+        <p class="expect">
+          预期：<strong class="ok-txt">通过</strong>。这对应 Pluma 的真实情况 —— 白名单里的请求
+          全都该用同一个播放账号，值全局一致，就没有"这条规则该给谁"的问题。
+          如果它过了，per-request nonce 就不是必需品。
+        </p>
+        <div class="actions">
+          <button class="btn btn-run" data-run="no-nonce-persistent">单独跑 S4</button>
+        </div>
+        <div class="result" id="res-no-nonce-persistent"></div>
       </article>
 
     </div>

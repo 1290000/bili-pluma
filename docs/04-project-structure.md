@@ -181,7 +181,7 @@ bili-pluma/
 │   ├── platform/                   # 【适配层】把浏览器 API 包成接口，供 core 使用
 │   │   ├── http/
 │   │   │   ├── fetcher.ts          # 统一请求入口（注入到 core，便于测试）
-│   │   │   └── dnr.ts              # ★ DNR 规则池：申请/释放/并发保护
+│   │   │   └── dnr.ts              # ★ DNR 常驻规则：按路径建/改/删 + 自愈
 │   │   ├── storage/
 │   │   │   ├── local.ts            # chrome.storage.local 封装
 │   │   │   └── session.ts          # chrome.storage.session（内存态凭据）
@@ -304,7 +304,7 @@ export function buildPlayurlRequest(
 这里的所有代码都只做一件事：**把浏览器 API 包成 core 需要的接口。**
 
 - `platform/http/dnr.ts` 是整个项目**技术风险最高**的文件（对应 Q2）。它要负责：
-  - 规则 ID 池（预分配，如 32 个，轮转复用）
+  - 规则 ID 按路径索引固定分配（不用池，见 ADR 0006）
   - nonce 生成与 `urlFilter` 拼接
   - 加规则 → 请求 → 删规则的异常安全（`try/finally`）
   - 超时回收（防止请求挂死导致规则泄漏）
@@ -549,16 +549,16 @@ for (const file of walk(CORE_DIR)) {
 
 不要一次把所有目录建全，那会变成"文件夹驱动的开发"（建完目录不知道填什么）。
 
-### P0：Q2 验证 —— **独立于主项目，不用 WXT**
+### P0：Q2 验证 —— ✅ **已完成（2026-10-25）**
 
 | 项 | 内容 |
 | --- | --- |
 | 位置 | `poc/q2-dnr-concurrency/`（**不在 `src/` 下，不接入 WXT**） |
-| 内容 | 手写 `manifest.json` + 一个 `background.js` + 一个 `test.html` |
-| 目的 | 只验证一件事：并发 20 个不同 Cookie 的请求，会不会串号 |
+| 内容 | `manifest.json` + `background.js` + `lab.html`/`lab.js`/`lab.css` |
+| 结果 | **通过**：180 并发请求串号 0、规则残留 0；结论是**不需要 per-request nonce**（[ADR 0006](./decisions/0006-no-per-request-nonce.md)） |
 | 产出 | **保留为常驻回归测试**，以后每次改 `dnr.ts` 都跑一遍 |
 
-**为什么不放进主项目**：如果 Q2 失败，你要换方案（可能换回油猴或引入本地服务）。此时若已经把 WXT 项目搭起来，那套脚手架的配置、依赖、构建脚本就全白费了。**P0 用 200 行原生 JS，失败时沉没成本为零。**
+**为什么不放进主项目**：P0 的价值就在于失败时沉没成本为零。它用裸 JS + 零依赖写成，任何时候 `加载已解压的扩展程序` 就能跑，不受主项目构建失败、依赖升级、WXT 换版本影响。
 
 ### P1 之后才建主项目
 

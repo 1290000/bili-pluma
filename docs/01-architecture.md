@@ -271,14 +271,16 @@ const STRATEGIES = [
 
 **结论**：v1 用 **DNR 动态规则**实现"临时给某个 URL 的请求替换 Cookie 头"。
 
+> ⚠️ **实现细节已由 [ADR 0006](./decisions/0006-no-per-request-nonce.md) 修正。** Q2 实测（180 并发请求，串号 0）证明**不需要 per-request nonce** —— 白名单里的请求全都该用同一个播放账号，值全局一致，不存在"这条规则该给谁"的问题。下面的代码是最终形态，不带 nonce。
+
 具体做法：
 
 ```ts
-// 1. background 生成一次性 token，写规则
+// 一个白名单路径一条常驻规则，ID 由路径索引固定分配
 await chrome.declarativeNetRequest.updateSessionRules({
-  removeRuleIds: [RULE_ID],
+  removeRuleIds: [ruleIdFor(path)],
   addRules: [{
-    id: RULE_ID,
+    id: ruleIdFor(path),
     priority: 1,
     action: {
       type: 'modifyHeaders',
@@ -286,24 +288,26 @@ await chrome.declarativeNetRequest.updateSessionRules({
         { header: 'cookie', operation: 'set', value: bCookieString },
       ],
     },
-    // 用 urlFilter 精确锁定本次请求（带随机 nonce 参数最稳）
     condition: {
-      urlFilter: `${apiHost}${path}*nonce=${nonce}`,
+      urlFilter: `||api.bilibili.com${path}`,   // 不带 nonce
       resourceTypes: ['xmlhttprequest'],
     },
   }],
 });
 
-// 2. 立刻发请求（带 nonce），SW 的 fetch 会命中规则
-const res = await fetch(urlWithNonce);
-
-// 3. 清理规则
-await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [RULE_ID] });
+// 发请求时 credentials:'omit' 保证不附加 A 的 cookie，DNR 再把 B 的塞进去
+const res = await fetch(url, { credentials: 'omit' });
 ```
 
-这样 SW 的 `fetch` 不带 A（因为默认 SW fetch 的 cookie 行为可配，或干脆用 `credentials:'omit'` 保证不附加），DNR 再把 B 的 cookie 头塞进去。
+规则**常驻不删**，只在三种时机变动：凭据刷新（改值）、路径白名单变化（增删规则）、用户停用（全删）。因此没有"加规则 → 请求 → 删规则"的生命周期，也就没有规则泄漏和并发撞车。
 
-**这是 MV3 下最干净的做法，也是 v0.2 相对 v0.1 最大的技术增量**——v0.1 说"DNR 改不了 Cookie 头"，实测确认**可以**（`cookie` 在 append 白名单内，`set`/`remove` 也支持）。
+**配套的三条硬性要求**（不满足就不算实现完）：
+
+1. **总开关**：规则常驻意味着播放账号凭据失效时，所有白名单路径会一起变成未登录。popup 必须能一键停用（= 删所有规则）。
+2. **SW 启动自愈**：`sessionRules` 在浏览器重启后清空，Service Worker 每次启动都要检查并重建规则。
+3. **POST 例外**：`/ogv/player/playview` 是 POST 且 `csrf` 在请求体里，DNR 改不了 body，必须走 JS 层拦截重建。所以最终是**两条路径两种实现**，不是一套走天下。
+
+**这是 MV3 下最干净的做法，也是 v0.2 相对 v0.1 最大的技术增量**——v0.1 说"DNR 改不了 Cookie 头"，实测确认**可以**（`cookie` 在 append 白名单内，`set`/`remove` 也支持；`credentials: 'omit'` 和 `'include'` 两种模式都实测通过）。
 
 ### 4.3 音质与画质：v0.1 判断错误的更正
 
@@ -473,7 +477,7 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 
 | 难点 | 严重度 | 缓解 |
 |---|---|---|
-| **DNR 临时规则的并发安全**（同时多个视频页取流，规则 id 冲突） | **高（新增，v0.2 的主要技术风险）** | 用 nonce 化 urlFilter + 规则池（预分配 N 个 id 轮转）+ 请求完成即清理 + 超时自动回收 |
+| **DNR 规则的并发安全**（同时多个视频页取流） | **已消除（Q2 实测通过）** | 改为按路径的常驻规则，无 per-request 状态 → 不存在并发撞车。见 [ADR 0006](./decisions/0006-no-per-request-nonce.md) |
 | 番剧 `/ogv/player/playview` 的 csrf + WBI 重签 | 中高 | 照 §4.4 实现；建议单独写单测覆盖签名逻辑 |
 | `__playinfo__` 注入依赖前端变量名 | 中（降级为兜底手段） | 主路径已改为代理，注入只是"代理失败时的备用" |
 | 设备 Cookie 补齐（防 -412） | 中 | 照搬 `DEVICE_COOKIES` 列表，从 `document.cookie` 借 |
@@ -504,23 +508,20 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 
 > **路线与目录落地的细节以 [04-project-structure.md](./04-project-structure.md) §6 为准。** 本节只说"做什么、验收什么"。
 
-### P0：Q2 并发验证（**半天**，最高优先级）
+### P0：Q2 并发验证 —— ✅ **已完成（2026-10-25）**
 
 **目标只验证一件事：DNR 临时规则在并发下会不会用错账号凭据。**
 
 | 项 | 说明 |
 |---|---|
 | 位置 | `poc/q2-dnr-concurrency/`，**独立于主项目，不用 WXT** |
-| 内容 | 手写 `manifest.json` + `background.js` + `lab.html` / `lab.js` / `lab.css`（MV3 禁止内联脚本） |
-| 做法 | 三策略对比（唯一 nonce 规则 / 规则常驻 / 全局单条共享），20 并发 × 3 轮，用 `httpbin.org/anything` 回声服务检查 Cookie 标记是否一一对应 |
+| 内容 | `manifest.json` + `background.js` + `lab.html` / `lab.js` / `lab.css`（MV3 禁止内联脚本） |
+| 做法 | 四策略对比（唯一 nonce 规则 / 规则常驻 + nonce / 全局单条共享 / 常驻无 nonce），20 并发 × 3 轮，用 `httpbin.org/anything` 回声服务检查 Cookie 标记是否一一对应 |
 | 判据 | L1 功能 → L2 隔离（串号数=0）→ L3 回收（残留数=0），三层都要过 |
+| 结果 | **全部通过**：L1 两种 credentials 模式都能改；S1/S2/S4 均 60/60 对号；串号 0；残留 0 |
 | 产出 | **保留为常驻回归测试**，以后每次改 `dnr.ts` 都跑一遍。操作手册见 `poc/q2-dnr-concurrency/README.md` |
 
-**为什么独立**：如果 Q2 失败，退路是换回油猴形态或引入本地服务，那时 WXT 脚手架全是沉没成本。P0 只有裸 JS + 零依赖，失败时成本归零。
-
-**Go / No-Go**：
-- 20 个并发**全部对号** → 架构成立，进入 P1
-- 出现**任何一个串号** → **停下**，不要"先写着再说"。串号意味着点赞可能点到另一个号，不可接受。转 ADR 0002 的退路方案。
+**Go / No-Go 结果：Go。** 结论比预期更好 —— **不需要 per-request nonce**，`dnr.ts` 因此可以砍掉规则 ID 池和每请求的 add/remove，见 [ADR 0006](./decisions/0006-no-per-request-nonce.md)。串号从未出现，退路方案（串行化 / `chrome.debugger` / 本地服务）不需要启用。
 
 > ⚠️ 与原 v0.2 的差异：原计划 P0 是"手动拿 cookie 写 MV3 扩展 hook fetch 验证画质"。现在**不做 hook**（直接用 DNR 测并发）、**不用 WXT**、**目标从"验证画质"改成"验证并发安全"**。因为画质可行性已有 Dual Account Helper 佐证，而并发安全没有任何先例可循。
 
@@ -531,7 +532,7 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 - WXT 初始化，`entrypoints/` + `src/` 分层落地
 - 扫码登录（生成二维码 / 轮询 / 落地凭据）
 - 凭据加密存储（档 1：AES-GCM + `chrome.storage.local`）
-- `platform/http/dnr.ts` 正式版（规则池 + nonce + 异常安全）
+- `platform/http/dnr.ts` 正式版（按路径的常驻规则 + 总开关 + SW 启动自愈）
 - `core/identity/router.ts` + 对应单测
 - 单条 playurl 走通，能拿到 4K 流列表
 
