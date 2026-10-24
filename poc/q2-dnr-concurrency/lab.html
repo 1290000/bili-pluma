@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Pluma Q2 · DNR 并发安全验证</title>
+<link rel="stylesheet" href="lab.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-left">
+    <span class="mark">Q2</span>
+    <h1>DNR 并发安全验证</h1>
+  </div>
+  <div class="bar-right">
+    <span id="clock" class="clock">idle</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ============ 命题 ============ -->
+  <section class="card intro">
+    <h2>这条测试在证明什么</h2>
+    <p class="lede">
+      命题：<strong>用 declarativeNetRequest 的 sessionRules 临时替换 Cookie 请求头，
+      在并发请求下不会让某个请求命中别人的规则。</strong>
+    </p>
+    <p>
+      如果这条不成立，整个 Pluma 架构要推翻 —— <code>platform/http/dnr.ts</code> 的设计得换，
+      甚至要退回油猴脚本或引入本地服务。所以先单独测它，不掺任何业务代码。
+    </p>
+
+    <div class="layers">
+      <div class="layer">
+        <div class="layer-tag">L1</div>
+        <div>
+          <h3>功能</h3>
+          <p>DNR 到底能不能改 Cookie 头。这层不过，后面免谈。</p>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="layer-tag">L2</div>
+        <div>
+          <h3>隔离</h3>
+          <p>并发时每个请求拿到的 Cookie 是不是<em>自己的</em>那个。串号数必须为 0。</p>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="layer-tag">L3</div>
+        <div>
+          <h3>回收</h3>
+          <p>规则是否正确清理。残留数必须为 0，否则长会话会撑爆规则配额。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 三个策略 ============ -->
+  <section class="card">
+    <h2>三个策略，依次跑</h2>
+    <p class="sub">
+      同一件事有三种写法，并发安全性不同。测试结果决定 <code>dnr.ts</code> 采用哪一种。
+    </p>
+
+    <div class="strategies">
+
+      <article class="strategy" data-strategy="pool-random-id">
+        <header>
+          <span class="sid">S1</span>
+          <h3>规则 ID 池 + 随机 nonce</h3>
+          <span class="badge badge-pick">首选</span>
+        </header>
+        <p class="desc">
+          每次请求前 <code>addRules</code> 一条新规则（ID 从池里取），响应后立刻删。
+          <code>urlFilter</code> 带 nonce，保证一条规则只可能命中一个请求。
+        </p>
+        <p class="expect">
+          预期：<strong class="ok-txt">通过</strong>。这是最干净的写法，也是架构想用的。
+          但它最依赖 DNR 的 add/remove 没有窗口期 —— 所以也是最可能暴露问题的。
+        </p>
+        <div class="actions">
+          <button class="btn btn-run" data-run="pool-random-id">单独跑 S1</button>
+        </div>
+        <div class="result" id="res-pool-random-id"></div>
+      </article>
+
+      <article class="strategy" data-strategy="persistent-id">
+        <header>
+          <span class="sid">S2</span>
+          <h3>规则 ID 常驻</h3>
+          <span class="badge">备选</span>
+        </header>
+        <p class="desc">
+          一次性建好 N 条规则（ID 固定），之后只替换内容不新增删除。
+          没有 add/remove 的时间窗口。
+        </p>
+        <p class="expect">
+          预期：<strong class="ok-txt">通过</strong>。代价是规则数量写死，且必须显式清理。
+        </p>
+        <div class="actions">
+          <button class="btn btn-run" data-run="persistent-id">单独跑 S2</button>
+        </div>
+        <div class="result" id="res-persistent-id"></div>
+      </article>
+
+      <article class="strategy" data-strategy="single-shared">
+        <header>
+          <span class="sid">S3</span>
+          <h3>全局单条共享规则</h3>
+          <span class="badge badge-bad">反例</span>
+        </header>
+        <p class="desc">
+          所有请求复用同一个 ruleId，每次请求前改写它。
+          这是"图省事"的实现方式。
+        </p>
+        <p class="expect">
+          预期：<strong class="bad-txt">失败</strong>。它存在的意义是给出一条实测证据 ——
+          B站页面同时发多个取流请求时，只维护一条规则会发生什么。
+        </p>
+        <div class="actions">
+          <button class="btn btn-run" data-run="single-shared">单独跑 S3</button>
+        </div>
+        <div class="result" id="res-single-shared"></div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ 操作台 ============ -->
+  <section class="card">
+    <h2>操作台</h2>
+    <div class="controls">
+      <button id="btn-l1" class="btn btn-l1">① 先测 L1（单请求）</button>
+      <button id="btn-all" class="btn btn-primary">② 跑完整测试（3 策略 × 3 轮）</button>
+      <button id="btn-state" class="btn">查看当前规则</button>
+      <button id="btn-clear" class="btn btn-danger">清空所有 session 规则</button>
+    </div>
+    <div id="l1-box" class="l1-box hidden"></div>
+    <div id="global-log" class="log"></div>
+  </section>
+
+  <!-- ============ 结论 ============ -->
+  <section class="card hidden" id="verdict-card">
+    <h2>结论</h2>
+    <div id="verdict-body"></div>
+  </section>
+
+  <!-- ============ 明细 ============ -->
+  <section class="card hidden" id="detail-card">
+    <h2>明细</h2>
+    <div id="detail-body"></div>
+  </section>
+
+</main>
+
+<footer>
+  <p>
+    配置见 <code>background.js</code> 顶部 <code>CFG</code>。
+    完整 JSON 报告同时写入 <code>chrome.storage.local.lastReport</code>，
+    可在 DevTools Console 里 <code>chrome.storage.local.get('lastReport')</code> 取。
+  </p>
+</footer>
+
+<script src="lab.js"></script>
+</body>
+</html>

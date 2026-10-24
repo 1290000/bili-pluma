@@ -511,11 +511,12 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 | 项 | 说明 |
 |---|---|
 | 位置 | `poc/q2-dnr-concurrency/`，**独立于主项目，不用 WXT** |
-| 内容 | 手写 `manifest.json` + 一个 `background.js` + 一个 `test.html` |
-| 做法 | `Promise.all` 并发 20 个请求，每个带不同的假 Cookie，检查响应里的账号特征字段是否与预期一一对应 |
-| 产出 | **保留为常驻回归测试**，以后每次改 `dnr.ts` 都跑一遍 |
+| 内容 | 手写 `manifest.json` + `background.js` + `lab.html` / `lab.js` / `lab.css`（MV3 禁止内联脚本） |
+| 做法 | 三策略对比（唯一 nonce 规则 / 规则常驻 / 全局单条共享），20 并发 × 3 轮，用 `httpbin.org/anything` 回声服务检查 Cookie 标记是否一一对应 |
+| 判据 | L1 功能 → L2 隔离（串号数=0）→ L3 回收（残留数=0），三层都要过 |
+| 产出 | **保留为常驻回归测试**，以后每次改 `dnr.ts` 都跑一遍。操作手册见 `poc/q2-dnr-concurrency/README.md` |
 
-**为什么独立**：如果 Q2 失败，退路是换回油猴形态或引入本地服务，那时 WXT 脚手架全是沉没成本。P0 用 200 行原生 JS，失败时成本归零。
+**为什么独立**：如果 Q2 失败，退路是换回油猴形态或引入本地服务，那时 WXT 脚手架全是沉没成本。P0 只有裸 JS + 零依赖，失败时成本归零。
 
 **Go / No-Go**：
 - 20 个并发**全部对号** → 架构成立，进入 P1

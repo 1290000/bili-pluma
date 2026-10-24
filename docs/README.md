@@ -63,11 +63,11 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 | 技术选型 | ✅ WXT + TS `^5.9` + Preact（仅 UI）+ 原生 CSS 变量 + Vitest + pnpm |
 | 目录结构 | ✅ 已定（v1.1，遵循 WXT `entrypoints/` 约定） |
 | 实施路线 | ✅ 已定（P0 半天 → P1 骨架 → P2 可用 → P3 完善） |
-| **Q2 DNR 并发验证** | ❌ **未做，最高优先级（`poc/q2-dnr-concurrency/` 独立扩展）** |
+| **Q2 DNR 并发验证** | 🟡 **PoC 代码已写完，待跑（`poc/q2-dnr-concurrency/`）** |
 | **Q4 番剧边界验证** | ❌ **未做，第二优先级** |
-| 代码 | ❌ 尚未开始 |
+| 代码 | ❌ 尚未开始（仅 `poc/`） |
 
-**下一步：`poc/q2-dnr-concurrency/` 的并发测试扩展。** 唯一可能推翻架构的未知数，成本约半天，且**独立于主项目**——Q2 失败时沉没成本为零。
+**下一步：把 `poc/q2-dnr-concurrency/` 加载进浏览器跑一遍。** 唯一可能推翻架构的未知数，成本约半天，且**独立于主项目**——Q2 失败时沉没成本为零。操作步骤与判读标准见 [`poc/q2-dnr-concurrency/README.md`](../poc/q2-dnr-concurrency/README.md)。
 
 ---
 

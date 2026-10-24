@@ -61,9 +61,9 @@
 
 **在 Q2 验证通过之前，不要写任何业务代码。**
 
-Q2 = DNR 临时规则在并发下会不会用错账号凭据。验证方式：`poc/q2-dnr-concurrency/` 独立扩展，`Promise.all` 并发 20 个不同 Cookie 的请求，检查响应账号是否一一对应。
+Q2 = DNR 临时规则在并发下会不会用错账号凭据。验证方式：`poc/q2-dnr-concurrency/` 独立扩展，`Promise.all` 并发 20 个不同 Cookie 的请求，检查响应里的凭据标记是否与预期一一对应。**PoC 代码已写完**，怎么加载、怎么判读、结论往哪写，全在该目录的 `README.md` 里。
 
-**P0 不用 WXT**、不建 `src/`、不引入任何依赖。就是手写 `manifest.json` + `background.js` + `test.html`。
+**P0 不用 WXT**、不建 `src/`、不引入任何依赖。就是手写 `manifest.json` + `background.js` + `lab.html` / `lab.js` / `lab.css`（MV3 禁止内联 `<script>`，所以逻辑必须拆成独立文件）。
 
 ### 3.2 必须先读再动手的清单
 

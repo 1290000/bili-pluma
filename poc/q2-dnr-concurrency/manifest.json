@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Pluma Q2 - DNR Concurrency Probe",
+  "version": "0.1.0",
+  "description": "验证 declarativeNetRequest 在并发请求下是否会串号。仅用于本地实验，不采集任何数据。",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://httpbin.org/*",
+    "https://postman-echo.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Q2 DNR 并发测试"
+  }
+}
