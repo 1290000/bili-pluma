@@ -1,0 +1,129 @@
+{
+  "note": "Q2 DNR 并发验证摘要。完整原始数据见同目录 result-q2-auto.full.json",
+  "ranAt": "2026-10-25T13:10:04.503Z",
+  "finishedAt": "2026-10-25T13:10:07.612Z",
+  "browser": "Edge 156 / Windows",
+  "config": {
+    "concurrency": 20,
+    "echoHost": "https://httpbin.org",
+    "rounds": 3
+  },
+  "leakedRulesAfter": {
+    "count": 0,
+    "ids": []
+  },
+  "strategies": {
+    "no-nonce-persistent": {
+      "rounds": [
+        {
+          "round": 1,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        },
+        {
+          "round": 2,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        },
+        {
+          "round": 3,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        }
+      ]
+    },
+    "persistent-id": {
+      "rounds": [
+        {
+          "round": 1,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        },
+        {
+          "round": 2,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        },
+        {
+          "round": 3,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        }
+      ]
+    },
+    "pool-random-id": {
+      "rounds": [
+        {
+          "round": 1,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        },
+        {
+          "round": 2,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        },
+        {
+          "round": 3,
+          "ok": 20,
+          "mismatch": 0,
+          "missing": 0,
+          "error": 0,
+          "verdict": "PASS"
+        }
+      ]
+    },
+    "single-shared": {
+      "rounds": [
+        {
+          "round": 1,
+          "ok": 1,
+          "mismatch": 0,
+          "missing": 19,
+          "error": 0,
+          "verdict": "PARTIAL"
+        },
+        {
+          "round": 2,
+          "ok": 1,
+          "mismatch": 0,
+          "missing": 19,
+          "error": 0,
+          "verdict": "PARTIAL"
+        },
+        {
+          "round": 3,
+          "ok": 1,
+          "mismatch": 0,
+          "missing": 19,
+          "error": 0,
+          "verdict": "PARTIAL"
+        }
+      ]
+    }
+  }
+}

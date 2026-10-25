@@ -47,9 +47,7 @@ GPL-3.0-only · Chrome 120+ / Edge · **P1 代码完成，待新 dnr.ts 回归 +
 - ❌ **不能防本机程序**——能读本机文件的程序可以同时拿到密文和密钥
 - ❌ 也不改变：B站登录态本身就以 cookie 存在浏览器里，本扩展的加密不涉及那部分
 
-我们不上传凭据到任何服务器。没有做"口令解锁"——它防不住上面第 2 条，只会增加操作负担（[`ADR 0009`](./docs/decisions/0009-drop-passphrase-mode.md)）。
-
-> `cookies` 权限**只在你扫码登录播放账号的那一刻读取一次该账号凭据**，不读主账号、不读其他网站（[`ADR 0008`](./docs/decisions/0008-cookies-permission-for-playback-credential.md)）。
+不上传凭据到任何服务器。没有做"口令解锁"——它防不住上面第 2 条，只会增加负担（[ADR 0009](./docs/decisions/0009-drop-passphrase-mode.md)）。`cookies` 权限**只在扫码登录播放账号那一刻读一次**，不读主账号、不读其他网站（[ADR 0008](./docs/decisions/0008-cookies-permission-for-playback-credential.md)）。
 
 ## 音质需要你的环境配合
 
@@ -60,15 +58,17 @@ GPL-3.0-only · Chrome 120+ / Edge · **P1 代码完成，待新 dnr.ts 回归 +
 - **AI 代理 / 新来的开发者：先读 [AGENTS.md](./AGENTS.md)** ← 硬约束、不可翻案的决策、写代码与改文档的规则
 - 文档索引：[docs/README.md](./docs/README.md)　当前进度与阻塞项：[docs/03](./docs/03-open-questions.md) §0
 
-## 安装（代码完成后）
+## 安装
 
 **不上架任何商店，也不提供预编译安装包**，请自行构建：
 
 ```bash
-pnpm install && pnpm build    # 产物在 .output/chrome-mv3/
+pnpm install && pnpm build
 ```
 
-`chrome://extensions/` → 开发者模式 → 加载已解压的扩展程序。理由见 [docs/guides/releasing.md](./docs/guides/releasing.md)。
+然后 `chrome://extensions/` 或 `edge://extensions/` → 开「开发者模式」→「加载已解压的扩展程序」→ 选 **`.output/chrome-mv3`**。
+
+> ⚠️ **选仓库根目录会报「清单文件丢失或不可读取」**——WXT 项目的 `manifest.json` 是构建产物，根目录本来就没有。没找到就先跑 `pnpm build`。理由见 [docs/guides/releasing.md](./docs/guides/releasing.md)。
 
 ## 致谢
 
