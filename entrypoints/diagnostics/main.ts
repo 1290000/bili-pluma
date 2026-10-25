@@ -76,18 +76,27 @@ async function collect(): Promise<Row[]> {
   put('播放代理总开关', proxy.enabled ? '已开启' : '已关闭', proxy.enabled);
 
   // 5) ★ DNR 规则 —— 这是"取流是否生效"的直接证据
+  // 分两类：全局路径规则（10000-10999）+ 标签页限定规则（20000-29999）
   try {
     const rules = await chrome.declarativeNetRequest.getSessionRules();
-    const tabRules = rules.filter((r) => r.id >= 20000);
-    put('DNR 页面规则数', tabRules.length, tabRules.length > 0);
 
-    for (const r of tabRules.slice(0, 5)) {
-      put(
-        `  规则 ${r.id}`,
-        `tabIds=[${(r.condition.tabIds ?? []).join(',')}] filter=${r.condition.urlFilter ?? '-'}`,
-        true,
-      );
+    const pathRules = rules.filter((r) => r.id >= 10000 && r.id < 11000);
+    const tabRules = rules.filter((r) => r.id >= 20000 && r.id < 30000);
+
+    put('DNR 全局路径规则', pathRules.length, pathRules.length > 0);
+    for (const r of pathRules.slice(0, 5)) {
+      put(`  ${r.id}`, `filter=${r.condition.urlFilter ?? '-'}`, true);
     }
+
+    put('DNR 标签页规则', tabRules.length, tabRules.length > 0);
+    for (const r of tabRules.slice(0, 5)) {
+      put(`  ${r.id}`, `tabIds=[${(r.condition.tabIds ?? []).join(',')}] filter=${r.condition.urlFilter ?? '-'}`, true);
+    }
+
+    // 其他规则（不属于我们的）也报出来，避免"规则数对不上"的困惑
+    const ours = new Set([...pathRules, ...tabRules].map((r) => r.id));
+    const others = rules.filter((r) => !ours.has(r.id));
+    if (others.length > 0) put('DNR 其他规则', others.length);
   } catch (e) {
     put('DNR 规则', '读取失败: ' + String(e));
   }
@@ -157,9 +166,18 @@ function render(rows: Row[]): void {
   tip.className = 'tip';
   // 代理状态已经在 rows 里显示，这里只给解读提示
   const proxyRow = rows.find((r) => r.label === '播放代理总开关');
-  tip.textContent = proxyRow?.ok
-    ? '代理已开启。取流是否生效看「DNR 规则总数」；为 0 说明规则没装上。'
-    : '代理已关闭，所有请求以主账号身份发出（开关在 P2 的 popup 里）。';
+  const pathRow = rows.find((r) => r.label === 'DNR 全局路径规则');
+  const tabRow = rows.find((r) => r.label === 'DNR 标签页规则');
+
+  if (!proxyRow?.ok) {
+    tip.textContent = '代理已关闭，所有请求以主账号身份发出（开关在 P2 的 popup 里）。';
+  } else if (!pathRow?.ok) {
+    tip.textContent = '代理开了但全局规则没装上 —— 打开视频页不会生效，检查 background 的启动自愈日志。';
+  } else if (!tabRow?.ok) {
+    tip.textContent = '全局规则正常。标签页规则为 0 表示当前没有打开视频页（正常）。';
+  } else {
+    tip.textContent = '规则齐全。两者都有 = 视频页正在被代理。';
+  }
   root.appendChild(tip);
 }
 
