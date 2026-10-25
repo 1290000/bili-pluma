@@ -1,0 +1,10 @@
+# pnpm 10+ 的配置位置（.npmrc 里的 node-linker 在 pnpm 12 上不生效）
+#
+# 为什么必须用 hoisted：
+# Windows 下 isolated 布局需要为每个直接依赖创建顶层 symlink，本项目路径含空格时
+# 创建失败且不报错，表现为 node_modules/wxt 不存在、wxt prepare 报 MODULE_NOT_FOUND。
+nodeLinker: hoisted
+
+# 允许这些包执行安装脚本（pnpm 10+ 默认拦截）
+onlyBuiltDependencies:
+  - esbuild

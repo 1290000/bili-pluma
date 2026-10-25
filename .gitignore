@@ -62,3 +62,14 @@ desktop.ini
 # ---------- 本地备份 ----------
 *.bak
 *.orig
+
+# ---------- 验证脚本的临时产物 ----------
+# poc/verify/ 下的诊断脚本会写这些：
+#   .tmp/            浏览器 profile（几百个文件，绝不能入库）
+#   *.png            截图
+#   result-*.json    验证结果
+# 这些是本地排查产物，不是成果。成果以 RESULT.md 为准。
+.tmp/
+poc/verify/*.png
+poc/verify/result-*.json
+poc/verify/.keep

@@ -1,0 +1,26 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "preact",
+    "paths": {
+      "@/*": ["./*"],
+      "~/*": ["./*"],
+      "@@/*": ["./*"],
+      "~~/*": ["./*"],
+      "@shared/*": ["./src/shared/*"],
+      "@core/*": ["./src/core/*"],
+      "@platform/*": ["./src/platform/*"],
+      "@design/*": ["./src/design/*"]
+    }
+  },
+  "include": [
+    "entrypoints/**/*",
+    "src/**/*",
+    "tests/**/*",
+    "wxt.config.ts",
+    "vitest.config.ts",
+    ".wxt/wxt.d.ts"
+  ]
+}
