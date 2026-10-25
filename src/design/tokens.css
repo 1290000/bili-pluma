@@ -1,0 +1,41 @@
+/**
+ * 视觉令牌 —— UI 的唯一真相源。改配色只改这一个文件。
+ *
+ * 对应 docs/02-ui-spec.md §6。用信息蓝而不是 B站粉：
+ * 用粉色会让人以为是官方插件，出问题容易被误认为官方行为。
+ */
+
+:root {
+  color-scheme: light dark;
+
+  --pluma-accent: #378add;
+  --pluma-accent-bg: #e6f1fb;
+  --pluma-danger: #e24b4a;
+  --pluma-warning: #ef9f27;
+
+  --pluma-text: #1a1a1a;
+  --pluma-text-muted: #6b7280;
+  --pluma-surface: #ffffff;
+  --pluma-border: rgba(0, 0, 0, 0.15);
+
+  --pluma-radius-card: 12px;
+  --pluma-radius-control: 8px;
+
+  --pluma-font-title: 15px;
+  --pluma-font-body: 13px;
+  --pluma-font-caption: 11px;
+
+  --pluma-font-sans:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pluma-accent: #85b7eb;
+    --pluma-accent-bg: #1e3a5f;
+    --pluma-text: #e5e7eb;
+    --pluma-text-muted: #9ca3af;
+    --pluma-surface: #1f1f1f;
+    --pluma-border: rgba(255, 255, 255, 0.15);
+  }
+}
