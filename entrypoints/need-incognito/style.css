@@ -1,0 +1,86 @@
+/* 说明页样式 —— 只引用 tokens.css 的变量 */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--pluma-surface);
+  color: var(--pluma-text);
+  font-family: var(--pluma-font-sans);
+  font-size: var(--pluma-font-body);
+  line-height: 1.65;
+}
+
+.wrap {
+  padding: 26px 28px 22px;
+}
+
+.title {
+  margin: 0 0 10px;
+  font-size: 17px;
+  font-weight: 500;
+}
+
+.lead {
+  margin: 0 0 16px;
+  color: var(--pluma-text-muted);
+}
+
+.why {
+  padding: 12px 14px;
+  border-left: 2px solid var(--pluma-accent);
+  background: var(--pluma-accent-bg);
+  border-radius: 0 var(--pluma-radius-control) var(--pluma-radius-control) 0;
+  margin-bottom: 18px;
+}
+
+.why-title {
+  margin: 0 0 4px;
+  font-weight: 500;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-accent);
+}
+
+.why-body {
+  margin: 0;
+  font-size: var(--pluma-font-caption);
+  line-height: 1.7;
+}
+
+.steps-title {
+  margin: 0 0 6px;
+  font-weight: 500;
+}
+
+.steps {
+  margin: 0 0 18px;
+  padding-left: 20px;
+}
+
+.steps li {
+  margin-bottom: 6px;
+}
+
+code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--pluma-accent-bg);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+}
+
+.footnote {
+  margin: 0;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+/* 8 秒后仍未就绪时高亮这条提示，强调需要手动操作 */
+.footnote.show {
+  color: var(--pluma-warning);
+  font-weight: 500;
+}

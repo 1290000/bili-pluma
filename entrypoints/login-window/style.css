@@ -1,0 +1,130 @@
+/* 登录窗口样式 —— 只引用 tokens.css 的变量，不硬编码颜色/字号 */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--pluma-surface);
+  color: var(--pluma-text);
+  font-family: var(--pluma-font-sans);
+  font-size: var(--pluma-font-body);
+  line-height: 1.6;
+}
+
+.wrap {
+  padding: 24px 28px 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100vh;
+}
+
+.title {
+  margin: 0 0 4px;
+  font-size: var(--pluma-font-title);
+  font-weight: 500;
+}
+
+.subtitle {
+  margin: 0 0 20px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  text-align: center;
+}
+
+.qr-card {
+  width: 300px;
+  height: 300px;
+  border-radius: var(--pluma-radius-card);
+  border: 0.5px solid var(--pluma-border);
+  background: var(--pluma-accent-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.qr-card.scanned {
+  border-color: var(--pluma-accent);
+}
+
+.qr-card.success {
+  border-color: var(--pluma-accent);
+}
+
+.qr-card.error {
+  border-color: var(--pluma-danger);
+}
+
+.qr-canvas {
+  display: block;
+  /* 宽高由 JS 按整数倍设置，这里不写死，避免插值 */
+  image-rendering: pixelated;
+  border-radius: 4px;
+}
+
+.placeholder {
+  font-size: var(--pluma-font-body);
+  color: var(--pluma-text-muted);
+  text-align: center;
+  padding: 0 20px;
+}
+
+.placeholder.success {
+  font-size: 48px;
+  color: var(--pluma-accent);
+}
+
+.placeholder.error {
+  font-size: 40px;
+  color: var(--pluma-danger);
+}
+
+.status {
+  margin: 18px 0 0;
+  font-size: var(--pluma-font-body);
+  text-align: center;
+  min-height: 22px;
+}
+
+.status.scanned {
+  color: var(--pluma-accent);
+}
+
+.status.success {
+  color: var(--pluma-accent);
+}
+
+.status.error,
+.status.expired {
+  color: var(--pluma-danger);
+}
+
+.refresh {
+  margin-top: 14px;
+  padding: 8px 20px;
+  font-family: inherit;
+  font-size: var(--pluma-font-body);
+  color: var(--pluma-text);
+  background: transparent;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-control);
+  cursor: pointer;
+}
+
+.refresh:hover {
+  border-color: var(--pluma-accent);
+  color: var(--pluma-accent);
+}
+
+.footnote {
+  margin: auto 0 0;
+  padding-top: 20px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  text-align: center;
+}
