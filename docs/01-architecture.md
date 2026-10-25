@@ -570,13 +570,17 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 
 ### P2：可用（约 1 周）
 
-- 完整 7 个代理路径
-- 设备 Cookie 补齐（防 `-412`）
-- 三种发送策略自动探测 + 缓存
-- 番剧 OGV 的 POST + WBI 重签
+- **总开关 UI**（能力已在 P1 就位：`enableProxy` / `disableProxy` / `proxy/set` 消息）
 - Popup 五种状态（见 [02-ui-spec.md](./02-ui-spec.md)）
 - 页内角标（原生 DOM + Shadow DOM）
 - 失败回退主账号 + 日志脱敏
+- 设备 Cookie 补齐（防 `-412`）
+
+> 原计划的「完整 7 个代理路径」「三种发送策略自动探测」「番剧 OGV 的 POST + WBI 重签」
+> **已作废**：
+> - P1 实测确认**只有 `/x/player/wbi/playurl` 一条有效**，其余 6 条在 `routes.ts` 里标 `enabled: false`
+> - 「三种发送策略」是油猴 `GM_xmlhttpRequest` 的产物，扩展用 DNR 后不存在这个问题
+> - 番剧 v1 不做（[ADR 0007](./decisions/0007-v1-video-only-bangumi-deferred.md)）
 
 **验收**：装到全新浏览器，扫码一次后，任意视频页画质提升；点赞/历史仍归主账号。
 

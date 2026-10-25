@@ -98,6 +98,9 @@ MV3 有三到四个独立执行环境，它们**内存不共享**：
 
 ## 1. 完整目录结构
 
+> ⚠️ **本节是设计意图，不是实现清单。** 实际落地的差异见文末「实现现状」一节。
+> 判断"某文件是否存在"以仓库为准，不要拿这棵树当事实。
+
 ```
 bili-pluma/
 ├── .github/
@@ -625,3 +628,33 @@ for (const file of walk(CORE_DIR)) {
 | 6 | 未列技术选型 | 新增 §〇 技术选型表，版本一律写范围 | 避免钉死版本号后半年就落后 |
 | 7 | 未提 ESLint/Prettier | 列入必选工具 | 依赖方向强制手段，不是可选项 |
 
+---
+
+## 9. 实现现状（2026-10-25，P1 完成时）
+
+§1 那棵树是设计稿。实际实现与它的**差异**如下，避免把设计当成事实：
+
+| 设计稿 | 实际实现 | 原因 |
+| --- | --- | --- |
+| `entrypoints/bili.content.ts` + `bili-main.content.ts`（两个入口） | **单个** `entrypoints/content.ts` + `public/main-world.js` | WXT 的 `world` 选项只支持 `'ISOLATED'`，MAIN world 必须用资源文件注入（[ADR 0010](./decisions/0010-page-proxy-via-tab-ids.md)） |
+| `src/content/main-world/` `src/content/isolated/` | 无（已并入上述两处） | 同上 |
+| `src/background/index.ts` | `entrypoints/background.ts` | WXT 约定 |
+| `src/platform/runtime/messaging.ts` | 无独立封装，页面直接 `sendMessage` | 只有 3 个 UI 页面，封装收益低于成本 |
+| `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
+| `entrypoints/popup/` `options/` | **尚未实现**（P2） | — |
+| `scripts/check-boundaries.ts` | **尚未实现** | 依赖方向目前靠人工审查 |
+| ESLint / Prettier 配置 | **尚未实现** | `pnpm lint` 跑不了 |
+
+### 已实现且与设计一致的
+
+```
+src/shared/{types,constants,utils}     ✅ 全部落地，零依赖
+src/design/tokens.css                  ✅
+src/core/{auth,vault,wbi,identity}     ✅
+src/platform/{http,storage,qr}         ✅
+src/background/{login-window,login-handshake,handlers/}  ✅
+entrypoints/{background,content,login-window,need-incognito,diagnostics}  ✅
+public/main-world.js                   ✅
+```
+
+**判断"某文件是否存在"请用 `git ls-files`，不要看 §1。**

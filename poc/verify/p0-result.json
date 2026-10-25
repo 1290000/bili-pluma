@@ -1,0 +1,47 @@
+{
+  "startedAt": "2026-10-24T18:13:11.705Z",
+  "extPath": "D:\\workbuddy\\No Project\\2026-10-24-22-23-40\\poc\\q2-dnr-concurrency",
+  "extId": "ddkcdhnpandlpepoaocadmidfemmoboh",
+  "pageLoaded": true,
+  "verdict": "GO —— 全部 6 项通过，耗时 973 ms。架构成立，可以进 P1。",
+  "verdictClass": "go",
+  "rows": [
+    {
+      "name": "T0 DNR 是否作用于 background fetch",
+      "result": "PASS",
+      "count": "1 / 1",
+      "detail": "{\"cookie\":\"scope-probe\",\"nonce\":\"352a96947f224113\"}"
+    },
+    {
+      "name": "T1 串行 10 次",
+      "result": "PASS",
+      "count": "10 / 10",
+      "detail": ""
+    },
+    {
+      "name": "T2 并发 20 次",
+      "result": "PASS",
+      "count": "20 / 20",
+      "detail": ""
+    },
+    {
+      "name": "T2 并发 40 次（+30ms 延迟）",
+      "result": "PASS",
+      "count": "40 / 40",
+      "detail": ""
+    },
+    {
+      "name": "T3 规则生效延迟（100 次 加规则→立刻请求→删规则）",
+      "result": "PASS",
+      "count": "100 / 100",
+      "detail": ""
+    },
+    {
+      "name": "T4 异常后规则泄漏",
+      "result": "PASS",
+      "count": "1 / 1",
+      "detail": "{\"rulesBefore\":0,\"rulesAfter\":0,\"cookieAfter\":\"clean-probe\"}"
+    }
+  ],
+  "console": []
+}

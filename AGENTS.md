@@ -224,13 +224,22 @@ grep -n "^## [0-9]" docs/03-open-questions.md
 ## 8. 交付前自检清单
 
 - [ ] `pnpm typecheck` 通过
-- [ ] `pnpm lint` 通过（含依赖方向规则）
-- [ ] `pnpm check:boundaries` 通过
-- [ ] `pnpm test` 通过（`core/` 层）
+- [ ] `pnpm test` 通过
 - [ ] 若改了 `dnr.ts` → 已重跑 `poc/q2-dnr-concurrency/`
 - [ ] 若改了文档 → 已跑 §6.3 的检查
 - [ ] 没有新增"两边都写同一件事"的重复
 - [ ] 没有偷偷改 §3 的 12 条决策
+
+> ⚠️ **以下两项尚未实现**（`docs/04-project-structure.md` §〇 有规划，代码里没有）。
+> 不要假装跑过：
+>
+> | 项 | 状态 |
+> | --- | --- |
+> | `pnpm lint`（ESLint + import/no-restricted-paths） | ❌ 未配置 |
+> | `pnpm check:boundaries`（`scripts/check-boundaries.ts`） | ❌ 未实现 |
+>
+> **目前依赖方向靠人工审查**（`core/` 里不许 `chrome.` / `window.` / `document.` / `fetch(`）。
+> 实现这两项是 P2 的待办，不是"已具备的能力"。
 
 ---
 

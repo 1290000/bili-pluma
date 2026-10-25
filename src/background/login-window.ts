@@ -1,7 +1,7 @@
 /**
  * 登录窗口管理 —— **必须开在无痕分区里**。
  *
- * 原因（[ADR 0011](../../docs/decisions/0011-isolated-window-login.md)）：
+ * 原因（[ADR 0012](../../docs/decisions/0012-isolated-window-login.md)）：
  * B站凭据只通过 `Set-Cookie` 下发，JS 读不到那个响应头，必须让浏览器真正落地。
  * 而落地就会覆盖同一分区的登录态，所以在普通窗口登录 = 覆盖主账号。
  *

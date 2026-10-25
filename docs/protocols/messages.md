@@ -194,11 +194,17 @@ popup 打开 → send({ type: 'account/status' }) → 渲染对应状态
 
 ## 相关代码位置
 
+> 下表是**实际实现位置**。原规划里的 `src/content/main-world/channel.ts`、
+> `src/content/isolated/router.ts`、`src/background/index.ts`、
+> `src/platform/runtime/messaging.ts` **均未按此落地**——WXT 约定下入口在 `entrypoints/`，
+> 见 [ADR 0005](../decisions/0005-adopt-wxt-conventions.md)。
+
 | 概念 | 文件 |
 | --- | --- |
 | 消息类型定义 | `src/shared/types/messages.ts` |
 | 错误码 | `src/shared/types/errors.ts` |
-| MAIN world 通道 | `src/content/main-world/channel.ts` |
-| ISOLATED 侧处理 | `src/content/isolated/router.ts` |
-| SW 消息分发 | `src/background/index.ts` + `handlers/*.ts` |
-| UI 侧调用封装 | `src/platform/runtime/messaging.ts` |
+| MAIN world 脚本（整份，含通道） | `public/main-world.js` |
+| ISOLATED 侧编排 + 通道令牌 | `entrypoints/content.ts` |
+| SW 入口 + 消息分发 | `entrypoints/background.ts` |
+| 各消息处理函数 | `src/background/handlers/*.handler.ts` |
+| UI 侧调用 | 直接在页面里 `chrome.runtime.sendMessage`（无独立封装层） |

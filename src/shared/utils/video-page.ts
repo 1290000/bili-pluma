@@ -28,7 +28,7 @@ export interface VideoPageInfo {
  * 从 URL 解析视频页信息。非视频页返回 null。
  *
  * 只认 `/video/BVxxx`：
- *   - 番剧 `/bangumi/play/*` 不支持（ADR 0006）
+ *   - 番剧 `/bangumi/play/*` 不支持（ADR 0007）
  *   - 直播 `/live/*` 不支持
  *   - legacy `/s/video/*` 不支持（B站已基本不用，且路径不同）
  */

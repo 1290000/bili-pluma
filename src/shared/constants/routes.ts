@@ -5,7 +5,7 @@
  * B站改路径时只改这一个文件。
  *
  * ⚠️ `enabled` 字段反映的是 **2026-10-25 的实测结论**，不是文档抄来的清单。
- * 来源：poc/verify/RESULT.md、docs/03-open-questions.md Q4、ADR 0006。
+ * 来源：poc/verify/RESULT.md、docs/03-open-questions.md Q4、ADR 0007。
  */
 
 export const BILI_API_HOST = 'api.bilibili.com';
@@ -41,21 +41,21 @@ export const PROXY_ROUTES = [
     method: 'GET',
     label: '番剧取流（当前）',
     enabled: false,
-    note: '实测：番剧页零请求、走 SSR 注入，此路径无效（ADR 0006）',
+    note: '实测：番剧页零请求、走 SSR 注入，此路径无效（ADR 0007）',
   },
   {
     path: '/pgc/player/web/playurl',
     method: 'GET',
     label: '番剧取流（旧版）',
     enabled: false,
-    note: '同上，未观测到（ADR 0006）',
+    note: '同上，未观测到（ADR 0007）',
   },
   {
     path: '/ogv/player/playview',
     method: 'POST',
     label: '番剧 OGV 播放器',
     enabled: false,
-    note: '同上，未观测到。原以为需要 csrf + WBI 重签，实际不存在该请求（ADR 0006）',
+    note: '同上，未观测到。原以为需要 csrf + WBI 重签，实际不存在该请求（ADR 0007）',
   },
   {
     path: '/xlive/web-room/v2/index/getRoomPlayInfo',

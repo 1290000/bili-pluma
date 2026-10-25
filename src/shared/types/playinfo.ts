@@ -64,7 +64,7 @@ export interface PlayInfo {
 
   /**
    * 番剧走 durl（MP4 分段），且没有 dash。
-   * v1 不支持番剧（ADR 0006），此字段保留仅为类型完整性。
+   * v1 不支持番剧（ADR 0007），此字段保留仅为类型完整性。
    */
   durl: unknown[] | null;
 }

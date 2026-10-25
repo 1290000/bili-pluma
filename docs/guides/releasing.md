@@ -27,7 +27,7 @@
 - `MINOR`：新增支持的场景、新增界面
 - `PATCH`：修 bug、调整文案
 
-同步更新 `src/manifest.json` 的 `version`。
+同步更新 `wxt.config.ts` 里 `manifest.version`（WXT 没有独立的 `src/manifest.json`）。
 
 ### 2. 发布前检查
 

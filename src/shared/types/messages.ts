@@ -16,9 +16,16 @@ import type { PlayInfo } from './playinfo';
 /** 这次请求用的是哪个身份 */
 export type Identity = 'primary' | 'playback';
 
-/** UI / content → background */
+/**
+ * UI / content → background
+ *
+ * ⚠️ 标注 `【P2 预留】` 的两条**当前无处理方**，是给 popup / options 用的占位。
+ * 加处理方之前不要从 UI 调用，否则消息会永远悬着。
+ */
 export type RequestMsg =
+  /** 【P2 预留】popup 显示账号摘要（不含凭据） */
   | { type: 'account/summary' }
+  /** 【P2 预留】options 页的画质体检：用主账号身份取一次 playurl 做对比 */
   | { type: 'playinfo/get'; bvid: string; cid: number; qn: number | null }
   | { type: 'qr/generate' }
   | { type: 'qr/poll'; qrcodeKey: string }

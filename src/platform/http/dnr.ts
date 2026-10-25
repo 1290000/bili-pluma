@@ -37,11 +37,11 @@ import { serializeCookie } from '@shared/utils/cookie';
  * 按路径索引固定分配：同一路径永远用同一个 ID，不轮转、不复用。
  * 分三个区段避免与将来的其他规则集撞车：
  *   10000–10999  路径常驻规则（全局，整个浏览器范围）
- *   20000–29999  标签页限定规则（ADR 0009，页面代理用）
+ *   20000–29999  标签页限定规则（ADR 0010，页面代理用）
  */
 const PATH_RULE_BASE = 10000;
 
-/** 标签页规则区段（ADR 0009） */
+/** 标签页规则区段（ADR 0010） */
 const TAB_RULE_BASE = 20000;
 
 /** 标签页规则区段大小，用于识别"哪些是我们的" */
@@ -222,7 +222,7 @@ async function removeAllPathRules(): Promise<number> {
   return ours.length;
 }
 
-/** 删掉指向已关闭标签页的规则（ADR 0009） */
+/** 删掉指向已关闭标签页的规则（ADR 0010） */
 async function removeStaleTabRules(): Promise<number> {
   const [rules, tabs] = await Promise.all([
     chrome.declarativeNetRequest.getSessionRules().catch(() => []),
@@ -243,7 +243,7 @@ async function removeStaleTabRules(): Promise<number> {
   return stale.length;
 }
 
-// ── 页面代理：标签页限定规则（ADR 0009） ──
+// ── 页面代理：标签页限定规则（ADR 0010） ──
 
 /**
  * 普通视频页的取流路径。
