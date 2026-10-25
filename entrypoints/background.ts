@@ -42,7 +42,10 @@ export default defineBackground(() => {
       handleQrGenerate()
         .then(sendResponse)
         .catch((e: unknown) =>
-          sendResponse({ type: 'qr/generate:err', detail: e instanceof Error ? e.name : 'unknown' }),
+          sendResponse({
+            type: 'qr/generate:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
         );
       return true;
     }
@@ -87,7 +90,12 @@ export default defineBackground(() => {
       handleProxyStatus()
         .then(sendResponse)
         .catch(() =>
-          sendResponse({ type: 'proxy/status:ok', enabled: false, hasCredential: false, ruleCount: 0 }),
+          sendResponse({
+            type: 'proxy/status:ok',
+            enabled: false,
+            hasCredential: false,
+            ruleCount: 0,
+          }),
         );
       return true;
     }
@@ -182,4 +190,3 @@ export default defineBackground(() => {
     })();
   });
 });
-

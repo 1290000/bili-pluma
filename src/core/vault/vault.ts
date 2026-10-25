@@ -18,7 +18,14 @@
 
 import type { Credential } from '@shared/types/account';
 
-import { decryptJson, encryptJson, exportKey, generateRandomKey, importKey, type EncryptedBlob } from './crypto';
+import {
+  decryptJson,
+  encryptJson,
+  exportKey,
+  generateRandomKey,
+  importKey,
+  type EncryptedBlob,
+} from './crypto';
 
 /** platform 层实现这个接口，core 只依赖接口 */
 export interface VaultStorage {

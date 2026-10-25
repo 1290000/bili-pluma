@@ -90,7 +90,11 @@ async function collect(): Promise<Row[]> {
 
     put('DNR 标签页规则', tabRules.length, tabRules.length > 0);
     for (const r of tabRules.slice(0, 5)) {
-      put(`  ${r.id}`, `tabIds=[${(r.condition.tabIds ?? []).join(',')}] filter=${r.condition.urlFilter ?? '-'}`, true);
+      put(
+        `  ${r.id}`,
+        `tabIds=[${(r.condition.tabIds ?? []).join(',')}] filter=${r.condition.urlFilter ?? '-'}`,
+        true,
+      );
     }
 
     // 其他规则（不属于我们的）也报出来，避免"规则数对不上"的困惑
@@ -103,7 +107,9 @@ async function collect(): Promise<Row[]> {
 
   // 6) manifest
   try {
-    const manifest = chrome.runtime.getManifest() as chrome.runtime.Manifest & { incognito?: string };
+    const manifest = chrome.runtime.getManifest() as chrome.runtime.Manifest & {
+      incognito?: string;
+    };
     put('manifest incognito', manifest.incognito ?? '(未设置)');
   } catch {
     put('manifest incognito', '读取失败');
@@ -113,7 +119,8 @@ async function collect(): Promise<Row[]> {
   try {
     const bag = await chrome.storage.local.get('pluma:diag');
     const list =
-      (bag['pluma:diag'] as { at: number; step: string; detail?: string; from?: string }[] | undefined) ?? [];
+      (bag['pluma:diag'] as
+        { at: number; step: string; detail?: string; from?: string }[] | undefined) ?? [];
     if (list.length === 0) {
       put('诊断日志', '（空）');
     } else {
@@ -172,7 +179,8 @@ function render(rows: Row[]): void {
   if (!proxyRow?.ok) {
     tip.textContent = '代理已关闭，所有请求以主账号身份发出（开关在 P2 的 popup 里）。';
   } else if (!pathRow?.ok) {
-    tip.textContent = '代理开了但全局规则没装上 —— 打开视频页不会生效，检查 background 的启动自愈日志。';
+    tip.textContent =
+      '代理开了但全局规则没装上 —— 打开视频页不会生效，检查 background 的启动自愈日志。';
   } else if (!tabRow?.ok) {
     tip.textContent = '全局规则正常。标签页规则为 0 表示当前没有打开视频页（正常）。';
   } else {

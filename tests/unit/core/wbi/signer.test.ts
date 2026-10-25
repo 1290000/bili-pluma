@@ -45,9 +45,9 @@ describe('md5（与 Node 内置实现逐个对拍）', () => {
 
 describe('extractKeyFromUrl', () => {
   it('取文件名去掉扩展名', () => {
-    expect(extractKeyFromUrl('https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png')).toBe(
-      '7cd084941338484aae1ad9425b84077c',
-    );
+    expect(
+      extractKeyFromUrl('https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png'),
+    ).toBe('7cd084941338484aae1ad9425b84077c');
   });
 
   it('没有扩展名时返回整个文件名', () => {
@@ -55,9 +55,9 @@ describe('extractKeyFromUrl', () => {
   });
 
   it('7d 风格的 sub_key 也能取', () => {
-    expect(extractKeyFromUrl('https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png')).toBe(
-      '4932caff0ff746eab6f01bf08b70ac45',
-    );
+    expect(
+      extractKeyFromUrl('https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png'),
+    ).toBe('4932caff0ff746eab6f01bf08b70ac45');
   });
 });
 
@@ -87,7 +87,7 @@ describe('mixinKey', () => {
 });
 
 describe('filterValue', () => {
-  it('过滤 !\'()* 五个字符', () => {
+  it("过滤 !'()* 五个字符", () => {
     expect(filterValue("a!b'c(d)e*f")).toBe('abcdef');
   });
 

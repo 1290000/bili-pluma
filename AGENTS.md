@@ -226,10 +226,11 @@ grep -n "^## [0-9]" docs/03-open-questions.md
 **一条命令跑完全部**：
 
 ```bash
-pnpm verify      # = typecheck && lint && check:boundaries && test
+pnpm verify      # = typecheck && format:check && lint && check:boundaries && test
 ```
 
 - [ ] `pnpm typecheck` 通过
+- [ ] `pnpm format:check` 通过（不通过就 `pnpm format`，不要手改）
 - [ ] `pnpm lint` 通过
 - [ ] `pnpm check:boundaries` 通过
 - [ ] `pnpm test` 通过
@@ -257,7 +258,6 @@ entrypoints → background / content → core → shared
 
 `core/` 和 `shared/` **不许**出现 `chrome` / `window` / `document` / `fetch(` / `localStorage`。
 这不是洁癖 —— 192 个单测能在 Node 里跑，全靠这条。
-> 实现这两项是 P2 的待办，不是"已具备的能力"。
 
 ---
 

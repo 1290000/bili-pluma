@@ -13,9 +13,9 @@
 
 /** B站固定的 mixinKey 置换表（下标 → 原位置） */
 const MIXIN_KEY_ENC_TAB = [
-  46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28, 14, 39, 12, 38,
-  41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36,
-  20, 34, 44, 52,
+  46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49, 33, 9, 42, 19, 29, 28,
+  14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61, 26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54,
+  21, 56, 59, 6, 63, 57, 62, 11, 36, 20, 34, 44, 52,
 ] as const;
 
 /** 从完整 URL 里取文件名部分作为 key */
@@ -41,7 +41,11 @@ export function filterValue(value: string): string {
 }
 
 /** 给参数加 wts + w_rid，返回完整的查询串 */
-export function signQuery(params: Record<string, string | number>, mixin: string, wts: number): string {
+export function signQuery(
+  params: Record<string, string | number>,
+  mixin: string,
+  wts: number,
+): string {
   const withTs: Record<string, string> = { ...toStrMap(params), wts: String(wts) };
 
   const sorted = Object.keys(withTs)

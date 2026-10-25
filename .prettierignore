@@ -1,0 +1,23 @@
+# Prettier 忽略清单
+# 同步维护：.gitignore / eslint.config.mjs 的 ignores
+
+node_modules/
+.output/
+.wxt/
+coverage/
+
+# Q2 是独立扩展，裸 JS，独立演进，不随主项目格式化
+poc/
+
+# 文档：表格是手工对齐的信息密度，Prettier 重排会撑成 100 列巨表，
+# 且 git diff 噪音极大。proseWrap=preserve 之外再整体排除。
+*.md
+
+# 注入页面的裸 JS：保留手写布局可读性，禁止重排
+public/
+
+# 锁文件由 pnpm 生成，格式化会破坏完整性校验
+pnpm-lock.yaml
+
+# 构建产物
+*.zip

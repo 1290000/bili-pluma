@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseVideoPage, readDeviceCookies, readPrimaryMidFromCookie } from '@shared/utils/video-page';
+import {
+  parseVideoPage,
+  readDeviceCookies,
+  readPrimaryMidFromCookie,
+} from '@shared/utils/video-page';
 
 describe('parseVideoPage', () => {
   it('普通视频页', () => {
@@ -62,7 +66,9 @@ describe('parseVideoPage', () => {
   });
 
   it('bvid 里只有大小写字母和数字时能取到', () => {
-    expect(parseVideoPage('https://www.bilibili.com/video/BV1beNcz2ECq')?.bvid).toBe('BV1beNcz2ECq');
+    expect(parseVideoPage('https://www.bilibili.com/video/BV1beNcz2ECq')?.bvid).toBe(
+      'BV1beNcz2ECq',
+    );
   });
 
   it('/video/ 后面不是 BV 开头则不解析', () => {
@@ -109,7 +115,9 @@ describe('readDeviceCookies', () => {
 
 describe('readPrimaryMidFromCookie', () => {
   it('从页面 cookie 读出主账号 mid', () => {
-    expect(readPrimaryMidFromCookie('buvid3=B3; DedeUserID={{primary_mid}}; bili_jct=x')).toBe('{{primary_mid}}');
+    expect(readPrimaryMidFromCookie('buvid3=B3; DedeUserID={{primary_mid}}; bili_jct=x')).toBe(
+      '{{primary_mid}}',
+    );
   });
 
   it('读的是页面里的 DedeUserID，不是别的字段', () => {

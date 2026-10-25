@@ -20,7 +20,7 @@
 | 样式 | **原生 CSS 变量**（`tokens.css`） | — | 不用 Tailwind，理由见 §2.7 |
 | 单测 | **Vitest** | `^2` | 只跑 `core/` `shared/`，不碰浏览器 |
 | 集成测试 | **独立最小扩展**（P0 常驻） | — | `dnr.ts` 的回归测试，见 §5.2 |
-| 代码规范 | **ESLint**（含 `import/no-restricted-paths`）+ **Prettier** | — | ESLint 是依赖方向的强制手段，不是可选项 |
+| 代码规范 | **ESLint**（flat config）+ **Prettier** | `^9` / `^3` | 分工：ESLint 管"对不对"（含依赖方向强制），Prettier 管"好不好看"。`eslint-config-prettier` 关掉重叠规则，避免互相改来改去 |
 | 包管理 | **pnpm** | `^12` | **Windows 下必须 `nodeLinker: hoisted`**，见下方「环境约束」 |
 | 边界检查 | **`scripts/check-boundaries.ts`** | — | 按符号静态检查，CI 卡 PR |
 
@@ -257,8 +257,9 @@ bili-pluma/
 │   └── check-boundaries.ts         # ★ 依赖方向检查（CI 里跑）
 │
 ├── .editorconfig
-├── .eslintrc.cjs                   # 含 import/no-restricted-paths 规则
-├── .prettierrc
+├── eslint.config.mjs               # flat config，含 no-restricted-imports / no-restricted-globals
+├── .prettierrc                     # printWidth 100 / singleQuote / lf
+├── .prettierignore                 # 排除 Markdown、poc/、public/
 ├── package.json
 ├── tsconfig.json                   # paths 别名：@shared @core @platform @ui
 ├── LICENSE                         # GPL-3.0
@@ -668,7 +669,9 @@ pnpm check:boundaries
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
 | `entrypoints/popup/` `options/` | **尚未实现**（P2） | — |
 | `scripts/check-boundaries.ts` | ✅ **已实现**（`pnpm check:boundaries`） | — |
-| ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`，`pnpm lint`） | 只配了 ESLint，Prettier 尚未接入 |
+| ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`，`pnpm lint`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
+| Prettier 配置 | ✅ **已实现**（`.prettierrc`，`pnpm format` / `pnpm format:check`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |
+| `.eslintrc.cjs` | `eslint.config.mjs` | ESLint 9 默认 flat config |
 
 ### 已实现且与设计一致的
 

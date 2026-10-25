@@ -47,7 +47,10 @@ function fromBase64(text: string): Uint8Array<ArrayBuffer> {
 
 /** 生成新的随机 AES-GCM 密钥 */
 export async function generateRandomKey(): Promise<CryptoKey> {
-  return crypto.subtle.generateKey({ name: 'AES-GCM', length: KEY_BITS }, true, ['encrypt', 'decrypt']);
+  return crypto.subtle.generateKey({ name: 'AES-GCM', length: KEY_BITS }, true, [
+    'encrypt',
+    'decrypt',
+  ]);
 }
 
 /** 导出为 base64，供 platform 层存储 */
@@ -58,10 +61,13 @@ export async function exportKey(key: CryptoKey): Promise<string> {
 
 /** 从 base64 恢复密钥 */
 export async function importKey(base64: string): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', fromBase64(base64), { name: 'AES-GCM', length: KEY_BITS }, true, [
-    'encrypt',
-    'decrypt',
-  ]);
+  return crypto.subtle.importKey(
+    'raw',
+    fromBase64(base64),
+    { name: 'AES-GCM', length: KEY_BITS },
+    true,
+    ['encrypt', 'decrypt'],
+  );
 }
 
 /** 加密任意可序列化对象 */
@@ -69,7 +75,11 @@ export async function encryptJson(key: CryptoKey, payload: unknown): Promise<Enc
   const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES));
   const plaintext = new TextEncoder().encode(JSON.stringify(payload));
 
-  const cipher = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv as BufferSource }, key, plaintext);
+  const cipher = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv as BufferSource },
+    key,
+    plaintext,
+  );
 
   return {
     v: 1,

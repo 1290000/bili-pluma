@@ -23,7 +23,6 @@ const LOGIN_URL = '/login-window.html';
 /** 记住当前登录窗口，避免连点开出一堆（仅本实例可见） */
 let currentWindowId: number | null = null;
 
-
 export interface OpenLoginResult {
   ok: boolean;
   /**
@@ -80,7 +79,10 @@ export async function openLoginWindow(): Promise<OpenLoginResult> {
     return { ok: false, reason: 'incognito-disabled' };
   }
 
-  const before = await chrome.windows.getAll().then((ws) => ws.length).catch(() => -1);
+  const before = await chrome.windows
+    .getAll()
+    .then((ws) => ws.length)
+    .catch(() => -1);
 
   let created: chrome.windows.Window | undefined;
   try {
@@ -99,7 +101,10 @@ export async function openLoginWindow(): Promise<OpenLoginResult> {
 
   // 给浏览器一点时间让窗口真正出现
   await new Promise((r) => setTimeout(r, 400));
-  const after = await chrome.windows.getAll().then((ws) => ws.length).catch(() => -1);
+  const after = await chrome.windows
+    .getAll()
+    .then((ws) => ws.length)
+    .catch(() => -1);
 
   // 再查一次：本分区能不能看到 login-window 的标签（能看到就说明窗口真在我们这个分区里）
   const visibleTabs = await chrome.tabs
@@ -188,7 +193,12 @@ export async function diag(step: string, detail?: string): Promise<void> {
   try {
     const bag = await chrome.storage.local.get(DIAG_KEY);
     const list = (bag[DIAG_KEY] as DiagEntry[] | undefined) ?? [];
-    list.push({ at: Date.now(), step, from: INSTANCE_ID, ...(detail === undefined ? {} : { detail }) });
+    list.push({
+      at: Date.now(),
+      step,
+      from: INSTANCE_ID,
+      ...(detail === undefined ? {} : { detail }),
+    });
     await chrome.storage.local.set({ [DIAG_KEY]: list.slice(-30) });
   } catch {
     // 诊断失败不能影响主流程

@@ -14,12 +14,7 @@
  * 只有 `disableProxy()` 而没有切换到开启的入口，等于开关只能关不能开。
  */
 
-import {
-  describeRules,
-  disableProxy,
-  enableProxy,
-  isProxyEnabled,
-} from '@platform/http/dnr';
+import { describeRules, disableProxy, enableProxy, isProxyEnabled } from '@platform/http/dnr';
 import { readPersistedCredential } from '@platform/storage/credential-store';
 import { serializeCookie } from '@shared/utils/cookie';
 import type { ResponseMsg } from '@shared/types/messages';
@@ -65,6 +60,9 @@ export async function handleProxySet(enabled: boolean): Promise<ResponseMsg> {
     await enableProxy(cookie);
     return { type: 'proxy/set:ok', enabled: true };
   } catch (e) {
-    return { type: 'proxy/set:err', detail: e instanceof Error ? e.message.slice(0, 80) : '未知错误' };
+    return {
+      type: 'proxy/set:err',
+      detail: e instanceof Error ? e.message.slice(0, 80) : '未知错误',
+    };
   }
 }

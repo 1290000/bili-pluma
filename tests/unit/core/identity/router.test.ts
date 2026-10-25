@@ -122,7 +122,9 @@ describe('域名判定', () => {
   });
 
   it('passport.bilibili.com 不代理（登录接口用浏览器自己的身份）', () => {
-    expect(routeFor('https://passport.bilibili.com/x/passport-login/web/qrcode/generate')).toBe('primary');
+    expect(routeFor('https://passport.bilibili.com/x/passport-login/web/qrcode/generate')).toBe(
+      'primary',
+    );
   });
 
   it('www.bilibili.com 的页面请求不代理', () => {

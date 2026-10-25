@@ -12,7 +12,11 @@
 
 import { browser } from 'wxt/browser';
 
-import { parseVideoPage, readDeviceCookies, readPrimaryMidFromCookie } from '@shared/utils/video-page';
+import {
+  parseVideoPage,
+  readDeviceCookies,
+  readPrimaryMidFromCookie,
+} from '@shared/utils/video-page';
 
 /** 跨 world 通信的随机令牌。页面脚本能读到它，只用于防盲注 */
 const CHANNEL_TOKEN = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
@@ -42,10 +46,15 @@ function injectMainWorld(onInjected: (ok: boolean, detail: string) => void): voi
       parent.appendChild(script);
       // 不 remove：src 加载是异步的，提前移除会取消加载
       script.addEventListener('load', () => onInjected(true, '已加载'));
-      script.addEventListener('error', () => onInjected(false, '资源加载失败（检查 web_accessible_resources）'));
+      script.addEventListener('error', () =>
+        onInjected(false, '资源加载失败（检查 web_accessible_resources）'),
+      );
       return true;
     } catch (e) {
-      onInjected(false, `插入 script 抛错: ${e instanceof Error ? e.message.slice(0, 60) : String(e)}`);
+      onInjected(
+        false,
+        `插入 script 抛错: ${e instanceof Error ? e.message.slice(0, 60) : String(e)}`,
+      );
       return false;
     }
   };
@@ -149,7 +158,7 @@ function listenMainWorld(): void {
     // playurl 响应里的音频轨道清单 —— 确认 Hi-Res / 杜比轨有没有下发
     if (d.type === 'playurl-tracks') {
       const s = (
-        d as         {
+        d as {
           summary?: {
             audio?: { id: number; bw: number }[];
             video?: { id: number; h: number; codecid: number; bw: number }[];

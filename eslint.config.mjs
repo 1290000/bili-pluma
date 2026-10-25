@@ -17,12 +17,16 @@
  */
 
 import js from '@eslint/js';
+import prettierConfig from 'eslint-config-prettier';
 import tseslint from 'typescript-eslint';
 
 /** 严禁出现在 core / shared 的模块 */
 const BROWSER_AND_UI_MODULES = [
   // 浏览器扩展 API
-  { name: 'wxt/browser', message: 'core/shared 层禁止依赖浏览器 API，请通过接口注入（见 AGENTS.md §5.1）' },
+  {
+    name: 'wxt/browser',
+    message: 'core/shared 层禁止依赖浏览器 API，请通过接口注入（见 AGENTS.md §5.1）',
+  },
   { name: 'wxt', message: 'core/shared 层禁止依赖 WXT，请通过接口注入' },
   // 各层之间不许反向依赖
   { name: '@/src/platform', message: 'upper 层不能反向依赖：core/shared 不许 import platform' },
@@ -127,4 +131,9 @@ export default tseslint.config(
       'no-console': 'off',
     },
   },
+
+  // ── ★ 必须放最后：关掉与 Prettier 冲突的纯格式规则 ──
+  // 分工：ESLint 管"对不对"，Prettier 管"好不好看"。
+  // 两者都管缩进/换行会互相打架（一个报错、一个改回去，无限循环）。
+  prettierConfig,
 );

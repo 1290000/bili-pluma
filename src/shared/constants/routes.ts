@@ -74,7 +74,9 @@ export const PROXY_ROUTES = [
 ] as const satisfies readonly ProxyRoute[];
 
 /** 只有这些路径会被 DNR 规则命中 */
-export const ENABLED_ROUTE_PATHS: readonly string[] = PROXY_ROUTES.filter((r) => r.enabled).map((r) => r.path);
+export const ENABLED_ROUTE_PATHS: readonly string[] = PROXY_ROUTES.filter((r) => r.enabled).map(
+  (r) => r.path,
+);
 
 /**
  * 判断一个 pathname 是否在白名单内。

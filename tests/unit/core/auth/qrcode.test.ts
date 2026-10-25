@@ -46,7 +46,11 @@ describe('generateQr', () => {
 describe('pollQr', () => {
   const make = (innerCode: number, url = '', message = '') =>
     fakeHttp({
-      '/poll': { code: 0, message: 'OK', data: { url, refresh_token: '', timestamp: 0, code: innerCode, message } },
+      '/poll': {
+        code: 0,
+        message: 'OK',
+        data: { url, refresh_token: '', timestamp: 0, code: innerCode, message },
+      },
     });
 
   it('86101 → 未扫码', async () => {
@@ -62,7 +66,10 @@ describe('pollQr', () => {
   });
 
   it('0 → 登录成功，带回跨域 url', async () => {
-    const status = await pollQr(make(0, 'https://passport.biligame.com/x/crossDomain?ticket=t'), 'k');
+    const status = await pollQr(
+      make(0, 'https://passport.biligame.com/x/crossDomain?ticket=t'),
+      'k',
+    );
     expect(status).toEqual({
       kind: 'success',
       crossDomainUrl: 'https://passport.biligame.com/x/crossDomain?ticket=t',

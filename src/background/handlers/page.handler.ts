@@ -64,7 +64,10 @@ export async function handlePageActivate(payload: ActivatePayload): Promise<Acti
     const cookie = buildCookieHeader(credential, payload.deviceCookies);
     await diag(
       'page/activate',
-      `Cookie 字段=${cookie.split('; ').map((s) => s.split('=')[0]).join(',')}`,
+      `Cookie 字段=${cookie
+        .split('; ')
+        .map((s) => s.split('=')[0])
+        .join(',')}`,
     );
 
     await installTabRule(payload.tabId, cookie);

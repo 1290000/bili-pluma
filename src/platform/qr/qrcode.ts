@@ -18,7 +18,10 @@ export interface QrMatrix {
  * @param text 要编码的内容（B站给的是一个 URL）
  * @param errorCorrection 'L' | 'M' | 'Q' | 'H'，默认 M（约 15% 容错，屏幕扫码够用）
  */
-export function buildQrMatrix(text: string, errorCorrection: 'L' | 'M' | 'Q' | 'H' = 'M'): QrMatrix {
+export function buildQrMatrix(
+  text: string,
+  errorCorrection: 'L' | 'M' | 'Q' | 'H' = 'M',
+): QrMatrix {
   if (text.length === 0) throw new Error('二维码内容不能为空');
 
   // typeNumber = 0 表示按内容长度自动选版本

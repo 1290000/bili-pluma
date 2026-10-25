@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import type { EncryptedBlob } from '@core/vault/crypto';
-import { clearVault, hasCredential, loadCredential, saveCredential, type VaultStorage } from '@core/vault/vault';
+import {
+  clearVault,
+  hasCredential,
+  loadCredential,
+  saveCredential,
+  type VaultStorage,
+} from '@core/vault/vault';
 import type { Credential } from '@shared/types/account';
 
 /** 内存版存储，模拟 chrome.storage.local */

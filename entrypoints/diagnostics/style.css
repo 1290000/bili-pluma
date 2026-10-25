@@ -53,7 +53,7 @@ body {
 }
 
 .val {
-  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
   font-size: 12px;
   text-align: right;
   word-break: break-all;

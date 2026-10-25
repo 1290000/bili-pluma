@@ -67,7 +67,10 @@ async function fetchWbiKeys(): Promise<WbiKeys> {
  * 为什么设备 Cookie 不换：设备和浏览器都没变，换 buvid 反而让风控觉得异常。
  * 为什么凭据必须同源：`SESSDATA` / `bili_jct` / `DedeUserID` 来自不同账号会 -101。
  */
-export function buildCookieHeader(credential: Credential, deviceCookies: Record<string, string>): string {
+export function buildCookieHeader(
+  credential: Credential,
+  deviceCookies: Record<string, string>,
+): string {
   const device = pickCookie(deviceCookies, DEVICE_COOKIE_NAMES);
   return serializeCookie({
     ...device,
