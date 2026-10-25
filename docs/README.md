@@ -34,6 +34,12 @@
 | [0004](./decisions/0004-request-level-identity-proxy.md) | 请求级身份代理，不切 Cookie |
 | [0005](./decisions/0005-adopt-wxt-conventions.md) | 接入 WXT 约定，放弃自定 `src/content/` 结构 |
 | [0006](./decisions/0006-no-per-request-nonce.md) | **不用 per-request nonce**，改为按路径的常驻 DNR 规则 |
+| [0007](./decisions/0007-v1-video-only-bangumi-deferred.md) | v1 只支持普通视频，番剧留作 v1.5 实验性功能 |
+| [0008](./decisions/0008-cookies-permission-for-playback-credential.md) | **推翻 Q5「不申请 cookies」**：登录必须读 httpOnly 的 SESSDATA |
+| [0009](./decisions/0009-drop-passphrase-mode.md) | 移除口令模式与自动锁定：防不住本机程序的机制一律不加 |
+| [0010](./decisions/0010-page-proxy-via-tab-ids.md) | 页面代理用 tabIds 限定 + 常驻规则（不 hook fetch） |
+| [0011](./decisions/0011-playback-login-overwrites-primary.md) | 登录播放账号会覆盖主账号登录态（问题记录） |
+| [0012](./decisions/0012-isolated-window-login.md) | **播放账号在隔离窗口登录**：凭据脱离浏览器登录态 |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 
@@ -51,7 +57,10 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 
 ---
 
-## 当前状态（2026-10-24）
+## 已定事项（不含进度）
+
+> **进度看根 [README.md](../README.md) 首屏那一行。** 本文不重复维护进度，
+> 避免两处漂移。
 
 | 项 | 状态 |
 | --- | --- |
@@ -66,7 +75,6 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 | 实施路线 | ✅ 已定（P0 半天 → P1 骨架 → P2 可用 → P3 完善） |
 | **Q2 DNR 并发验证** | ✅ **已实测通过**：180 并发请求串号 0、残留 0；结论是**不需要 nonce**（[ADR 0006](./decisions/0006-no-per-request-nonce.md)） |
 | **Q4 番剧边界验证** | ❌ **未做，第二优先级** |
-| 代码 | ❌ 尚未开始（仅 `poc/`） |
 
 **下一步：P1-a 脚手架。** Q2 已通过，架构不再有阻塞项。P1 分三个里程碑（脚手架 → 扫码存副账号 → 端到端取流），详见 [`03-open-questions.md`](./03-open-questions.md) 末尾的实施顺序。
 

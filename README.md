@@ -4,11 +4,9 @@
 >
 > 用主账号浏览、点赞、收藏、评论，让一个大会员账号专门负责播放。
 
-GPL-3.0-only · Chrome 120+ / Edge · **设计完成，代码未开始**
+GPL-3.0-only · Chrome 120+ / Edge · **P1 代码完成，待新 dnr.ts 回归 + 真机复验（2026-10-25）**
 
----
-
-## ⚠️ 请先读
+## 请先读
 
 **本项目与哔哩哔哩（bilibili.com）官方无任何关联，未获授权或认可。** B站用户协议通常禁止通过非官方工具访问服务，**本工具的行为可能被视为违反该协议**。如果这不可接受，请不要使用。
 
@@ -40,21 +38,27 @@ GPL-3.0-only · Chrome 120+ / Edge · **设计完成，代码未开始**
 - ❌ 不解锁地区限制
 - ❌ 不共享账号
 - ❌ 不提供任何破解或加密绕过手段
-- ❌ 不在无痕模式运行（无痕窗口里扩展不生效，属预期行为）
+
+## 凭据如何存储
+
+播放账号凭据以 **AES-GCM** 加密后存在本地，密钥同样保存在本地。**这个加密能防什么、不能防什么，说清楚：**
+
+- ✅ 能防：其他网页脚本、其他扩展直接读到明文
+- ❌ **不能防本机程序**——能读本机文件的程序可以同时拿到密文和密钥
+- ❌ 也不改变：B站登录态本身就以 cookie 存在浏览器里，本扩展的加密不涉及那部分
+
+我们不上传凭据到任何服务器。没有做"口令解锁"——它防不住上面第 2 条，只会增加操作负担（[`ADR 0009`](./docs/decisions/0009-drop-passphrase-mode.md)）。
+
+> `cookies` 权限**只在你扫码登录播放账号的那一刻读取一次该账号凭据**，不读主账号、不读其他网站（[`ADR 0008`](./docs/decisions/0008-cookies-permission-for-playback-credential.md)）。
 
 ## 音质需要你的环境配合
 
-**Hi-Res** 通常开箱可用（Chrome/Edge 原生 FLAC 解码）。
-
-**杜比全景声** 需三件事同时成立：装 Microsoft EC-3 解码扩展（Store ID `9nvjqjbdkn97`）· 浏览器启用 media foundation playback · 系统音频设为空间音频/E-AC-3 直通。扩展**不做任何解码**，只提供自检面板。
-
----
+**Hi-Res** 通常开箱可用（Chrome/Edge 原生 FLAC 解码）。**杜比全景声**需三件事同时成立：装 Microsoft EC-3 解码扩展（Store ID `9nvjqjbdkn97`）· 浏览器启用 media foundation playback · 系统音频设为空间音频/E-AC-3 直通。扩展**不做任何解码**，只提供自检面板。
 
 ## 接手这个项目
 
 - **AI 代理 / 新来的开发者：先读 [AGENTS.md](./AGENTS.md)** ← 硬约束、不可翻案的决策、写代码与改文档的规则
-- 文档索引：[docs/README.md](./docs/README.md)
-- 当前进度与阻塞项：[docs/03-open-questions.md](./docs/03-open-questions.md) §0
+- 文档索引：[docs/README.md](./docs/README.md)　当前进度与阻塞项：[docs/03](./docs/03-open-questions.md) §0
 
 ## 安装（代码完成后）
 
@@ -64,7 +68,7 @@ GPL-3.0-only · Chrome 120+ / Edge · **设计完成，代码未开始**
 pnpm install && pnpm build    # 产物在 .output/chrome-mv3/
 ```
 
-`chrome://extensions/` → 开启开发者模式 → 加载已解压的扩展程序。理由见 [docs/guides/releasing.md](./docs/guides/releasing.md)。
+`chrome://extensions/` → 开发者模式 → 加载已解压的扩展程序。理由见 [docs/guides/releasing.md](./docs/guides/releasing.md)。
 
 ## 致谢
 

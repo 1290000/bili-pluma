@@ -21,8 +21,25 @@
 | 单测 | **Vitest** | `^2` | 只跑 `core/` `shared/`，不碰浏览器 |
 | 集成测试 | **独立最小扩展**（P0 常驻） | — | `dnr.ts` 的回归测试，见 §5.2 |
 | 代码规范 | **ESLint**（含 `import/no-restricted-paths`）+ **Prettier** | — | ESLint 是依赖方向的强制手段，不是可选项 |
-| 包管理 | **pnpm** | `^9` | — |
+| 包管理 | **pnpm** | `^12` | **Windows 下必须 `nodeLinker: hoisted`**，见下方「环境约束」 |
 | 边界检查 | **`scripts/check-boundaries.ts`** | — | 按符号静态检查，CI 卡 PR |
+
+### 环境约束：pnpm 在 Windows 上的 node_modules 布局
+
+pnpm 默认的 `isolated` 布局要为每个直接依赖创建顶层 symlink。**本项目路径含空格时，创建会静默失败**——表现为 `node_modules/wxt` 不存在、`wxt prepare` 报 `MODULE_NOT_FOUND`，而 `pnpm install` 却显示成功。
+
+必须在 `pnpm-workspace.yaml` 里配：
+
+```yaml
+nodeLinker: hoisted
+```
+
+两个坑：
+
+1. `.npmrc` 里的 `node-linker=hoisted` 在 pnpm 12 上**不生效**（pnpm 10+ 把配置迁到了 workspace 文件）。
+2. `pnpm exec` / `pnpm run` 会先做一次依赖校验，可能把布局切回 `isolated`。安装后建议直接确认 `node_modules/wxt` 存在。
+
+（2026-10-25 实装时踩到，排查耗时较久——`install` 显示成功但产物缺失，是典型的静默失败。）
 
 ### 为什么不用 TypeScript 钉版本
 

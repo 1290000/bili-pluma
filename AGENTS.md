@@ -6,7 +6,43 @@
 
 ---
 
-## 0. 三分钟认知
+## 0. 开工前必做（**第一条，比什么都重要**）
+
+**先确认"我是不是在 Pluma 仓库里"。判据是仓库身份，不是路径字符串。**
+
+```bash
+git rev-parse --show-toplevel     # 必须能跑通（是 git 仓库）
+ls AGENTS.md docs/decisions/      # 必须都存在
+grep -q '"name": "pluma"' package.json   # 项目身份
+```
+
+**三条全部满足 → 开工。任一不满足 → 停下来问用户，不要新建任何文件。**
+
+> ⚠️ **不要用绝对路径做判据**。`pwd == D:\Projects\Pluma` 这种写法会在下面这些
+> 正常场景里误报：
+>
+> | 场景 | 路径 |
+> | --- | --- |
+> | `git worktree add ../Pluma-feat-x` | `..\Pluma-feat-x` |
+> | 换机器 / 换用户名 | `C:\Users\other\code\Pluma` |
+> | macOS / Linux | `~/code/Pluma` |
+> | CI / 容器 | `/workspace` |
+>
+> **只要有 `.git` + `AGENTS.md` + `docs/decisions/` + `package.json` 的 name 对得上，
+> 在哪里都是正确的仓库。**
+
+> **为什么把这条放在最前面**：2026-10-25，一个 AI 代理没有确认工作目录，
+> 在 `D:\workbuddy\No Project\2026-10-24-22-23-40\` 从一个空目录重建了整个项目。
+> 结果是：文档与仓库版本产生 11 处冲突、ADR 编号撞车、
+> 代码按早已被推翻的方案（per-request nonce）实现。
+> 花了数小时才理清，最终那个目录被整体删除。
+>
+> **本项目只有一个工作目录，就是仓库根（`git rev-parse --show-toplevel` 的输出）。
+> 不要在别处建骨架，不要"先写再合并"。**
+
+---
+
+## 1. 三分钟认知
 
 **Pluma**（`bili-pluma`）= B站双账号画质助手。纯 MV3 浏览器扩展。
 
@@ -14,11 +50,11 @@
 
 **不是**破解，不是切 cookie，不是冒充会员。
 
-**当前状态**：设计完成，Q2 已实测通过，**代码尚未开始**（只有 `poc/`）。下一步是 P1-a 脚手架。
+**当前状态**：见 [README.md](./README.md) 首屏那一行。**不要在本文档维护第二份状态。**
 
 ---
 
-## 1. 先读什么（按此顺序，不要跳）
+## 2. 先读什么（按此顺序，不要跳）
 
 | 顺序 | 文件 | 读它的目的 |
 | --- | --- | --- |
@@ -26,7 +62,7 @@
 | 2 | **本文件** | 硬约束 |
 | 3 | [docs/03-open-questions.md](./docs/03-open-questions.md) §0 总览表 | **还剩几件事没定**，哪些已定不要翻案 |
 | 4 | [docs/04-project-structure.md](./docs/04-project-structure.md) §〇 + §1 + §2 | 技术选型、目录、分层禁令 |
-| 5 | [docs/decisions/](./docs/decisions/) | 5 条已定决策的理由 |
+| 5 | [docs/decisions/](./docs/decisions/) | 已定决策的理由 |
 | 6 | [docs/01-architecture.md](./docs/01-architecture.md) | 需要理解原理时再读 |
 | 7 | [docs/02-ui-spec.md](./docs/02-ui-spec.md) | 只在做 UI 时读 |
 
@@ -34,7 +70,7 @@
 
 ---
 
-## 2. 不可翻案的决策（12 条）
+## 3. 不可翻案的决策（12 条）
 
 以下决策已经过讨论并定稿。**没有用户明确指示，不得更改、不得"优化"、不得"顺便改进"。**
 
@@ -50,16 +86,23 @@
 | 8 | **只发源码**，不上架商店、不发预编译包 | 提议"打包个 zip 方便用户" |
 | 9 | **v1 只支持 Chrome + Edge** | 提议"顺手适配 Firefox" |
 | 10 | **WXT 的 `entrypoints/` 约定** 优先于个人目录偏好 | 提议"把入口改回 `src/content/`" |
-| 11 | **不支持无痕模式**，manifest 不声明 `incognito` | 提议"加个 `incognito: split` 让无痕也能用" |
-| 12 | **不申请 `cookies` 权限**，设备 cookie 从 `document.cookie` 借 | 提议"加 `cookies` 权限读起来更方便" |
+| 11 | **用无痕分区（`incognito: "split"`）登录播放账号** —— 推翻原"不支持无痕"（[ADR 0012](./docs/decisions/0012-isolated-window-login.md)） | 提议"直接在普通窗口扫码更简单" |
+| 12 | **申请 `cookies` 权限**，仅在扫码登录那一刻读一次播放账号凭据 —— 推翻原"不申请"（[ADR 0008](./docs/decisions/0008-cookies-permission-for-playback-credential.md)） | 提议"从 `document.cookie` 借就够了" |
 
 **如果你认为某条决策有问题**：不要直接改，也不要绕过它写代码。**先向用户说明你的理由和建议，由用户决定**。ADR 存在的意义是记录"为什么当时这么定"，不是让你重新讨论一遍。
 
+> **第 11、12 条的翻案依据**（2026-10-25 用户裁定）：
+> - **11**：「不支持无痕」基于"无痕里扩展不生效"的假设，**实测不成立**——无痕分区里扩展完全能运行。
+>   而且登录播放账号**必然覆盖主账号登录态**（`Set-Cookie` 按域名唯一），
+>   隔离窗口是唯一能保住主账号的方案。
+> - **12**：B站凭据（`SESSDATA`）是 **httpOnly**，`document.cookie` 读不到。
+>   不申请 `cookies` 权限就无法完成登录，属硬性需求。
+
 ---
 
-## 3. 动手前必须知道的事
+## 4. 动手前必须知道的事
 
-### 3.1 Q2 已实测通过，架构不再有阻塞项
+### 4.1 Q2 已实测通过，架构不再有阻塞项
 
 **2026-10-25 实测结论：DNR 并发安全。** 180 个并发请求，串号 0，规则残留 0。更重要的发现是**不需要 per-request nonce** —— 白名单请求全都该用同一个播放账号，值全局一致。所以 `dnr.ts` 用**按路径的常驻 session 规则**，不要规则 ID 池、不要每请求 add/remove、不要在 URL 上加 nonce 参数。见 [ADR 0006](./docs/decisions/0006-no-per-request-nonce.md)。
 
@@ -67,7 +110,7 @@
 
 `poc/q2-dnr-concurrency/` **保留为常驻回归测试**，改 `dnr.ts` 必跑。它不用 WXT、不建 `src/`、零依赖，手写 `manifest.json` + `background.js` + `lab.html`/`lab.js`/`lab.css`（MV3 禁止内联 `<script>`）。
 
-### 3.2 必须先读再动手的清单
+### 4.2 必须先读再动手的清单
 
 开始任何编码任务前，确认你已经知道：
 
@@ -81,9 +124,9 @@
 
 ---
 
-## 4. 写代码的硬规则
+## 5. 写代码的硬规则
 
-### 4.1 依赖方向
+### 5.1 依赖方向
 
 ```
 entrypoints/*  →  src/background、src/content  →  src/core  →  src/shared
@@ -91,19 +134,19 @@ entrypoints/*  →  src/background、src/content  →  src/core  →  src/shared
 
 **反向一律禁止。** 如果 `core/` 里想用 `chrome.storage`，正确答案是给 `core` 注入一个接口，实现在 `platform/`。
 
-### 4.2 三个"不许"
+### 5.2 三个"不许"
 
 1. **`core/` 里不许出现 `chrome.` / `window.` / `document.` / `fetch(`**——CI 的 `check-boundaries.ts` 会拦。
 2. **不许在 popup 里做长任务**——popup 失焦即销毁。扫码走独立窗口（`chrome.windows.create`）。
 3. **不许把凭据下发给 UI**——UI 只能拿到 `{uname, mid, vipLabel, expireAt, healthy}`。
 
-### 4.3 页内注入
+### 5.3 页内注入
 
 - **必须用 Shadow DOM**（`mode: 'closed'`）隔离，否则和 B 站页面样式互相污染。
 - **不用 Preact**，纯 DOM 20 行即可。
 - `tokens.css` 必须能注入 shadow root——**CSS 变量不穿透 shadow 边界**。
 
-### 4.4 DNR 相关
+### 5.4 DNR 相关
 
 - 所有 DNR 代码只在 `platform/http/dnr.ts`，对外只暴露 `withCookieFor()`。
 - **按白名单路径各建一条常驻 session 规则，不带 nonce。** 不要写成每请求 add/remove，也不要加规则 ID 池（ADR 0006）。
@@ -113,11 +156,11 @@ entrypoints/*  →  src/background、src/content  →  src/core  →  src/shared
 
 ---
 
-## 5. 改文档的硬规则
+## 6. 改文档的硬规则
 
 > 这一节是从一次「一次自检修出 11 处矛盾」的教训里来的。**违反它就会重现那些问题。**
 
-### 5.1 每件事只有一个权威位置
+### 6.1 每件事只有一个权威位置
 
 | 内容 | 权威位置 | 其他地方怎么写 |
 | --- | --- | --- |
@@ -130,12 +173,12 @@ entrypoints/*  →  src/background、src/content  →  src/core  →  src/shared
 
 **发现两处都写了同一件事 → 删掉一处，改成引用。** 不要"两边都更新，保持同步"——那必然漂移。
 
-### 5.2 引用规则
+### 6.2 引用规则
 
-- **必须写文件名**：`见 docs/04-project-structure.md §2`，不写"见 §6.2"。
+- **必须写文件名**：`见 docs/04-project-structure.md §2`，不写"见 §7.2"。
 - 原因：章节会重排，无锚点的相对位置一定会指错。
 
-### 5.3 改完必跑检查
+### 6.3 改完必跑检查
 
 ```bash
 # 死链检查
@@ -152,7 +195,7 @@ grep -n "^## [0-9]" docs/03-open-questions.md
 
 **任何一项输出异常，先修完再交付。**
 
-### 5.4 长度纪律
+### 6.4 长度纪律
 
 | 文件 | 上限 | 为什么 |
 | --- | --- | --- |
@@ -166,32 +209,32 @@ grep -n "^## [0-9]" docs/03-open-questions.md
 
 ---
 
-## 6. 遇到不确定时的处理
+## 7. 遇到不确定时的处理
 
 | 情况 | 正确做法 |
 | --- | --- |
 | 觉得某条决策有问题 | **停下来说明理由，由用户决定**，不要直接改 |
-| 文档之间矛盾 | **先查 §5.1 的权威位置表**，改错误的那一份 |
+| 文档之间矛盾 | **先查 §6.1 的权威位置表**，改错误的那一份 |
 | 接口行为不确定 | **抓官方前端**，不要猜；也不要依赖第三方文档（bilibili-API-collect 已关停） |
 | 测试挂了 | 先判断是 `core/` 逻辑错还是 `platform/` 适配错，不要"改测试让它过" |
 | 想加新依赖 | **先问**。当前依赖清单是封闭的，加任何一个都要有理由 |
 
 ---
 
-## 7. 交付前自检清单
+## 8. 交付前自检清单
 
 - [ ] `pnpm typecheck` 通过
 - [ ] `pnpm lint` 通过（含依赖方向规则）
 - [ ] `pnpm check:boundaries` 通过
 - [ ] `pnpm test` 通过（`core/` 层）
 - [ ] 若改了 `dnr.ts` → 已重跑 `poc/q2-dnr-concurrency/`
-- [ ] 若改了文档 → 已跑 §5.3 的检查
+- [ ] 若改了文档 → 已跑 §6.3 的检查
 - [ ] 没有新增"两边都写同一件事"的重复
-- [ ] 没有偷偷改 §2 的 10 条决策
+- [ ] 没有偷偷改 §3 的 12 条决策
 
 ---
 
-## 8. 一句话总结
+## 9. 一句话总结
 
 **这个项目不缺想法，缺的是"不擅自发挥"。**
 

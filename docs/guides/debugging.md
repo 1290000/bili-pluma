@@ -14,6 +14,56 @@
 5. 改了 manifest 后：必须重新加载扩展，且已打开的页面要刷新
 ```
 
+> 构建产物在 `.output/chrome-mv3/`（WXT 默认），不是 `dist/`。
+
+### 三个会让人排查很久的坑（2026-10-25 实测）
+
+**1. `chrome.action.onClicked` 不触发 → 检查 manifest 有没有 `action` 字段**
+
+WXT 不会因为你在代码里写了 `action.onClicked` 就自动加 `action` 到 manifest。没有这个字段，工具栏图标不绑定任何行为，**点了毫无反应也不报错**。
+
+必须在 `wxt.config.ts` 显式声明：
+
+```ts
+manifest: { action: { default_title: 'Pluma' } }
+```
+
+**2. 消息永远 pending → 先排除 Service Worker 冷启动**
+
+`chrome.runtime.sendMessage` 在 SW 冷启动时需要等待唤醒。如果页面侧设 3 秒超时，而 SW 首次启动要更久，消息会表现为"永远不回来"，且**没有任何报错**。
+
+排查顺序：
+1. 在 SW 里直接调 `fetch` → 排除网络
+2. 在 SW 里直接调 `chrome.storage.session` → 排除权限
+3. 在 SW 里**临时注册一个探针监听器**，从页面发消息，看 `hits` 是否增加 → 判断是投递问题还是处理问题
+4. 把超时拉到 20 秒再试 → 若通过即是冷启动
+
+**3. Edge 156 有自己的 `browser` 命名空间，别用它**
+
+Edge 156 提供 `globalThis.browser`，但它**既不是 `chrome` 的别名**（`browser !== chrome`），**也不是 webextension-polyfill**（无 polyfill 标记），而是一个带 `onRestartRequired` / `onUserScriptMessage` / `dynamicId` 等 Edge 专有 API 的独立命名空间。
+
+WXT 的产物里有这样一行：
+
+```js
+var t = globalThis.browser?.runtime?.id ? globalThis.browser : globalThis.chrome
+```
+
+所以在 Edge 上会**优先用这个 `browser`**。它的 `onMessage` 行为与标准 `chrome` 不一致，会导致 `sendResponse` + `return true` 失效。
+
+**项目约定：全项目统一用 `chrome.*`，不 import `wxt/browser` 的 `browser`。** 需要类型时装 `@types/chrome`。
+
+### 自动化测试的限制
+
+- **Chrome 155+ 已完全禁用 `--load-extension`**，加 `--disable-features=DisableLoadExtensionCommandLineSwitch` 也无效，SW 不会启动
+- **Edge 156 可以加载**，但在 Playwright 下扩展消息路由不稳定
+- 因此**端到端验证（扫码、真实取流）必须手动加载扩展**，不要试图全自动化
+
+### 二维码渲染必须整数倍缩放
+
+canvas 内部尺寸与 CSS 显示尺寸若不是整数倍关系，浏览器会插值，模块边缘发虚，手机扫不出来。
+
+做法：按可用空间算出整数 `scale`，再反推 canvas 尺寸，并**显式设置 `canvas.style.width/height` 等于内部尺寸**，同时 `ctx.imageSmoothingEnabled = false`。
+
 **常见坑**：改了 `content/main-world/inject.ts` 却没刷新页面，以为没生效。MAIN world 脚本是页面加载时注入的，不刷新就不会更新。
 
 ---
@@ -83,6 +133,28 @@ console.log('cleared', rules.length);
 ```
 
 卡在"所有请求都用错账号"时，先执行这个，再重新加载扩展。
+
+### Q2 实测结论（2026-10-25）
+
+用 [`poc/q2-dnr-concurrency/`](../../poc/q2-dnr-concurrency/) 连跑 3 轮：
+
+| 项 | 结果 |
+| --- | --- |
+| DNR 是否作用于 background 自己发的 fetch | ✅ **是**（这是整个方案的支点） |
+| 串行 10 次 / 并发 20 次 / 并发 40 次 | 全部 100% 对号 |
+| 规则生效延迟（100 次「加规则→立刻请求」） | **100/100 命中，无窗口期** |
+| 异常后规则泄漏 | 规则数 0 → 0，后续请求不受污染 |
+| 单轮耗时 | 806 / 848 / 973 ms |
+
+**三条由此确定的实现约束**：
+
+1. **规则池 32 够用，但必须实现排队**。40 并发时后 8 个排队，实测行为正常。
+2. **不需要"规则生效确认"逻辑**。100/100 命中，说明 `updateSessionRules` 后立刻 fetch 是安全的。
+3. **`try/finally` 是硬要求**。不清理会污染后续请求，这是实测过的。
+
+**没覆盖的**：Service Worker 被系统杀掉导致规则残留。正式版要在启动时执行一次"清空所有 session 规则"兜底。
+
+**怎么重跑**：起 `node poc/q2-dnr-concurrency/echo-server.cjs`，加载该目录为扩展，打开「选项」，点按钮。
 
 ---
 

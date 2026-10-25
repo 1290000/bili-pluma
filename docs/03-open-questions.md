@@ -1,9 +1,10 @@
 # Pluma · 待确认问题清单（Open Questions）
 
 > 项目名 **Pluma** / 仓库名 `bili-pluma` / 副标题 B站双账号画质助手
-> 版本：**v1.3** · 2026-10-25
+> 版本：**v1.4** · 2026-10-25
 > **已决策：Q5 / Q6 / Q7 / Q10 / Q11 / Q12 / Q13 / Q15**（共 8 条）
 > **已实测：Q2**（2026-10-25 跑完，结论见 §2，并新增 ADR 0006）
+> **v1.4 变更**：Q5 从"不申请 `cookies`"翻案为"申请"（[ADR 0008](./decisions/0008-cookies-permission-for-playback-credential.md)）
 > **待验证：Q1 / Q3 / Q4 / Q8 / Q9 / Q14**（共 6 条）
 > **待落实：Q16**（分发与预案，决策已定，文档已落地，需在实际发版时执行）
 > 用途：项目开工前必须清掉的未知项。每条标注**影响面、验证方式、阻塞程度**。
@@ -19,7 +20,7 @@
 | Q2  | DNR 临时规则在并发请求下的实际行为            | 🔴 | 半天        | ✅ **已实测（结论：不需要 nonce）** |
 | Q3  | 播放页对 playurl 的调用次数与时机          | 🔴 | 1 小时      | 待验 |
 | Q4  | 番剧/影视"能播会员专享"的真实边界（试看 vs 完整）   | 🔴 | 1 小时      | 待验 |
-| Q5  | 是否需要主账号的 cookie（CSRF/历史归属）     | 🔴 | 决策        | ✅ 已定（**不申请 `cookies`**） |
+| Q5  | 是否需要主账号的 cookie（CSRF/历史归属）     | 🔴 | 决策        | ✅ 已定（**申请 `cookies`**，仅读播放账号凭据，[ADR 0008](./decisions/0008-cookies-permission-for-playback-credential.md)） |
 | Q6  | 凭据加密的密钥来源（主密码 vs 随机 vs 系统）     | 🟡 | 决策，非验证    | ✅ 已定（方案 C，v1 只做默认模式） |
 | Q7  | 主账号是否写死为"当前浏览器登录"（不支持多主账号）     | 🟡 | 决策        | ✅ 已定（不管理） |
 | Q8  | 白名单覆盖面是否完整（漏了接口就等于画质没生效）       | 🟡 | 需真机抓包     | 待验 |
@@ -186,37 +187,48 @@ DevTools Network 面板过滤 `playurl`，长时间挂着观察。或用扩展�
 
 ---
 
-## 5. ✅ Q5：到底需不需要主账号的 cookie — **已决策：不申请 `cookies` 权限**
+## 5. ✅ Q5：到底需不需要主账号的 cookie — **已决策：申请 `cookies` 权限**
 
 ### 为什么重要
 
-方案假设"浏览器是 A，扩展只换取流那一路"。逐项核对下来，没有任何一处需要**显式读取 A 的 cookie**：
+原判断是"完全不需要 `cookies` 权限"，理由是设备 cookie 能从 `document.cookie` 借、
+主账号的 `SESSDATA` 本来就不需要。**这个判断在 P1 实装时被推翻。**
 
-| 需要什么 | 靠什么拿 | 需要 `cookies` 权限吗 |
+### 推翻的原因：播放账号凭据读不到
+
+`cookies` 权限的真正用途**不是读主账号**，而是**读播放账号自己**：
+
+| 要读什么 | 能用 `document.cookie` 吗 | 结论 |
 | --- | --- | --- |
-| 设备 Cookie（`buvid3` / `buvid4` / `bili_ticket` / `_uuid` / `buvid_fp`） | MAIN world 里读 `document.cookie` | **不需要** |
-| 番剧 POST 的 `csrf` | 用 B 的 `bili_jct`，不碰 A | 不需要 |
-| 播放历史归属 A | 浏览器全程是 A，天然归 A | 不需要 |
-| "画质体检"里用 A 身份对比 | 同源 fetch 自动带 A 的 cookie | 不需要 |
-| A 的 `SESSDATA` | 根本不需要（httpOnly，也读不到） | 不需要 |
+| 设备 Cookie（`buvid3` 等） | ✅ 能（非 httpOnly） | 不需要权限 |
+| **播放账号的 `SESSDATA`** | ❌ **httpOnly，读不到** | **必须用 `cookies`** |
+| 播放账号的 `bili_jct` / `DedeUserID` | ❌ 同上 | 必须用 `cookies` |
 
-### 决策：v1 不申请 `cookies` 权限
+**扫码登录成功后，B站通过 `Set-Cookie` 下发凭据。** 而：
+- `fetch` 读不到 `Set-Cookie`（forbidden response header）
+- `document.cookie` 读不到 httpOnly 的 `SESSDATA`
 
-**理由：**
+**所以不用 `chrome.cookies` 就根本拿不到播放账号凭据，登录流程无法完成。**
 
-1. 设备 cookie 是 B站前端自己要用的设备标识，通常非 httpOnly —— 否则前端 JS 读不到、`buvid` 请求头就没法加。Dual Account Helper 作为油猴脚本（同样没有 `cookies` 权限）就是从 `document.cookie` 借的，它能跑说明这条路走得通。
-2. `cookies` 权限在安装时显示的是"读取和更改你在所有网站上的数据"，是所有权限里最吓人的一档。我们只发源码不上商店，没有审核压力，但用户看到那个警告一样会犹豫。
-3. 权限申请应该"**遇到具体失败再加**"，而不是"提前预防"。现在没有证据说明需要它。
+### 决策：申请 `cookies`，但严格限定用途
 
-**兜底路径**（真遇到才走）：
+```json
+"permissions": ["cookies"],
+"host_permissions": ["*://*.bilibili.com/*"]
+```
 
-- 症状：请求被风控返回 `-412`，且 `document.cookie` 里确实缺设备 cookie
-- 手段：`chrome.cookies.getAll({ domain: '.bilibili.com' })` **能读到 httpOnly 的 cookie**，这是 `document.cookie` 做不到的
-- 届时再申请权限，并把这段决策改成"需要 `cookies`"
+**三条自律**（写进 README，让用户能核对）：
 
-### 这条决策的验证条件
+1. **只在扫码登录成功那一刻调用一次**，之后走 vault 加密存储
+2. **只读 `www.bilibili.com` 的 `SESSDATA` / `bili_jct` / `DedeUserID` 三个**
+3. **不读主账号、不读其他网站、不持续监听**
 
-P1-c 端到端跑通时顺带确认：主账号登录态下打开 4K 视频，playurl 走代理返回 4K，**且没有出现 `-412`**。若出现，按上面的兜底路径处理，不要直接加权限。
+见 [ADR 0008](./decisions/0008-cookies-permission-for-playback-credential.md)。
+
+### 对原"不需要"判断的说明
+
+原分析里"设备 cookie 从 `document.cookie` 借"这一点**仍然成立**，实装时也确实这么做的。
+被推翻的只是结论——漏考虑了"播放账号凭据本身怎么读"。
 
 ---
 

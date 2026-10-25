@@ -531,14 +531,42 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 
 打通一条最小链路：**扫码登录 → 凭据加密存储 → 代理取流**。
 
-- WXT 初始化，`entrypoints/` + `src/` 分层落地
-- 扫码登录（生成二维码 / 轮询 / 落地凭据）
-- 凭据加密存储（档 1：AES-GCM + `chrome.storage.local`）
-- `platform/http/dnr.ts` 正式版（按路径的常驻规则 + 总开关 + SW 启动自愈）
-- `core/identity/router.ts` + 对应单测
-- 单条 playurl 走通，能拿到 4K 流列表
+| # | 内容 | 状态 |
+| --- | --- | --- |
+| 1 | WXT 初始化，`entrypoints/` + `src/` 分层落地 | ✅ |
+| 2 | 扫码登录（隔离窗口 + 生成二维码 / 轮询 / 落地凭据） | ✅ |
+| 3 | 凭据加密存储（AES-GCM + `chrome.storage.local`，单一模式） | ✅ |
+| 4 | `platform/http/dnr.ts`（按路径常驻规则 + 总开关 + SW 启动自愈） | ✅ |
+| 4b | `core/wbi/signer.ts`（`w_rid` 签名，playurl 必需） | ✅ |
+| 5 | `core/identity/router.ts` + 对应单测 | ✅ TDD 编写，36 个测试，4 种变异全被抓住 |
+| 6 | 单条 playurl 走通，能拿到 4K 流列表 | ✅ |
+| 7 | 页面代理接到真实视频页（tabIds 限定，[ADR 0010](./decisions/0010-page-proxy-via-tab-ids.md)） | ✅ |
+| 8 | 主世界脚本：藏 `__playinfo__` + 伪装本地会员状态 | ✅ 见 [ADR 0010](./decisions/0010-page-proxy-via-tab-ids.md) |
 
-**验收**：在真实视频页，代理请求返回的 `accept_quality` 包含主账号拿不到的档位。
+**验收**：在真实双账号环境下，主账号（无大会员）能看到并播放会员画质。
+
+> **2026-10-25 实测（真实双账号）**：
+>
+> | 项 | 结果 |
+> | --- | --- |
+> | 主账号登录态 | **未被覆盖**（头像仍是主账号 mid={{primary_mid}}） |
+> | 播放账号隔离 | ✅ 无痕分区，mid={{playback_mid}} |
+> | DNR 换 Cookie | ✅ `playurl 请求出现` → `页面实际播放 4320p` |
+> | SSR 拦截 | ✅ `playinfo=hidden-or-empty`，播放器改走 API |
+> | 会员状态伪装 | ✅ `已改写 /x/player/wbi/v2`，切换画质不弹框 |
+> | **8K** | ✅ **7680×4320 真实播放** |
+> | **HDR** | ✅ **肉眼确认生效**（高光更亮、暗部有细节） |
+> | Hi-Res (FLAC) | ✅ `音轨装载成功: flac`，与杜比视界可共存 |
+> | 杜比全景声 | ⚠️ 未验证——测试视频无杜比音轨，且本机缺 EC-3 解码器 |
+
+> ⚠️ **不要用 `accept_quality` 判断。** 未登录时它就返回含 8K/4K 的假数组。
+> 判据必须是 `dash.video[].height` 与 `<video>.videoHeight`。
+>
+> ⚠️ **`video-dynamic-range` 媒体查询不可靠。** 实测 HDR 生效时它仍返回 `standard`。
+> 判断 HDR 只能靠肉眼对比与 `edge://gpu` 的 HEVC 解码项。
+>
+> ⚠️ **必须双账号环境。** 主账号（普通用户）登录浏览器，播放账号仅存于 vault。
+> 两者相同的话，代理等于自己换自己，无法验证。
 
 ### P2：可用（约 1 周）
 
