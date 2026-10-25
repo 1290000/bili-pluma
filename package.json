@@ -14,6 +14,9 @@
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "check:boundaries": "tsx scripts/check-boundaries.ts",
+    "verify": "tsc --noEmit && eslint . && tsx scripts/check-boundaries.ts && vitest run",
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "wxt prepare"
@@ -26,7 +29,11 @@
     "@preact/preset-vite": "^2.10.6",
     "@types/chrome": "^0.3.6",
     "@types/node": "^22.20.5",
+    "eslint": "^9.39.5",
+    "eslint-plugin-import": "^2.32.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.0",
     "vitest": "^2.1.9",
     "wxt": "^0.21.4"
   },

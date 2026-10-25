@@ -223,22 +223,40 @@ grep -n "^## [0-9]" docs/03-open-questions.md
 
 ## 8. 交付前自检清单
 
+**一条命令跑完全部**：
+
+```bash
+pnpm verify      # = typecheck && lint && check:boundaries && test
+```
+
 - [ ] `pnpm typecheck` 通过
+- [ ] `pnpm lint` 通过
+- [ ] `pnpm check:boundaries` 通过
 - [ ] `pnpm test` 通过
-- [ ] 若改了 `dnr.ts` → 已重跑 `poc/q2-dnr-concurrency/`
+- [ ] 若改了 `dnr.ts` → 已重跑 `poc/q2-dnr-concurrency/`（或 `node poc/verify/run-q2-auto.cjs`）
 - [ ] 若改了文档 → 已跑 §6.3 的检查
 - [ ] 没有新增"两边都写同一件事"的重复
 - [ ] 没有偷偷改 §3 的 12 条决策
 
-> ⚠️ **以下两项尚未实现**（`docs/04-project-structure.md` §〇 有规划，代码里没有）。
-> 不要假装跑过：
->
-> | 项 | 状态 |
-> | --- | --- |
-> | `pnpm lint`（ESLint + import/no-restricted-paths） | ❌ 未配置 |
-> | `pnpm check:boundaries`（`scripts/check-boundaries.ts`） | ❌ 未实现 |
->
-> **目前依赖方向靠人工审查**（`core/` 里不许 `chrome.` / `window.` / `document.` / `fetch(`）。
+### 分层是怎么被强制的（两道防线，缺一不可）
+
+| 工具 | 拦什么 | 局限 |
+| --- | --- | --- |
+| `pnpm lint`（ESLint `no-restricted-imports`） | **静态 import**：`import { browser } from 'wxt/browser'` | 看不见 `globalThis.chrome` 这类动态访问 |
+| `pnpm check:boundaries`（`scripts/check-boundaries.ts`） | **文本扫描**：`core/` 下出现 `chrome` / `window` / `document` / `fetch(` 等 | 可能误报（已用注释/字符串掩码处理，实测零误报） |
+
+**为什么要两道**：ESLint 能精确定位到行，但只认 import；
+boundaries 能抓动态绕过，但只能给出文本位置。
+**2026-10-25 实测验证**：`(globalThis as any).chrome` 能绕过 ESLint，被 boundaries 抓到。
+
+核心约束（`docs/04-project-structure.md` §0）：依赖只能从外往里流
+
+```
+entrypoints → background / content → core → shared
+```
+
+`core/` 和 `shared/` **不许**出现 `chrome` / `window` / `document` / `fetch(` / `localStorage`。
+这不是洁癖 —— 192 个单测能在 Node 里跑，全靠这条。
 > 实现这两项是 P2 的待办，不是"已具备的能力"。
 
 ---

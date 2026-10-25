@@ -511,42 +511,67 @@ v1 只做纯 MV3 扩展。
 
 **`core` 里不许出现 `chrome.`**——这一条可以用 ESLint 规则卡死。
 
-### 保险 2：ESLint 的 `no-restricted-imports` 限定层间引用
+### 保险 2：ESLint 的 `no-restricted-imports` 限定层间引用 ✅ 已落地
+
+实现见 `eslint.config.mjs`，跑 `pnpm lint`。核心规则：
 
 ```js
-// .eslintrc.cjs
-rules: {
-  'no-restricted-imports': ['error', {
-    patterns: [
-      { group: ['@core/*', '@platform/*', '@design/*'], message: 'shared 不能依赖上层' },
-      { group: ['@platform/*', '@design/*'], message: 'core 不能依赖 platform（用注入）' },
-    ],
-  }],
-}
+// src/core/**、src/shared/** 下
+'no-restricted-imports': ['error', {
+  paths: [{ name: 'wxt/browser' }, { name: 'wxt' }],
+  patterns: [
+    { group: ['@platform/*'], message: 'core/shared 不许依赖 platform' },
+    { group: ['@background/*', '@content/*'], message: 'core/shared 不许依赖上层' },
+    { group: ['wxt', 'wxt/*'], message: 'core/shared 禁止依赖 WXT' },
+  ],
+}],
+// 还禁了 chrome / browser 全局对象
+'no-restricted-globals': ['error', { name: 'chrome' }, { name: 'browser' }],
 ```
+
+**实测（2026-10-25）**：在 `core/vault/vault.ts` 顶部加一行
+`import { browser } from 'wxt/browser'`，ESLint 立刻报 2 条 `no-restricted-imports`。
 
 配合 `overrides` 按目录生效，就能做到**编译期强制依赖方向**。
 
 > `@design/*` 只允许 `entrypoints/` 引用，`shared`/`core`/`platform` 一律禁止——因为设计令牌是 UI 概念，业务层不该知道颜色。
+> ⚠️ 这条**尚未加进 ESLint 配置**（当前没有跨层引用 design 的情况），加的时候记得补。
 
-### 保险 3：`scripts/check-boundaries.ts` 在 CI 跑
+### 保险 3：`scripts/check-boundaries.ts` 在 CI 跑 ✅ 已落地
 
-ESLint 管 import 方向，但管不住"`core` 里偷偷用了 `chrome.storage`"。所以再加一个静态检查：
+ESLint 管 import 方向，但**管不住 `globalThis.chrome` 这类动态访问**。所以再加一个文本级检查：
 
-```ts
-// 伪代码
-const CORE_DIR = 'src/core';
-const FORBIDDEN = [/\bchrome\./, /\bwindow\./, /\bdocument\./, /\bfetch\(/];
-
-for (const file of walk(CORE_DIR)) {
-  const src = read(file);
-  for (const re of FORBIDDEN) {
-    if (re.test(src)) fail(`${file} 出现禁用符号 ${re}`);
-  }
-}
+```bash
+pnpm check:boundaries
 ```
 
-这个脚本比 ESLint 更狠，因为它是按**符号**而非 import 检查。跑在 CI 里，PR 过不了。
+实现要点：
+
+| 项 | 做法 |
+| --- | --- |
+| 扫描范围 | `src/core/` + `src/shared/` 下所有 `.ts` |
+| 禁止符号 | `chrome` / `browser.` / `window` / `document` / `fetch(` / `localStorage` / `sessionStorage` / `XMLHttpRequest` |
+| **注释与字符串** | **掩码成等长空白**（保持列号），避免注释里提到 `chrome` 就误报 |
+| 输出 | 文件名:行:列 + 原始代码片段 + 修复提示 |
+
+**为什么 ESLint 抓不到 `globalThis.chrome`**：它只看静态 import 语句。
+`(globalThis as any).chrome` 里没有 import，ESLint 只报了 `no-explicit-any`，
+**完全没提分层违规**。这正是需要第二道防线的原因。
+
+**实测（2026-10-25，六种变异）**：
+
+| 变异 | ESLint | boundaries |
+| --- | --- | --- |
+| `import { browser } from 'wxt/browser'` | ✅ 抓到 | ✅ 抓到 |
+| `(globalThis as any).chrome` | ❌ **只报 any，漏了分层** | ✅ 抓到 |
+| `await fetch(...)` | ✅ 抓到 | ✅ 抓到 |
+| `document.title` | ✅ 抓到 | ✅ 抓到 |
+| `localStorage.setItem` | ✅ 抓到 | ✅ 抓到 |
+| 注释/字符串提到 `chrome` | ✅ 不误报 | ✅ **不误报**（掩码生效） |
+
+> ⚠️ **检查项是 `\bchrome\b` 而不是 `chrome\.`** ——
+> `globalThis.chrome`、`('chrome' in x)` 拿到的都是同一个对象，
+> 只拦 `chrome.` 会漏。这是实测踩出来的。
 
 ---
 
@@ -642,8 +667,8 @@ for (const file of walk(CORE_DIR)) {
 | `src/platform/runtime/messaging.ts` | 无独立封装，页面直接 `sendMessage` | 只有 3 个 UI 页面，封装收益低于成本 |
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
 | `entrypoints/popup/` `options/` | **尚未实现**（P2） | — |
-| `scripts/check-boundaries.ts` | **尚未实现** | 依赖方向目前靠人工审查 |
-| ESLint / Prettier 配置 | **尚未实现** | `pnpm lint` 跑不了 |
+| `scripts/check-boundaries.ts` | ✅ **已实现**（`pnpm check:boundaries`） | — |
+| ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`，`pnpm lint`） | 只配了 ESLint，Prettier 尚未接入 |
 
 ### 已实现且与设计一致的
 

@@ -103,16 +103,20 @@ export function playurlQuery(params: PlayurlParams, wts: number) {
 const PLAYURL_PATH = '/x/player/wbi/playurl';
 
 /**
- * 用播放账号凭据请求 playurl。
+ * 用播放账号身份请求 playurl（由 background 自己发，不是页面）。
  *
  * ⚠️ 路径必须过白名单。这不是防御性编程，是架构约束：
  * 白名单外的东西一律不代理（`shared/constants/routes.ts` 是唯一真相源）。
+ *
+ * ⚠️ **当前无调用方**，是给 P2 的 options 页「画质体检」预留的
+ * （用主账号身份对比一次 playurl，生成对比表）。
+ * 加调用方之前不要从别处调——它依赖 `enableProxy()` 已装好常驻规则，
+ * 否则请求会以未登录身份发出。
+ *
+ * 注意：**不接收 credential 参数**。凭据已由常驻规则全局注入，
+ * 这里传凭据会让人误以为"这个函数自己管身份"，而实际它什么都不管。
  */
-export async function fetchPlayurlAsPlayback(
-  credential: Credential,
-  params: PlayurlParams,
-  deviceCookies: Record<string, string>,
-): Promise<unknown> {
+export async function fetchPlayurlAsPlayback(params: PlayurlParams): Promise<unknown> {
   const { imgKey, subKey } = await fetchWbiKeys();
   const wts = Math.floor(Date.now() / 1000);
   const signed = signQuery(playurlQuery(params, wts), mixinKey(imgKey, subKey), wts);
@@ -125,9 +129,7 @@ export async function fetchPlayurlAsPlayback(
     throw new Error(`router 判定该 URL 不应代理: ${PLAYURL_PATH}`);
   }
 
-  const cookie = buildCookieHeader(credential, deviceCookies);
-
-  // ⚠️ 这里**不自己装 DNR 规则**（ADR 0006）。
+  // ⚠️ 这里**不自己装 DNR 规则，也不自己拼 Cookie**（ADR 0006）。
   // 常驻规则由 `enableProxy()` 在配置播放账号时统一装好，值全局一致。
   // 请求方只需 `credentials: 'omit'` —— 浏览器自带的 cookie 被丢弃，
   // DNR 注入的播放账号凭据生效。
