@@ -129,6 +129,84 @@ bsk install-skill --harness cursor
 
 ---
 
+## 7a. `chrome-extension://` 页面 **bsk 一律读不到**（2026-10-26 逐个命令实测）
+
+想验证扩展自己的页面（options / popup）渲染得对不对时，会自然想到
+`bsk evaluate --tab-id <扩展页>`。**这条路走不通，而且不是"换个命令就好"。**
+
+### 错误长什么样
+
+`evaluate` / `get-html` / `snapshot` / `observe` 报的是：
+
+```
+error: operation denied by the Agent Window sandbox
+details: tool.evaluate cannot access tab 1673220385 because its URL is
+         chrome-extension://<id>/popup.html; navigate the Agent Window to a web page first
+```
+
+`screenshot` 报的是另一个码，**这个 `reason` 是决定性证据**：
+
+```json
+{ "code": "permission_denied", "message": "tool.screenshot cannot access tab …",
+  "data": { "reason": "restricted_tab_url" } }
+```
+
+`restricted_tab_url` 说明判定发生在 **URL 层面**，之后所有工具都被同一个闸门挡住。
+所以"再多试几个命令"是无效方向。
+
+### 已经排除的几种"以为是原因"的解释
+
+顺序很重要——**前两条是我先猜错的方向，实际都不是原因**：
+
+| 猜测 | 实测结果 |
+| --- | --- |
+| "扩展模块不能从普通页面 import，是 CSP/跨源限制" | ❌ **不是**。报错时页面是 `https://www.bilibili.com`，普通网页上下文里压根没有 `chrome.runtime`，`import('chrome-extension://…')` 当然失败。那是**方法用错**，与扩展页无关 |
+| "要先 `bsk tab borrow` 借过来" | ❌ **不是**。借了照样报同一个错 |
+| **真原因：沙箱 URL 白名单** | ✅ `evaluate` 的沙箱只接受 http/https 页面，`chrome-extension://` 一律拒绝 |
+
+`bsk evaluate --help` 里有个 `--tab-id`，看着像"可以指定任意标签页"，
+**但它受沙箱约束**，对扩展页无效。
+
+### 那怎么验扩展页
+
+**结论：`chrome-extension://` 页面用 bsk 的读取类命令一律读不到，这是
+词表级（URL scheme）的限制，不是"换个命令就好"。**
+
+2026-10-26 逐个实测：
+
+| 命令 | 结果 |
+| --- | --- |
+| `evaluate --tab-id` / `get-html` / `snapshot` / `observe` | ❌ `operation denied by the Agent Window sandbox` |
+| `screenshot --tab-id` | ❌ `permission_denied`，`data.reason = **restricted_tab_url**` |
+| `debug pages` | ❌ 只列**录制目标**，不是全上下文清单 |
+
+`restricted_tab_url` 是决定性证据：**判定发生在 URL 层面**，之后所有工具被同一个闸门挡住。
+所以"再多试几个命令"是无效方向。另两个已排除的方向**都实测过，别再重复**：
+
+- **`bsk tab borrow` 不管用。** 借过来照样报同一个错——限的是 URL scheme，不是访问权。
+- **不是 CSP / 跨源问题。** 报错时页面是 `https://www.bilibili.com`，普通网页里
+  压根没有 `chrome.runtime`，`import('chrome-extension://…')` 当然失败。那是**方法用错**。
+
+### 实际可用的替代路径
+
+| 目标 | 可行做法 |
+| --- | --- |
+| 确认**判据取值**正确（如 `canPlayType` / `isTypeSupported`） | 在**任意 https 页面**跑同一段表达式——这些 Web API 与扩展上下文无关 |
+| 确认**渲染文本**正确 | 抽成纯函数单测；或写桩页面复现同一份 JSX |
+| 确认扩展页**真能打开**（有没有白屏） | **只能人眼看**：`edge://extensions` 点「扩展选项」，或点工具栏图标看 popup |
+| 让扩展页**把数据送出来** | 要改产品代码（`postMessage`），成本高于收益，**不建议为测试这么做** |
+
+⚠️ 「设置页三个分区都能进」这类验收（`01-architecture.md` §9 的 3a）**必须由人点一遍**。
+
+### 记一笔
+
+1. **报错信息要先读完再猜原因。** 第一版报错里已经写着 `because its URL is
+   chrome-extension://…`，我却先按"CSP/跨源"解释，方向全错。
+2. **`hint` 可能是误导项。** 那句"先 borrow"只对**普通** user 标签页成立；
+   对扩展页，borrow 完照样被拒。**信 `details` 和 `reason`，不要盲信 hint。**
+
+---
+
 ## 8. 已验证的事实（2026-10-26）
 
 `BV1jt421t7XH`，真实双账号：
