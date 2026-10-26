@@ -262,6 +262,21 @@
   var PATCH_PATHS = ['/x/web-interface/nav', '/x/player/wbi/v2', '/x/player/v2'];
 
   /**
+   * 允许改写**观看进度字段**的路径（ADR 0017）。
+   *
+   * ⚠️ 与 `PATCH_PATHS` 是两件不同的事，**别合并、别互相顶替**：
+   *
+   *   - `PATCH_PATHS`      → 把会员字段伪装成"已开通"（ADR 0013 授权）
+   *   - `PROGRESS_PATCH_PATHS` → 只把 `last_play_time` / `last_play_cid`
+   *                             还原成**主账号自己的**观看进度（ADR 0017）
+   *
+   * 后者不伪装任何权益，改的是"这个浏览器用户本来就有的数据"。
+   * 但它在**响应体**上动手，风险等级和前者同级，所以同样要 ADR 兜着，
+   * 并由 `scripts/check-patch-scope.mjs` 校验两边一致。
+   */
+  var PROGRESS_PATCH_PATHS = ['/x/player/wbi/playurl', '/x/player/playurl'];
+
+  /**
    * 允许改写的主机白名单。
    *
    * 参考实现用的是数组 + `indexOf`，理由是同路径可能出现在别的域上，
@@ -281,6 +296,11 @@
     } catch (e) {
       return false;
     }
+  }
+
+  /** 是不是取流接口（精确 pathname 匹配，不用正则，避免误匹配 `/playurlXxx`） */
+  function isPlayurlPath(url) {
+    return matchPath(url, PROGRESS_PATCH_PATHS);
   }
 
   /**
@@ -652,7 +672,7 @@
   /** 记录请求 URL（含查询参数摘要），用于确认播放器请求的是哪条轨道 */
   function noteRequest(url, method) {
     try {
-      if (!/\/x\/player\/(wbi\/)?playurl/.test(url)) return;
+      if (!isPlayurlPath(url)) return;
       // 供"主账号基线"判定：这条一旦置位，之后才出现的 __playinfo__ 就是客户端数据
       anyPlayurlSeen = true;
       var key = url.split('?')[0] + '|' + (method || 'GET');
@@ -992,8 +1012,16 @@
         this.__plumaMethod = String(method || 'GET').toUpperCase();
         this.__plumaHeaders = {};
 
-        // 只监听 playurl —— 纯粹为了记录轨道清单，不碰响应内容
-        if (/\/x\/player\/(wbi\/)?playurl/.test(abs)) {
+        // playurl 走的是 XHR（2026-10-26 实测 initiatorType=xmlhttprequest）。
+        // 这里做两件事：
+        //   1. open 时就并行取一次主账号进度 —— readystatechange 是同步回调，里面没法 await
+        //   2. 记录轨道清单 + 把进度写回响应
+        if (isPlayurlPath(abs)) {
+          if (enabled) {
+            var pids = playurlIds(abs);
+            if (pids) prefetchProgress(pids.aid, pids.cid);
+          }
+
           var xhr = this;
           xhr.addEventListener('readystatechange', function () {
             if (xhr.readyState !== 4) return;
@@ -1004,7 +1032,12 @@
               var type = xhr.responseType;
               if (type !== '' && type !== 'text' && type !== 'json') return;
               var raw = xhr.responseText;
-              if (typeof raw === 'string' && raw) capturePlayurlJson(xhr.__plumaUrl, raw);
+              if (typeof raw === 'string' && raw) {
+                capturePlayurlJson(xhr.__plumaUrl, raw);
+                // ⚠️ 顺序不能反：必须在页面读 responseText **之前**完成遮蔽。
+                // 这个监听器是在 open() 里注册的，早于页面自己注册的处理函数。
+                patchPlayurlXhrProgress(xhr, raw);
+              }
             } catch (e) {}
           });
         }
@@ -1209,8 +1242,15 @@
 
         var p = origFetch.apply(self, args);
 
-        var isPlayurl = /\/x\/player\/(wbi\/)?playurl/.test(url);
+        var isPlayurl = isPlayurlPath(url);
         var needPatch = enabled && matchPath(url, PATCH_PATHS);
+
+        // playurl 若走 fetch（2026-10-26 实测主路径是 XHR，这里是兜底），
+        // 同样要并行预取主账号进度
+        if (isPlayurl && enabled) {
+          var fids = playurlIds(url);
+          if (fids) prefetchProgress(fids.aid, fids.cid);
+        }
 
         // **两条路都不需要 → 一字节都不碰**
         if (!needPatch && !isPlayurl) return p;
@@ -1221,21 +1261,56 @@
           // 只需要记录轨道清单时，用 clone 是安全的：
           // 拿副本去读，原 resp 仍然完好交回给页面
           if (!needPatch) {
+            // 同步判断有没有进度要还原。没有就走**零额外延迟**的老路径 ——
+            // 大多数情况（新视频、没看过）都是这条路。
+            var entry = null;
+            try {
+              var ids = playurlIds(url);
+              entry = ids ? progressCache[ids.aid + '|' + ids.cid] : null;
+            } catch (e) {}
+            var hasProgress = !!(entry && entry.value && entry.value.cid);
+            if (hasProgress) {
+              // 同 XHR 版：已经播起来就不再改写
+              try {
+                var pv = document.querySelector('video');
+                if (pv && pv.currentTime > 3) hasProgress = false;
+              } catch (e) {}
+            }
+
             var copy;
             try {
               copy = resp.clone();
             } catch (e) {
               return resp;
             }
-            copy
+
+            if (!hasProgress) {
+              // 后台记录轨道清单，原响应立刻交回页面
+              copy
+                .text()
+                .then(function (t) {
+                  try {
+                    capturePlayurlJson(url, t);
+                  } catch (e) {}
+                })
+                .catch(function () {});
+              return resp;
+            }
+
+            // 有进度要还原 → 等副本读完再交回（多一次 JSON 解析）
+            return copy
               .text()
               .then(function (t) {
                 try {
                   capturePlayurlJson(url, t);
                 } catch (e) {}
+                var patched = applyProgressToJson(t, entry.value);
+                if (patched === null) return resp;
+                return rebuildResponse(resp, patched);
               })
-              .catch(function () {});
-            return resp;
+              .catch(function () {
+                return resp;
+              });
           }
 
           // 需要改写：**读原 resp 而不是 clone 副本**。
@@ -1297,6 +1372,180 @@
     } catch (e) {}
 
     return rebuilt;
+  }
+
+  // ── 4c. 把主账号的观看进度写回 playurl 响应（续播） ──
+  //
+  // ## 症状
+  //
+  // 看到一半的视频，重新打开后**从 0:00 开始**。
+  //
+  // ## 根因（2026-10-26 实测）
+  //
+  // playurl 是被 DNR 换成播放账号凭据的那一条请求，所以响应里的
+  // `last_play_time` / `last_play_cid` 也是**播放账号的**。实测同一页面同一时刻：
+  //
+  //   /x/player/wbi/playurl（播放账号）→ last_play_time=0     last_play_cid=0
+  //   /x/player/wbi/v2    （主账号）  → last_play_time=15000  last_play_cid=<cid>
+  //
+  // 播放器（core.js）的续播判定是：
+  //
+  //   var y = (p.lastPlayTime || 0) / 1e3;
+  //   var m = (cid === p.lastPlayCid);          // ← 0 永远不等于 cid
+  //   m && duration > 30 && y >= 5 && y < duration - 5 && seek(y)
+  //
+  // `p` 就是 playurl 响应体。播放账号从没看过这个视频 → `m` 恒为 false
+  // → **永远不续播**，而且不报错、不降级，只是静默地从开头放。
+  //
+  // ## 数据从哪来
+  //
+  // `/x/player/wbi/v2` **不在代理白名单里**，所以它天然是主账号身份。
+  // 这里用浏览器自己的 cookie（`credentials:'include'`）取一次 ——
+  // 不读取、不接触主账号的 SESSDATA，与「主账号 = 浏览器当前登录态」一致。
+  //
+  // ## 时序：为什么必须提前取
+  //
+  // XHR 的 `readystatechange` 是**同步**回调，没法在里面 await。
+  // 所以在 `open()` 时就把 v2 请求发出去（与 playurl 并行），
+  // 等 playurl 下完（4K 响应通常比这个小 JSON 慢）时，值一般已经在手上了。
+  // 拿不到就**什么都不做** —— 退化成"这次不续播"，绝不阻断视频。
+
+  /** key = `aid|cid` → { done, value: { time, cid } | null } */
+  var progressCache = {};
+
+  function playurlIds(url) {
+    try {
+      var u = new URL(url, location.href);
+      var aid = u.searchParams.get('avid') || u.searchParams.get('aid');
+      var cid = u.searchParams.get('cid');
+      if (!aid || !cid) return null;
+      return { aid: aid, cid: cid };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function prefetchProgress(aid, cid) {
+    var key = aid + '|' + cid;
+    if (progressCache[key]) return;
+    var entry = { done: false, value: null };
+    progressCache[key] = entry;
+
+    try {
+      nativeFetch
+        .call(
+          window,
+          'https://api.bilibili.com/x/player/wbi/v2?aid=' +
+            encodeURIComponent(aid) +
+            '&cid=' +
+            encodeURIComponent(cid),
+          { credentials: 'include' },
+        )
+        .then(function (r) {
+          return r && r.ok ? r.json() : null;
+        })
+        .then(function (j) {
+          var d = j && j.data;
+          if (d && typeof d.last_play_time === 'number' && typeof d.last_play_cid === 'number') {
+            entry.value = { time: d.last_play_time, cid: d.last_play_cid };
+          }
+          entry.done = true;
+        })
+        .catch(function () {
+          entry.done = true;
+        });
+    } catch (e) {
+      entry.done = true;
+    }
+  }
+
+  /**
+   * 把进度写进已解析的 playurl JSON。改动了返回新的文本，没改动返回 null。
+   */
+  function applyProgressToJson(raw, prog) {
+    try {
+      var o = JSON.parse(raw);
+      var d = o && o.data;
+      if (!d || typeof d.last_play_time !== 'number') return null;
+      if (d.last_play_time === prog.time && d.last_play_cid === prog.cid) return null;
+      d.last_play_time = prog.time;
+      d.last_play_cid = prog.cid;
+      return JSON.stringify(o);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * XHR 版：就地遮蔽这个实例的 `responseText` / `response`。
+   *
+   * ⚠️ 只在**这个实例**上 defineProperty，不动原型；只在 `responseType`
+   * 是文本/JSON 时动手。历史上"给所有 XHR 覆盖 responseText"导致过
+   * arraybuffer 响应读文本抛异常 → 打断 readystatechange → 渲染进程崩溃。
+   * 这里逐条排除那些情形。
+   *
+   * @returns 是否改写了
+   */
+  function patchPlayurlXhrProgress(xhr, raw) {
+    if (!enabled) return false;
+
+    // 已经播起来了就不再改写。切清晰度 / 换轨会重新拉一次 playurl，
+    // 那时缓存里的进度是**页面打开时**的旧值，再写回去可能把播放位置拽回过去。
+    // 播放器自己也有 `currentTime < 3` 的闸门，这里再加一道，双保险。
+    try {
+      var v = document.querySelector('video');
+      if (v && v.currentTime > 3) return false;
+    } catch (e) {}
+
+    var ids = playurlIds(xhr.__plumaUrl || '');
+    if (!ids) return false;
+
+    var entry = progressCache[ids.aid + '|' + ids.cid];
+    if (!entry || !entry.value || !entry.value.cid) return false; // 没有可还原的进度
+
+    var prog = entry.value;
+    var type = '';
+    try {
+      type = xhr.responseType;
+    } catch (e) {}
+
+    if (type === 'json') {
+      // 页面读的是对象 → 直接改那个对象，不碰任何访问器
+      try {
+        var live = xhr.response;
+        var ld = live && live.data;
+        if (ld && typeof ld.last_play_time === 'number') {
+          ld.last_play_time = prog.time;
+          ld.last_play_cid = prog.cid;
+          return true;
+        }
+      } catch (e) {}
+      return false;
+    }
+
+    if (type !== '' && type !== 'text') return false; // arraybuffer / blob 一律不碰
+
+    var patched = applyProgressToJson(raw, prog);
+    if (patched === null) return false;
+
+    try {
+      Object.defineProperty(xhr, 'responseText', {
+        configurable: true,
+        get: function () {
+          return patched;
+        },
+      });
+      // responseType 为 '' 时 `response` 等价于 `responseText`，两个都要遮
+      Object.defineProperty(xhr, 'response', {
+        configurable: true,
+        get: function () {
+          return patched;
+        },
+      });
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   // ── 5. 记录 playurl 响应里的音频轨道清单 ──
@@ -1467,7 +1716,7 @@
   /** 拦截 playurl 响应，把轨道清单记下来 */
   function capturePlayurlJson(url, text) {
     try {
-      if (!/\/x\/player\/(wbi\/)?playurl/.test(url)) return;
+      if (!isPlayurlPath(url)) return;
       var j = JSON.parse(text);
       var s = summarizePlayurl(j);
       if (!s) return;
