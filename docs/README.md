@@ -4,7 +4,12 @@
 > 许可证：GPL-3.0-only + [附加条款](../ADDITIONAL-TERMS.md)
 >
 > ⚠️ 使用前请先读 [README](../README.md) 首屏的免责声明与合规提示
-> 🤖 **AI 代理 / 新接手者：先读 [AGENTS.md](../AGENTS.md)**，那是硬约束，本文件只是导航
+> 🤖 **AI 代理 / 新接手者：先读 [AGENTS.md](../AGENTS.md)**，那是硬约束。
+> **本文件只是文档导航**——项目门面（免责声明、它做什么、怎么装）在根 [README.md](../README.md)。
+>
+> 仓库里有 3 个 `README.md`，各是不同目录的首页（GitHub 浏览该目录时会自动渲染）：
+> 根 = 项目门面 · `docs/` = 本文件 · `poc/q2-dnr-concurrency/` = Q2 操作手册。
+> **引用时请写"根 `README.md`"或 `docs/README.md`**，只写 `README.md` 会有歧义。
 
 ---
 
@@ -12,9 +17,9 @@
 
 | # | 文档 | 回答什么问题 |
 | --- | --- | --- |
-| 0 | [AGENTS.md](../AGENTS.md) | **什么不能做**。10 条不可翻案决策、依赖禁令、改文档规则 |
+| 0 | [AGENTS.md](../AGENTS.md) | **什么不能做**。12 条不可翻案决策、依赖禁令、改文档规则 |
 | 1 | [01-architecture.md](./01-architecture.md) | **为什么这么设计**。取流链路、代码复用风险、关键难点 |
-| 2 | [02-ui-spec.md](./02-ui-spec.md) | **界面长什么样**。popup 五种状态、options 四页、页内角标、视觉令牌 |
+| 2 | [02-ui-spec.md](./02-ui-spec.md) | **界面长什么样**。popup 七种状态、options 四页、页内角标、视觉令牌 |
 | 3 | [03-open-questions.md](./03-open-questions.md) | **还差什么**。16 条待确认问题，含状态标记，末尾有决策变更日志 |
 | 4 | [04-project-structure.md](./04-project-structure.md) | **代码放哪**。技术选型、目录结构（WXT 约定）、分层职责、依赖禁令、解耦手段 |
 
@@ -40,6 +45,7 @@
 | [0010](./decisions/0010-page-proxy-via-tab-ids.md) | 页面代理用 tabIds 限定 + 常驻规则（不 hook fetch） |
 | [0011](./decisions/0011-playback-login-overwrites-primary.md) | 登录播放账号会覆盖主账号登录态（问题记录） |
 | [0012](./decisions/0012-isolated-window-login.md) | **播放账号在隔离窗口登录**：凭据脱离浏览器登录态 |
+| [0013](./decisions/0013-patch-player-info-response.md) | **允许改写 `/x/player/wbi/v2` 响应体**（Q12 的例外，精确到字段） |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 
@@ -51,57 +57,60 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 
 读 [protocols/messages.md](./protocols/messages.md)。注意：`src/shared/types/messages.ts` 是真相源，文档是解释。
 
+### 我要排查一个 bug / 改完不确定有没有坑
+
+读 [guides/methodology.md](./guides/methodology.md)。两个部分：
+**穷举法**（怎么从症状走到根因，什么时候不该用它）和
+**考虑周全七问**（判据还是参数、修在哪一层、时序约束、反例验证……）。
+
+具体怎么调 DNR、抓包、看日志，看 [guides/debugging.md](./guides/debugging.md)。
+
 ### 我在调 DNR 相关的问题
 
 读 [decisions/0002](./decisions/0002-dnr-to-replace-cookie-header.md) 的"已知风险"一节，以及 [guides/debugging.md](./guides/debugging.md)。
 
 ---
 
-## 已定事项（不含进度）
+## 已定事项与进度
 
-> **进度看根 [README.md](../README.md) 首屏那一行。** 本文不重复维护进度，
-> 避免两处漂移。
+> **本文不维护这两样，因为它们各有权威位置**，抄一份必然漂移（这里就抄错过一次：
+> 曾写「Q4 ❌ 未做」，而 `03-open-questions.md` §0 记的是「Q4 ✅ 已实测」）。
 
-| 项 | 状态 |
+| 想知道 | 去哪看 |
 | --- | --- |
-| 架构选型 | ✅ 纯 MV3 扩展（[ADR 0001](./decisions/0001-use-mv3-pure-extension.md)） |
-| 命名 | ✅ Pluma / `bili-pluma` |
-| 协议 | ✅ GPL-3.0-only + 附加条款（`LICENSE` / `ADDITIONAL-TERMS.md` 已落地） |
-| 分发方式 | ✅ 只发源码，不上架商店，不发预编译包 |
-| 合规文案 | ✅ 根 [README](../README.md) 首屏免责声明已落地 |
-| UI 规范 | ✅ 已定 |
-| 技术选型 | ✅ WXT + TS `^5.9` + Preact（仅 UI）+ 原生 CSS 变量 + Vitest + pnpm |
-| 目录结构 | ✅ 已定（v1.1，遵循 WXT `entrypoints/` 约定） |
-| 实施路线 | ✅ 已定（P0 半天 → P1 骨架 → P2 可用 → P3 完善） |
-| **Q2 DNR 并发验证** | ✅ **已实测通过**：180 并发请求串号 0、残留 0；结论是**不需要 nonce**（[ADR 0006](./decisions/0006-no-per-request-nonce.md)） |
-| **Q4 番剧边界验证** | ❌ **未做，第二优先级** |
-
-**下一步：P1-a 脚手架。** Q2 已通过，架构不再有阻塞项。P1 分三个里程碑（脚手架 → 扫码存副账号 → 端到端取流），详见 [`03-open-questions.md`](./03-open-questions.md) 末尾的实施顺序。
+| **进度**（做到哪了） | 根 [README.md](../README.md) 首屏那一行 |
+| **阶段与路线** | [04-project-structure.md](./04-project-structure.md) §6 |
+| **16 个待确认问题的状态** | [03-open-questions.md](./03-open-questions.md) §0 总览表 |
+| **每个决策的理由** | [decisions/](./decisions/) |
 
 ---
 
 ## 文档一致性约定
 
-为避免文档之间互相矛盾（这类问题在本次修订中一次性清理了 11 处），遵守三条：
+**规则本身在 [AGENTS.md](../AGENTS.md) §6**（权威位置表、引用规则、长度纪律），本文不重复。
+这里只放**检查命令**——因为 `AGENTS.md` §6.3 指向本文。
 
-1. **每件事只有一个权威位置**
-   - 技术选型 → `04-project-structure.md` §〇
-   - 实施路线 → `04-project-structure.md` §6（`01-architecture.md` §9 只写验收标准，不写目录细节）
-   - 待确认问题状态 → `03-open-questions.md` §0 总览表
-   - 决策理由 → `decisions/`
-2. **交叉引用必须带文件名**，不写"见 §6.2"这种无锚点的相对位置——章节会重排。
-3. **改动后跑一遍死链检查**（见下）。
+> 本文曾自己维护一份「权威位置」副本，已与 §6.1 漂移（少了两行），2026-10-26 删除。
+> 同一张「已定事项」表也抄错过（Q4 状态写反）。**凡是"两边各写一份"的，最后都会变成两边不一样。**
 
-### 死链自检命令
+### 文档检查命令
 
 ```bash
-for f in README.md ADDITIONAL-TERMS.md docs/*.md docs/*/*.md; do
+# 1. 死链检查
+for f in README.md ADDITIONAL-TERMS.md AGENTS.md docs/*.md docs/*/*.md; do
   dir=$(dirname "$f")
   grep -o "\](\.\.\?/[^)#]*)" "$f" 2>/dev/null | sed 's/](//;s/)$//' | while read -r link; do
     [ -e "$dir/$link" ] || echo "❌ $f → $link"
   done
 done
+
+# 2. 章节编号连号检查（以 03 为例）
+grep -n "^## [0-9]" docs/03-open-questions.md
 ```
+
+**任何一项输出异常，先修完再交付。**
+
+> 这是**唯一权威位置**。`AGENTS.md` §6.3 只写"必须跑"，不复制命令。
 
 
 ---

@@ -16,10 +16,10 @@
 | 语言 | **TypeScript** | `^5.9` | 不钉 minor；**TS 7.0（Rust 重写版）暂不采用**，生态适配需时间 |
 | 严格度 | `strict` + `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` | — | `noUncheckedIndexedAccess` 对本项目尤其必要（数组下标取 DASH 轨） |
 | UI 渲染（popup / options / login window） | **Preact** | `^10` | 约 4KB，需 `@preact/preset-vite` |
-| UI 渲染（content script 角标） | **原生 DOM + Shadow DOM** | — | **不用框架**，见 §2.6 |
-| 样式 | **原生 CSS 变量**（`tokens.css`） | — | 不用 Tailwind，理由见 §2.7 |
+| UI 渲染（content script 角标） | **原生 DOM + Shadow DOM** | — | **不用框架**，见 §2「页内角标」 |
+| 样式 | **原生 CSS 变量**（`tokens.css`） | — | 不用 Tailwind：样式唯一真相源是 `tokens.css`，多一层构建换不来收益 |
 | 单测 | **Vitest** | `^2` | 只跑 `core/` `shared/`，不碰浏览器 |
-| 集成测试 | **独立最小扩展**（P0 常驻） | — | `dnr.ts` 的回归测试，见 §5.2 |
+| 集成测试 | **独立最小扩展**（P0 常驻） | — | `dnr.ts` 的回归测试，见 §6「P0」 |
 | 代码规范 | **ESLint**（flat config）+ **Prettier** | `^9` / `^3` | 分工：ESLint 管"对不对"（含依赖方向强制），Prettier 管"好不好看"。`eslint-config-prettier` 关掉重叠规则，避免互相改来改去 |
 | 包管理 | **pnpm** | `^12` | **Windows 下必须 `nodeLinker: hoisted`**，见下方「环境约束」 |
 | 边界检查 | **`scripts/check-boundaries.ts`** | — | 按符号静态检查，CI 卡 PR |
@@ -40,6 +40,32 @@ nodeLinker: hoisted
 2. `pnpm exec` / `pnpm run` 会先做一次依赖校验，可能把布局切回 `isolated`。安装后建议直接确认 `node_modules/wxt` 存在。
 
 （2026-10-25 实装时踩到，排查耗时较久——`install` 显示成功但产物缺失，是典型的静默失败。）
+
+### 环境约束：依赖构建脚本白名单（`allowBuilds`）
+
+pnpm 默认**不允许**依赖跑安装脚本。未裁决的包会让 `pnpm install` 以
+`ERR_PNPM_IGNORED_BUILDS` **非零退出**——CI 会直接红。
+
+```yaml
+allowBuilds:
+  esbuild: true
+```
+
+三个坑，全部实测过：
+
+1. **写法是 map，不是列表。** `allowBuilds: [esbuild]` 不报错但语义不对。
+2. **旧名 `onlyBuiltDependencies` 从 pnpm v11 起已被移除。** 写了不报错、**完全不生效**——
+   这是本项目"`pnpm install` 每次失败"的真正原因，排查时先以为是 pnpm 版本行为差异，实际是配置名过期。
+   同批被移除的还有 `neverBuiltDependencies` / `ignoredBuiltDependencies`。
+   迁移命令：`pnpx codemod run pnpm-v10-to-v11`。
+3. **pnpm 会自动往文件里写。** 发现未裁决的包时，它会把条目**插在文件开头**，
+   手工再改容易产生重复的 `allowBuilds:` 键，YAML 直接解析失败（报 `duplicate mapping key`）。
+   改这个文件前先完整读一遍。
+
+只放行 `esbuild`：wxt / vite / vitest / tsx 都靠它的平台二进制，装不上工具链就起不来。
+其余依赖不需要执行脚本，一律不放行——这是故意的保守选择，**不要图省事改成 `dangerouslyAllowAllBuilds`**。
+
+文档：<https://pnpm.io/settings/build#allowbuilds>
 
 ### 为什么不用 TypeScript 钉版本
 
@@ -98,173 +124,45 @@ MV3 有三到四个独立执行环境，它们**内存不共享**：
 
 ## 1. 完整目录结构
 
-> ⚠️ **本节是设计意图，不是实现清单。** 实际落地的差异见文末「实现现状」一节。
-> 判断"某文件是否存在"以仓库为准，不要拿这棵树当事实。
+> ⚠️ **只画到目录层，不列文件名。** 文档不维护第二份"可执行的事实"
+> （见 [README.md](./README.md) 的维护原则第 1 条）——列了就会漂移。
+> 想知道有哪些文件用 `git ls-files`；想知道与设计的差异看 §9「实现现状」。
 
 ```
 bili-pluma/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                  # typecheck + lint + unit test
-│       └── release.yml             # 打 zip 到 Release（可选，见 Q16 不建议发预编译包）
+├── entrypoints/            # 【WXT 约定】入口，文件名即 manifest 清单项
+│   ├── background.ts       # → Service Worker
+│   ├── content.ts          # → ISOLATED world content script
+│   ├── popup/              # → action.default_popup
+│   ├── options/            # → options_ui（P3）
+│   └── login-window/       # 独立扫码窗口（chrome.windows.create 打开）
 │
-├── docs/                           # ← 所有设计文档集中在此
-│   ├── README.md                   # 文档索引（从哪读起）
-│   ├── 01-architecture.md          # 技术方案（原 Pluma-技术方案.md）
-│   ├── 02-ui-spec.md               # UI 设计规范
-│   ├── 03-open-questions.md        # 待确认问题清单
-│   ├── 04-project-structure.md     # 本文
-│   ├── decisions/                  # 架构决策记录 ADR
-│   │   ├── 0001-use-mv3-pure-extension.md
-│   │   ├── 0002-dnr-to-replace-cookie-header.md
-│   │   ├── 0003-gplv3-with-additional-terms.md
-│   │   └── 0004-request-level-identity-proxy.md
-│   ├── protocols/
-│   │   ├── messages.md             # SW ↔ content ↔ popup 消息协议（已有）
-│   │   └── page-bridge.md          # MAIN world ↔ ISOLATED world 协议（待补，可先并入 messages.md）
-│   └── guides/
-│       ├── debugging.md            # 怎么调 DNR 规则、怎么抓包（已有）
-│       └── releasing.md            # 发布流程与红线（已有）
+├── public/                 # WXT 静态资源，原样拷贝（不编译）
+│   └── main-world.js       # ★ 注入 MAIN world 的脚本，唯一源文件
 │
-├── entrypoints/                    # 【WXT 约定目录】扩展入口，文件名即清单项
-│   ├── background.ts               # → background Service Worker
-│   ├── popup/                      # → action.default_popup
-│   │   ├── index.html
-│   │   ├── main.ts
-│   │   ├── states/                 # 5 种状态各一个组件（Preact）
-│   │   │   ├── Ready.ts
-│   │   │   ├── NotConfigured.ts
-│   │   │   ├── CredentialExpired.ts
-│   │   │   ├── Degraded.ts
-│   │   │   └── NotVideoPage.ts
-│   │   └── components/
-│   │       ├── StatusBadge.ts
-│   │       ├── QualityChips.ts
-│   │       ├── AccountCard.ts
-│   │       └── SuccessSparkline.ts
-│   ├── options/                    # → options_ui
-│   │   ├── index.html
-│   │   ├── main.ts
-│   │   └── pages/
-│   │       ├── accounts.ts
-│   │       ├── quality-check.ts
-│   │       ├── audio-env.ts
-│   │       └── diagnostics.ts
-│   ├── login-window/               # 独立扫码窗口（chrome.windows.create 打开）
-│   │   ├── index.html
-│   │   ├── main.ts
-│   │   └── QrCanvas.tsx
-│   ├── bili.content.ts             # ISOLATED world，默认注入
-│   └── bili-main.content.ts        # MAIN world，world: 'MAIN'
-│
-├── src/                            # 【WXT 不管理的部分】业务代码
-│   ├── shared/                     # 【最底层】零依赖、纯函数、纯类型
-│   │   ├── types/
-│   │   │   ├── account.ts          # Account, Credential, AccountHealth
-│   │   │   ├── playinfo.ts         # PlayInfo, DashStream, VideoTrack, AudioTrack
-│   │   │   ├── messages.ts         # 所有跨环境消息的联合类型（判别联合）
-│   │   │   └── errors.ts           # 错误码枚举 + 错误类型
-│   │   ├── constants/
-│   │   │   ├── routes.ts           # 代理路径白名单（唯一的路径真相源）
-│   │   │   ├── device-cookies.ts   # 需借用/补立的设备 Cookie 名单
-│   │   │   └── hosts.ts            # api.bilibili.com 等主机白名单
-│   │   └── utils/
-│   │       ├── cookie.ts           # parse / serialize / merge（纯函数）
-│   │       ├── url.ts              # 路径匹配、nonce 注入、参数重排
-│   │       └── result.ts           # Result<T,E> 类型，避免到处 try/catch
-│   │
-│   ├── core/                       # 【领域层】业务逻辑，不知道"浏览器"的存在
-│   │   ├── auth/
-│   │   │   ├── qrcode.ts           # 扫码生成/轮询（纯逻辑，注入 http 客户端）
-│   │   │   ├── credential.ts       # 凭据校验：(sessdata,bili_jct) 同源断言
-│   │   │   ├── refresh.ts          # cookie/refresh 的原子替换 + 回滚
-│   │   │   └── health.ts           # 保活探测、失效判定
-│   │   ├── vault/
-│   │   │   ├── cipher.ts           # AES-GCM 加解密（WebCrypto，纯逻辑）
-│   │   │   ├── keyring.ts          # 密钥派生（可选启动解锁）、会话缓存
-│   │   │   └── repository.ts       # 凭据仓储接口 + 实现分离（可换存储后端）
-│   │   ├── playinfo/
-│   │   │   ├── request.ts          # 构造 playurl 请求（含 fnval/qn 策略）
-│   │   │   ├── parse.ts            # 解析 DASH 响应为统一模型
-│   │   │   ├── rank.ts             # 选轨算法（按分辨率/帧率/编码优先级）
-│   │   │   └── diagnose.ts         # 主/副账号画质对比（体检表数据）
-│   │   ├── identity/
-│   │   │   ├── router.ts           # ★ 核心：URL → 用哪个身份的判定
-│   │   │   ├── strategy.ts         # 三种发送策略的探测与缓存
-│   │   │   └── device-cookie.ts    # 设备 Cookie 补齐逻辑
-│   │   ├── wbi/
-│   │   │   └── signer.ts           # WBI 签名（md5 + 密钥混淆表）
-│   │   └── policy/
-│   │       ├── fallback.ts         # 失败回退策略（何时退回主账号）
-│   │       └── throttle.ts         # 请求节流、错峰（防风控）
-│   │
-│   ├── platform/                   # 【适配层】把浏览器 API 包成接口，供 core 使用
-│   │   ├── http/
-│   │   │   ├── fetcher.ts          # 统一请求入口（注入到 core，便于测试）
-│   │   │   └── dnr.ts              # ★ DNR 常驻规则：按路径建/改/删 + 自愈
+├── src/                    # 业务代码，WXT 不管
+│   ├── shared/             # 最底层：零依赖、纯函数、纯类型
+│   │   ├── types/          # 跨环境消息的判别联合
+│   │   ├── constants/      # ★ routes.ts = 路径白名单唯一真相源
+│   │   └── utils/          # cookie / url / result 等纯函数
+│   ├── core/               # 领域层：不知道"浏览器"存在
+│   │   ├── identity/       # ★ router.ts = URL → 用哪个身份
+│   │   ├── auth/           # 扫码、凭据校验、健康度
+│   │   ├── vault/          # 凭据加密存储
+│   │   ├── playinfo/       # 取流解析与选轨（parse/rank/diagnose 属 P3）
+│   │   └── wbi/            # WBI 签名
+│   ├── platform/           # 适配层：唯一允许碰 chrome.* 的地方
+│   │   ├── http/           # ★ dnr.ts = 风险最高，只对外暴露 withCookieFor()
 │   │   ├── storage/
-│   │   │   ├── local.ts            # chrome.storage.local 封装
-│   │   │   └── session.ts          # chrome.storage.session（内存态凭据）
-│   │   ├── runtime/
-│   │   │   ├── messaging.ts        # sendMessage / onMessage 的类型化封装
-│   │   │   └── alarms.ts           # chrome.alarms 封装（保活、定时任务）
-│   │   └── browsers/
-│   │       ├── chrome.ts           # 主实现
-│   │       └── firefox.ts          # v1.5 预留，接口同形
-│   │
-│   ├── background/                 # SW 的内部实现（被 entrypoints/background.ts 调用）
-│   │   ├── handlers/
-│   │   │   ├── account.handler.ts  # 账号增删改查
-│   │   │   ├── qr.handler.ts       # 扫码会话管理
-│   │   │   ├── playinfo.handler.ts # 取流请求处理
-│   │   │   ├── diagnose.handler.ts # 体检
-│   │   │   └── stats.handler.ts    # 成功率环形缓冲
-│   │   └── lifecycle.ts            # 休眠前保存状态、唤醒后恢复
-│   │
-│   ├── content/                    # 两个 world 的具体实现（被 entrypoints/*.content.ts 调用）
-│   │   ├── main-world/
-│   │   │   ├── net-hook.ts         # Hook fetch / XHR（只识别，不处理）
-│   │   │   ├── playinfo-bridge.ts  # __playinfo__ 读取/兜底注入
-│   │   │   └── channel.ts          # 与 ISOLATED world 的 postMessage 通道
-│   │   ├── isolated/
-│   │   │   ├── router.ts           # 路径白名单复检（防御性二次校验）
-│   │   │   ├── proxy.ts            # 组织代理请求
-│   │   │   └── badge.ts            # 页内极简角标（原生 DOM + Shadow DOM）
-│   │   └── css/
-│   │       └── badge.css
-│   │
-│   └── design/                     # ★ 设计令牌，UI 唯一真相源
-│       ├── tokens.css              # 颜色/字号/圆角/间距 CSS 变量
-│       ├── base.css                # reset + 深色模式
-│       └── README.md               # 与 docs/02-ui-spec.md 的对应关系
+│   │   └── qr/
+│   ├── background/         # SW 内部实现（handlers/ 按消息域拆分）
+│   ├── content/isolated/   # 页面侧：★ badge.ts 页内角标（Shadow DOM）
+│   └── design/             # ★ tokens.css = 视觉唯一真相源
 │
-├── public/                         # WXT 静态资源，原样拷贝到产物
-│   └── icon/                       # 16/32/48/128
-│
-├── tests/
-│   ├── unit/                       # Vitest，跑在 Node，不碰浏览器
-│   │   ├── core/identity/router.test.ts
-│   │   ├── core/playinfo/rank.test.ts
-│   │   ├── core/wbi/signer.test.ts
-│   │   └── shared/cookie.test.ts
-│   └── fixtures/
-│       ├── playinfo-4k.json        # 真实 playurl 响应样本（脱敏）
-│       └── playinfo-1080p.json
-│
-├── scripts/
-│   ├── build.ts                    # 打包（esbuild / vite）
-│   ├── gen-manifest.ts             # 从代码推导 manifest（权限按需生成）
-│   └── check-boundaries.ts         # ★ 依赖方向检查（CI 里跑）
-│
-├── .editorconfig
-├── eslint.config.mjs               # flat config，含 no-restricted-imports / no-restricted-globals
-├── .prettierrc                     # printWidth 100 / singleQuote / lf
-├── .prettierignore                 # 排除 Markdown、poc/、public/
-├── package.json
-├── tsconfig.json                   # paths 别名：@shared @core @platform @ui
-├── LICENSE                         # GPL-3.0
-├── ADDITIONAL-TERMS.md             # GPLv3 第 7 条附加条款
-└── README.md                       # 首屏：名字 + 副标题 + 免责声明 + 合规提示
+├── tests/                  # Vitest，跑在 Node，不碰浏览器
+├── scripts/                # ★ check-boundaries.ts 依赖方向检查
+├── docs/                   # 全部设计文档（索引见 docs/README.md）
+└── poc/                    # 一次性验证 + 常驻回归测试，不接入 WXT、零构建
 ```
 
 ---
@@ -412,7 +310,11 @@ document.body.appendChild(host);
 
 `src/design/tokens.css` 是 UI 的唯一真相源，对应 `docs/02-ui-spec.md` 里定义的色值与字号。**改配色只改这一个文件**，不许在各组件里写死。
 
-`entrypoints/popup/states/` 按 UI 规范里那 5 种状态各一个文件，**一个文件对应一种状态**，方便逐个对照设计稿实现和测试。
+`entrypoints/popup/` **没有按状态拆目录**，只有三个文件：`index.html` / `main.tsx` / `style.css`。
+状态判定放在 `src/core/ui/popup-state.ts`（纯函数，可单测），渲染在 `main.tsx` 一个组件里。
+7 种状态各是什么见 `docs/02-ui-spec.md` §3。
+
+> 原设计稿写的是"每个状态一个文件"，实装时发现状态之间共享大量结构，拆开反而重复，所以没采用。
 
 ---
 
@@ -427,7 +329,7 @@ docs/
 ├── 04-project-structure.md ← 本文（代码放哪）
 ├── decisions/              ← ADR：一条决策一个文件
 ├── protocols/              ← 消息协议（会和代码类型定义互相引用）
-└── guides/                 ← 操作手册（怎么调、怎么发）
+└── guides/                 ← 操作手册（怎么调、怎么发、怎么排查）
 ```
 
 ### 为什么按数字前缀
@@ -608,21 +510,93 @@ pnpm check:boundaries
 
 ### P1 之后才建主项目
 
-| 阶段 | 建哪些 | 为什么 |
+| 阶段 | 建哪些 | 状态 |
 |---|---|---|
-| **骨架** | WXT 初始化 → `shared/` `core/identity/` `core/vault/` `platform/` `entrypoints/background.ts` `src/background/` | 打通"扫码 → 存凭据 → 代理取流" |
-| **可用** | `entrypoints/bili*.content.ts` `src/content/` `entrypoints/popup/` `entrypoints/login-window/` `src/design/` | 用户能装上用 |
-| **完善** | `entrypoints/options/` `core/playinfo/diagnose.ts` `tests/` | 体检表、环境自检、单测 |
-| **预留** | `platform/browsers/firefox.ts` | v1.5 |
+| **骨架** | WXT 初始化 → `shared/` `core/identity/` `core/vault/` `platform/` `entrypoints/background.ts` `src/background/` | ✅ 2026-10-25 |
+| **P2-a 数据源** | `core/auth/health.ts` `core/auth/account-info.ts` `core/playinfo/stats.ts` `background/handlers/account.handler.ts` `stats.handler.ts` | ✅ 2026-10-25 |
+| **P2-b 总开关** | popup 接上 `proxy/set`；`tabs.handler.ts` 统计受影响标签页 | ✅ 2026-10-25 |
+| **P2-c 界面** | `entrypoints/popup/`（7 种状态）+ 登录窗口 + 登录入口迁移 | 🟡 **部分完成**：状态框架 / 开关 / 登录 / 受影响标签页提示已做；**§2.3 核心价值区、§2.4 双账号卡片、§2.6 底部三按钮未做**（见下） |
+| **P2-d 页面侧** | 页内角标（Shadow DOM） | ✅ 2026-10-26 |
+| **P3 完善** | `entrypoints/options/` `core/playinfo/diagnose.ts` `parse.ts` `rank.ts`；**并承接 P2 顺延项**（见下） | ⬜ 未开始 |
+| **预留** | `platform/browsers/firefox.ts` | ⬜ v1.5 |
+
+> **判断某文件是否存在，用 `git ls-files`，不要看 §1 的那棵树。**
+
+#### P2 顺延到 P3 的四项（2026-10-26 决定）
+
+P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下规范要求**没有落地**。
+它们全部依赖 P3 的东西（options 页，或 `core/playinfo/parse.ts` / `rank.ts`），
+硬在 P2 里补等于先造临时实现、下一阶段再拆掉。所以顺延，**不删减**：
+
+| 规范条目 | 原文位置 | 依赖 | 为什么顺延 |
+| --- | --- | --- | --- |
+| **当前页解锁画质（核心价值区）** | §2.3 | `core/playinfo/parse.ts` `rank.ts` + content 上报 playurl | 需要 `accept_quality` 与主/副账号对比，这套解析是 P3 的核心模块 |
+| 双账号卡片（主 A / 播放 B 对比） | §2.4 | 同 §2.3（要主账号可用画质才能做"仅可用 1080P"） | 当前 popup 只有播放账号一行摘要 |
+| popup 底部三按钮（体检 / 切换账号 / 设置） | §2.6 | `entrypoints/options/` | 三个按钮**全部**指向 options 页，页不存在时是死链 |
+| 角标「设置里可关闭」 | §5 | `entrypoints/options/` | 设置页不存在；且 §2.5 明确「popup 只放一个开关」，不能再往 popup 塞 |
+
+> ⚠️ **§2.3 是规范里写的"整个 popup 唯一不能省的部分"**。
+> 它顺延意味着：当前 popup 只能回答"现在生效了吗"（状态条 + 开关），
+> 还不能回答"解锁了什么"（对比表）。这是 P3 必须最先补的一块，
+> 也是 README 首屏「功能自证」的素材来源。
+
+**代价（已知并接受）**：
+- 用户想隐藏角标只能关总开关（`proxying: false` 时角标不渲染，见 `badge-content.ts` 的 `visible` 判定）
+- popup 无法展示"主账号仅可用 1080P vs 已解锁 4K"的对比，产品说服力打了折扣
+
+
+### 为什么 P2 的顺序是 a → b → c → d
+
+> 这节记的是**当初为什么这么排**，不是当前状态。当时 popup 规范要求覆盖 7 种状态，
+> 但其中 3 种没有数据源：`account/summary` 无处理方、`core/auth/health.ts` 未实现、
+> `stats.handler.ts` 未实现。先做界面等于画空壳。
+>
+> **三者现在都已实现（P2-a，2026-10-25）。** 但这套顺序逻辑仍然成立——
+> 以后加任何新界面，先问"它的数据从哪来"，再动手画。
+
+### 凭据健康检查：惰性，不用 alarms
+
+**不做后台定时探测。** `incognito: "split"` 下普通/无痕是两个 SW 实例，共享 `storage.local`，
+定时任务在哪个实例跑不确定，两个实例会互相覆盖健康标记。
+
+改为**惰性检查**，只在三个时机触发：
+
+| 时机 | 做什么 |
+| --- | --- |
+| popup 打开 | 若 `checkedAt` 超过 6 小时，查一次 `nav` |
+| `page/activate` 成功/失败 | 用真实取流结果反推健康度（比 `nav` 更准） |
+| 用户点"重新检查" | 强制查一次 |
+
+代价：用户既不开 popup 也不看视频时，失效不会被发现——而那种场景本来也不需要发现。
+好处：不申请 `alarms` 权限，不多一条跨分区协调逻辑。
+
+### v1 只支持单个播放账号
+
+`core/vault` 的 `Credential` 是单数、`vault-storage.ts` 只存一个 blob。
+**多账号（对齐 bilipai 的多 profile）推迟到 v1.5**，`docs/02-ui-spec.md` §4.1 已同步修正。
 
 ### 测试策略：两个层次，不可互相替代
 
 | 层 | 工具 | 覆盖什么 | 不能覆盖什么 |
 | --- | --- | --- | --- |
-| 单测 | Vitest（Node） | `core/identity/router`、`core/wbi/signer`、`core/playinfo/rank`、`shared/utils/*` | 任何碰浏览器的代码 |
-| 集成 | **P0 独立扩展**（真实 Chrome） | `platform/http/dnr.ts` 的并发正确性、规则回收 | 业务逻辑（它只测 Cookie 头对不对） |
+| 单测 | Vitest（Node / jsdom） | `core/identity/router`、`core/wbi/signer`、`core/auth/health`、`shared/utils/*` | 碰真实浏览器的 API（`chrome.*`、DNR） |
+| 集成 | **P0 独立扩展**（真实浏览器） | `platform/http/dnr.ts` 的并发正确性、规则回收 | 业务逻辑（它只测 Cookie 头对不对） |
 
 **关键认知**：`dnr.ts` 是风险最高的文件，却恰好**无法用 Vitest 测**。所以 P0 那个测试页不是"一次性验证"，而是**这个文件唯一的测试手段**，必须留在仓库里长期跑。
+
+### 主世界脚本怎么测（2026-10-25 定）
+
+`public/main-world.js` 是 `web_accessible_resources` 里的**静态文件**，WXT 只拷贝不编译。
+把它迁成 TS 会引入第二个构建步骤、并让它从"唯一源文件"变成"构建产物"，得不偿失。
+
+采用**零新增依赖、零构建改动**的做法：
+
+1. 文件顶部加 `// @ts-check` + JSDoc，`tsconfig` 的 `checkJs` 只对它生效
+2. 测试用文件级 `// @vitest-environment jsdom` 直接 `import` 真实文件，断言 `window.__playinfo__`
+   的 getter/setter 与 `patchVipScoped` 的递归边界
+
+**这样测的是真源码，不是复刻。** 此前 `tests/unit/content/main-world-logic.test.ts` 用"复刻函数"测，
+一旦主世界改了而测试没跟着改，两边就悄悄漂移——这个隐患随本方案消失。
 
 `tests/` 建议在**骨架阶段就开始**，至少给 `core/identity/router.ts` 和 `core/wbi/signer.ts` 写单测。这两个是纯逻辑、易出错、改一次就得重新验的东西——手测成本远高于写测试。
 
@@ -656,7 +630,7 @@ pnpm check:boundaries
 
 ---
 
-## 9. 实现现状（2026-10-25，P1 完成时）
+## 9. 实现现状（2026-10-26，P2 完成时）
 
 §1 那棵树是设计稿。实际实现与它的**差异**如下，避免把设计当成事实：
 
@@ -667,7 +641,8 @@ pnpm check:boundaries
 | `src/background/index.ts` | `entrypoints/background.ts` | WXT 约定 |
 | `src/platform/runtime/messaging.ts` | 无独立封装，页面直接 `sendMessage` | 只有 3 个 UI 页面，封装收益低于成本 |
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
-| `entrypoints/popup/` `options/` | **尚未实现**（P2） | — |
+| `entrypoints/popup/` | 🟡 **部分实现**（P2-c：状态框架 + 开关 + 登录入口 + 受影响标签页提示）；§2.3 / §2.4 / §2.6 顺延到 P3 | 依赖 options 页与 `core/playinfo` 解析 |
+| `entrypoints/options/` | **尚未实现**（P3） | — |
 | `scripts/check-boundaries.ts` | ✅ **已实现**（`pnpm check:boundaries`） | — |
 | ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`，`pnpm lint`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
 | Prettier 配置 | ✅ **已实现**（`.prettierrc`，`pnpm format` / `pnpm format:check`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |
@@ -679,9 +654,11 @@ pnpm check:boundaries
 src/shared/{types,constants,utils}     ✅ 全部落地，零依赖
 src/design/tokens.css                  ✅
 src/core/{auth,vault,wbi,identity}     ✅
+src/core/playinfo/stats.ts             ✅（P2-a；parse/rank/diagnose 属 P3）
 src/platform/{http,storage,qr}         ✅
 src/background/{login-window,login-handshake,handlers/}  ✅
-entrypoints/{background,content,login-window,need-incognito,diagnostics}  ✅
+src/content/isolated/{badge,badge-content}.ts  ✅（P2-d）
+entrypoints/{background,content,popup,login-window,need-incognito,diagnostics}  ✅
 public/main-world.js                   ✅
 ```
 

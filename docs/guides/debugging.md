@@ -58,6 +58,21 @@ var t = globalThis.browser?.runtime?.id ? globalThis.browser : globalThis.chrome
 - **Edge 156 可以加载**，但在 Playwright 下扩展消息路由不稳定
 - 因此**端到端验证（扫码、真实取流）必须手动加载扩展**，不要试图全自动化
 
+#### 自动化拿不到「登录态 + 调试端口」（2026-10-26 实测，不要再试）
+
+| 想做的事 | 能否做到 |
+| --- | --- |
+| 连**运行中**的浏览器（`--extension`） | ❌ playwright-cli 0.1.22 无此参数 |
+| 用**默认 profile** 开调试端口 | ❌ Chromium 一律拒绝：`requires a non-default data directory`。**Chrome / Edge 都是**（按路径字符串比对，传内建默认路径等于没传） |
+| **复制 profile** 到别的路径再开端口 | ⚠️ 端口能开，但 **cookie 解密密钥绑定原路径 → 登录态全丢** |
+| 父进程退出后浏览器继续活着 | ❌ 沙箱会回收子进程。必须把「启动 → 等端口 → 实测 → 收尾」写在**同一个脚本**里 |
+| Node 连 `127.0.0.1:9222` | ⚠️ 环境有 `HTTP_PROXY`，会被拦成 502。必须清空 `*_PROXY` 并设 `NO_PROXY=*` |
+
+**结论：自动化无法同时拿到「用户登录态」和「调试端口」。**
+
+需要用户真实 HDR 环境的数据时，**不要试图自动化** —— 用扩展自己的诊断日志
+（`entrypoints/content.ts` 的 `[角标输入]` 行），让用户在正常浏览器里看一次视频即可。
+
 ### 二维码渲染必须整数倍缩放
 
 canvas 内部尺寸与 CSS 显示尺寸若不是整数倍关系，浏览器会插值，模块边缘发虚，手机扫不出来。
@@ -302,6 +317,39 @@ const log = (...a) => console.log('%c[ISO]', 'color:#1D9E75', ...a);
 - [ ] 当前页面是视频页（不是首页/动态页）
 - [ ] 网络面板里 playurl 请求确实发出了
 - [ ] 该视频本身支持高画质（源限制，不是插件问题）
+
+---
+
+## 7. 视频页挂后台后回来白屏 / 播放器无响应（2026-10-25 已修）
+
+### 症状
+
+视频详情页在后台放一段时间（几十分钟），切回去时：白屏、卡顿、播放器不响应点击。
+用同类工具（Bili Dual Account Helper）不会出现，所以是本扩展引入的。
+
+### 三个根因，都已修掉
+
+| # | 根因 | 为什么只在"后台挂久"后暴露 | 修法 |
+| --- | --- | --- | --- |
+| 1 | `setInterval(patchSsUser, 100)` 永不停止 | 前台时用户感觉不到；后台时它变成唯一持续消耗 CPU 的东西，且每次都在动 `__INITIAL_STATE__` 这棵被播放器依赖的大对象树 | 改成 `Object.defineProperty(window, '__INITIAL_STATE__')` 的 setter 拦截，**赋值那一刻改一次**，之后零开销 |
+| 2 | 设备 Cookie 缺失 | `document_start` 时 `document.cookie` 是空的，规则里没有 `buvid3` → 风控 `-412`。首次打开靠 `DOMContentLoaded` 补报能救回来，后台恢复/被丢弃后重新加载只走 `document_start`，就救不回来 | 新增 `platform/storage/device-cookies-store.ts`：页面没带 buvid 就回退到缓存 |
+| 3 | 规则被反复重建 | `installTabRule` 每次无条件 `updateSessionRules`。`document_start`、`DOMContentLoaded`、后台恢复各一次 → 规则表重算 + 所有 B站标签页重评估 | 加幂等判断：Cookie 值一致就直接 return |
+
+### 怎么确认修好了
+
+```bash
+pnpm test -- tests/unit/content/main-world-real.test.ts
+```
+
+那里有 9 个用例直接对 `public/main-world.js` 的真源码断言，其中最关键的是
+**"启用后也不建 setInterval"**。
+
+⚠️ **验证测试本身有效的方法**（踩过）：把 `setInterval(patchSsUser, 100)` 临时加回
+`syncHooks()`，测试必须变红。如果还是绿的，说明 spy 打在了 `globalThis` 而不是
+jsdom 的 `window` 上——脚本在 jsdom 里解析的是 `window.setInterval`，
+spy 打错地方等于没测。
+
+真机上还要手测一遍：开一个视频页 → 切到别的标签 → 等 30 分钟 → 切回来。
 
 ---
 

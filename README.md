@@ -4,7 +4,7 @@
 >
 > 用主账号浏览、点赞、收藏、评论，让一个大会员账号专门负责播放。
 
-GPL-3.0-only · Chrome 120+ / Edge · **P1 代码完成，待新 dnr.ts 回归 + 真机复验（2026-10-25）**
+GPL-3.0-only · Chrome 120+ / Edge · **P2 可用（2026-10-26）**：画质提升与社交归属已真机验收，界面待 P3
 
 ## 请先读
 
@@ -35,6 +35,7 @@ GPL-3.0-only · Chrome 120+ / Edge · **P1 代码完成，待新 dnr.ts 回归 +
 
 - ❌ 不绕过付费墙（会员专享番剧/电影仍需购买）
 - ❌ 不伪装会员标识（界面如实显示真实状态）
+- ⚠️ 会改写**播放器自己**用于判断会员状态的接口响应，只为让画质切换不被拦截；**不改变账号在服务端的真实权益**（[ADR 0013](./docs/decisions/0013-patch-player-info-response.md)）
 - ❌ 不解锁地区限制
 - ❌ 不共享账号
 - ❌ 不提供任何破解或加密绕过手段
@@ -51,12 +52,12 @@ GPL-3.0-only · Chrome 120+ / Edge · **P1 代码完成，待新 dnr.ts 回归 +
 
 ## 音质需要你的环境配合
 
-**Hi-Res** 通常开箱可用（Chrome/Edge 原生 FLAC 解码）。**杜比全景声**需三件事同时成立：装 Microsoft EC-3 解码扩展（Store ID `9nvjqjbdkn97`）· 浏览器启用 media foundation playback · 系统音频设为空间音频/E-AC-3 直通。扩展**不做任何解码**，只提供自检面板。
+**Hi-Res** 通常开箱可用（Chrome/Edge 原生 FLAC 解码）。**杜比全景声**需三件事同时成立：装 Microsoft EC-3 解码扩展（Store ID `9nvjqjbdkn97`）· 浏览器启用 media foundation playback · 系统音频设为空间音频/E-AC-3 直通。扩展**不做任何解码**，环境自检面板在 P3 提供（当前需自己按上面三条核对）。
 
 ## 接手这个项目
 
 - **AI 代理 / 新来的开发者：先读 [AGENTS.md](./AGENTS.md)** ← 硬约束、不可翻案的决策、写代码与改文档的规则
-- 文档索引：[docs/README.md](./docs/README.md)　当前进度与阻塞项：[docs/03](./docs/03-open-questions.md) §0
+- 文档索引：[docs/README.md](./docs/README.md)　待确认问题与阻塞项：[docs/03](./docs/03-open-questions.md) §0
 
 ## 安装
 

@@ -98,6 +98,15 @@ Object.defineProperty(window, '__playinfo__', {
 **只改本地显示状态，不伪造任何服务端权益**：能否拿到 4K 仍取决于 DNR 换 Cookie 后
 服务端的真实响应。播放账号不是真会员的话，照样拿不到。
 
+### 3. 必须改写播放器信息接口的响应体（2026-10-25 追加）
+
+只改 `__INITIAL_STATE__` 不够：播放器**切画质时**会重新读 `/x/player/wbi/v2`
+（或旧版 `/x/player/v2`）响应里的 `vip` 字段，主账号不是会员就弹「开通大会员」，请求不发。
+
+所以实际实现还会改写这两个接口响应体的 `vip.status` / `vip.type` / `vip.due_date`。
+**这是对 Q12「不做伪装会员标识」的例外，单独记录在 [ADR 0013](./0013-patch-player-info-response.md)**，
+授权范围精确到接口与字段，不得顺手扩大。
+
 ### 与 Bili Dual 的差异
 
 | | Bili Dual（油猴） | Pluma（MV3） |

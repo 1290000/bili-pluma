@@ -95,18 +95,25 @@ MAIN world 发请求后 **8 秒**无响应即视为失败，走原始请求（�
 
 ### 消息类型清单
 
+> ⚠️ 下表是**当前实现**的清单（2026-10-25 P2-a 后）。更早的草案里
+> `bridge/ping` / `playinfo/proxy` / `diagnose/*` 等名称**已不采用**——实际方案是 DNR 换 Cookie，
+> 不需要把请求代理回 SW。以 `src/shared/types/messages.ts` 为准。
+
 | type | 方向 | payload | 说明 |
 | --- | --- | --- | --- |
-| `bridge/ping` | C→SW | — | 检查 SW 是否存活 |
-| `playinfo/proxy` | C→SW | `{ method, url, headers, body }` | **核心**：请求代理（实际执行 DNR 那一步） |
-| `account/status` | UI→SW | — | 查询两个账号的状态摘要 |
-| `account/qr-start` | UI→SW | `{ purpose: 'playback' }` | 开始扫码会话 |
-| `account/qr-poll` | UI→SW | `{ sessionId }` | 轮询扫码状态 |
-| `account/remove` | UI→SW | `{ accountId }` | 删除播放账号条目 |
-| `account/health` | SW→UI | `{ accounts, degraded, successRate }` | 状态推送 |
-| `diagnose/quality` | UI→SW | `{ bvid, cid }` | 主/副账号画质对比 |
-| `diagnose/audio-env` | UI→SW | — | 音质环境自检结果 |
-| `stats/recent` | UI→SW | — | 最近成功率环形数组 |
+| `account/summary` | UI→SW | `{ recheck?: boolean }` | 账号摘要 + 健康。`recheck` 省略时按 6h 窗口惰性判断 |
+| `account/remove` | UI→SW | — | 退出播放账号：清凭据/规则/健康/统计/摘要 |
+| `qr/generate` | UI→SW | — | 生成二维码 |
+| `qr/poll` | UI→SW | `{ qrcodeKey }` | 轮询扫码状态 |
+| `login/open` | UI→SW | — | 打开隔离窗口登录 |
+| `playinfo/get` | —（未使用） | `{ bvid, cid, qn }` | **已定义但无人收发**。预留给 P3 的取流/体检，`qn` 为 `null` 表示自动取最高 |
+| `proxy/status` | UI→SW | — | 总开关状态（只读） |
+| `proxy/set` | UI→SW | `{ enabled }` | 切换总开关 |
+| `proxy/affected-tabs` | UI→SW | — | 已打开的视频页里还有几个是旧画质（→ `{ count, tabIds }`） |
+| `tabs/reload` | UI→SW | `{ tabIds }` | 刷新指定标签页（用户点"全部刷新"） |
+| `stats/recent` | UI→SW | — | 最近 1 小时成功率时序（12 桶） |
+| `page/activate` | content→SW | `{ bvid, p, deviceCookies, primaryMid }` | 视频页报到，装 tab 规则 |
+| `page/quality` | content→SW | `{ height, note? }` | 诊断日志 |
 
 ### 统一响应包装
 
@@ -116,7 +123,7 @@ type Reply<T> =
   | { ok: false; code: ErrCode; message?: string };
 ```
 
-**错误码必须枚举**，不许直接返回字符串。因为 UI 要按错误码决定显示哪个状态（见 `docs/02-ui-spec.md` 的五种状态）。
+**错误码必须枚举**，不许直接返回字符串。因为 UI 要按错误码决定显示哪个状态（见 `docs/02-ui-spec.md` 的七种状态）。
 
 ```ts
 enum ErrCode {
@@ -175,11 +182,14 @@ UI 有三个入口：popup、options、login window。
 popup 存活时间很短，用**拉取**（打开时查一次）比**推送**简单可靠。
 
 ```
-popup 打开 → send({ type: 'account/status' }) → 渲染对应状态
+popup 打开 → send({ type: 'account/summary' }) → 渲染对应状态
 （不需要 SW 主动 push，因为 popup 生命周期太短，push 没有意义）
 ```
 
-只有 options 页需要**推送**（用户可能停留很久，状态要实时更新）：SW 用 `chrome.runtime.sendMessage` 广播 `account/health`，options 页监听。
+> ⚠️ **options 页的推送机制尚未实现**（options 页本身是 P3）。
+> 计划是：用户可能停留很久，状态要实时更新，届时由 SW 广播一条新的消息类型，options 页监听。
+> **不要照抄成"已有 `account/health` 广播"**——该消息类型在 `messages.ts` 里不存在，
+> 当前只有拉取式的 `account/summary`。
 
 ---
 
