@@ -186,22 +186,68 @@ export function DiagnosticsSection(): JSX.Element {
       </Card>
 
       <Card title="诊断日志">
-        {logs.length === 0 ? (
-          <p class="empty">（空）</p>
-        ) : (
-          <div class="rows">
-            {logs.map((e, i) => (
-              <div class="row" key={`${String(e.at)}-${String(i)}`}>
-                <span class="key">
-                  {new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false })}
-                  {e.from ? ` [${e.from}]` : ''} {e.step}
-                </span>
-                <span class="val">{e.detail ?? ''}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {logs.length === 0 ? <p class="empty">（空）</p> : <LogList logs={logs} />}
       </Card>
+    </>
+  );
+}
+
+/**
+ * 日志列表：默认只露最近 4 条，其余折叠。
+ *
+ * ## 为什么取尾部而不是头部
+ *
+ * `readDiag()` 返回的是**时间正序**（最旧在前）。所以"最近 4 条"是数组末尾。
+ * 取头部会把最旧的四条展示出来，恰好是排查时最没用的。
+ *
+ * ## 为什么折叠而不是分页
+ *
+ * 日志上限 30 条（`DIAG_LIMIT`），铺开会把诊断页拉得很长，把下面的音质卡片
+ * 挤到看不见。折叠起来既保持页面短，又不丢信息。
+ */
+/**
+ * 日志列表：**最新的在最上方**，默认只露最近 4 条，其余折叠。
+ *
+ * ## 为什么在渲染层倒序，而不是改 `readDiag()`
+ *
+ * `readDiag()` 的契约是**时间正序**（与 `diag-store` 的写入顺序一致）。
+ * 那是数据层的自然形态，导出诊断包、日志分析脚本都按这个顺序读。
+ * 展示要倒序是**视图需求**，在视图层做，别污染数据层。
+ *
+ * ## 倒序后"折叠取哪 4 条"跟着变了
+ *
+ * 倒序数组的**头部**才是最近的。所以折叠时用 `slice(0, 4)`，
+ * 展开时给全量。这和正序时的 `slice(-4)` 是同一件事的两种写法 ——
+ * **顺序是唯一变量，改顺序就必须同步改切片方向**。
+ */
+function LogList(props: { logs: readonly DiagEntry[] }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const VISIBLE = 4;
+
+  // 最新在前。用副本，不改 props
+  const newestFirst = [...props.logs].reverse();
+
+  const hiddenCount = Math.max(0, newestFirst.length - VISIBLE);
+  const shown = expanded || hiddenCount === 0 ? newestFirst : newestFirst.slice(0, VISIBLE);
+
+  return (
+    <>
+      <div class="rows">
+        {shown.map((e, i) => (
+          <div class="row" key={`${String(e.at)}-${String(i)}`}>
+            <span class="key">
+              {new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false })}
+              {e.from ? ` [${e.from}]` : ''} {e.step}
+            </span>
+            <span class="val">{e.detail ?? ''}</span>
+          </div>
+        ))}
+      </div>
+      {hiddenCount > 0 && (
+        <button class="ghost small" onClick={() => setExpanded((v) => !v)}>
+          {expanded ? '只看最近 4 条' : `展开更早的 ${String(hiddenCount)} 条`}
+        </button>
+      )}
     </>
   );
 }

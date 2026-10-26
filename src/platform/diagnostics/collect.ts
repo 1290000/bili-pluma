@@ -261,13 +261,9 @@ export function tipFor(rows: readonly DiagRow[]): string {
   const tabRow = rows.find((r) => r.label === 'DNR 标签页规则');
   // 主账号基线优先：它是 ADR 0014 的验证门，比 DNR 状态更值得先看
   const primaryRow = rows.find((r) => r.label.startsWith('主账号基线'));
-  const playbackRow = rows.find((r) => r.label.startsWith('播放账号（页面'));
 
   if (primaryRow && primaryRow.ok === false) {
     return '主账号基线不可用';
-  }
-  if (primaryRow?.ok && playbackRow?.ok) {
-    return '两侧数据都在。「对比结论」那行就是 popup §2.3 显示的内容。';
   }
   if (!proxyRow?.ok) {
     return '代理已关闭，所有请求以主账号身份发出（开关在 popup 里）。';
