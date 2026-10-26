@@ -175,6 +175,14 @@ export interface PageTracksView {
     capability: Capability | null;
     user: PrimaryUser | null;
     /**
+     * 主账号 mid（`document.cookie` 的 `DedeUserID`）。
+     *
+     * ⚠️ 只在**打开过视频页**之后才有 —— 设置页独立打开时拿不到。
+     * 没有时 UI 要显示"打开任意视频页后可见"，**不许自己发 nav 去猜**
+     * （决策 4：扩展不读主账号凭据）。
+     */
+    mid: string | null;
+    /**
      * 主账号是否登录。
      *
      * ⚠️ **三态，不是布尔。** `document_start` 时 `document.cookie` 往往是空的，

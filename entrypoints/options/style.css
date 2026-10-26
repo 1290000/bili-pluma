@@ -224,3 +224,97 @@ button {
 .ver {
   white-space: nowrap;
 }
+
+/* ── 账号卡片（§4.1）──
+   视觉上刻意"受控"：播放账号带「仅取流」标签，主账号带「只读」标签。
+   目的是让用户确信这不是两个活跃账号，而是"一个你的号 + 一个受控的工具"。 */
+
+.acct {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 12px 14px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-card);
+}
+
+.acct-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.acct-name {
+  font-size: var(--pluma-font-title);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.acct-tag {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-accent);
+  background: var(--pluma-accent-bg);
+  white-space: nowrap;
+}
+
+/* 「只读」比「仅取流」更弱：它只是说明这一栏不可操作，不是一种能力 */
+.acct-tag.muted {
+  color: var(--pluma-text-muted);
+  background: transparent;
+  border: 0.5px solid var(--pluma-border);
+}
+
+.acct-meta {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+/* 空态 / 提示：不要用灰色大字，它只是"补充说明"，不是错误 */
+.empty {
+  margin: 0 0 10px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  line-height: 1.6;
+}
+
+.hint {
+  margin: 10px 0 0;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-accent);
+}
+
+/* ── 次级 / 危险按钮 ── */
+
+.ghost {
+  padding: 6px 14px;
+  color: var(--pluma-text-muted);
+  background: transparent;
+  border: 0.5px solid var(--pluma-border);
+}
+
+.ghost:hover:not(:disabled) {
+  color: var(--pluma-accent);
+  border-color: var(--pluma-accent);
+}
+
+/* 危险色只用于"退出账号"这类不可逆动作，不要拿它标普通失败 */
+.danger {
+  padding: 6px 14px;
+  color: #ffffff;
+  background: var(--pluma-danger);
+  border: 0.5px solid var(--pluma-danger);
+}
+
+.danger:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

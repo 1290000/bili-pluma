@@ -8,7 +8,8 @@
 import '@/src/design/tokens.css';
 import './style.css';
 
-import type { PageTracksView, PrimaryBaselineReason } from '@shared/types/playinfo';
+import { queryPageState } from '@platform/page/page-state-client';
+import type { PrimaryBaselineReason } from '@shared/types/playinfo';
 
 interface Row {
   label: string;
@@ -30,38 +31,12 @@ const REASON_TEXT: Record<PrimaryBaselineReason, string> = {
   unparsable: '有数据但解析不出轨道',
 };
 
-/**
- * 找"要查哪个标签页"。
- *
- * ⚠️ **不能用 `query({ active: true, currentWindow: true })`。**
- * 本页是 `options_ui.open_in_tab` 打开的，它自己就是活动标签页 ——
- * 那样查到的永远是自检页，`sendMessage` 必然失败，看起来像"没有 content script"。
- *
- * 所以按 URL 过滤 B站视频页，再在其中优先选活动的、否则选最近访问的。
- */
-async function pickVideoTab(): Promise<chrome.tabs.Tab | null> {
-  const tabs = await chrome.tabs
-    .query({ url: ['*://*.bilibili.com/video/*'] })
-    .catch(() => [] as chrome.tabs.Tab[]);
-  if (tabs.length === 0) return null;
-
-  const active = tabs.find((t) => t.active);
-  if (active) return active;
-
-  // 没有活动的就取最近访问的（`lastAccessed` 缺失时退化成第一个）
-  return tabs.reduce<chrome.tabs.Tab>((best, t) => {
-    const a = t.lastAccessed ?? 0;
-    const b = best.lastAccessed ?? 0;
-    return a > b ? t : best;
-  }, tabs[0] as chrome.tabs.Tab);
-}
-
-/** 直连当前标签页的 content script，取两侧取流数据 */
+/** 直连当前视频页的 content script，取两侧取流数据（找标签页的逻辑在 platform 层共用） */
 async function readPageTracks(): Promise<Row[]> {
   const rows: Row[] = [];
+  const res = await queryPageState();
 
-  const tab = await pickVideoTab();
-  if (!tab || typeof tab.id !== 'number') {
+  if (res.kind === 'no-tab') {
     rows.push({
       label: '当前页取流数据',
       value: '没有打开的 B站视频页 —— 先打开一个视频，再回到这里',
@@ -69,24 +44,20 @@ async function readPageTracks(): Promise<Row[]> {
     return rows;
   }
 
-  let reply: { type?: string; view?: PageTracksView; reason?: string } | undefined;
-  try {
-    reply = await chrome.tabs.sendMessage(tab.id, { type: 'page/summary:get' });
-  } catch {
-    // 没有 content script（页面在扩展安装前就打开了 / 扩展刚更新）时 sendMessage 会抛
+  if (res.kind === 'no-content-script') {
     rows.push({
       label: '当前页取流数据',
-      value: `标签页「${tab.title ?? tab.url ?? '?'}」没有 content script —— 刷新那个视频页再试`,
+      value: `标签页「${res.title}」没有 content script —— 刷新那个视频页再试`,
     });
     return rows;
   }
 
-  if (reply?.type !== 'page/summary:ok' || !reply.view) {
+  if (res.kind === 'not-ready') {
     rows.push({ label: '当前页取流数据', value: 'content 在，但还没报到（稍等再点一次）' });
     return rows;
   }
 
-  const v = reply.view;
+  const v = res.view;
   const primary = v.primary;
   const playback = v.playback?.capability ?? null;
 

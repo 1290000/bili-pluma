@@ -43,6 +43,7 @@ function view(over: Partial<PageTracksView> = {}): PageTracksView {
         hasHiRes: false,
       }),
       user: { uname: '{{primary_name}}', face: null },
+      mid: null,
       loggedIn: 'yes',
     },
     playback: { capability: cap() },
@@ -91,7 +92,14 @@ describe('describeUnlock：没有提升的两种原因必须分开说', () => {
     const playback = cap({ maxHeight: 1080, hasHiRes: false });
     const s = describeUnlock(
       view({
-        primary: { usable: true, reason: 'ssr', capability: primary, user: null, loggedIn: 'yes' },
+        primary: {
+          usable: true,
+          reason: 'ssr',
+          capability: primary,
+          user: null,
+          mid: null,
+          loggedIn: 'yes',
+        },
         playback: { capability: playback },
         diff: {
           heightGain: 0,
@@ -115,6 +123,7 @@ describe('describeUnlock：没有提升的两种原因必须分开说', () => {
           reason: 'ssr',
           capability: cap({ maxHeight: 2160 }),
           user: null,
+          mid: null,
           loggedIn: 'yes',
         },
         playback: { capability: cap({ maxHeight: 1080, hasHiRes: false }) },
@@ -139,6 +148,7 @@ describe('describeUnlock：没有提升的两种原因必须分开说', () => {
           reason: 'client-written',
           capability: null,
           user: null,
+          mid: null,
           loggedIn: 'yes',
         },
         diff: null,
@@ -156,7 +166,14 @@ describe('describeUnlock：基线不可用时锚点必须说清原因', () => {
   ] as const)('%s → %s', (reason, expected) => {
     const s = describeUnlock(
       view({
-        primary: { usable: false, reason, capability: null, user: null, loggedIn: 'yes' },
+        primary: {
+          usable: false,
+          reason,
+          capability: null,
+          user: null,
+          mid: null,
+          loggedIn: 'yes',
+        },
         diff: null,
       }),
     );
@@ -166,7 +183,14 @@ describe('describeUnlock：基线不可用时锚点必须说清原因', () => {
   it('usable 为真但能力为空（不该出现）时也不编数字', () => {
     const s = describeUnlock(
       view({
-        primary: { usable: true, reason: 'ssr', capability: null, user: null, loggedIn: 'yes' },
+        primary: {
+          usable: true,
+          reason: 'ssr',
+          capability: null,
+          user: null,
+          mid: null,
+          loggedIn: 'yes',
+        },
         diff: null,
       }),
     );
@@ -221,6 +245,7 @@ describe('describeUnlock：主账号未登录（Q1 的 A 部分）', () => {
           hasHiRes: false,
         }),
         user: null,
+        mid: null,
         loggedIn: 'no',
       },
       playback: {
@@ -265,6 +290,7 @@ describe('describeUnlock：主账号未登录（Q1 的 A 部分）', () => {
           reason: 'ssr',
           capability: cap({ maxHeight: 480 }),
           user: null,
+          mid: null,
           loggedIn: 'no',
         },
       }),
@@ -283,6 +309,7 @@ describe('describeUnlock：主账号未登录（Q1 的 A 部分）', () => {
           reason: 'ssr',
           capability: cap({ maxHeight: 480, hasHiRes: false }),
           user: null,
+          mid: null,
           loggedIn: 'unknown',
         },
         playback: { capability: cap({ maxHeight: 480, hasHiRes: false }) },
@@ -307,7 +334,14 @@ describe('describeUnlock：游客页没有 __playinfo__（2026-10-26 InPrivate �
     // 那句话只说明"数据缺"，不告诉用户"该去登录"。
     const s = describeUnlock(
       view({
-        primary: { usable: false, reason: 'absent', capability: null, user: null, loggedIn: 'no' },
+        primary: {
+          usable: false,
+          reason: 'absent',
+          capability: null,
+          user: null,
+          mid: null,
+          loggedIn: 'no',
+        },
         diff: null,
       }),
     );
@@ -318,7 +352,14 @@ describe('describeUnlock：游客页没有 __playinfo__（2026-10-26 InPrivate �
   it('徽章仍按播放账号实际拿到的显示（实测 2160p 在响应里）', () => {
     const s = describeUnlock(
       view({
-        primary: { usable: false, reason: 'absent', capability: null, user: null, loggedIn: 'no' },
+        primary: {
+          usable: false,
+          reason: 'absent',
+          capability: null,
+          user: null,
+          mid: null,
+          loggedIn: 'no',
+        },
         diff: null,
       }),
     );

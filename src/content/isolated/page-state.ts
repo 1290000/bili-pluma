@@ -165,6 +165,7 @@ export class PageState {
         reason: this.primaryReason,
         capability: this.primaryCap,
         user: this.user,
+        mid: this.primaryMid,
         loggedIn: this.midSettled ? (this.primaryMid === null ? 'no' : 'yes') : 'unknown',
       },
       playback: this.sawPlayback ? { capability: this.playbackCap } : null,

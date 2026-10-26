@@ -250,3 +250,19 @@ describe('PageState：主账号是否登录（三态，不许把"还没读到"�
     expect(s.view()?.primary.loggedIn).toBe('unknown');
   });
 });
+
+describe('PageState：主账号 mid（账号页要显示它）', () => {
+  it('读到 mid 后 view 里能拿到', () => {
+    const s = freshState();
+    s.setPage('BV1', 1);
+    s.setPrimaryMid('{{primary_mid}}', true);
+    expect(s.view()?.primary.mid).toBe('{{primary_mid}}');
+  });
+
+  it('没读到时是 null，不是空串（UI 靠 null 判断"还没拿到"）', () => {
+    const s = freshState();
+    s.setPage('BV1', 1);
+    s.setPrimaryMid(null, false);
+    expect(s.view()?.primary.mid).toBeNull();
+  });
+});
