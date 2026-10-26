@@ -1,6 +1,6 @@
 // 验证 WBI 签名是否被 B站接受 —— 判据是 code=0 且 dash 里有 2160p 轨道
 // 全程不输出任何凭据值
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
@@ -11,7 +11,8 @@ const USER_DATA = path.resolve(__dirname, '../../.tmp/dnr-profile-' + Date.now()
 
 const LAUNCH = {
   channel: 'msedge',
-  headless: false,
+  // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+  headless: process.env.POC_HEADLESS === '1',
   viewport: { width: 420, height: 560 },
   args: [
     `--disable-extensions-except=${EXT_DIR}`,

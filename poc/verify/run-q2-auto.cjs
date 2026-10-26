@@ -1,6 +1,6 @@
 // Q2 DNR 并发验证 —— 自动跑
 // 加载 poc/q2-dnr-concurrency 扩展，操作测试页，抓取结论
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -16,7 +16,8 @@ const SHOT = path.join(__dirname, 'q2-lab.png');
     path.join(os.tmpdir(), 'pluma-q2-' + Date.now()),
     {
       channel: 'msedge',
-      headless: false,
+      // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
       viewport: { width: 1280, height: 900 },
       args: [
         `--disable-extensions-except=${EXT_DIR}`,

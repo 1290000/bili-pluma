@@ -1,6 +1,6 @@
 // 核实：测试 profile 里到底是什么身份
 // 判据：nav 接口返回的 mid 是哪一个，以及 storage 里存的播放账号 mid
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -11,7 +11,8 @@ const OUT = path.join(__dirname, 'result-identity-audit.json');
 (async () => {
   const ctx = await chromium.launchPersistentContext(PROFILE, {
     channel: 'msedge',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     args: [
       `--disable-extensions-except=${EXT_DIR}`,
       `--load-extension=${EXT_DIR}`,

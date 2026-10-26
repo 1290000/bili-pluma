@@ -1,7 +1,7 @@
 // 验证：能否通过 hook window.__playinfo__ 的 setter，
 // 原地修改 SSR 数据对象（durl / durls 的 url），并让播放器真的去请求改后的地址。
 // 用假 URL 指向本地 echo，只要 echo 收到请求，就说明注入点有效。
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const http = require('node:http');
 const { writeFileSync } = require('node:fs');
 const path = require('node:path');
@@ -80,7 +80,8 @@ const INIT = (fakeUrl) => {
 
   const browser = await chromium.launch({
     channel: 'chrome',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     args: ['--disable-blink-features=AutomationControlled', '--autoplay-policy=no-user-gesture-required', '--lang=zh-CN'],
   });
   const ctx = await browser.newContext({ locale: 'zh-CN', timezoneId: 'Asia/Shanghai', viewport: { width: 1440, height: 900 } });

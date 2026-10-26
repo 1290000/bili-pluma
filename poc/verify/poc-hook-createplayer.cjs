@@ -1,7 +1,7 @@
 // PoC：验证能否在 MAIN world 拦截番剧播放器的 createPlayer，
 // 并替换 reqHttpPlayUrlInfo 为「延迟 resolve 的 Promise」。
 // 不需要登录态——番剧页未登录也能打开（试看）。
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const { writeFileSync } = require('node:fs');
 const path = require('node:path');
 
@@ -69,7 +69,8 @@ const INIT = () => {
 (async () => {
   const browser = await chromium.launch({
     channel: 'chrome',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     args: ['--disable-blink-features=AutomationControlled', '--autoplay-policy=no-user-gesture-required', '--lang=zh-CN'],
   });
   const ctx = await browser.newContext({ locale: 'zh-CN', timezoneId: 'Asia/Shanghai', viewport: { width: 1440, height: 900 } });

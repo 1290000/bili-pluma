@@ -1,5 +1,5 @@
 // 用代码检查 canvas 渲染质量：不是肉眼看图，而是量化验证
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const os = require('node:os');
 
@@ -9,7 +9,8 @@ const USER_DATA = path.join(os.tmpdir(), 'pluma-qrcheck-' + Date.now());
 (async () => {
   const ctx = await chromium.launchPersistentContext(USER_DATA, {
     channel: 'msedge',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     viewport: { width: 420, height: 560 },
     args: [
       `--disable-extensions-except=${EXT_DIR}`,

@@ -1,7 +1,7 @@
 // P1 第 6 步最终验收：打开真实视频页，看页面是否真的请求到了高画质
 // 判据：B站页面自己的 playurl 响应里 dash.video 出现 height >= 2160
 // 这不是我们自己 fetch 的结果，而是页面播放器拿到的结果
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
@@ -13,7 +13,8 @@ const VIDEO = 'https://www.bilibili.com/video/BV1beNcz2ECq/?p=4';
 (async () => {
   const ctx = await chromium.launchPersistentContext(path.resolve(__dirname, '../../.tmp/page-profile'), {
     channel: 'msedge',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     viewport: { width: 1440, height: 900 },
     args: [
       `--disable-extensions-except=${EXT_DIR}`,

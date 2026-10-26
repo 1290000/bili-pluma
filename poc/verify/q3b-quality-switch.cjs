@@ -1,5 +1,5 @@
 // Q3 补测：只切「未登录可用」的档位（480P / 360P），确认切画质是否真的不发 playurl
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const { writeFileSync } = require('node:fs');
 const path = require('node:path');
 
@@ -13,7 +13,8 @@ let mark = 'init';
 (async () => {
   const browser = await chromium.launch({
     channel: 'chrome',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     args: ['--disable-blink-features=AutomationControlled', '--autoplay-policy=no-user-gesture-required', '--lang=zh-CN'],
   });
   const ctx = await browser.newContext({ locale: 'zh-CN', timezoneId: 'Asia/Shanghai', viewport: { width: 1440, height: 900 } });

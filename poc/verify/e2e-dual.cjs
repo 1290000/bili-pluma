@@ -1,6 +1,6 @@
 // 双账号验证：主账号（普通用户）浏览，播放账号（大会员）代理取流
 // 流程：① 等用户在窗口里登录主账号 ② 再扫码登录播放账号 ③ 打开视频页对比画质
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -12,7 +12,8 @@ const BASE = 'https://www.bilibili.com/video/BV1beNcz2ECq/';
 (async () => {
   const ctx = await chromium.launchPersistentContext(PROFILE, {
     channel: 'msedge',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     viewport: { width: 1440, height: 900 },
     args: [
       `--disable-extensions-except=${EXT_DIR}`,

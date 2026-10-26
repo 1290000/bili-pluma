@@ -1,6 +1,6 @@
 // 自动化跑 P0：启动 Edge（全新 profile）→ 加载未打包扩展 → 打开测试页 → 点按钮 → 读结果
 // 不碰用户任何 profile / 登录态
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
@@ -18,7 +18,8 @@ require('../q2-dnr-concurrency/echo-server.cjs');
 
   const ctx = await chromium.launchPersistentContext(USER_DATA, {
     channel: 'msedge',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     viewport: { width: 1100, height: 900 },
     args: [
       `--disable-extensions-except=${EXT}`,

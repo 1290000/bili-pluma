@@ -1,6 +1,6 @@
 // 端到端验证扫码登录：加载真实扩展 → 打开登录窗口 → 等用户扫码 → 检查凭据是否落库
 // 安全：只检查凭据"是否存在"，不打印任何值；临时 profile，结束即销毁
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
@@ -21,7 +21,8 @@ const USER_DATA = path.join(os.tmpdir(), 'pluma-e2e-' + Date.now());
 
   const ctx = await chromium.launchPersistentContext(USER_DATA, {
     channel: 'msedge',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     viewport: { width: 420, height: 620 },
     args: [
       `--disable-extensions-except=${EXT_DIR}`,

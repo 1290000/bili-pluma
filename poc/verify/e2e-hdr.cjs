@@ -1,6 +1,6 @@
 // 逐个验证三个分P + 8K 的轨道属性
 // 重点：dash.video 里的 HDR / 杜比视界字段，以及 qn 与 hdr 参数
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -53,7 +53,8 @@ function summarizeDash(d) {
 (async () => {
   const ctx = await chromium.launchPersistentContext(PROFILE, {
     channel: 'msedge',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     viewport: { width: 1440, height: 900 },
     args: [
       `--disable-extensions-except=${EXT_DIR}`,

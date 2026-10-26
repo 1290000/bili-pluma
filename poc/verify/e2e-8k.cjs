@@ -2,7 +2,7 @@
 //   1. P3 / P4 的 playurl 到底有没有发（可能是 __playinfo__ 预取）
 //   2. 8K（qn=127）能否拿到，需要什么条件
 //   3. 播放器实际选的轨道是什么（含 HDR / 杜比视界判定）
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -14,7 +14,8 @@ const BASE = 'https://www.bilibili.com/video/BV1beNcz2ECq/';
 (async () => {
   const ctx = await chromium.launchPersistentContext(PROFILE, {
     channel: 'msedge',
-    headless: false,
+    // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+    headless: process.env.POC_HEADLESS === '1',
     viewport: { width: 1440, height: 900 },
     args: [
       `--disable-extensions-except=${EXT_DIR}`,

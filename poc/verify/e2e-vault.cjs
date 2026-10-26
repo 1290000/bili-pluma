@@ -1,6 +1,6 @@
 // 第 3 步端到端：登录 → 关闭浏览器 → 重开 → 凭据仍在（且是密文）
 // 容错：窗口被用户关掉时，仍尝试读取已有存储状态
-const { chromium } = require('playwright');
+const { chromium } = require('playwright-core');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -10,7 +10,8 @@ const USER_DATA = path.resolve(__dirname, '../../.tmp/vault-profile');
 
 const LAUNCH = {
   channel: 'msedge',
-  headless: false,
+  // POC_HEADLESS=1 时无窗口运行（CI / 无显示器环境）。默认 false 保持原行为。
+  headless: process.env.POC_HEADLESS === '1',
   viewport: { width: 420, height: 560 },
   args: [
     `--disable-extensions-except=${EXT_DIR}`,
