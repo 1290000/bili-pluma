@@ -217,11 +217,10 @@ bash poc/probe/run-all.sh            # 启动带端口的 Edge → 等就绪 →
 
 ## 8. 交付前自检清单
 
-**一条命令跑完全部**：`pnpm verify`（= typecheck && format:check && lint && check:boundaries && test）
+**一条命令跑完全部**：`node scripts/verify.mjs`（`--help` 看检查项）
 
-- [ ] `pnpm verify` 全绿；`format:check` 挂了就跑 `pnpm format`，**不要手改**
+- [ ] `node scripts/verify.mjs` 全绿
 - [ ] 若改了 `dnr.ts` → 已重跑 `node poc/verify/run-q2-auto.cjs`
-- [ ] 若改了文档 → 已跑 §6.3 的检查
 - [ ] 没有新增"两边都写同一件事"的重复
 - [ ] 没有偷偷改 §3 的 12 条决策
 

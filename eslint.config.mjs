@@ -132,6 +132,28 @@ export default tseslint.config(
     },
   },
 
+  // ── 检查脚本（.mjs）：Node 环境，允许 console / process ──
+  // 2026-10-26 加：check-messages / check-design-imports / check-docs / verify
+  // 是 Node 脚本，不是浏览器代码。不声明 globals 会报 71 个 no-undef。
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        console: 'readonly',
+        process: 'readonly',
+        Buffer: 'readonly',
+        __dirname: 'readonly',
+        URL: 'readonly',
+      },
+    },
+    rules: {
+      'no-console': 'off',
+      'no-empty': ['error', { allowEmptyCatch: true }],
+    },
+  },
+
   // ── ★ 必须放最后：关掉与 Prettier 冲突的纯格式规则 ──
   // 分工：ESLint 管"对不对"，Prettier 管"好不好看"。
   // 两者都管缩进/换行会互相打架（一个报错、一个改回去，无限循环）。

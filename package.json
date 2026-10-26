@@ -18,7 +18,10 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:boundaries": "tsx scripts/check-boundaries.ts",
-    "verify": "tsc --noEmit && prettier --check . && eslint . && tsx scripts/check-boundaries.ts && vitest run",
+    "check:messages": "node scripts/check-messages.mjs",
+    "check:design": "node scripts/check-design-imports.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
+    "verify": "tsc --noEmit && prettier --check . && eslint . && tsx scripts/check-boundaries.ts && node scripts/check-messages.mjs && node scripts/check-design-imports.mjs && node scripts/check-docs.mjs && vitest run",
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "wxt prepare"
