@@ -42,7 +42,15 @@ export interface NavResponse {
     vipStatus?: number;
     /** 1 = 月度大会员，2 = 年度大会员 */
     vipType?: number;
-    /** Unix 秒；0 表示无到期 */
+    /**
+     * 会员到期时间。
+     *
+     * ⚠️ **单位没有实测确认。** 这里的注释长期写"Unix 秒"，但 2026-10-26
+     * 用户界面显示"698197 个月后到期"——反推 `expireAt ≈ 1.81e15`，
+     * 即原始值 ≈ 1.81e12：按秒是 2084 年（不可能），按毫秒是 2027-05（合理）。
+     * 所以真实单位**很可能是毫秒**，旧代码的 `* 1000` 多乘了一次。
+     * 处理方式见 `dueDateToMs`。
+     */
     vipDueDate?: number;
   };
 }
@@ -76,6 +84,21 @@ export function toVipLabel(vipStatus: number | undefined, vipType: number | unde
 }
 
 /**
+ * `vipDueDate` → 毫秒时间戳，**单位自适应**。
+ *
+ * 为什么不直接按秒：见 `NavResponse.vipDueDate` 的注释 —— 真实单位很可能是毫秒，
+ * 旧代码固定 `* 1000` 会把 2027-05 的到期日显示成"69 万个月后到期"。
+ *
+ * 阈值取 `1e11`：
+ *   - 任何合理的**秒**级时间戳都 < 1e10（1e10 秒 = 2286 年）
+ *   - 任何 2000 年之后的**毫秒**时间戳都 > 1e11（1e11 ms = 1973 年）
+ * 两者不重叠，所以判据稳定，不依赖"猜"。
+ */
+function dueDateToMs(value: number): number {
+  return value >= 1e11 ? value : value * 1000;
+}
+
+/**
  * 把 `nav` 的 `data` 归一成下发给 UI 的摘要。
  *
  * 只有在 `mid` 有效时才可能返回摘要 —— 没有 mid 说明不是登录态，那是失效而不是"资料缺失"。
@@ -89,7 +112,7 @@ export function summarizeNav(data: NavResponse['data'], checkedAt: number): Acco
   const vipLabel = toVipLabel(data?.vipStatus, data?.vipType);
   const dueDate = data?.vipDueDate;
   const expireAt =
-    vipLabel !== 'none' && typeof dueDate === 'number' && dueDate > 0 ? dueDate * 1000 : null;
+    vipLabel !== 'none' && typeof dueDate === 'number' && dueDate > 0 ? dueDateToMs(dueDate) : null;
 
   const uname = typeof data?.uname === 'string' && data.uname.length > 0 ? data.uname : '(未知)';
   const face = typeof data?.face === 'string' && data.face.length > 0 ? data.face : null;

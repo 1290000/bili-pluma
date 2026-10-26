@@ -117,3 +117,27 @@ describe('isHealthFresh', () => {
     expect(isHealthFresh(null, NOW)).toBe(false);
   });
 });
+
+describe('summarizeNav：到期日单位（2026-10-26 修）', () => {
+  /**
+   * 真实事故：用户 popup 显示「698197 个月后到期」。
+   * 反推 expireAt ≈ 1.81e15，即 nav 给的原始值 ≈ 1.81e12 ——
+   * 按秒是 2084 年（不可能），按毫秒是 2027-05（合理）。
+   * 旧代码固定 `* 1000`，于是把毫秒又乘了一次。
+   */
+  it('vipDueDate 已经是毫秒时不再乘 1000', () => {
+    const s = summarizeNav(
+      { mid: 1, uname: 'a', vipStatus: 1, vipType: 2, vipDueDate: 1_811_500_000_000 },
+      NOW,
+    );
+    expect(s?.expireAt).toBe(1_811_500_000_000);
+  });
+
+  it('秒级时间戳仍然按秒换算（两种单位都吃得下）', () => {
+    const s = summarizeNav(
+      { mid: 1, uname: 'a', vipStatus: 1, vipType: 2, vipDueDate: 1_800_000_000 },
+      NOW,
+    );
+    expect(s?.expireAt).toBe(1_800_000_000_000);
+  });
+});

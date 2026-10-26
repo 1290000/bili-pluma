@@ -396,3 +396,15 @@ describe('状态 5：当前页不是视频页（2026-10-26 新增）', () => {
     expect(describePopup(snap({ page: { kind: 'video' } })).state).toBe('active');
   });
 });
+
+describe('describeExpiry：超过一年要说"年"', () => {
+  it('800 天 → 2 年后到期', () => {
+    // 不加这一档，单位算错时会显示"698197 个月后到期"——
+    // 那种数字没人读得懂，也就没人发现它是 bug
+    expect(describeExpiry(NOW + 800 * 86_400_000, NOW)).toBe('2 年后到期');
+  });
+
+  it('365 天以内仍是"个月"（不越过 1 年就别说年）', () => {
+    expect(describeExpiry(NOW + 200 * 86_400_000, NOW)).toBe('6 个月后到期');
+  });
+});

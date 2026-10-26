@@ -316,6 +316,14 @@ export function describeExpiry(expireAt: number | null, now: number): string {
   const days = Math.floor(ms / 86_400_000);
   if (days === 0) return '今天到期';
   if (days <= 30) return `${String(days)} 天后到期`;
+  /**
+   * 超过一年就用"年"。
+   *
+   * 不加这一档的话，一个 3 年期的会员会显示"36 个月后到期"；
+   * 更糟的是**单位算错时**会显示"698197 个月后到期"——
+   * 那种数字没人读得懂，也就没人发现它是 bug（2026-10-26 真实发生）。
+   */
+  if (days > 365) return `${String(Math.floor(days / 365))} 年后到期`;
   return `${String(Math.floor(days / 30))} 个月后到期`;
 }
 
