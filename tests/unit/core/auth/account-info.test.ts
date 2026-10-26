@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isExpireAtImplausible,
   isHealthFresh,
   judgeNav,
   HEALTH_TTL_MS,
@@ -139,5 +140,46 @@ describe('summarizeNav：到期日单位（2026-10-26 修）', () => {
       NOW,
     );
     expect(s?.expireAt).toBe(1_800_000_000_000);
+  });
+});
+
+describe('isExpireAtImplausible：缓存脏数据自愈', () => {
+  /**
+   * 真实事故链（2026-10-27 用户复报）：
+   *
+   *   1. 旧构建无条件 `dueDate * 1000` → 算出 expireAt = 1.81e15 存进缓存
+   *   2. 修好算法后，新构建**仍读那份缓存** → 界面还是「57386 年后到期」
+   *
+   * 所以算法修对 ≠ 修好。存量数据必须能自己失效，否则每次改算法
+   * 都要用户重扫一次码，而用户毫无线索。
+   */
+  const YEAR = 365 * 86_400_000;
+
+  it('多乘 1000 产生的那类值必须被判为脏', () => {
+    // 1.81e12（真实毫秒值）被乘 1000 → 5 万年后
+    expect(isExpireAtImplausible(1_811_500_000_000_000, NOW)).toBe(true);
+  });
+
+  it('正常的年度大会员到期日不被误判', () => {
+    // 主账号实测值 1773936000000 = 2026-03-19，距 NOW 不到半年
+    expect(isExpireAtImplausible(1_773_936_000_000, NOW)).toBe(false);
+    // 未来 10 年（B站最长有效期量级）也不该误判
+    expect(isExpireAtImplausible(NOW + 10 * YEAR, NOW)).toBe(false);
+  });
+
+  it('已过期的时间戳不算"脏" —— 那是真实状态，UI 会显示「已过期」', () => {
+    expect(isExpireAtImplausible(NOW - YEAR, NOW)).toBe(false);
+    expect(isExpireAtImplausible(1_600_000_000_000, NOW)).toBe(false);
+  });
+
+  it('null / 非法值一律放过（没有到期日不是错误）', () => {
+    expect(isExpireAtImplausible(null, NOW)).toBe(false);
+    expect(isExpireAtImplausible(Number.NaN, NOW)).toBe(false);
+    expect(isExpireAtImplausible(Number.POSITIVE_INFINITY, NOW)).toBe(false);
+  });
+
+  it('阈值边界：99 年放过、101 年拦下（留足余量，不会误伤真实数据）', () => {
+    expect(isExpireAtImplausible(NOW + 99 * YEAR, NOW)).toBe(false);
+    expect(isExpireAtImplausible(NOW + 101 * YEAR, NOW)).toBe(true);
   });
 });

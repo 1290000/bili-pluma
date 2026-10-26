@@ -18,6 +18,7 @@
  * sessdata / biliJct 字段，从类型层面就漏不出去。
  */
 
+import { isExpireAtImplausible } from '@core/auth/account-info';
 import { applyVerdict, needsRecheck } from '@core/auth/health';
 import { checkCredential } from '@platform/http/nav';
 import { readPersistedCredential } from '@platform/storage/credential-store';
@@ -144,6 +145,23 @@ async function readCachedSummary(): Promise<AccountSummary | null> {
     const v = bag[SUMMARY_KEY] as AccountSummary | undefined;
     if (!v || typeof v !== 'object') return null;
     if (!v.profile || typeof v.profile.mid !== 'number') return null;
+
+    /**
+     * 脏数据自愈。判定逻辑在 `core/auth/account-info.ts`（可单测），
+     * 这里只做落地的处理。原因见 `isExpireAtImplausible` 的注释。
+     *
+     * ⚠️ 只丢 `expireAt`，**不丢整份摘要** —— uname / mid / 头像仍然可信，
+     * 整份丢掉会让用户看到卡片变成"读不出账号资料"，比显示错日期更糟。
+     *
+     * ⚠️ 还要**写回**存储：不写回的话脏值一直躺在 `storage.local` 里，
+     * 每次打开 popup 都要重判一次；而且下次写入新摘要前它一直是隐患。
+     */
+    if (isExpireAtImplausible(v.expireAt, Date.now())) {
+      const cleaned: AccountSummary = { ...v, expireAt: null };
+      await writeCachedSummary(cleaned);
+      return cleaned;
+    }
+
     return v;
   } catch {
     return null;

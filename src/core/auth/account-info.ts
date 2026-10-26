@@ -170,6 +170,36 @@ export function judgeNav(probe: NavProbe, checkedAt: number): HealthVerdict {
  */
 export const HEALTH_TTL_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * 缓存摘要里的到期日是否**明显算错了**。
+ *
+ * ## 为什么需要它（2026-10-26 真实踩到）
+ *
+ * 修了 `vipDueDate` 的单位乘错之后，用户界面**仍然显示「57386 年后到期」**。
+ * 原因不是代码没改对，而是**缓存是持久化的**：旧构建用 `* 1000` 算出
+ * `expireAt = 1.81e15` 写进了 `storage.local`，新构建读的仍是这份脏数据。
+ *
+ * **改算法不等于修好，存量数据得自己失效。**
+ *
+ * 光靠"让用户重扫一次"不可接受：每次算法修正都要用户配合，
+ * 而用户没有任何线索知道自己该重扫。
+ *
+ * ## 阈值取 100 年
+ *
+ * B站最长的大会员有效期就是个位数年。100 年是**极宽的**下界 ——
+ * 宽到不可能误判真实数据，窄到一定能抓住"多乘了 1000"这类量级错误
+ * （1.81e12 乘 1000 后变成 1.81e15，即 5 万年后，远超 100 年）。
+ *
+ * @param expireAt 缓存里的到期时间戳（ms）
+ * @param now      当前时间戳（ms）
+ */
+const MAX_EXPIRE_AHEAD_MS = 100 * 365 * 86_400_000;
+
+export function isExpireAtImplausible(expireAt: number | null, now: number): boolean {
+  if (typeof expireAt !== 'number' || !Number.isFinite(expireAt)) return false;
+  return expireAt - now > MAX_EXPIRE_AHEAD_MS;
+}
+
 export function isHealthFresh(health: AccountHealth | null, now: number): boolean {
   if (!health) return false;
   if (typeof health.checkedAt !== 'number' || health.checkedAt <= 0) return false;
