@@ -1,10 +1,11 @@
 /**
  * 诊断分区 —— 回答"出问题时看这里"。
  *
- * ## 它正在取代独立的自检页
+ * ## 它已经取代了独立的自检页
  *
- * 取数逻辑在 `platform/diagnostics/collect.ts`，两处共用。迁移顺序：
- * 先让这里显示同样的数据 → 用户逐行核对 → 再删 `entrypoints/diagnostics/`。
+ * 取数逻辑在 `platform/diagnostics/collect.ts`。原来那个独立页
+ * （`entrypoints/diagnostics/`）2026-10-26 已删除 —— 删之前做过逐行比对
+ * （16 行事实全同），不是凭感觉删的。
  *
  * ## 三块内容
  *
