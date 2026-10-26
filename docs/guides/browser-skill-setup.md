@@ -129,10 +129,24 @@ bsk install-skill --harness cursor
 
 ---
 
-## 7a. `chrome-extension://` 页面 **bsk 一律读不到**（2026-10-26 逐个命令实测）
+## 7a. `chrome-extension://` 页面 **能打开、但 bsk 读不到**（2026-10-26 逐个命令实测）
 
 想验证扩展自己的页面（options / popup）渲染得对不对时，会自然想到
 `bsk evaluate --tab-id <扩展页>`。**这条路走不通，而且不是"换个命令就好"。**
+
+### 先分清两件事（我一开始混了）
+
+| 动作 | 结果 |
+| --- | --- |
+| **打开**扩展页（`bsk tab create --url chrome-extension://…/options.html`） | ✅ **可以**。会正常跑起来，`tab list` 里标题是「Pluma 设置」 |
+| **读取**扩展页（evaluate / screenshot / …） | ❌ **一律拒绝** |
+
+所以看到"扩展页明明加载出来了"是对的 —— 限制在**读取**这一侧，
+不在能否打开。把这两件事混起来会得出"扩展页打不开"的错误结论。
+
+另外：页面虽能打开，**展开挂载的时机可能比你读的时候晚**。`tab create` 之后
+立刻 `tab list` 会看到 `url=<pending>`，等 1–2 秒才是真实标题。
+**别把 `url=<pending>` 当成"没加载"。**
 
 ### 错误长什么样
 
@@ -140,52 +154,40 @@ bsk install-skill --harness cursor
 
 ```
 error: operation denied by the Agent Window sandbox
-details: tool.evaluate cannot access tab 1673220385 because its URL is
-         chrome-extension://<id>/popup.html; navigate the Agent Window to a web page first
+details: tool.evaluate cannot access tab … because its URL is
+         chrome-extension://<id>/options.html; navigate the Agent Window to a web page first
 ```
 
 `screenshot` 报的是另一个码，**这个 `reason` 是决定性证据**：
 
 ```json
-{ "code": "permission_denied", "message": "tool.screenshot cannot access tab …",
-  "data": { "reason": "restricted_tab_url" } }
+{ "code": "permission_denied", "data": { "reason": "restricted_tab_url" } }
 ```
 
-`restricted_tab_url` 说明判定发生在 **URL 层面**，之后所有工具都被同一个闸门挡住。
-所以"再多试几个命令"是无效方向。
+`restricted_tab_url` 说明判定发生在 **URL 层面**，之后所有工具被同一个闸门挡住。
 
 ### 已经排除的几种"以为是原因"的解释
 
-顺序很重要——**前两条是我先猜错的方向，实际都不是原因**：
+**前两条是我先猜错的方向，实际都不是原因**：
 
 | 猜测 | 实测结果 |
 | --- | --- |
-| "扩展模块不能从普通页面 import，是 CSP/跨源限制" | ❌ **不是**。报错时页面是 `https://www.bilibili.com`，普通网页上下文里压根没有 `chrome.runtime`，`import('chrome-extension://…')` 当然失败。那是**方法用错**，与扩展页无关 |
+| "扩展模块不能从普通页面 import，是 CSP/跨源限制" | ❌ **不是**。报错时页面是 `https://www.bilibili.com`，普通网页里没有 `chrome.runtime`，`import()` 当然失败。那是**方法用错** |
 | "要先 `bsk tab borrow` 借过来" | ❌ **不是**。借了照样报同一个错 |
-| **真原因：沙箱 URL 白名单** | ✅ `evaluate` 的沙箱只接受 http/https 页面，`chrome-extension://` 一律拒绝 |
+| **真原因：沙箱 URL 白名单** | ✅ 只接受 http/https，`chrome-extension://` 一律拒绝 |
 
 `bsk evaluate --help` 里有个 `--tab-id`，看着像"可以指定任意标签页"，
 **但它受沙箱约束**，对扩展页无效。
 
 ### 那怎么验扩展页
 
-**结论：`chrome-extension://` 页面用 bsk 的读取类命令一律读不到，这是
-词表级（URL scheme）的限制，不是"换个命令就好"。**
-
-2026-10-26 逐个实测：
+逐个命令实测：
 
 | 命令 | 结果 |
 | --- | --- |
-| `evaluate --tab-id` / `get-html` / `snapshot` / `observe` | ❌ `operation denied by the Agent Window sandbox` |
-| `screenshot --tab-id` | ❌ `permission_denied`，`data.reason = **restricted_tab_url**` |
+| `evaluate` / `get-html` / `snapshot` / `observe` | ❌ `operation denied by the Agent Window sandbox` |
+| `screenshot --tab-id` | ❌ `permission_denied`，`reason = restricted_tab_url` |
 | `debug pages` | ❌ 只列**录制目标**，不是全上下文清单 |
-
-`restricted_tab_url` 是决定性证据：**判定发生在 URL 层面**，之后所有工具被同一个闸门挡住。
-所以"再多试几个命令"是无效方向。另两个已排除的方向**都实测过，别再重复**：
-
-- **`bsk tab borrow` 不管用。** 借过来照样报同一个错——限的是 URL scheme，不是访问权。
-- **不是 CSP / 跨源问题。** 报错时页面是 `https://www.bilibili.com`，普通网页里
-  压根没有 `chrome.runtime`，`import('chrome-extension://…')` 当然失败。那是**方法用错**。
 
 ### 实际可用的替代路径
 
