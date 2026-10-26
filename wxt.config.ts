@@ -27,7 +27,15 @@ export default defineConfig({
   manifest: {
     name: 'Pluma',
     description: 'B站双账号画质助手',
-    version: '0.0.0',
+    /**
+     * ⚠️ **每段上限 65535**（Chrome 扩展版本号规范）。
+     * 别把日期往里塞（`20261026` 超限，装不上）。
+     *
+     * `0.9.0` 的含义是「v1 范围已完整落地并通过六条验收，但仍明确在观察期」，
+     * 而非「刚开了个头」。`1.0.0` 留给「首个稳定版」。
+     * 与白名单修订号（`ROUTES_REVISION`）**是两个号，不同步变化**。
+     */
+    version: '0.9.0',
     minimum_chrome_version: '120',
     // ⚠️ 声明 action 是必须的，否则工具栏图标不绑定任何行为、点了毫无反应也不报错。
     // P2 起加了 default_popup：**有 popup 时 `chrome.action.onClicked` 不再触发**，
