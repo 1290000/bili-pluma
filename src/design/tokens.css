@@ -3,8 +3,20 @@
  *
  * 对应 docs/02-ui-spec.md §6。用信息蓝而不是 B站粉：
  * 用粉色会让人以为是官方插件，出问题容易被误认为官方行为。
+ *
+ * ## 为什么选择器是 `:host, :root` 两个
+ *
+ * 这份文件被两种场景消费：
+ *   1. popup / options / login-window —— 普通文档，靠 `:root` 生效
+ *   2. 页内角标 —— Shadow DOM 内部，**`:root` 不会匹配 shadow tree**
+ *      （`:root` 只指代文档树的根元素 html）
+ *
+ * CSS 变量**不穿透 shadow 边界**，所以角标必须把这整份文本塞进 shadow root。
+ * 只写 `:root` 的话变量在 shadow 里全部失效，角标会变成无样式的裸元素。
+ * `:host` 在 shadow tree 里指代宿主元素，加上它两处都能命中。
  */
 
+:host,
 :root {
   color-scheme: light dark;
 
@@ -30,6 +42,7 @@
 }
 
 @media (prefers-color-scheme: dark) {
+  :host,
   :root {
     --pluma-accent: #85b7eb;
     --pluma-accent-bg: #1e3a5f;
