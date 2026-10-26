@@ -18,7 +18,7 @@
  * sessdata / biliJct 字段，从类型层面就漏不出去。
  */
 
-import { isExpireAtImplausible } from '@core/auth/account-info';
+import { repairExpireAt } from '@core/auth/account-info';
 import { applyVerdict, needsRecheck } from '@core/auth/health';
 import { checkCredential } from '@platform/http/nav';
 import { readPersistedCredential } from '@platform/storage/credential-store';
@@ -148,16 +148,24 @@ async function readCachedSummary(): Promise<AccountSummary | null> {
 
     /**
      * 脏数据自愈。判定逻辑在 `core/auth/account-info.ts`（可单测），
-     * 这里只做落地的处理。原因见 `isExpireAtImplausible` 的注释。
+     * 这里只做落地的处理。原因见 `repairExpireAt` 的注释。
      *
-     * ⚠️ 只丢 `expireAt`，**不丢整份摘要** —— uname / mid / 头像仍然可信，
-     * 整份丢掉会让用户看到卡片变成"读不出账号资料"，比显示错日期更糟。
+     * ## ⚠️ 为什么是"修正"而不是"清除"（2026-10-27 改过一次，这是第二版）
      *
-     * ⚠️ 还要**写回**存储：不写回的话脏值一直躺在 `storage.local` 里，
-     * 每次打开 popup 都要重判一次；而且下次写入新摘要前它一直是隐患。
+     * 第一版写的是 `{ ...v, expireAt: null }` —— 直接丢掉。**造成了新 bug**：
+     * 播放账号的 cookie 只活在扫码时的无痕分区里（见 `probeAndCacheSummary` 的注释），
+     * 窗口一关就没了。所以在普通分区**再也探测不到**这个账号，
+     * `expireAt` 一旦清成 null 就**永远补不回来** —— 用户看到的从
+     * 「57386 年后到期」变成了「仅取流」，到期日彻底消失。
+     *
+     * 从"显示错日期"换成"什么都不显示"，不是修复，是换了个坏法。
+     * 正确做法是**把脏值还原成正确值**（除以 1000），因为它本来就只是多乘了一次。
+     *
+     * 只有实在还原不出合理值时才清成 null —— 宁可没有，不能显示错。
      */
-    if (isExpireAtImplausible(v.expireAt, Date.now())) {
-      const cleaned: AccountSummary = { ...v, expireAt: null };
+    const repaired = repairExpireAt(v.expireAt, Date.now());
+    if (repaired !== v.expireAt) {
+      const cleaned: AccountSummary = { ...v, expireAt: repaired };
       await writeCachedSummary(cleaned);
       return cleaned;
     }

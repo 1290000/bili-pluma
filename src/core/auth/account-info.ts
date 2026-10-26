@@ -171,7 +171,15 @@ export function judgeNav(probe: NavProbe, checkedAt: number): HealthVerdict {
 export const HEALTH_TTL_MS = 6 * 60 * 60 * 1000;
 
 /**
- * 缓存摘要里的到期日是否**明显算错了**。
+ * 到期日的合理上限：**距今 100 年**。
+ *
+ * B站最长的大会员有效期就是个位数年，100 年宽到不可能误判真实数据，
+ * 又窄到一定能抓住「多乘了 1000」这类量级错误（1.81e12 → 1.81e15 = 5 万年后）。
+ */
+const MAX_EXPIRE_AHEAD_MS = 100 * 365 * 86_400_000;
+
+/**
+ * 判定一个到期时间戳是否**明显算错了**（不可信）。
  *
  * ## 为什么需要它（2026-10-26 真实踩到）
  *
@@ -180,9 +188,6 @@ export const HEALTH_TTL_MS = 6 * 60 * 60 * 1000;
  * `expireAt = 1.81e15` 写进了 `storage.local`，新构建读的仍是这份脏数据。
  *
  * **改算法不等于修好，存量数据得自己失效。**
- *
- * 光靠"让用户重扫一次"不可接受：每次算法修正都要用户配合，
- * 而用户没有任何线索知道自己该重扫。
  *
  * ## 阈值取 100 年
  *
@@ -193,11 +198,56 @@ export const HEALTH_TTL_MS = 6 * 60 * 60 * 1000;
  * @param expireAt 缓存里的到期时间戳（ms）
  * @param now      当前时间戳（ms）
  */
-const MAX_EXPIRE_AHEAD_MS = 100 * 365 * 86_400_000;
-
 export function isExpireAtImplausible(expireAt: number | null, now: number): boolean {
   if (typeof expireAt !== 'number' || !Number.isFinite(expireAt)) return false;
   return expireAt - now > MAX_EXPIRE_AHEAD_MS;
+}
+
+/**
+ * 尝试把一个脏的 `expireAt` **还原**成合理值。
+ *
+ * ## 为什么是还原，而不是清掉（2026-10-27 的第二版实现）
+ *
+ * 第一版直接返回 `null`。那造成了一个更糟的 bug：
+ * **到期日从"显示错的"变成了"完全不显示"**。
+ *
+ * 原因是结构性约束：播放账号的 cookie 只活在扫码时的无痕分区，
+ * 窗口一关就没了（见 `probeAndCacheSummary` 的注释）。所以在普通分区
+ * **再也探测不到这个账号** —— `expireAt` 一旦清成 null 就永远补不回来。
+ * 用户得重新扫码才能看到到期日，而他并不知道这一点。
+ *
+ * 而脏值本身是可逆的：它只是被多乘了一次 1000（旧代码 `dueDate * 1000`）。
+ * 除以 1000 就回到真实值（实测：1.81e15 / 1000 = 1.81e12 = 2027-05-28）。
+ *
+ * ## 判据顺序（重要）
+ *
+ * 1. 值合理 → 原样返回（**最常见路径，不碰它**）
+ * 2. 不合理，但除以 1000 后合理 → 返回除后的值（**这就是修复**）
+ * 3. 怎么都不合理 → `null`（宁可没有，不能显示错）
+ *
+ * @param expireAt 缓存里的到期时间戳（ms），可能是脏的
+ * @param now      当前时间戳（ms）
+ * @returns 合理的时间戳，或 null 表示无法还原
+ */
+export function repairExpireAt(expireAt: number | null, now: number): number | null {
+  if (typeof expireAt !== 'number' || !Number.isFinite(expireAt) || expireAt <= 0) return null;
+  if (!isExpireAtImplausible(expireAt, now)) return expireAt;
+
+  /**
+   * 多乘一次 1000 是最可能的成因：除以 1000 就是原值。
+   *
+   * ⚠️ 但**不能无条件除**。只有除完的结果本身**像一个真实到期日**才算还原成功：
+   * 必须距今至少 1 天（排除"除完已经过去了"）且在 100 年以内。
+   *
+   * 反例（测试抓到的）：`now + 101 年` 除以 1000 后是「36 天后」——
+   * 数字上不算离谱，但它显然不是"多乘了 1000"，而是别的原因造成的坏值。
+   * 无条件接受会**凭空造出一个到期日**，比显示 null 更糟。
+   */
+  const halved = Math.round(expireAt / 1000);
+  const oneDay = 86_400_000;
+  if (halved - now >= oneDay && !isExpireAtImplausible(halved, now)) return halved;
+
+  return null;
 }
 
 export function isHealthFresh(health: AccountHealth | null, now: number): boolean {

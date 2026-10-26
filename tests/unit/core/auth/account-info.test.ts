@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  isExpireAtImplausible,
+  repairExpireAt,
   isHealthFresh,
   judgeNav,
   HEALTH_TTL_MS,
@@ -143,43 +143,65 @@ describe('summarizeNav：到期日单位（2026-10-26 修）', () => {
   });
 });
 
-describe('isExpireAtImplausible：缓存脏数据自愈', () => {
+describe('repairExpireAt：缓存脏数据自愈', () => {
   /**
-   * 真实事故链（2026-10-27 用户复报）：
+   * 真实事故链（两天连着踩）：
    *
    *   1. 旧构建无条件 `dueDate * 1000` → 算出 expireAt = 1.81e15 存进缓存
    *   2. 修好算法后，新构建**仍读那份缓存** → 界面还是「57386 年后到期」
+   *   3. 第一版修复把它清成 null → 界面变成「仅取流」，到期日**彻底消失**
    *
-   * 所以算法修对 ≠ 修好。存量数据必须能自己失效，否则每次改算法
-   * 都要用户重扫一次码，而用户毫无线索。
+   * 第 3 步是本文件最重要的教训：播放账号的 cookie 只在扫码时的无痕分区里，
+   * 窗口一关就没了，所以**普通分区再也探测不到它** —— 清成 null 就永远补不回来。
+   * 脏值是可逆的（只多乘了一次 1000），必须**还原**而不是丢弃。
    */
   const YEAR = 365 * 86_400_000;
 
-  it('多乘 1000 产生的那类值必须被判为脏', () => {
-    // 1.81e12（真实毫秒值）被乘 1000 → 5 万年后
-    expect(isExpireAtImplausible(1_811_500_000_000_000, NOW)).toBe(true);
+  it('多乘 1000 的值必须被还原成真实毫秒值（不是清掉）', () => {
+    // 1.81e12 是真实毫秒值（≈2027-05-28），被旧代码乘 1000 后 = 1.81e15
+    const repaired = repairExpireAt(1_811_500_000_000_000, NOW);
+    expect(repaired).toBe(1_811_500_000_000);
+    // 还原后走 describeExpiry 应该是个正常量级，而不是 5 万年
+    expect(repaired! - NOW).toBeLessThan(20 * YEAR);
   });
 
-  it('正常的年度大会员到期日不被误判', () => {
-    // 主账号实测值 1773936000000 = 2026-03-19，距 NOW 不到半年
-    expect(isExpireAtImplausible(1_773_936_000_000, NOW)).toBe(false);
-    // 未来 10 年（B站最长有效期量级）也不该误判
-    expect(isExpireAtImplausible(NOW + 10 * YEAR, NOW)).toBe(false);
+  it('合理的值必须原样返回（最常见路径，一个字节都不改）', () => {
+    // 主账号实测值 1773936000000 = 2026-03-19
+    expect(repairExpireAt(1_773_936_000_000, NOW)).toBe(1_773_936_000_000);
+    expect(repairExpireAt(NOW + 10 * YEAR, NOW)).toBe(NOW + 10 * YEAR);
   });
 
-  it('已过期的时间戳不算"脏" —— 那是真实状态，UI 会显示「已过期」', () => {
-    expect(isExpireAtImplausible(NOW - YEAR, NOW)).toBe(false);
-    expect(isExpireAtImplausible(1_600_000_000_000, NOW)).toBe(false);
+  it('已过期的时间戳原样返回 —— 那是真实状态，UI 会显示「已过期」', () => {
+    expect(repairExpireAt(NOW - YEAR, NOW)).toBe(NOW - YEAR);
+    expect(repairExpireAt(1_600_000_000_000, NOW)).toBe(1_600_000_000_000);
   });
 
-  it('null / 非法值一律放过（没有到期日不是错误）', () => {
-    expect(isExpireAtImplausible(null, NOW)).toBe(false);
-    expect(isExpireAtImplausible(Number.NaN, NOW)).toBe(false);
-    expect(isExpireAtImplausible(Number.POSITIVE_INFINITY, NOW)).toBe(false);
+  it('无法还原时返回 null（宁可没有，不能显示错）', () => {
+    // 除以 1000 之后仍然是"过去"的值 → 还原不成立
+    expect(repairExpireAt(NOW * 1000 * 1000, NOW)).toBeNull();
   });
 
-  it('阈值边界：99 年放过、101 年拦下（留足余量，不会误伤真实数据）', () => {
-    expect(isExpireAtImplausible(NOW + 99 * YEAR, NOW)).toBe(false);
-    expect(isExpireAtImplausible(NOW + 101 * YEAR, NOW)).toBe(true);
+  it('null / NaN / Infinity / 负数一律返回 null', () => {
+    expect(repairExpireAt(null, NOW)).toBeNull();
+    expect(repairExpireAt(Number.NaN, NOW)).toBeNull();
+    expect(repairExpireAt(Number.POSITIVE_INFINITY, NOW)).toBeNull();
+    expect(repairExpireAt(-1, NOW)).toBeNull();
+    expect(repairExpireAt(0, NOW)).toBeNull();
+  });
+
+  it('阈值边界：99 年原样放过', () => {
+    const at99 = NOW + 99 * YEAR;
+    expect(repairExpireAt(at99, NOW)).toBe(at99);
+  });
+
+  it('除 1000 后不像真实到期日的，不许"还原"，必须返回 null', () => {
+    /**
+     * 测试抓到的真实缺陷：最初写成"除以 1000 只要不是未来 100 年就接受"，
+     * 于是 `now + 101年` 被"还原"成「36 天后」——
+     * 数字上不离谱，但它显然不是"多乘了 1000"造成的。
+     * **凭空造一个到期日比显示 null 更糟**：用户会以为那是真的。
+     */
+    const at101 = NOW + 101 * YEAR;
+    expect(repairExpireAt(at101, NOW)).toBeNull();
   });
 });
