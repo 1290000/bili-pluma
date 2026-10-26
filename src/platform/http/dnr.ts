@@ -78,8 +78,16 @@ export async function isProxyEnabled(): Promise<boolean> {
 /**
  * 开启代理：装规则、置状态。
  *
+ * ## 为什么"一条规则都没装"时要报错而不是照置 true
+ *
+ * 白名单的 `enabled` 是可能全为 false 的（B站改路径、或临时禁掉某条时）。
+ * 那种情况下如果仍然写 `ENABLED_KEY: true`，就会出现
+ * **"总开关显示已接管，实际一条规则都没有"** 的不一致状态——
+ * 用户看到的和实际发生的不一样，这是最难排查的一类 bug。
+ *
  * @param cookie 播放账号的完整 Cookie 头值
  * @param paths  要代理的路径列表（默认取白名单）
+ * @throws 当没有任何可代理的路径时
  */
 export async function enableProxy(cookie: string, paths?: string[]): Promise<void> {
   const targets = paths ?? defaultProxyPaths();
@@ -88,12 +96,14 @@ export async function enableProxy(cookie: string, paths?: string[]): Promise<voi
     .map((p) => buildPathRule(p, cookie))
     .filter((r): r is chrome.declarativeNetRequest.Rule => r !== null);
 
-  if (addRules.length > 0) {
-    await chrome.declarativeNetRequest.updateSessionRules({
-      removeRuleIds: addRules.map((r) => r.id),
-      addRules,
-    });
+  if (addRules.length === 0) {
+    throw new Error('白名单里没有启用中的代理路径，无法开启');
   }
+
+  await chrome.declarativeNetRequest.updateSessionRules({
+    removeRuleIds: addRules.map((r) => r.id),
+    addRules,
+  });
 
   await chrome.storage.local.set({ [ENABLED_KEY]: true });
 }
@@ -259,9 +269,25 @@ const PLAYURL_PATH = '/x/player/wbi/playurl';
  *
  * 与全局路径规则的区别：多了 `tabIds` 限定，只对这一个标签页生效。
  * 用于普通视频页 —— 页面自己发请求，我们预测不到完整 URL（含实时 `w_rid`）。
+ *
+ * ## 幂等性（重要）
+ *
+ * 同一条规则会被装**很多次**：`document_start` 一次、`DOMContentLoaded` 一次、
+ * 标签页从后台恢复时再一次。每次 `updateSessionRules` 都会让浏览器的规则表重算，
+ * 同时触发所有已打开 B站标签页的 content script 重评估。
+ *
+ * 所以这里先比对现有规则：**Cookie 值一样就什么都不做**。
+ * 这不是微优化——反复重建规则是"恢复标签页时卡一下"的直接来源之一。
  */
 export async function installTabRule(tabId: number, cookie: string): Promise<void> {
   const id = TAB_RULE_BASE + (tabId % TAB_RULE_SPAN);
+
+  const existing = await chrome.declarativeNetRequest.getSessionRules().catch(() => []);
+  const current = existing.find((r) => r.id === id);
+  if (current) {
+    const currentValue = current.action?.requestHeaders?.[0]?.value;
+    if (currentValue === cookie) return; // 完全一致，跳过重建
+  }
 
   await chrome.declarativeNetRequest.updateSessionRules({
     removeRuleIds: [id],
@@ -288,11 +314,31 @@ export async function installTabRule(tabId: number, cookie: string): Promise<voi
 /** 删掉某个标签页的规则 */
 export async function removeTabRule(tabId: number): Promise<void> {
   const id = TAB_RULE_BASE + (tabId % TAB_RULE_SPAN);
+  // 先查再删：没有这条规则时不必触发一次规则表重算
+  const existing = await chrome.declarativeNetRequest.getSessionRules().catch(() => []);
+  if (!existing.some((r) => r.id === id)) return;
   await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] }).catch(() => {});
 }
 
 /** 校正标签页规则：删掉不属于任何现存标签页的（标签页崩溃时留下） */
 export const reconcileTabRules = removeStaleTabRules;
+
+/**
+ * 本实例能看到的路径规则条数。
+ *
+ * ## 为什么单独包一层
+ *
+ * `incognito: "split"` 下 `sessionRules` 疑似**按实例独立**：
+ * 诊断页（页面上下文）能数到 2 条，而 background 里数到 0 条。
+ * 这意味着"数规则"不能跨实例用作判据。
+ *
+ * 所以 `proxy/status` 只用这个值做**本实例视角**的展示，
+ * 不能拿它断言"全局是否生效"。
+ */
+export async function countPathRules(): Promise<number> {
+  const rules = await describeRules().catch(() => []);
+  return rules.filter((r) => r.kind === 'path').length;
+}
 
 /** 当前已装的规则摘要（诊断用） */
 export async function describeRules(): Promise<

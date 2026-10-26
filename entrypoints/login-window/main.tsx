@@ -68,11 +68,14 @@ function App() {
   const [qr, setQr] = useState<QrPayload | null>(null);
   const [status, setStatus] = useState<QrLoginStatus>({ kind: 'pending' });
   const [error, setError] = useState<string | null>(null);
+  /** 扫码成功但凭据读取/落库失败。此时**不能**自动关窗口 */
+  const [saveFailed, setSaveFailed] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const regenerate = useCallback(async () => {
     setQr(null);
     setError(null);
+    setSaveFailed(false);
     setStatus({ kind: 'pending' });
 
     try {
@@ -115,6 +118,12 @@ function App() {
 
         if (res?.type === 'qr/poll:ok') {
           setStatus(res.status);
+          // 登录成功但凭据没存进去 —— 必须让用户看见，否则窗口自动关闭后
+          // 他只是回到 popup 看到"凭据失效"，完全不知道发生了什么。
+          if (res.status.kind === 'success' && !res.credentialSaved) {
+            setSaveFailed(true);
+            return;
+          }
           if (isTerminal(res.status)) return;
         } else {
           setStatus({ kind: 'error', code: -1, message: res?.detail ?? '轮询失败' });
@@ -136,12 +145,16 @@ function App() {
     };
   }, [qr]);
 
-  // 成功后自动关闭，让用户回到视频页
+  // 成功后自动关闭，让用户回到视频页。
+  //
+  // ⚠️ 必须同时满足 `!saveFailed`。曾经只看 status.kind === 'success'，
+  // 结果凭据没存进去时窗口照样关掉，失败被完全吞掉——
+  // 用户只看到 popup 说"凭据读取失败"，无从判断发生了什么。
   useEffect(() => {
-    if (status.kind !== 'success') return;
+    if (status.kind !== 'success' || saveFailed) return;
     const t = window.setTimeout(() => window.close(), 1500);
     return () => clearTimeout(t);
-  }, [status]);
+  }, [status, saveFailed]);
 
   const statusText = (() => {
     switch (status.kind) {
@@ -152,13 +165,13 @@ function App() {
       case 'expired':
         return '二维码已失效';
       case 'success':
-        return '登录成功，正在关闭…';
+        return saveFailed ? '扫码成功，但读取登录凭据失败' : '登录成功，正在关闭…';
       case 'error':
         return `登录失败：${status.message}`;
     }
   })();
 
-  const showQr = status.kind === 'pending' || status.kind === 'scanned';
+  const showQr = !saveFailed && (status.kind === 'pending' || status.kind === 'scanned');
 
   return (
     <div class="wrap">
@@ -169,13 +182,24 @@ function App() {
         {showQr && qr && <canvas ref={canvasRef} class="qr-canvas" />}
         {showQr && !qr && !error && <div class="placeholder">正在生成二维码…</div>}
         {status.kind === 'expired' && <div class="placeholder">二维码已失效</div>}
-        {status.kind === 'success' && <div class="placeholder success">✓</div>}
+        {status.kind === 'success' && !saveFailed && <div class="placeholder success">✓</div>}
+        {saveFailed && <div class="placeholder error">!</div>}
         {status.kind === 'error' && <div class="placeholder error">!</div>}
       </div>
 
       <p class={`status ${status.kind}`}>{statusText}</p>
 
-      {(status.kind === 'expired' || status.kind === 'error' || error) && (
+      {saveFailed && (
+        <div class="save-failed">
+          <p class="save-failed-title">账号已登录成功，但扩展读不到凭据</p>
+          <p class="save-failed-note">
+            通常是因为 InPrivate 窗口允许扩展运行，但 cookies 权限未生效。 请在扩展详情页确认「在
+            InPrivate 中允许」已勾选，然后重新扫码。
+          </p>
+        </div>
+      )}
+
+      {(status.kind === 'expired' || status.kind === 'error' || error || saveFailed) && (
         <button class="refresh" onClick={() => void regenerate()}>
           刷新二维码
         </button>

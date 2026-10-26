@@ -14,6 +14,7 @@ import { diag } from '@/src/background/login-window';
 import { buildCookieHeader } from '@platform/http/playurl';
 import { installTabRule, removeTabRule } from '@platform/http/dnr';
 import { readPersistedCredential } from '@platform/storage/credential-store';
+import { readDeviceCookies, writeDeviceCookies } from '@platform/storage/device-cookies-store';
 
 export interface ActivatePayload {
   tabId: number;
@@ -61,7 +62,43 @@ export async function handlePageActivate(payload: ActivatePayload): Promise<Acti
       return { activated: false, reason: 'same-account' };
     }
 
-    const cookie = buildCookieHeader(credential, payload.deviceCookies);
+    // ── 游客态：`primaryMid === null` 也继续代理 ──
+    //
+    // 这是**有意的**，不是漏判。Q1 实测结论：身份由 Cookie 决定，
+    // 游客 + 大会员凭据同样能拿到 2160P（`poc/verify/RESULT.md` §一）。
+    // 拒绝游客等于砍掉一个能用的场景：用户只想看高清、不想登录任何主账号。
+    //
+    // 代价是点赞/历史不可用，那由 popup 如实告知（"未检测到主账号登录"），
+    // 不由这里静默拒绝。
+    //
+    // 只有"两个账号是同一个"时才拒绝 —— 那种情况代理毫无意义。
+
+    // ── 设备 Cookie：页面给的为空就回退到缓存 ──
+    //
+    // `document_start` 时 `document.cookie` 是空的（新标签页尤其明显），
+    // 页面传来的 `deviceCookies` 于是也是空对象。缺 `buvid3` 会被风控判成陌生设备，
+    // 取流返回 -412 —— 这正是"首屏正常、后台恢复后坏掉"的根因。
+    //
+    // 缓存来自**之前某个能读到 cookie 的时刻**（DOMContentLoaded 或另一标签页）。
+    // 设备标识是浏览器级的，跨标签页共用是对的。
+    let deviceCookies = payload.deviceCookies;
+    if (!hasBuvid(deviceCookies)) {
+      const cached = await readDeviceCookies();
+      if (cached) {
+        deviceCookies = { ...cached, ...deviceCookies };
+        await diag(
+          'page/activate',
+          `设备 Cookie 回退到缓存（来自 ${Object.keys(cached).length} 项）`,
+        );
+      } else {
+        await diag('page/activate', '⚠️ 无 buvid3 且无缓存 → 该请求可能被判风控');
+      }
+    } else {
+      // 页面上读到了就顺手更新缓存，供其它标签页 / 后续 reload 使用
+      void writeDeviceCookies(deviceCookies);
+    }
+
+    const cookie = buildCookieHeader(credential, deviceCookies);
     await diag(
       'page/activate',
       `Cookie 字段=${cookie
@@ -78,6 +115,11 @@ export async function handlePageActivate(payload: ActivatePayload): Promise<Acti
     await diag('page/activate 异常', e instanceof Error ? e.message.slice(0, 100) : String(e));
     return { activated: false, reason: 'error' };
   }
+}
+
+/** 判断设备 Cookie 里有没有可用的 buvid（缺它必被判风控） */
+function hasBuvid(cookies: Record<string, string>): boolean {
+  return typeof cookies.buvid3 === 'string' && cookies.buvid3.length > 0;
 }
 
 export async function handlePageDeactivate(tabId: number): Promise<void> {

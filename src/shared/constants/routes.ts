@@ -11,6 +11,17 @@
 export const BILI_API_HOST = 'api.bilibili.com';
 export const BILI_WEB_HOST = 'www.bilibili.com';
 
+/**
+ * `nav` 接口 —— 用于探测播放账号凭据是否有效。
+ *
+ * ⚠️ **它不在代理白名单里**，也不需要：探活必须用**指定账号**的凭据，
+ * 而白名单规则注入的是"全局那一个"。探活由 `platform/http/nav.ts`
+ * 自己拼 Cookie 头（`credentials: 'omit'`）。
+ *
+ * 放在这里而不是散在别处，是为了和 B 站域名/路径变更保持单点维护。
+ */
+export const NAV_URL = `https://${BILI_API_HOST}/x/web-interface/nav`;
+
 export interface ProxyRoute {
   path: string;
   method: 'GET' | 'POST';

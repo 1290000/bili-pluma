@@ -20,8 +20,6 @@
 
 import type { Credential } from '@shared/types/account';
 
-const BILI_ORIGIN = 'https://www.bilibili.com';
-
 /**
  * 读 cookie 时要指定的存储分区。
  *
@@ -33,17 +31,38 @@ const BILI_ORIGIN = 'https://www.bilibili.com';
  */
 export type StoreId = string | undefined;
 
-async function readOne(name: string, storeId: StoreId): Promise<string | null> {
-  try {
-    const details: chrome.cookies.CookieDetails = { url: BILI_ORIGIN, name };
-    if (storeId) details.storeId = storeId;
+/**
+ * 读一个 cookie，**依次尝试多个域**。
+ *
+ * ## 为什么不能只查一个域
+ *
+ * `chrome.cookies.get({ url })` 是**按 URL 精确匹配**的。B站的 `SESSDATA` 可能挂在
+ * `www.bilibili.com`（host-only），也可能挂在 `.bilibili.com`（domain cookie）。
+ * 只查 `www` 会漏掉后者——表现就是"扫码明明成功了，扩展说读不到凭据"。
+ *
+ * 顺序很重要：先 `www`（最常见），再裸域，最后 `api` 子域。
+ * 拿到第一个非空就返回，不做合并——三个字段必须来自**同一份**会话。
+ */
+const COOKIE_URLS = [
+  'https://www.bilibili.com',
+  'https://bilibili.com',
+  'https://api.bilibili.com',
+] as const;
 
-    const cookie = await chrome.cookies.get(details);
-    const value = cookie?.value;
-    return typeof value === 'string' && value.length > 0 ? value : null;
-  } catch {
-    return null;
+async function readOne(name: string, storeId: StoreId): Promise<string | null> {
+  for (const url of COOKIE_URLS) {
+    try {
+      const details: chrome.cookies.CookieDetails = { url, name };
+      if (storeId) details.storeId = storeId;
+
+      const cookie = await chrome.cookies.get(details);
+      const value = cookie?.value;
+      if (typeof value === 'string' && value.length > 0) return value;
+    } catch {
+      // 某个域查失败不影响继续试下一个
+    }
   }
+  return null;
 }
 
 /**

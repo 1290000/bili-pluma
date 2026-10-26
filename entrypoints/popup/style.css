@@ -1,0 +1,339 @@
+/* Popup 样式 —— 只引用 tokens.css 的变量，不硬编码颜色/字号。
+ *
+ * 尺寸依据 docs/02-ui-spec.md §1：
+ *   - 宽 360px（规范建议 360–400，更宽会显得空）
+ *   - min-height 钉住高度，避免不同状态之间抖动
+ *   - 绝不出现滚动条（内容超了就是设计失败，该砍内容）
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--pluma-surface);
+  color: var(--pluma-text);
+  font-family: var(--pluma-font-sans);
+  font-size: var(--pluma-font-body);
+  line-height: 1.5;
+}
+
+body {
+  width: 360px;
+}
+
+.popup {
+  display: flex;
+  flex-direction: column;
+  /* 钉住高度：内容少的态与内容多的态切换时不跳 */
+  min-height: 220px;
+  padding: 12px 14px 10px;
+}
+
+/* ── 状态条：20% 注意力，2 秒内读完 ── */
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 0.5px solid var(--pluma-border);
+}
+
+.brand {
+  font-size: var(--pluma-font-title);
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+/* 状态胶囊：文案必须短（2–3 字），用户不会读长句 */
+.pill {
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: var(--pluma-font-caption);
+  white-space: nowrap;
+}
+
+.pill-idle {
+  color: var(--pluma-text-muted);
+  background: var(--pluma-accent-bg);
+}
+
+.pill-success {
+  color: #ffffff;
+  background: var(--pluma-accent);
+}
+
+.pill-danger {
+  color: #ffffff;
+  background: var(--pluma-danger);
+}
+
+/* 琥珀只用于"降级"这一类可恢复的警告，不要拿去表示失败 */
+.pill-warn {
+  color: #ffffff;
+  background: var(--pluma-warning);
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 0;
+}
+
+.placeholder {
+  margin: 0;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+.placeholder.error {
+  color: var(--pluma-danger);
+}
+
+/* ── 内容区 ── */
+
+.content {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+/* 一句话结论。tone 决定颜色，不要用颜色编码状态以外的含义 */
+.line {
+  margin: 0;
+  text-align: center;
+  font-size: var(--pluma-font-body);
+}
+
+.line.neutral {
+  color: var(--pluma-text-muted);
+}
+
+.line.good {
+  color: var(--pluma-accent);
+}
+
+.line.warn {
+  color: var(--pluma-warning);
+}
+
+.line.bad {
+  color: var(--pluma-danger);
+}
+
+/* ── 账号卡片：信任建立区 ──
+   视觉上刻意做得"受控"：不是头像卡片，是一行摘要。
+   目的是让用户确信这只是一个取流工具，不是另一个活跃账号。 */
+
+.account {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 10px;
+  border-radius: var(--pluma-radius-control);
+  background: var(--pluma-accent-bg);
+  font-size: var(--pluma-font-caption);
+  overflow: hidden;
+}
+
+.account-name {
+  font-weight: 500;
+  color: var(--pluma-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.account-meta {
+  color: var(--pluma-text-muted);
+  white-space: nowrap;
+}
+
+.account-role {
+  margin-left: auto;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--pluma-accent);
+  background: var(--pluma-surface);
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+}
+
+.note {
+  margin: 0;
+  text-align: center;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+/* ── 开关行 ── */
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-card);
+  cursor: pointer;
+}
+
+.row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--pluma-font-body);
+}
+
+.row-hint {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  line-height: 1.35;
+}
+
+/* 开关本体：原生 checkbox 隐藏，用 span 画。
+   不用 appearance: none 直接改 checkbox，是因为那样在深色模式下
+   各浏览器表现不一致（踩过的老问题）。 */
+.switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--pluma-border);
+  transition: background-color 0.15s;
+}
+
+.switch.on {
+  background: var(--pluma-accent);
+}
+
+.switch.busy {
+  opacity: 0.6;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch .knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.15s;
+  pointer-events: none;
+}
+
+.switch.on .knob {
+  transform: translateX(16px);
+}
+
+/* ── 受影响标签页提示 ── */
+
+.affected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: var(--pluma-radius-control);
+  background: var(--pluma-accent-bg);
+}
+
+.affected-text {
+  margin: 0;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text);
+  line-height: 1.35;
+}
+
+.hint {
+  margin: 4px 0 0;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  max-width: 280px;
+}
+
+.hint.danger {
+  color: var(--pluma-danger);
+}
+
+/* ── 按钮：三档权重 ── */
+
+button {
+  font-family: inherit;
+  font-size: var(--pluma-font-body);
+  border-radius: var(--pluma-radius-control);
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.primary {
+  padding: 7px 18px;
+  color: #ffffff;
+  background: var(--pluma-accent);
+  border: 0.5px solid var(--pluma-accent);
+}
+
+.primary:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.ghost {
+  padding: 6px 14px;
+  color: var(--pluma-text-muted);
+  background: transparent;
+  border: 0.5px solid var(--pluma-border);
+}
+
+.ghost.small {
+  padding: 4px 10px;
+  font-size: var(--pluma-font-caption);
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.ghost:hover:not(:disabled) {
+  color: var(--pluma-accent);
+  border-color: var(--pluma-accent);
+}
+
+.foot {
+  padding-top: 8px;
+  border-top: 0.5px solid var(--pluma-border);
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  text-align: center;
+}

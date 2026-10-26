@@ -128,3 +128,26 @@ body {
   color: var(--pluma-text-muted);
   text-align: center;
 }
+
+/* 扫码成功但凭据没存进去 —— 必须显眼，因为这是用户最容易被卡住的地方 */
+.save-failed {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--pluma-danger);
+  border-radius: var(--pluma-radius-control);
+  background: transparent;
+  max-width: 300px;
+}
+
+.save-failed-title {
+  margin: 0 0 4px;
+  font-size: var(--pluma-font-body);
+  color: var(--pluma-danger);
+}
+
+.save-failed-note {
+  margin: 0;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  line-height: 1.5;
+}

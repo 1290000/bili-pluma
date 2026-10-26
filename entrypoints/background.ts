@@ -12,10 +12,79 @@
 
 import { diag, forgetLoginWindow, openLoginWindow } from '@/src/background/login-window';
 import { clearLoginReady, markLoginReady } from '@/src/background/login-handshake';
+import { handleAccountSummary } from '@/src/background/handlers/account.handler';
+import { handleAccountRemove } from '@/src/background/handlers/account-remove.handler';
 import { handlePageActivate, handlePageDeactivate } from '@/src/background/handlers/page.handler';
 import { handleProxySet, handleProxyStatus } from '@/src/background/handlers/proxy.handler';
 import { handleQrGenerate, handleQrPoll } from '@/src/background/handlers/qr.handler';
+import { handleAffectedTabs, handleTabsReload } from '@/src/background/handlers/tabs.handler';
+import { handleStatsRecent } from '@/src/background/handlers/stats.handler';
 import { reconcileTabRules, rebuildRulesIfEnabled } from '@/src/platform/http/dnr';
+import { recordStat } from '@/src/platform/storage/stats-store';
+
+/** 是否 B站视频详情页。用于判断标签页导航后该不该保留代理规则 */
+function isVideoPageUrl(url: string): boolean {
+  return /^https?:\/\/(www\.)?bilibili\.com\/video\//.test(url);
+}
+
+/**
+ * 打开登录窗口 —— `login/open` 消息的处理体。
+ *
+ * ## 为什么这段逻辑从 `action.onClicked` 搬到这里
+ *
+ * P2 加了 `default_popup` 之后，**`chrome.action.onClicked` 不再触发**
+ * （Chrome 的规则：有 popup 时点图标只开 popup）。原来挂在 onClicked 上的
+ * 登录入口会直接失效——用户再也点不出二维码。所以搬成消息处理，
+ * 由 popup 的「扫码登录播放账号」按钮触发。
+ *
+ * ## 核心事实（实测，别改）
+ *
+ * `windows.create({ incognito: true })` 可能**确实创建成功**，但返回 `undefined`，
+ * 且当前实例的 `windows.getAll()` 看不到新窗口（用户确认窗口真出现了，
+ * 标题 `登录播放账号-[InPrivate]`）。
+ *
+ * 所以**不能**用返回值判断成败，否则会误弹说明页。
+ * 判定依据只有一条：`isAllowedIncognitoAccess()`。
+ *   true  → 按已创建处理（乐观，reason='assumed'）
+ *   false → 确定没权限，弹说明页
+ */
+async function handleLoginOpen(): Promise<{
+  type: 'login/open:ok';
+  opened: boolean;
+  reason?: 'incognito-disabled' | 'already-open' | 'assumed' | 'unknown';
+}> {
+  const result = await openLoginWindow();
+  await diag('login/open', JSON.stringify(result));
+
+  if (result.ok || result.reason === 'already-open' || result.reason === 'assumed') {
+    if (result.reason === 'assumed') {
+      await diag('create 返回 undefined 但权限正常 → 按已创建处理');
+    }
+    await markLoginReady();
+    return {
+      type: 'login/open:ok',
+      opened: true,
+      ...(result.reason ? { reason: result.reason } : {}),
+    };
+  }
+
+  // 只有确定没权限时才弹说明页
+  if (result.reason === 'incognito-disabled') {
+    await diag('权限未开启 → 弹说明页');
+    await chrome.windows
+      .create({
+        url: chrome.runtime.getURL('/need-incognito.html'),
+        type: 'popup',
+        width: 460,
+        height: 420,
+      })
+      .catch(() => {});
+    return { type: 'login/open:ok', opened: false, reason: 'incognito-disabled' };
+  }
+
+  await diag('openLoginWindow 未知失败');
+  return { type: 'login/open:ok', opened: false, reason: 'unknown' };
+}
 
 export default defineBackground(() => {
   // ── SW 启动自愈（ADR 0006 的三条硬性配套之一）──
@@ -67,6 +136,38 @@ export default defineBackground(() => {
       return false;
     }
 
+    if (type === 'account/summary') {
+      const { recheck } = message as { recheck?: boolean };
+      handleAccountSummary(recheck === true)
+        .then(sendResponse)
+        .catch(() => sendResponse({ type: 'account/summary:err', code: 'UNKNOWN', detail: null }));
+      return true;
+    }
+
+    if (type === 'account/remove') {
+      handleAccountRemove()
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'account/remove:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
+    if (type === 'stats/recent') {
+      handleStatsRecent()
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'stats/recent:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
     if (type === 'page/activate') {
       const { bvid, p, deviceCookies, primaryMid } = message as {
         bvid: string;
@@ -81,7 +182,15 @@ export default defineBackground(() => {
       }
 
       handlePageActivate({ tabId, bvid, p, deviceCookies, primaryMid })
-        .then((r) => sendResponse({ type: 'page/activate:ok', ...r }))
+        .then((r) => {
+          // 记一次取流结果 —— 这是**唯一**已知的真实成败信号，
+          // 比 background 另发一个探测请求更贴近用户体感。
+          // 只统计"配置了账号"的情况：not-configured 不是失败，是还没开始用。
+          if (r.reason !== 'not-configured') {
+            void recordStat(r.activated);
+          }
+          sendResponse({ type: 'page/activate:ok', ...r });
+        })
         .catch(() => sendResponse({ type: 'page/activate:ok', activated: false, reason: 'error' }));
       return true;
     }
@@ -113,15 +222,24 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (type === 'proxy/affected-tabs') {
+      handleAffectedTabs()
+        .then(sendResponse)
+        .catch(() => sendResponse({ type: 'proxy/affected-tabs:ok', count: 0, tabIds: [] }));
+      return true;
+    }
+
+    if (type === 'tabs/reload') {
+      const { tabIds } = message as { tabIds: number[] };
+      handleTabsReload(Array.isArray(tabIds) ? tabIds : [])
+        .then(sendResponse)
+        .catch(() => sendResponse({ type: 'tabs/reload:ok', reloaded: 0 }));
+      return true;
+    }
+
     if (type === 'login/open') {
-      openLoginWindow()
-        .then((r) =>
-          sendResponse({
-            type: 'login/open:ok',
-            opened: r.ok,
-            ...(r.reason ? { reason: r.reason } : {}),
-          }),
-        )
+      handleLoginOpen()
+        .then(sendResponse)
         .catch(() => sendResponse({ type: 'login/open:ok', opened: false, reason: 'unknown' }));
       return true;
     }
@@ -129,64 +247,35 @@ export default defineBackground(() => {
     return false;
   });
 
-  // 标签页关闭时删掉它的规则，避免规则堆积
+  // ── 标签页生命周期：清理规则 ──
+  //
+  // ⚠️ `onActivated`（用户切到这个标签页）**绝不能**删规则。
+  // 曾经只在 onUpdated + onRemoved 上清理，看起来够，但漏了一种高频情况：
+  // 标签页在后台被 Chrome「冻结 / 丢弃」后重新进入，页面走 restore 路径，
+  // 既没有 url 变化的 onUpdated、也没有 content script 的重新报到，
+  // 于是规则留着、页面状态却是旧的 —— 表现就是"挂后台久了回来白屏 / 播放器无响应"。
+  // 现在改为：**任何一次生命周期事件都只做"确认该不该有规则"，不该有才删。**
+
   chrome.tabs.onRemoved.addListener((tabId) => {
     void handlePageDeactivate(tabId);
   });
 
-  // 标签页导航到非视频页时也删（content script 不会在新页面上报，规则会残留）
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    // ⚠️ 只在**地址真的变了**时判断，不要因为 loading / status 变化就删规则。
+    // 播放器重建、B站前端路由切换都会触发 onUpdated，那些时候 URL 可能不变。
     if (!changeInfo.url) return;
-    const isVideo = /^https?:\/\/(www\.)?bilibili\.com\/video\//.test(changeInfo.url);
-    if (!isVideo) void handlePageDeactivate(tabId);
+    if (!isVideoPageUrl(changeInfo.url)) void handlePageDeactivate(tabId);
+  });
+
+  // 标签页被冻结/丢弃时把规则撤掉。恢复时页面会重新报到，规则自然重建；
+  // 不撤的话，恢复过程中任何 playurl 都会带旧 Cookie 发出去。
+  chrome.tabs.onReplaced.addListener((_added, removed) => {
+    void handlePageDeactivate(removed);
   });
 
   // 登录窗口被用户手动关掉时清理状态
   chrome.windows.onRemoved.addListener(() => {
     forgetLoginWindow();
     void clearLoginReady();
-  });
-
-  // P1 阶段没有 popup，点图标直接开登录窗口（走 InPrivate，不污染主账号）。
-  // P2 会换成 popup 的「未配置」按钮。
-  chrome.action.onClicked.addListener(() => {
-    void (async () => {
-      // 先记录"谁收到了这次点击"——split 模式下可能是两个实例各收一次
-      await diag('action.onClicked 收到点击');
-
-      // ⚠️ 核心事实（实测）：`windows.create({ incognito: true })` 可能**确实创建成功**，
-      // 但返回 `undefined`，且当前实例的 `windows.getAll()` 看不到新窗口
-      // （用户确认窗口真的出现了，标题 `登录播放账号-[InPrivate]`）。
-      //
-      // 所以**不能**用返回值判断成败，否则会误弹说明页。
-      // 判定依据只有一条：`isAllowedIncognitoAccess()`。
-      //   true  → 按已创建处理（乐观）
-      //   false → 确定没权限，弹说明页
-
-      const result = await openLoginWindow();
-      await diag('openLoginWindow result', JSON.stringify(result));
-
-      if (result.ok || result.reason === 'already-open' || result.reason === 'assumed') {
-        if (result.reason === 'assumed') {
-          await diag('create 返回 undefined 但权限正常 → 按已创建处理');
-        }
-        await markLoginReady();
-        return;
-      }
-
-      // 只有确定没权限时才弹说明页
-      if (result.reason === 'incognito-disabled') {
-        await diag('权限未开启 → 弹说明页');
-        await chrome.windows.create({
-          url: chrome.runtime.getURL('/need-incognito.html'),
-          type: 'popup',
-          width: 460,
-          height: 420,
-        });
-        return;
-      }
-
-      await diag('openLoginWindow 未知失败，跳过');
-    })();
   });
 });

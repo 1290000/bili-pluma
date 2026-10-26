@@ -18,16 +18,16 @@ interface Row {
  * 读取总开关状态（只读）。
  *
  * 这里是**调试页**，只显示状态供排查用。
- * 切换开关属于产品 UI，归 P2 的 popup，不放这里。
+ * 切换开关属于产品 UI，归 popup，不放这里。
  */
-async function readProxyState(): Promise<{ enabled: boolean }> {
+async function readProxyState(): Promise<{ enabled: boolean; ruleCount: number }> {
   try {
     const r = await chrome.runtime.sendMessage({ type: 'proxy/status' });
-    if (r?.type === 'proxy/status:ok') return { enabled: r.enabled };
+    if (r?.type === 'proxy/status:ok') return { enabled: r.enabled, ruleCount: r.ruleCount };
   } catch {
     // 忽略，返回默认
   }
-  return { enabled: false };
+  return { enabled: false, ruleCount: 0 };
 }
 
 async function collect(): Promise<Row[]> {
@@ -72,8 +72,29 @@ async function collect(): Promise<Row[]> {
   }
 
   // 4b) 总开关（ADR 0006 硬性配套）
+  //
+  // ⚠️ `ok` 标记不能只看 enabled。开关开着但规则数为 0 是**最危险的状态**——
+  // 代码以为在代理，实际一条规则都没有。这里必须标红，否则自检页会骗人。
   const proxy = await readProxyState();
-  put('播放代理总开关', proxy.enabled ? '已开启' : '已关闭', proxy.enabled);
+
+  /**
+   * 一致性判定要分清"确认没规则"和"读不到规则"。
+   *
+   * `ruleCount === -1` 是 background 报的"读不到"（API 抛错），
+   * 这时不能说"不一致"，只能说"背景侧读不到"——后者是要排查的另一个问题。
+   *
+   * ⚠️ 这里曾经把 -1 当成 0 处理，导致诊断页显示"⚠️ 不一致"，
+   * 而下面第 5 节自己调 getSessionRules() 又能看到 2 条规则，
+   * 两行数字互相矛盾，反而增加排查成本。
+   */
+  const ruleCountKnown = proxy.ruleCount >= 0;
+  const proxyConsistent = !proxy.enabled || !ruleCountKnown || proxy.ruleCount > 0;
+
+  const countText = !ruleCountKnown
+    ? '规则数读不到（background 侧失败）'
+    : `${String(proxy.ruleCount)} 条路径规则${proxyConsistent ? '' : '，⚠️ 不一致'}`;
+
+  put('播放代理总开关', proxy.enabled ? `已开启（${countText}）` : '已关闭', proxyConsistent);
 
   // 5) ★ DNR 规则 —— 这是"取流是否生效"的直接证据
   // 分两类：全局路径规则（10000-10999）+ 标签页限定规则（20000-29999）

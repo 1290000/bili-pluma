@@ -12,9 +12,10 @@ export default defineConfig({
     description: 'B站双账号画质助手',
     version: '0.0.0',
     minimum_chrome_version: '120',
-    // 必须声明 action，否则 chrome.action.onClicked 不会触发（工具栏点了没反应）。
-    // P1 阶段没有 popup，点图标直接开登录窗口；P2 会加 default_popup。
-    action: { default_title: 'Pluma' },
+    // ⚠️ 声明 action 是必须的，否则工具栏图标不绑定任何行为、点了毫无反应也不报错。
+    // P2 起加了 default_popup：**有 popup 时 `chrome.action.onClicked` 不再触发**，
+    // 所以登录入口必须放在 popup 里（原 P1 的"点图标直接开登录窗口"已移除）。
+    action: { default_title: 'Pluma', default_popup: 'popup.html' },
     // 把自检页注册成「扩展选项」，这样在 edge://extensions 的「详细信息」页里
     // 会有可点击的入口，不用手动拼 chrome-extension:// 地址。
     options_ui: { page: 'diagnostics.html', open_in_tab: true },
