@@ -73,6 +73,20 @@ var t = globalThis.browser?.runtime?.id ? globalThis.browser : globalThis.chrome
 需要用户真实 HDR 环境的数据时，**不要试图自动化** —— 用扩展自己的诊断日志
 （`entrypoints/content.ts` 的 `[角标输入]` 行），让用户在正常浏览器里看一次视频即可。
 
+### WXT 会覆盖 `options_ui.open_in_tab`（2026-10-26 实测）
+
+`wxt.config.ts` 的 `manifest.options_ui` 里写 `open_in_tab: true`，构建出来的 manifest 却是 **`false`**。
+
+原因：WXT 生成 manifest 时会用**入口自己的** `openInTab` 覆盖这一段
+（`node_modules/wxt/dist/core/utils/manifest.mjs`：`openInTab: options.options.openInTab ?? false`），
+而 HTML 入口没有地方声明这个选项。
+
+**症状**：设置页被塞进浏览器的小弹窗里，侧栏布局直接挤爆（不报错，纯视觉）。
+**修法**：用 `build:manifestGenerated` 钩子在生成之后改回来（见 `wxt.config.ts`）。
+
+**教训**：`wxt.config.ts` 里写的东西**不一定**会原样进 manifest。
+改任何 manifest 字段后，都要读一遍 `.output/chrome-mv3/manifest.json` 确认。
+
 ### 二维码渲染必须整数倍缩放
 
 canvas 内部尺寸与 CSS 显示尺寸若不是整数倍关系，浏览器会插值，模块边缘发虚，手机扫不出来。

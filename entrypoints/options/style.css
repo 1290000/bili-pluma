@@ -1,0 +1,226 @@
+/* 设置页样式 —— 只引用 tokens.css 的变量，不硬编码颜色/字号。
+ *
+ * 布局依据 docs/02-ui-spec.md §4：
+ *   - 全屏标签页，≥900px 时左侧导航 + 右侧内容
+ *   - <900px 时纵向堆叠（导航变横向滚动条）
+ *   - 内容最宽 720px：再宽的行长会让人读丢行
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--pluma-surface);
+  color: var(--pluma-text);
+  font-family: var(--pluma-font-sans);
+  font-size: var(--pluma-font-body);
+  line-height: 1.6;
+}
+
+.page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 28px 24px 40px;
+}
+
+/* ── 页头 ── */
+
+.head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 0.5px solid var(--pluma-border);
+}
+
+.brand {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.brand-sub {
+  margin-left: 8px;
+  font-size: var(--pluma-font-caption);
+  font-weight: 400;
+  color: var(--pluma-text-muted);
+}
+
+.head-hint {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+/* ── 布局：侧栏 + 内容 ── */
+
+.layout {
+  display: grid;
+  grid-template-columns: 168px minmax(0, 1fr);
+  gap: 28px;
+  padding-top: 20px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-self: start;
+  position: sticky;
+  top: 20px;
+}
+
+.nav-item {
+  padding: 7px 10px;
+  border-radius: var(--pluma-radius-control);
+  color: var(--pluma-text-muted);
+  text-decoration: none;
+  font-size: var(--pluma-font-body);
+}
+
+.nav-item:hover {
+  color: var(--pluma-text);
+  background: var(--pluma-accent-bg);
+}
+
+.nav-item.active {
+  color: var(--pluma-accent);
+  background: var(--pluma-accent-bg);
+  font-weight: 500;
+}
+
+.content {
+  min-width: 0;
+  max-width: 720px;
+}
+
+/* 窄屏：导航变成横向条，不再 sticky */
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .nav {
+    position: static;
+    flex-direction: row;
+    gap: 6px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+    border-bottom: 0.5px solid var(--pluma-border);
+  }
+
+  .nav-item {
+    white-space: nowrap;
+  }
+
+  .head {
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
+/* ── 卡片 ── */
+
+.card {
+  padding: 18px 20px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-card);
+}
+
+.card-title {
+  margin: 0 0 10px;
+  font-size: var(--pluma-font-title);
+  font-weight: 600;
+}
+
+.lede {
+  margin: 0 0 14px;
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-body);
+}
+
+/* ── 待实现说明 ──
+   刻意做得显眼：打开设置页的人必须立刻知道这一页还没做，
+   而不是以为功能坏了。做完就把对应条目删掉。 */
+
+.pending {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: var(--pluma-radius-control);
+  background: var(--pluma-accent-bg);
+}
+
+.pending-head {
+  font-size: var(--pluma-font-caption);
+  font-weight: 600;
+  color: var(--pluma-accent);
+  margin-bottom: 4px;
+}
+
+.pending-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+.pending-list li {
+  margin: 2px 0;
+}
+
+/* ── 按钮 ── */
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.actions-note {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+button {
+  font-family: inherit;
+  font-size: var(--pluma-font-body);
+  border-radius: var(--pluma-radius-control);
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    filter 0.15s;
+}
+
+.primary {
+  padding: 7px 16px;
+  color: #ffffff;
+  background: var(--pluma-accent);
+  border: 0.5px solid var(--pluma-accent);
+}
+
+.primary:hover {
+  filter: brightness(0.94);
+}
+
+/* ── 页脚 ── */
+
+.foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 28px;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--pluma-border);
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+.ver {
+  white-space: nowrap;
+}
