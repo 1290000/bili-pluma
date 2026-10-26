@@ -428,6 +428,54 @@ node_modules/.bin/vitest run tests/unit/content/main-world-real.test.ts
 
 ---
 
+## 9. popup 里播放账号那张卡片不显示（2026-10-26 已修）
+
+### 症状
+
+popup 只显示主账号一行，播放账号整行**消失**。
+但自检页显示「播放账号凭据 已配置」，视频也确实能播 4K —— 功能是好的，只是界面不说。
+
+### 根因：账号资料缓存从来没被写进去
+
+`account/summary` 的 `account` 字段来自缓存 `pluma:account-summary`，
+而缓存只在 `checkCredential` 返回 `healthy` / `not-vip` 时写。
+
+问题在 `probeNav()`：它用 `credentials: 'include'` 带**当前分区**的 cookie。
+播放账号的 cookie 只存在于**登录窗口所在的无痕分区**，窗口一关就销毁 ——
+之后普通分区再探测，带的是**主账号** cookie，`checkCredential` 判定"分区不对"
+返回 `unknown`，于是：
+
+- 缓存永远写不进去
+- `account` 恒为 `null`
+- popup 的播放账号卡片**恒不显示**
+
+老版本 popup 只有一行摘要、且同样判 `snap.account`，所以这个 bug 一直没被发现；
+加了 §2.4 双卡片之后，"少了一行"才看得见。
+
+### 修法（两处）
+
+| 位置 | 做法 |
+| --- | --- |
+| `background/handlers/account.handler.ts` | 新增 `probeAndCacheSummary()`：**登录成功那一刻**在登录分区探测一次并写缓存 —— 这是唯一能读到播放账号资料的时刻 |
+| `entrypoints/popup/main.tsx` | 播放账号那一行改为**只要凭据在就渲染**；资料缺失时显示"读不出账号资料 · 点开可重新登录"，不再整行消失 |
+
+### 已经配好账号的用户怎么办
+
+缓存是空的，**重新登录一次**即可补上（会走新的 `probeAndCacheSummary`）。
+不重登也能用，只是那张卡片显示"已配置 / 读不出账号资料"。
+
+### 怎么确认
+
+自检页日志里搜 `账号资料缓存`：
+
+```
+20:xx:xx [xxxx] qr/poll   账号资料缓存成功
+```
+
+看到"失败（探测不确定）"说明探测那一刻分区或网络有问题，重扫一次。
+
+---
+
 ## 相关
 
 - DNR 决策与风险：[decisions/0002](../decisions/0002-dnr-to-replace-cookie-header.md)

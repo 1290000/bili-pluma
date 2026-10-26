@@ -22,7 +22,7 @@ import { applyVerdict, needsRecheck } from '@core/auth/health';
 import { checkCredential } from '@platform/http/nav';
 import { readPersistedCredential } from '@platform/storage/credential-store';
 import { readHealth, writeHealth } from '@platform/storage/health-store';
-import type { AccountSummary } from '@shared/types/account';
+import type { AccountSummary, Credential } from '@shared/types/account';
 import type { ResponseMsg } from '@shared/types/messages';
 
 /**
@@ -157,4 +157,39 @@ async function writeCachedSummary(summary: AccountSummary): Promise<void> {
 /** 退出账号时清掉，避免下次显示上一个号 */
 export async function clearCachedSummary(): Promise<void> {
   await chrome.storage.local.remove(SUMMARY_KEY).catch(() => {});
+}
+
+/**
+ * 登录成功后**立刻**探测一次并缓存账号资料。
+ *
+ * ## 为什么必须在这一刻做（2026-10-26 实测的真实 bug）
+ *
+ * `probeNav()` 用的是 `credentials: 'include'`（带**当前分区**的 cookie）。
+ * 播放账号的 cookie 只存在于**登录窗口所在的无痕分区**，窗口一关就销毁。
+ * 之后普通分区再探测，带的是主账号 cookie → `checkCredential` 判定"分区不对"
+ * → 返回 `unknown` → 本文件的缓存分支永远写不进去。
+ *
+ * 结果：`account/summary` 的 `account` 恒为 `null`，popup 里播放账号那张卡片
+ * **永远不显示**（老版本只显示一行摘要，所以没人发现；加了双卡片才暴露）。
+ *
+ * 所以这是唯一能读到播放账号昵称 / 会员 / 到期日的时刻。错过它就得让用户重扫。
+ *
+ * @returns 缓存下来的摘要；探测不确定时返回 `null`
+ *   —— **不用"未知"覆盖已有缓存**，那会让本来能显示的资料凭空消失
+ */
+export async function probeAndCacheSummary(credential: Credential): Promise<AccountSummary | null> {
+  const now = Date.now();
+  try {
+    const verdict = await checkCredential(credential, now);
+    if (verdict.kind !== 'healthy' && verdict.kind !== 'not-vip') return null;
+
+    const summary: AccountSummary = {
+      ...verdict.summary,
+      health: { healthy: true, checkedAt: now, reason: null },
+    };
+    await writeCachedSummary(summary);
+    return summary;
+  } catch {
+    return null;
+  }
 }

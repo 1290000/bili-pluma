@@ -19,6 +19,7 @@
 
 import { generateQr, pollQr } from '@core/auth/qrcode';
 import { diag } from '@/src/background/login-window';
+import { probeAndCacheSummary } from '@/src/background/handlers/account.handler';
 import { createHttpClient } from '@platform/http/fetcher';
 import { enableProxy } from '@platform/http/dnr';
 import { readPlaybackCredential } from '@platform/storage/cookies';
@@ -70,6 +71,21 @@ export async function handleQrPoll(qrcodeKey: string): Promise<ResponseMsg> {
       if (credential) {
         await persistCredential(credential);
         credentialSaved = true;
+
+        /**
+         * ★ 趁登录窗口还开着，把账号资料缓存下来。
+         *
+         * 这是**唯一**能读到播放账号昵称/会员/到期日的时刻 —— 播放账号的 cookie
+         * 只存在于这个无痕分区，窗口一关就没了；之后普通分区探测只会拿到主账号。
+         * 详见 `probeAndCacheSummary` 的注释（那是个长期存在、加双卡片才暴露的 bug）。
+         *
+         * 失败不影响登录本身：缓存只用于显示，凭据已经存好了。
+         */
+        const cached = await probeAndCacheSummary(credential).catch(() => null);
+        await diag(
+          'qr/poll',
+          `账号资料缓存${cached ? '成功' : '失败（探测不确定，稍后可重新登录补）'}`,
+        );
         // ★ 配置好播放账号后**自动开启代理**（ADR 0006 的总开关）
         // 装全局常驻规则，值全局一致，之后所有白名单请求自动带播放账号凭据
         //

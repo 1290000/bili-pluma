@@ -352,7 +352,10 @@ function App() {
                 <span class="p-tag">{primaryUser?.level ? `LV${primaryUser.level}` : '只读'}</span>
               </div>
 
-              {snap.account && (
+              {/* ⚠️ 只要**凭据在**就渲染这一行，哪怕读不出资料。
+                  原来只判 `snap.account`，而它可能为 null（探测不确定 / 缓存没写过），
+                  于是播放账号整行静默消失，用户会以为账号没了。 */}
+              {(snap.account || snap.proxy.hasCredential) && (
                 <button
                   class={`p-row playback ${menuOpen ? 'open' : ''}`}
                   onClick={() => {
@@ -362,12 +365,16 @@ function App() {
                 >
                   <span class="p-avatar accent">播</span>
                   <span class="p-main">
-                    <span class="p-name">{snap.account.uname}</span>
+                    <span class="p-name">{snap.account?.uname ?? '播放账号已配置'}</span>
                     <span class="p-sub">
-                      仅取流 · {describeExpiry(snap.account.expireAt, now) || '无到期日'}
+                      {snap.account
+                        ? `仅取流 · ${describeExpiry(snap.account.expireAt, now) || '无到期日'}`
+                        : '读不出账号资料 · 点开可重新登录'}
                     </span>
                   </span>
-                  <span class="p-tag accent">{VIP_TAG[snap.account.vipLabel]}</span>
+                  <span class="p-tag accent">
+                    {snap.account ? VIP_TAG[snap.account.vipLabel] : '已配置'}
+                  </span>
                 </button>
               )}
             </div>
