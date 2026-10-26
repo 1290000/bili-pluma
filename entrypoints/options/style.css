@@ -149,34 +149,7 @@ body {
   font-size: var(--pluma-font-body);
 }
 
-/* ── 待实现说明 ──
-   刻意做得显眼：打开设置页的人必须立刻知道这一页还没做，
-   而不是以为功能坏了。做完就把对应条目删掉。 */
-
-.pending {
-  margin-top: 4px;
-  padding: 10px 12px;
-  border-radius: var(--pluma-radius-control);
-  background: var(--pluma-accent-bg);
-}
-
-.pending-head {
-  font-size: var(--pluma-font-caption);
-  font-weight: 600;
-  color: var(--pluma-accent);
-  margin-bottom: 4px;
-}
-
-.pending-list {
-  margin: 0;
-  padding-left: 18px;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-}
-
-.pending-list li {
-  margin: 2px 0;
-}
+/* ── 待实现说明：已随 Pending 组件删除（2026-10-26，P3 验收 3a） ── */
 
 /* ── 按钮 ── */
 

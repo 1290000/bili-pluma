@@ -4,7 +4,7 @@
 >
 > 用主账号浏览、点赞、收藏、评论，让一个大会员账号专门负责播放。
 
-GPL-3.0-only · Chrome 120+ / Edge · **P3 进行中（2026-10-26）**：画质解锁与 §2.3 对比卡已落地，options 与 §2.4/§2.6 未完
+GPL-3.0-only · Chrome 120+ / Edge · **v0.9.0（2026-10-26）**：v1 范围已完整落地并通过六条验收
 
 ## 请先读
 
@@ -52,7 +52,7 @@ GPL-3.0-only · Chrome 120+ / Edge · **P3 进行中（2026-10-26）**：画质�
 
 ## 音质需要你的环境配合
 
-**Hi-Res** 通常开箱可用（Chrome/Edge 原生 FLAC 解码）。**杜比全景声**需三件事同时成立：装 Microsoft EC-3 解码扩展（Store ID `9nvjqjbdkn97`）· 浏览器启用 media foundation playback · 系统音频设为空间音频/E-AC-3 直通。扩展**不做任何解码**，环境自检面板在 P3 提供（当前需自己按上面三条核对）。
+**Hi-Res** 通常开箱可用（Chrome/Edge 原生 FLAC 解码）。**杜比全景声**需三件事同时成立：装 Microsoft EC-3 解码扩展（Store ID `9nvjqjbdkn97`）· 浏览器启用 media foundation playback · 系统音频设为空间音频/E-AC-3 直通。扩展**不做任何解码**，设置页的「音质环境」折叠块会报解码器在不在，链路仍需你自己核。
 
 ## 接手这个项目
 

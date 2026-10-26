@@ -11,7 +11,7 @@
  *
  * ## 路由
  *
- * 用 hash（`#/account`）而不是引入路由库：只有五个静态分区，`hashchange` 十行够用，
+ * 用 hash（`#/account`）而不是引入路由库：只有三个静态分区，`hashchange` 十行够用，
  * 而且 popup 将来可以直接 `chrome.tabs.create({ url: 'options.html#/quality' })` 深链。
  * **不加新依赖**（AGENTS §7）。
  */

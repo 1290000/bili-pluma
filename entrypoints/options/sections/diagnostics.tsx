@@ -45,14 +45,46 @@ function Facts(props: { rows: DiagRow[] }): JSX.Element {
   );
 }
 
-/** 音质环境自检 —— 只有 FLAC 能真测，其余给清单 */
+/**
+ * 音质环境自检。
+ *
+ * ## 判据来自 2026-10-26 实测，不是猜的
+ *
+ * | 查询 | 结果 | 说明 |
+ * | --- | --- | --- |
+ * | `canPlayType('audio/flac')` | `probably` | 能用 |
+ * | `canPlayType('audio/ogg; codecs=flac')` | `probably` | 能用 |
+ * | `canPlayType('audio/mp4; codecs=flac')` | `probably` | **B站 Hi-Res 走的是这条**（fMP4 封装） |
+ * | `MediaSource.isTypeSupported('audio/mp4; codecs="ec-3"')` | `true` | 杜比全景声解码器**在** |
+ * | `canPlayType('audio/ec-3')` | 空 | 但裸 MIME 查不出来，**不能用它判断** |
+ *
+ * ⚠️ 曾经这一行写的是"扩展读不到，请按下面三条自查" —— **那是错的**，
+ * 实测 `isTypeSupported` 查得出来。把能测的说成测不到，等于白丢一个诊断项。
+ *
+ * ⚠️ 但 `isTypeSupported` 只证明**解码器存在**，不证明**系统音频链路**
+ * 支持空间音频（还要开系统空间音频 + 对应输出设备）。所以两件事分开写：
+ * 解码器由这里测，链路引导用户自查。**不要因为测到了 true 就说"杜比可用"。**
+ */
 function AudioCheck(): JSX.Element {
   // `canPlayType` 返回 'probably' | 'maybe' | ''，空串就是不支持
-  const flac = (() => {
+  const probe = (mime: string): string => {
     try {
-      return new Audio().canPlayType('audio/flac');
+      return new Audio().canPlayType(mime);
     } catch {
       return '';
+    }
+  };
+
+  // B站的 Hi-Res 是 FLAC in fMP4，所以优先看这条；退而求其次看裸 audio/flac
+  const flacMp4 = probe('audio/mp4; codecs=flac');
+  const flacRaw = probe('audio/flac');
+  const flacOk = Boolean(flacMp4 || flacRaw);
+
+  const ec3 = (() => {
+    try {
+      return MediaSource.isTypeSupported('audio/mp4; codecs="ec-3"');
+    } catch {
+      return false;
     }
   })();
 
@@ -60,13 +92,19 @@ function AudioCheck(): JSX.Element {
     <div class="rows">
       <div class="row">
         <span class="key">FLAC 解码（Hi-Res）</span>
-        <span class={`val ${flac ? 'good' : 'bad'}`}>
-          {flac ? `支持（${flac}）` : '不支持 —— 换新版 Chrome / Edge'}
+        <span class={`val ${flacOk ? 'good' : 'bad'}`}>
+          {flacOk ? `支持（${flacMp4 || flacRaw}）` : '不支持 —— 换新版 Chrome / Edge'}
         </span>
       </div>
       <div class="row">
-        <span class="key">杜比全景声（EC-3）</span>
-        <span class="val">扩展读不到，请按下面三条自查</span>
+        <span class="key">EC-3 解码（杜比全景声）</span>
+        <span class={`val ${ec3 ? 'good' : 'bad'}`}>
+          {ec3 ? '解码器在（见下方链路自查）' : '解码器缺失 —— 见下方自查'}
+        </span>
+      </div>
+      <div class="row">
+        <span class="key">空间音频输出链路</span>
+        <span class="val">浏览器读不到，请按下面三条自查</span>
       </div>
     </div>
   );
