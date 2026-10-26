@@ -21,7 +21,7 @@
 import { describeUnlock } from '@core/playinfo/summary-view';
 import {
   describePopup,
-  describeVip,
+  describeExpiry,
   type PopupAccount,
   type PopupSnapshot,
 } from '@core/ui/popup-state';
@@ -47,6 +47,13 @@ type LoginHint = null | 'incognito-disabled' | 'opened' | 'failed';
 type PageView = { kind: 'video'; view: PageTracksView | null } | { kind: 'other' };
 
 const VIDEO_URL_RE = /^https?:\/\/(www\.)?bilibili\.com\/video\//;
+
+/** 会员类型的短标签（副标题里已经有到期日，这里只放类型，避免重复） */
+const VIP_TAG: Record<'none' | 'monthly' | 'annual', string> = {
+  none: '非会员',
+  monthly: '大会员',
+  annual: '年度大会员',
+};
 
 /** 打开设置页；`hash` 用来深链到某个分区（`#/quality` 等，见 options/main.tsx 的路由） */
 function openOptions(hash = ''): void {
@@ -269,6 +276,11 @@ function App() {
   /** §2.3 的视图模型（纯函数在 core，可单测） */
   const unlock = describeUnlock(page.kind === 'video' ? page.view : null);
 
+  // §2.4 主账号卡片的原料：只在视频页拿得到（昵称/等级来自页面，扩展不读凭据）
+  const primaryInfo = page.kind === 'video' ? (page.view?.primary ?? null) : null;
+  const primaryUser = primaryInfo?.user ?? null;
+  const primaryLoggedIn = primaryInfo?.loggedIn ?? 'unknown';
+
   const pillCls = load.kind === 'loading' ? 'pill-idle' : `pill-${view?.tone ?? 'danger'}`;
   const pillText = load.kind === 'loading' ? '读取中' : (view?.pill ?? '异常');
 
@@ -322,16 +334,43 @@ function App() {
               <p class="unlock-empty">打开任意视频页查看效果</p>
             )}
 
-            {/* 账号卡片：信任建立区。
-                刻意做成"一行摘要"而不是头像卡片——让用户确信这只是
-                一个受控的取流工具，不是又一个活跃账号。 */}
-            {snap.account && (
-              <div class="account">
-                <span class="account-name">{snap.account.uname}</span>
-                <span class="account-meta">{describeVip(snap.account, now)}</span>
-                <span class="account-role">仅取流</span>
+            {/* ── §2.4 双账号卡片（信任建立区）──
+                视觉层级刻意拉开：A 灰、B 信息色。目的是让 B 看起来像"受控的工具"，
+                而不是"另一个活跃账号" —— 用户的潜在恐惧是"我的号会不会被切走"。
+                B 可点击（就地展开菜单，不跳转），与 §2.6 的「播放账号」是同一个菜单。 */}
+            <div class="pair">
+              <div class="p-row">
+                <span class="p-avatar">主</span>
+                <span class="p-main">
+                  <span class="p-name">
+                    {primaryUser?.uname ||
+                      (primaryLoggedIn === 'no' ? '未登录' : '打开视频页后可见')}
+                  </span>
+                  <span class="p-sub">收藏 · 点赞 · 评论 · 历史</span>
+                </span>
+                {/* 等级拿不到就写「只读」—— 不编一个 LV 数字 */}
+                <span class="p-tag">{primaryUser?.level ? `LV${primaryUser.level}` : '只读'}</span>
               </div>
-            )}
+
+              {snap.account && (
+                <button
+                  class={`p-row playback ${menuOpen ? 'open' : ''}`}
+                  onClick={() => {
+                    setMenuOpen((v) => !v);
+                    setConfirmRemove(false);
+                  }}
+                >
+                  <span class="p-avatar accent">播</span>
+                  <span class="p-main">
+                    <span class="p-name">{snap.account.uname}</span>
+                    <span class="p-sub">
+                      仅取流 · {describeExpiry(snap.account.expireAt, now) || '无到期日'}
+                    </span>
+                  </span>
+                  <span class="p-tag accent">{VIP_TAG[snap.account.vipLabel]}</span>
+                </button>
+              )}
+            </div>
 
             {view.needsLogin ? (
               <>

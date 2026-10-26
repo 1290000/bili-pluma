@@ -183,7 +183,7 @@ function listenMainWorld(): void {
           firstSeen?: string;
           playurlBefore?: boolean;
           data?: unknown;
-          user?: { uname?: string; face?: string | null } | null;
+          user?: { uname?: string; face?: string | null; level?: number | null } | null;
           /** 主世界 `playurl-raw` 用 */
           json?: unknown;
           flags?: {
@@ -242,6 +242,8 @@ function listenMainWorld(): void {
           ? {
               uname: d.user.uname,
               face: typeof d.user.face === 'string' ? d.user.face : null,
+              // 等级拿不到就是 null，UI 会退化成"只读"标签（不编数字）
+              level: typeof d.user.level === 'number' ? d.user.level : null,
             }
           : null;
 

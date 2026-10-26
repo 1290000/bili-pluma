@@ -144,6 +144,14 @@ export interface CapabilityDiff {
 export interface PrimaryUser {
   uname: string;
   face: string | null;
+  /**
+   * 等级（如 6）。
+   *
+   * ⚠️ 从页面 `__INITIAL_STATE__.user.level_info.current_level` 容错读取 ——
+   * 这个形状**没有实测确认过**，读不到就是 `null`，UI 退化成"只读"标签。
+   * **不编一个等级**：卡片上写 "LV6" 就必须真是 6。
+   */
+  level: number | null;
 }
 
 /**

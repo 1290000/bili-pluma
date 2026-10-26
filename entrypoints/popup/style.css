@@ -208,42 +208,91 @@ body {
   color: var(--pluma-text-muted);
 }
 
-/* ── 账号卡片：信任建立区 ──
-   视觉上刻意做得"受控"：不是头像卡片，是一行摘要。
-   目的是让用户确信这只是一个取流工具，不是另一个活跃账号。 */
+/* ── §2.4 双账号卡片（信任建立区）──
+   视觉层级刻意拉开：A 灰（只读）、B 信息色（受控的工具）。
+   用户的潜在恐惧是"我的号会不会被切走"，所以 B 必须看起来像工具，不像另一个活跃账号。 */
 
-.account {
+.pair {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
-  padding: 7px 10px;
-  border-radius: var(--pluma-radius-control);
-  background: var(--pluma-accent-bg);
-  font-size: var(--pluma-font-caption);
-  overflow: hidden;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.account-name {
-  font-weight: 500;
-  color: var(--pluma-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.p-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-control);
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  color: inherit;
+}
+
+/* 播放账号：信息色底 + 可点（就地展开菜单，不跳转） */
+.p-row.playback {
+  width: 100%;
+  background: var(--pluma-accent-bg);
+  border-color: transparent;
+  cursor: pointer;
+}
+
+.p-row.playback:hover,
+.p-row.playback.open {
+  border-color: var(--pluma-accent);
+}
+
+.p-avatar {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  font-size: 10px;
+  color: var(--pluma-text-muted);
+  background: var(--pluma-border);
+}
+
+.p-avatar.accent {
+  color: var(--pluma-accent);
+  background: var(--pluma-surface);
+}
+
+.p-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
 
-.account-meta {
+.p-name {
+  font-size: var(--pluma-font-body);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.p-sub {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.p-tag {
+  font-size: var(--pluma-font-caption);
   color: var(--pluma-text-muted);
   white-space: nowrap;
 }
 
-.account-role {
-  margin-left: auto;
-  padding: 1px 6px;
-  border-radius: 4px;
+.p-tag.accent {
   color: var(--pluma-accent);
-  background: var(--pluma-surface);
-  white-space: nowrap;
+  font-weight: 500;
 }
 
 .actions {

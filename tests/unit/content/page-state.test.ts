@@ -49,7 +49,7 @@ describe('PageState：正常路径（SSR 基线可用）', () => {
       firstSeen: 'initial',
       playurlBefore: false,
       data: asSsrData(GUEST_480),
-      user: { uname: '主账号', face: null },
+      user: { uname: '主账号', face: null, level: null },
     });
     s.applyPlayback(PLAYBACK_4K);
 
@@ -139,7 +139,7 @@ describe('PageState：合并规则', () => {
       firstSeen: 'initial',
       playurlBefore: false,
       data: asSsrData(GUEST_480),
-      user: { uname: '晚到的昵称', face: 'https://i0.hdslb.com/x.jpg' },
+      user: { uname: '晚到的昵称', face: 'https://i0.hdslb.com/x.jpg', level: null },
     });
     expect(s.view()?.primary.user?.uname).toBe('晚到的昵称');
   });

@@ -1503,8 +1503,22 @@
       if (!u) return null;
       var uname = typeof u.uname === 'string' ? u.uname : '';
       var face = typeof u.face === 'string' ? u.face : null;
+
+      /**
+       * 等级。B站把等级放在 `level_info.current_level`。
+       *
+       * ⚠️ **这个形状没有实测确认过**，所以容错读取：拿不到就是 null，
+       * UI 会退化成"只读"标签。**绝不编一个等级** —— 卡片上写 LV6 就必须真是 6。
+       */
+      var level = null;
+      try {
+        if (u.level_info && typeof u.level_info.current_level === 'number') {
+          level = u.level_info.current_level;
+        }
+      } catch (e) {}
+
       if (!uname && !face) return null;
-      return { uname: uname, face: face };
+      return { uname: uname, face: face, level: level };
     } catch (e) {
       return null;
     }
