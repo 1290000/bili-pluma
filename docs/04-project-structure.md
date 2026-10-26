@@ -222,14 +222,19 @@ export function buildPlayurlRequest(
 
 这里的所有代码都只做一件事：**把浏览器 API 包成 core 需要的接口。**
 
-- `platform/http/dnr.ts` 是整个项目**技术风险最高**的文件（对应 Q2）。它要负责：
-  - 规则 ID 按路径索引固定分配（不用池，见 ADR 0006）
-  - nonce 生成与 `urlFilter` 拼接
-  - 加规则 → 请求 → 删规则的异常安全（`try/finally`）
-  - 超时回收（防止请求挂死导致规则泄漏）
-  - 并发计数与降级（超过池容量时排队或退回主账号）
+- `platform/http/dnr.ts` 是整个项目**技术风险最高**的文件（对应 Q2）。它实际负责三件事：
+  - **两套规则集**：全局路径规则（ID 10000 段，priority 1，无 `tabIds`，`enableProxy()` 装）+
+    标签页规则（ID 20000 段，priority 2，有 `tabIds`，页面报到时装）。两套的 Cookie 值相同
+  - **总开关 + SW 启动自愈**：`sessionRules` 浏览器重启即清空，启动时必须重建；
+    凭据读不到就关掉开关，绝不留下"开关开着、一条规则都没有"的状态
+  - **幂等**：`installTabRule` 先比对现有规则的 Cookie 值，一样就跳过——
+    反复重建规则是"恢复标签页时卡一下"的直接来源
 
 **这个文件要独立写测试**，且测试必须在真实 Chrome 里跑（DNR 行为无法在 Node 模拟）。
+
+> ⚠️ 本节曾列着「nonce 生成与 urlFilter 拼接 / 加规则→请求→删规则的 `try/finally` /
+> 超时回收 / 并发计数与降级」——那些是 **ADR 0006 之前**的设计，已全部废除。
+> 现行规则写法以 [ADR 0006](./decisions/0006-no-per-request-nonce.md) 与 AGENTS.md §5.4 为准。
 
 - `platform/runtime/messaging.ts` 要统一处理 MV3 的坑：SW 休眠导致 `sendMessage` 抛 `Could not establish connection`，需要重试一次。
 
@@ -438,14 +443,16 @@ v1 只做纯 MV3 扩展。
 配合 `overrides` 按目录生效，就能做到**编译期强制依赖方向**。
 
 > `@design/*` 只允许 `entrypoints/` 引用，`shared`/`core`/`platform` 一律禁止——因为设计令牌是 UI 概念，业务层不该知道颜色。
-> ⚠️ 这条**尚未加进 ESLint 配置**（当前没有跨层引用 design 的情况），加的时候记得补。
+> 这条由 `scripts/check-design-imports.mjs` 强制（**不是** ESLint）。
+> 实装教训：规则本身会漏**副作用导入**（`import '@design/x'` 没有 `from`），
+> 六种写法（副作用 / 静态 from / export 再导出 / 动态 import / 相对副作用 / 相对 from）已逐个反例验证。
 
 ### 保险 3：`scripts/check-boundaries.ts` 在 CI 跑 ✅ 已落地
 
 ESLint 管 import 方向，但**管不住 `globalThis.chrome` 这类动态访问**。所以再加一个文本级检查：
 
 ```bash
-pnpm check:boundaries
+node scripts/verify.mjs   # boundaries 是其中一项
 ```
 
 实现要点：
@@ -517,7 +524,7 @@ pnpm check:boundaries
 | **P2-b 总开关** | popup 接上 `proxy/set`；`tabs.handler.ts` 统计受影响标签页 | ✅ 2026-10-25 |
 | **P2-c 界面** | `entrypoints/popup/`（7 种状态）+ 登录窗口 + 登录入口迁移 | 🟡 **部分完成**：状态框架 / 开关 / 登录 / 受影响标签页提示已做；**§2.3 核心价值区、§2.4 双账号卡片、§2.6 底部三按钮未做**（见下） |
 | **P2-d 页面侧** | 页内角标（Shadow DOM） | ✅ 2026-10-26 |
-| **P3 完善** | `entrypoints/options/` `core/playinfo/diagnose.ts` `parse.ts` `rank.ts`；**并承接 P2 顺延项**（见下） | ⬜ 未开始 |
+| **P3 完善** | `entrypoints/options/` `core/playinfo/diagnose.ts`；**并承接 P2 顺延项**（见下） | 🟡 **进行中**：`core/playinfo/{parse,rank,summary-view}.ts` + 页面数据通道（`content/isolated/page-state.ts`）+ **popup §2.3 与状态 5** 已落地（2026-10-26，全仓 434 测试）；options 页与 §2.4/§2.6 未开始 |
 | **预留** | `platform/browsers/firefox.ts` | ⬜ v1.5 |
 
 > **判断某文件是否存在，用 `git ls-files`，不要看 §1 的那棵树。**
@@ -530,7 +537,7 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 
 | 规范条目 | 原文位置 | 依赖 | 为什么顺延 |
 | --- | --- | --- | --- |
-| **当前页解锁画质（核心价值区）** | §2.3 | `core/playinfo/parse.ts` `rank.ts` + content 上报 playurl | 需要 `accept_quality` 与主/副账号对比，这套解析是 P3 的核心模块 |
+| **当前页解锁画质（核心价值区）** ✅ 2026-10-26 已完成 | §2.3 | `core/playinfo/parse.ts` `rank.ts` `summary-view.ts` + content 上报 playurl | 需要 `accept_quality` 与主/副账号对比，这套解析是 P3 的核心模块 |
 | 双账号卡片（主 A / 播放 B 对比） | §2.4 | 同 §2.3（要主账号可用画质才能做"仅可用 1080P"） | 当前 popup 只有播放账号一行摘要 |
 | popup 底部三按钮（体检 / 切换账号 / 设置） | §2.6 | `entrypoints/options/` | 三个按钮**全部**指向 options 页，页不存在时是死链 |
 | 角标「设置里可关闭」 | §5 | `entrypoints/options/` | 设置页不存在；且 §2.5 明确「popup 只放一个开关」，不能再往 popup 塞 |
@@ -643,9 +650,9 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
 | `entrypoints/popup/` | 🟡 **部分实现**（P2-c：状态框架 + 开关 + 登录入口 + 受影响标签页提示）；§2.3 / §2.4 / §2.6 顺延到 P3 | 依赖 options 页与 `core/playinfo` 解析 |
 | `entrypoints/options/` | **尚未实现**（P3） | — |
-| `scripts/check-boundaries.ts` | ✅ **已实现**（`pnpm check:boundaries`） | — |
+| `scripts/check-boundaries.ts` | ✅ **已实现**（`node scripts/verify.mjs` 中的一项） | — |
 | ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`，`pnpm lint`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
-| Prettier 配置 | ✅ **已实现**（`.prettierrc`，`pnpm format` / `pnpm format:check`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |
+| Prettier 配置 | ✅ **已实现**（`.prettierrc`；跑 `node scripts/verify.mjs`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |
 | `.eslintrc.cjs` | `eslint.config.mjs` | ESLint 9 默认 flat config |
 
 ### 已实现且与设计一致的
@@ -654,10 +661,10 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 src/shared/{types,constants,utils}     ✅ 全部落地，零依赖
 src/design/tokens.css                  ✅
 src/core/{auth,vault,wbi,identity}     ✅
-src/core/playinfo/stats.ts             ✅（P2-a；parse/rank/diagnose 属 P3）
+src/core/playinfo/{stats,parse,rank}.ts     ✅（parse/rank 为 P3 首批；diagnose 待建）
 src/platform/{http,storage,qr}         ✅
 src/background/{login-window,login-handshake,handlers/}  ✅
-src/content/isolated/{badge,badge-content}.ts  ✅（P2-d）
+src/content/isolated/{badge,badge-content,page-state}.ts  ✅（badge 为 P2-d；page-state 为 P3 Step 2）
 entrypoints/{background,content,popup,login-window,need-incognito,diagnostics}  ✅
 public/main-world.js                   ✅
 ```
