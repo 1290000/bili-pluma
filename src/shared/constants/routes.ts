@@ -38,7 +38,7 @@ export const PROXY_ROUTES = [
     method: 'GET',
     label: '普通视频取流（当前）',
     enabled: true,
-    note: '实测确认在用。qn 不影响返回轨道，fnval=4048 即可拿到 2160p',
+    note: 'Q8 已验证（2026-10-26）：普通视频 / 多 P / 互动视频 都走这条，均能拿到 2160p 以上',
   },
   {
     path: '/x/player/playurl',
@@ -73,14 +73,14 @@ export const PROXY_ROUTES = [
     method: 'GET',
     label: '直播取流（当前）',
     enabled: false,
-    note: '未测。v1 不支持直播，开启前必须单独验证',
+    note: 'v1 不支持直播 —— 这是决定，不是遗漏（ADR 0007 / Q8）。别顺手改 true',
   },
   {
     path: '/room/v1/Room/playUrl',
     method: 'GET',
     label: '直播取流（旧版）',
     enabled: false,
-    note: '未测。v1 不支持直播',
+    note: 'v1 不支持直播 —— 这是决定，不是遗漏（ADR 0007 / Q8）。别顺手改 true',
   },
 ] as const satisfies readonly ProxyRoute[];
 
