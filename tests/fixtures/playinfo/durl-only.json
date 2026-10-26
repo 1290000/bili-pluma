@@ -1,0 +1,29 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "from": "local",
+    "quality": 64,
+    "accept_quality": [125, 120, 116, 112, 80, 64, 32, 16],
+    "accept_description": [
+      "真彩 HDR",
+      "超清 4K",
+      "高清 1080P60",
+      "高清 1080P+",
+      "高清 1080P",
+      "高清 720P",
+      "清晰 480P",
+      "流畅 360P"
+    ],
+    "durl": [
+      {
+        "order": 1,
+        "length": 360,
+        "size": 24000000,
+        "url": "https://upos-sz-mirror.example/ogv/1/2/3/preview-1.mp4",
+        "backup_url": ["https://upos-hz-mirror.example/ogv/1/2/3/preview-1.mp4"]
+      }
+    ]
+  }
+}

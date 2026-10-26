@@ -1,0 +1,177 @@
+{
+  "code": 0,
+  "message": "0",
+  "ttl": 1,
+  "data": {
+    "quality": 126,
+    "accept_quality": [127, 126, 125, 120, 116, 80, 74, 64, 32, 16],
+    "accept_description": [
+      "超清 8K",
+      "杜比视界",
+      "真彩 HDR",
+      "超清 4K",
+      "高清 1080P60",
+      "高清 1080P",
+      "高清 720P60",
+      "高清 720P",
+      "清晰 480P",
+      "流畅 360P"
+    ],
+    "dash": {
+      "duration": 70,
+      "video": [
+        {
+          "id": 126,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v126-av1.m4s",
+          "backup_url": [],
+          "bandwidth": 17500000,
+          "codecid": 12,
+          "width": 3840,
+          "height": 2160,
+          "frame_rate": "120.000",
+          "mime_type": "video/mp4"
+        },
+        {
+          "id": 120,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v120-avc.m4s",
+          "backup_url": [],
+          "bandwidth": 15300000,
+          "codecid": 7,
+          "width": 3840,
+          "height": 2160,
+          "frame_rate": "120.000",
+          "mime_type": "video/mp4"
+        },
+        {
+          "id": 120,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v120-av1.m4s",
+          "backup_url": [],
+          "bandwidth": 5900000,
+          "codecid": 12,
+          "width": 3840,
+          "height": 2160,
+          "frame_rate": "120.000",
+          "mime_type": "video/mp4"
+        },
+        {
+          "id": 120,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v120-hevc.m4s",
+          "backup_url": [],
+          "bandwidth": 4700000,
+          "codecid": 13,
+          "width": 3840,
+          "height": 2160,
+          "frame_rate": "120.000",
+          "mime_type": "video/mp4"
+        },
+        {
+          "id": 116,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v116.m4s",
+          "backup_url": [],
+          "bandwidth": 2900000,
+          "codecid": 7,
+          "width": 1920,
+          "height": 1080,
+          "frame_rate": "60.000",
+          "mime_type": "video/mp4"
+        },
+        {
+          "id": 80,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v80.m4s",
+          "backup_url": [],
+          "bandwidth": 1600000,
+          "codecid": 7,
+          "width": 1920,
+          "height": 1080,
+          "frame_rate": "30.000",
+          "mime_type": "video/mp4"
+        },
+        {
+          "id": 64,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v64.m4s",
+          "backup_url": [],
+          "bandwidth": 900000,
+          "codecid": 7,
+          "width": 1280,
+          "height": 720,
+          "frame_rate": "30.000",
+          "mime_type": "video/mp4"
+        },
+        {
+          "id": 32,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v32.m4s",
+          "backup_url": [],
+          "bandwidth": 500000,
+          "codecid": 7,
+          "width": 852,
+          "height": 480,
+          "frame_rate": "30.000",
+          "mime_type": "video/mp4"
+        },
+        {
+          "id": 16,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/v16.m4s",
+          "backup_url": [],
+          "bandwidth": 300000,
+          "codecid": 7,
+          "width": 640,
+          "height": 360,
+          "frame_rate": "30.000",
+          "mime_type": "video/mp4"
+        }
+      ],
+      "audio": [
+        {
+          "id": 30280,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/a30280.m4s",
+          "backup_url": [],
+          "bandwidth": 192000,
+          "codecid": 0,
+          "mime_type": "audio/mp4"
+        },
+        {
+          "id": 30232,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/a30232.m4s",
+          "backup_url": [],
+          "bandwidth": 132000,
+          "codecid": 0,
+          "mime_type": "audio/mp4"
+        },
+        {
+          "id": 30216,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/a30216.m4s",
+          "backup_url": [],
+          "bandwidth": 64000,
+          "codecid": 0,
+          "mime_type": "audio/mp4"
+        }
+      ],
+      "flac": {
+        "display": true,
+        "audio": {
+          "id": 30251,
+          "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/a30251.m4s",
+          "backup_url": [],
+          "bandwidth": 1500000,
+          "codecid": 0,
+          "mime_type": "audio/mp4"
+        }
+      },
+      "dolby": {
+        "type": 1,
+        "audio": [
+          {
+            "id": 30250,
+            "base_url": "https://upos-sz-mirror.example/upgcxcode/1/2/3/a30250.m4s",
+            "backup_url": [],
+            "bandwidth": 448000,
+            "codecid": 0,
+            "mime_type": "audio/mp4"
+          }
+        ],
+        "vision": false
+      }
+    },
+    "durl": null
+  }
+}
