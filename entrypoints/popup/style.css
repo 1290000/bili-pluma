@@ -505,3 +505,52 @@ button:disabled {
   color: var(--pluma-danger);
   border-color: var(--pluma-danger);
 }
+
+/* ── 成功率条形图（§3 状态 4）──
+   12 根柱子 = 最近 1 小时 × 5 分钟一桶。
+   **颜色是唯一编码**，高度刻意做成等高 —— 用高度表示样本数会暗示一种不存在的精度。
+   ⚠️ 类名带 `rate-` 前缀：`.bar` 已被顶部的状态条占用，撞名会让状态条也吃到这些规则。 */
+
+.rate-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.rate-bars {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 22px;
+}
+
+.rate-bar {
+  flex: 1 1 0;
+  border-radius: 2px;
+}
+
+/* 绿（信息色）与「已接管」同色 —— 这个项目里"好"就是信息蓝，不另设绿色 */
+.rate-bar.ok {
+  background: var(--pluma-accent);
+}
+
+/* 琥珀只用于"可恢复的警告"，与 pill-warn 一致 */
+.rate-bar.partial {
+  background: var(--pluma-warning);
+}
+
+.rate-bar.fail {
+  background: var(--pluma-danger);
+}
+
+/* 灰 = 这段时间没有请求。**没发生 ≠ 失败**，绝不能画红 */
+.rate-bar.empty {
+  background: var(--pluma-border);
+}
+
+.rate-note {
+  margin: 0;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  line-height: 1.4;
+}

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BUCKET_COUNT,
   BUCKET_MS,
+  barStates,
   bucketStart,
   recordResult,
   summarize,
@@ -106,5 +107,34 @@ describe('summarize', () => {
     expect(s.total).toBe(8);
     expect(s.ok).toBe(7);
     expect(s.rate).toBeCloseTo(7 / 8);
+  });
+});
+
+describe('barStates：柱子的颜色不许骗人', () => {
+  it('固定 12 根，稀疏时段补 empty', () => {
+    const states = barStates([], T0);
+    expect(states).toHaveLength(BUCKET_COUNT);
+    expect(states.every((s) => s === 'empty')).toBe(true);
+  });
+
+  it('全成功 → ok，全失败 → fail，混合 → partial', () => {
+    const now = T0;
+    const buckets = [
+      { start: bucketStart(now), ok: 3, fail: 0 },
+      { start: bucketStart(now) - BUCKET_MS, ok: 0, fail: 2 },
+      { start: bucketStart(now) - BUCKET_MS * 2, ok: 2, fail: 1 },
+    ];
+    const states = barStates(buckets, now);
+    expect(states[11]).toBe('ok');
+    expect(states[10]).toBe('fail');
+    expect(states[9]).toBe('partial');
+  });
+
+  it('⚠️ 没有请求的窗口是 empty（灰），不是 fail（红）', () => {
+    // 一小时里大部分桶本来就是空的（playurl 只在加载和切 P 时调），
+    // 画成红会让用户以为一直在失败
+    const states = barStates([{ start: bucketStart(T0), ok: 1, fail: 0 }], T0);
+    expect(states.filter((s) => s === 'empty')).toHaveLength(BUCKET_COUNT - 1);
+    expect(states).not.toContain('fail');
   });
 });

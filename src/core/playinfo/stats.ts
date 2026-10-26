@@ -106,3 +106,31 @@ export function summarize(buckets: readonly StatBucket[]): {
   }
   return { total, ok, rate: total === 0 ? null : ok / total };
 }
+
+/**
+ * 一根柱子的状态。
+ *
+ * 颜色是**唯一的编码方式**，所以每一档的语义必须写死：
+ *
+ * | 状态 | 含义 | 颜色 |
+ * | --- | --- | --- |
+ * | `ok` | 这个窗口全成功 | 信息色（与"已接管"同一色，见 `tokens.css`） |
+ * | `partial` | 有成功也有失败 | 琥珀（warning，可恢复） |
+ * | `fail` | 这个窗口全失败 | 红（danger） |
+ * | `empty` | **这个窗口没有任何请求** | 灰（中性） |
+ *
+ * ⚠️ `empty` 必须是灰色，**不能画成红**：没发生 ≠ 失败。
+ * playurl 只在页面加载和切 P 时调一次（Q3 实测），所以一小时里大部分桶是空的 ——
+ * 画成红会让用户以为一直在失败。
+ */
+export type BarState = 'ok' | 'partial' | 'fail' | 'empty';
+
+/** 把（可能稀疏的）桶转成固定 12 根柱子的状态，直接喂给图表 */
+export function barStates(buckets: readonly StatBucket[], now: number): BarState[] {
+  return toTimeline(buckets, now).map((b) => {
+    if (b.ok === 0 && b.fail === 0) return 'empty';
+    if (b.fail === 0) return 'ok';
+    if (b.ok === 0) return 'fail';
+    return 'partial';
+  });
+}

@@ -18,6 +18,7 @@
  * 属于 P3 的范围，这里不做。
  */
 
+import { barStates, summarize } from '@core/playinfo/stats';
 import { describeUnlock } from '@core/playinfo/summary-view';
 import {
   describePopup,
@@ -276,6 +277,17 @@ function App() {
   /** §2.3 的视图模型（纯函数在 core，可单测） */
   const unlock = describeUnlock(page.kind === 'video' ? page.view : null);
 
+  /**
+   * 成功率条形图的数据。
+   *
+   * **只在"有失败"时显示**（规格原写"只在已降级态显示"，这里放宽了一点）：
+   * 用户说"没效果"时，1 次失败 / 3 次请求 = 67% 成功率，够不上 0.6 的降级阈值，
+   * 但那种情况恰恰最需要这张图。全绿时不画 —— 那是噪音。
+   */
+  const bars = snap ? barStates(snap.buckets, now) : [];
+  const stats = snap ? summarize(snap.buckets) : { total: 0, ok: 0, rate: null };
+  const hasTrouble = bars.some((s) => s === 'partial' || s === 'fail');
+
   // §2.4 主账号卡片的原料：只在视频页拿得到（昵称/等级来自页面，扩展不读凭据）
   const primaryInfo = page.kind === 'video' ? (page.view?.primary ?? null) : null;
   const primaryUser = primaryInfo?.user ?? null;
@@ -332,6 +344,22 @@ function App() {
               )
             ) : (
               <p class="unlock-empty">打开任意视频页查看效果</p>
+            )}
+
+            {/* ── 成功率条形图（§3 状态 4）──
+                颜色是唯一编码：绿=全成功、琥珀=有失败、红=全失败、灰=这段时间没请求。
+                灰色必须画灰：playurl 一小时里大部分桶本来就是空的，画红等于谎报。 */}
+            {hasTrouble && (
+              <div class="rate-wrap">
+                <div class="rate-bars" role="img" aria-label="最近一小时的取流成功率">
+                  {bars.map((state, i) => (
+                    <span class={`rate-bar ${state}`} key={`${String(i)}-${state}`} />
+                  ))}
+                </div>
+                <p class="rate-note">
+                  最近 1 小时取流 {stats.ok}/{stats.total} 成功 · 灰格表示这段时间没有请求
+                </p>
+              </div>
             )}
 
             {/* ── §2.4 双账号卡片（信任建立区）──
