@@ -29,6 +29,58 @@ const CHANNEL_TOKEN = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
 const NS = '__PLUMA__';
 
 /**
+ * 给 background 发消息 —— **扩展上下文失效时静默返回，不抛错**。
+ *
+ * ## 为什么要收敛成一个函数（2026-10-27 修 `Extension context invalidated`）
+ *
+ * 扩展重新加载后，页面里旧 content script 的 `chrome.runtime` 已失效。
+ * 这时 `browser.runtime.sendMessage` 会**同步抛出**，而各调用点写的是
+ * `.catch(() => {})` —— **只接得住 Promise 拒绝，接不住同步抛出**。
+ * 于是错误冒到控制台，扩展管理页显示「错误 1 个」，用户以为插件坏了。
+ *
+ * 本文件有 **10 处**发消息，逐个打补丁必然漏。所以全部走这里。
+ *
+ * 默认实现：**静默返回 null，不 reject**。
+ *
+ * ⚠️ 曾经这里是 `Promise.reject(new Error('sender 尚未安装'))`，那是个真 bug：
+ * `reportQuality` 用 `void` 丢弃 Promise，而 `void` **不会消除未处理拒绝**。
+ * 任何在 `main()` 之前触发的上报，都会在控制台留下
+ * `Uncaught (in promise) Error: sender 尚未安装`。
+ *
+ * 现在与真实实现的契约一致：**失败就返回 null，永不 reject**。
+ * 调用点可以放心 `void`。
+ */
+let sendToBackground: (msg: unknown) => Promise<unknown> = () => Promise.resolve(null);
+
+/**
+ * 由 `main()` 调用：装上真实发送器。
+ *
+ * ## 为什么不再用 `ctx.isInvalid` 做短路
+ *
+ * 那个 getter 是**带副作用**的（`runtime.id == null` 时会永久 abort ctx）。
+ * 作为"每次发送前问一句"的判据太危险：SW 冷启动的瞬时读不到，
+ * 就会把整个 content script 永久判死。
+ *
+ * 而 `try/catch` 本身已经能接住真正失效时的**同步抛出** ——
+ * 那才是我们真正要解决的问题，不需要额外的预判。
+ */
+function installSender(): void {
+  sendToBackground = async (msg) => {
+    try {
+      return await browser.runtime.sendMessage(msg);
+    } catch {
+      // 上下文失效（同步抛出）/ background 未就绪 / 未配置 —— 都不冒到控制台
+      return null;
+    }
+  };
+}
+
+/** 发一条「页面画质」上报。失败静默 */
+function reportQuality(payload: { height: number; note?: string }): void {
+  void sendToBackground({ type: 'page/quality', ...payload });
+}
+
+/**
  * 当前页的取流数据（主账号基线 + 播放账号实际拿到的）。
  *
  * 纯逻辑在 `page-state.ts`（可单测）；这里只负责把消息喂给它、以及应答 UI 的查询。
@@ -199,13 +251,10 @@ function listenMainWorld(): void {
 
     if (d.type === 'hello') {
       const f = d.flags;
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: 0,
-          note: `主世界就绪 readyState=${f?.readyState ?? '?'} define=${f?.define ?? '?'} hadExisting=${String(f?.hadExisting)} playinfo=${f?.playinfo ?? '?'}`,
-        })
-        .catch(() => {});
+      reportQuality({
+        height: 0,
+        note: `主世界就绪 readyState=${f?.readyState ?? '?'} define=${f?.define ?? '?'} hadExisting=${String(f?.hadExisting)} playinfo=${f?.playinfo ?? '?'}`,
+      });
       // 主世界先发 hello 时，立刻把配置推过去
       tellMainWorld(true);
       return;
@@ -265,13 +314,10 @@ function listenMainWorld(): void {
     // 会员状态响应已被改写 —— 切换画质不再弹「开通大会员」的前提
     if (d.type === 'patch') {
       const p = d as { path?: string };
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: 0,
-          note: `已改写会员状态响应: ${p.path ?? '?'}`,
-        })
-        .catch(() => {});
+      reportQuality({
+        height: 0,
+        note: `已改写会员状态响应: ${p.path ?? '?'}`,
+      });
       return;
     }
 
@@ -279,16 +325,13 @@ function listenMainWorld(): void {
     if (d.type === 'sb-ok' || d.type === 'sb-error') {
       const s = d as { mime?: string; kind?: string; buffered?: number };
       const label = s.kind === 'video' ? '视频轨' : '音轨';
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: 0,
-          note:
-            d.type === 'sb-ok'
-              ? `${label}装载成功: ${s.mime ?? '?'} (缓冲 ${Math.round(s.buffered ?? 0)}s)`
-              : `${label}装载失败: ${s.mime ?? '?'}`,
-        })
-        .catch(() => {});
+      reportQuality({
+        height: 0,
+        note:
+          d.type === 'sb-ok'
+            ? `${label}装载成功: ${s.mime ?? '?'} (缓冲 ${Math.round(s.buffered ?? 0)}s)`
+            : `${label}装载失败: ${s.mime ?? '?'}`,
+      });
       return;
     }
 
@@ -329,15 +372,12 @@ function listenMainWorld(): void {
       // 视频轨按高度分组，标出各 codecid
       const vids = [...new Set((s.video ?? []).map((v) => `${v.h}p/cc${v.codecid}`))].join(',');
 
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: 0,
-          note:
-            `下发轨道 视频=[${vids}] 音频=[${aud}] Hi-Res=${flac} 杜比=${dolby}` +
-            ` 杜比视界=${s.dolbyVision ? '有' : '无'}`,
-        })
-        .catch(() => {});
+      reportQuality({
+        height: 0,
+        note:
+          `下发轨道 视频=[${vids}] 音频=[${aud}] Hi-Res=${flac} 杜比=${dolby}` +
+          ` 杜比视界=${s.dolbyVision ? '有' : '无'}`,
+      });
       return;
     }
 
@@ -395,40 +435,31 @@ function listenMainWorld(): void {
        *
        * 只记技术状态，不含任何凭据。
        */
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: 0,
-          note:
-            `[角标输入] h=${String(h.h ?? 0)} fps=${String(h.frameRate ?? 0)}` +
-            ` family=${h.family ?? '?'} audio=${h.audioFamily ?? '?'}` +
-            ` profile=${h.profile ?? '?'}` +
-            ` display=${h.display ?? '?'} video=${h.video ?? '?'}` +
-            ` dv=${String(badgeState.dolbyVisionAvailable)}`,
-        })
-        .catch(() => {});
+      reportQuality({
+        height: 0,
+        note:
+          `[角标输入] h=${String(h.h ?? 0)} fps=${String(h.frameRate ?? 0)}` +
+          ` family=${h.family ?? '?'} audio=${h.audioFamily ?? '?'}` +
+          ` profile=${h.profile ?? '?'}` +
+          ` display=${h.display ?? '?'} video=${h.video ?? '?'}` +
+          ` dv=${String(badgeState.dolbyVisionAvailable)}`,
+      });
 
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: h.h ?? 0,
-          note:
-            `画面 ${h.w ?? 0}x${h.h ?? 0} | 视频=${h.family ?? '?'}` +
-            ` | 音频=${h.audioFamily ?? '?'}` +
-            ` | 活跃 视频${h.vsb?.active ?? 0}/${h.vsb?.total ?? 0} 音频${h.asb?.active ?? 0}/${h.asb?.total ?? 0}` +
-            ` | HDR=${h.display ?? '?'}/${h.video ?? '?'}`,
-        })
-        .catch(() => {});
+      reportQuality({
+        height: h.h ?? 0,
+        note:
+          `画面 ${h.w ?? 0}x${h.h ?? 0} | 视频=${h.family ?? '?'}` +
+          ` | 音频=${h.audioFamily ?? '?'}` +
+          ` | 活跃 视频${h.vsb?.active ?? 0}/${h.vsb?.total ?? 0} 音频${h.asb?.active ?? 0}/${h.asb?.total ?? 0}` +
+          ` | HDR=${h.display ?? '?'}/${h.video ?? '?'}`,
+      });
 
       // 逐条明细单独打一行，切换音质时看这个
       if (h.vDetail || h.aDetail) {
-        void browser.runtime
-          .sendMessage({
-            type: 'page/quality',
-            height: 0,
-            note: `轨道明细 视频[${h.vDetail ?? ''}] 音频[${h.aDetail ?? ''}]`,
-          })
-          .catch(() => {});
+        reportQuality({
+          height: 0,
+          note: `轨道明细 视频[${h.vDetail ?? ''}] 音频[${h.aDetail ?? ''}]`,
+        });
       }
       return;
     }
@@ -436,25 +467,19 @@ function listenMainWorld(): void {
     // 播放器实际创建的 SourceBuffer 编码
     if (d.type === 'codec') {
       const c = d as { mime?: string; from?: string; kind?: string };
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: 0,
-          note: `${c.kind === 'audio' ? '音频' : '视频'}编码(${c.from ?? '?'}): ${c.mime ?? '?'}`,
-        })
-        .catch(() => {});
+      reportQuality({
+        height: 0,
+        note: `${c.kind === 'audio' ? '音频' : '视频'}编码(${c.from ?? '?'}): ${c.mime ?? '?'}`,
+      });
       return;
     }
 
     // 页面真的发出了 playurl 请求 —— 这是 DNR 能不能生效的前提
     if (d.type === 'req') {
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: 0,
-          note: `playurl 请求出现: ${d.method ?? 'GET'} ${(d.url ?? '').split('?')[0]}`,
-        })
-        .catch(() => {});
+      reportQuality({
+        height: 0,
+        note: `playurl 请求出现: ${d.method ?? 'GET'} ${(d.url ?? '').split('?')[0]}`,
+      });
     }
   });
 }
@@ -480,52 +505,68 @@ function report(): void {
     document.readyState !== 'loading',
   );
 
-  void browser.runtime
-    .sendMessage({
+  /**
+   * 上报「这个页面要用播放账号取流」，由 background 决定装不装规则。
+   *
+   * 走 `sendToBackground` 而不是直接 `browser.runtime.sendMessage`：
+   * 后者在扩展重新加载后会**同步抛出**，`.catch()` 接不住。
+   */
+  void (async () => {
+    const res = (await sendToBackground({
       type: 'page/activate',
       bvid: info.bvid,
       p: info.p,
       deviceCookies: readDeviceCookies(document.cookie),
       // 主账号 mid 从**页面** cookie 读（普通分区），不从 background 发 nav 猜。
       primaryMid: readPrimaryMidFromCookie(document.cookie),
-    })
-    .then((res: { type?: string; activated?: boolean } | undefined) => {
-      // 代理是否真的装上，**只以 background 的回报为准**。
-      // 不能因为"配置了账号"就假定生效——同账号、无白名单路径等情况都会 false。
-      badgeState.proxying = res?.type === 'page/activate:ok' && res.activated === true;
+    })) as { type?: string; activated?: boolean } | null;
+
+    /**
+     * 代理是否真的装上，**只以 background 的回报为准**。
+     * 不能因为"配置了账号"就假定生效——同账号、无白名单路径等情况都会 false。
+     */
+    if (res?.type === 'page/activate:ok') {
+      badgeState.proxying = res.activated === true;
       if (badgeState.proxying) hasEverActivated = true;
       paintBadge();
-    })
-    .catch(() => {
-      /**
-       * background 未就绪 / 未配置 —— 静默失败。
-       *
-       * ## 不能一失败就把角标撤掉（这是"乱跳"的根因之一）
-       *
-       * `page/activate` 在 SPA 路由变化、切 P、播放器重建时会被**重复调用**。
-       * 只要有一次 `.catch` 触发，旧代码就 `removeBadge()`，
-       * 而 `removeBadge` 会把 `lastPaintedHeight` 清零 ——
-       * 下一次 `paintBadge()` 时若高度恰好是 0，角标就闪回「已接管」。
-       *
-       * 用户看到的"角标在已接管和正常画质之间乱跳"就是这么来的。
-       *
-       * 现在的策略：
-       *   - 从未成功过 → 撤掉角标（诚实：确实没接管上）
-       *   - 曾经成功过 → 保留角标，只把状态降级，不清缓存
-       *     （临时失败很可能是 SW 休眠唤醒中，不代表真失效）
-       */
-      badgeState.proxying = false;
+      return;
+    }
 
-      if (!hasEverActivated) {
-        removeBadge();
-        return;
-      }
-      paintBadge();
-    });
+    /**
+     * 失败分支（含 `res === null`：background 未就绪 / 未配置 / 上下文已失效）
+     *
+     * ## 不能一失败就把角标撤掉（这是"乱跳"的根因之一）
+     *
+     * `page/activate` 在 SPA 路由变化、切 P、播放器重建时会被**重复调用**。
+     * 只要有一次失败就 `removeBadge()`，而 `removeBadge` 会把
+     * `lastPaintedHeight` 清零 —— 下一次 `paintBadge()` 时若高度恰好是 0，
+     * 角标就闪回「已接管」。
+     *
+     * 用户看到的"角标在已接管和正常画质之间乱跳"就是这么来的。
+     *
+     * 现在的策略：
+     *   - 从未成功过 → 撤掉角标（诚实：确实没接管上）
+     *   - 曾经成功过 → 保留角标，只把状态降级，不清缓存
+     *     （临时失败很可能是 SW 休眠唤醒中，不代表真失效）
+     */
+    badgeState.proxying = false;
+
+    if (!hasEverActivated) {
+      removeBadge();
+      return;
+    }
+    paintBadge();
+  })();
 }
 
-/** 观测页面实际播放画质，上报给 background 写进诊断日志 */
-function watchPlaybackQuality(): void {
+/**
+ * 观测页面实际播放画质，上报给 background 写进诊断日志。
+ *
+ * @param send 由 `main()` 注入的 `reportQuality`。**不要在这里直接调
+ *   `browser.runtime.sendMessage`** —— 扩展重新加载后会同步抛出
+ *   `Extension context invalidated`，而调用点只接得住 Promise 拒绝。
+ */
+function watchPlaybackQuality(send: (payload: { height: number; note?: string }) => void): void {
   let lastReported = -1;
 
   const sample = (): void => {
@@ -535,7 +576,7 @@ function watchPlaybackQuality(): void {
     if (!h || h === lastReported) return;
     lastReported = h;
 
-    void browser.runtime.sendMessage({ type: 'page/quality', height: h }).catch(() => {});
+    send({ height: h });
   };
 
   for (const delay of [2000, 5000, 10000, 20000]) {
@@ -549,7 +590,38 @@ export default defineContentScript({
   // - __playinfo__ 要在播放器读它之前藏好
   // - playurl 只在页面加载时调一次，晚了就没机会
   runAt: 'document_start',
-  main() {
+  /**
+   * ## 为什么接 `ctx`（2026-10-27 修 `Extension context invalidated`）
+   *
+   * 扩展被重新加载后，页面里**旧的 content script 还活着**，但它的
+   * `chrome.runtime` 已经失效。此后任何扩展 API 调用都会抛
+   * `Uncaught Error: Extension context invalidated`，扩展管理页会显示
+   * 「错误 1 个」，用户以为插件坏了。
+   *
+   * 实测：单个 `.catch()` 兜不住 —— WXT 的 `browser.runtime.sendMessage`
+   * 在上下文失效时**同步抛出**，不进入 Promise 链。
+   *
+   * WXT 的 `ctx` 提供了正规解法：它监听自身被替换 / 扩展卸载，
+   * 触发时把 `ctx.signal` abort 掉。所以我们只要**用 signal 驱动所有
+   * 异步任务和 addEventListener**，失效时它们会一起停，不再有调用发出。
+   *
+   * 这比在每个调用点套 try/catch 干净得多，也不会漏。
+   */
+  main(ctx) {
+    /**
+     * ⚠️ `ctx` 现在只用来接住 WXT 的生命周期，**不主动读 `ctx.isInvalid`**。
+     *
+     * 那个 getter 带副作用：`runtime.id == null` 时会调 `notifyInvalidated()`
+     * 永久 abort 整个 ctx。作为高频判据太危险（2026-10-27 踩过，
+     * 表现为设置页读不到主账号）。
+     *
+     * 真正的防护放在发送点：`sendToBackground` 用 try/catch 接同步抛出，
+     * 这正是 `Extension context invalidated` 的产生方式。
+     */
+    void ctx;
+
+    installSender();
+
     /**
      * popup / 诊断页**直连**查询当前页数据（不经 SW）。
      *
@@ -558,6 +630,28 @@ export default defineContentScript({
      * （见 `entrypoints/background.ts` 顶部注释）。这里同步应答，不返回 true。
      */
     chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      /**
+       * ⚠️ **这里不能加 `dead()` 判断**（2026-10-27 踩到）。
+       *
+       * `ctx.isInvalid` 的 getter 是**带副作用的**：
+       *
+       * ```js
+       * get isInvalid() {
+       *   if (browser.runtime?.id == null) this.notifyInvalidated();  // ← abort！
+       *   return this.signal.aborted;
+       * }
+       * ```
+       *
+       * 只要访问那一刻 `runtime.id` 读不到（SW 冷启动的瞬间就可能），
+       * 它就会 **永久 abort 掉 ctx** —— 之后所有消息都不再应答，
+       * 表现为「设置页的账号卡片读不到主账号」。
+       *
+       * 而这条判断本来就不必要：上下文失效后浏览器会**自动停用**这个监听器，
+       * 我们不需要自己再问一遍。加它只带来了误判风险。
+       *
+       * 发送方向（`sendToBackground`）用 `dead()` 是对的 —— 那里是**发出去**
+       * 才可能抛错，且即便误判也只是少发一条日志，不会让功能失效。
+       */
       if ((msg as { type?: string } | undefined)?.type !== 'page/summary:get') return false;
 
       const view = pageState.view();
@@ -590,13 +684,7 @@ export default defineContentScript({
     listenMainWorld();
 
     injectMainWorld((ok, detail) => {
-      void browser.runtime
-        .sendMessage({
-          type: 'page/quality',
-          height: 0,
-          note: `主世界注入${ok ? '成功' : '失败'}: ${detail}`,
-        })
-        .catch(() => {});
+      reportQuality({ height: 0, note: `主世界注入${ok ? '成功' : '失败'}: ${detail}` });
     });
 
     report();
@@ -606,12 +694,12 @@ export default defineContentScript({
         'DOMContentLoaded',
         () => {
           report();
-          watchPlaybackQuality();
+          watchPlaybackQuality(reportQuality);
         },
         { once: true },
       );
     } else {
-      watchPlaybackQuality();
+      watchPlaybackQuality(reportQuality);
     }
   },
 });
