@@ -6,9 +6,9 @@
 
 ## 0. 加载与重载
 
-```
+```text
 1. chrome://extensions/ → 开启右上角"开发者模式"
-2. "加载已解压的扩展程序" → 选择 dist/（见 scripts/build.ts 的输出目录）
+2. "加载已解压的扩展程序" → 选择 .output/chrome-mv3/（WXT 构建产物，先跑 pnpm build）
 3. 每次改完代码：点扩展卡片上的刷新按钮
 4. 改了 content script 后：必须刷新 B站页面（content script 不会热重载）
 5. 改了 manifest 后：必须重新加载扩展，且已打开的页面要刷新
@@ -338,8 +338,11 @@ const log = (...a) => console.log('%c[ISO]', 'color:#1D9E75', ...a);
 ### 怎么确认修好了
 
 ```bash
-pnpm test -- tests/unit/content/main-world-real.test.ts
+node_modules/.bin/vitest run tests/unit/content/main-world-real.test.ts
 ```
+
+（`vitest` 在 `node_modules/.bin` 下，不依赖包管理器在 PATH 里。Windows 上也可以写成
+`node node_modules/vitest/vitest.mjs run <file>`。）
 
 那里有 9 个用例直接对 `public/main-world.js` 的真源码断言，其中最关键的是
 **"启用后也不建 setInterval"**。

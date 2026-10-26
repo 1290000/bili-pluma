@@ -27,6 +27,7 @@
  * 有违规时退出码 1。
  */
 
+import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
@@ -42,6 +43,47 @@ const NUMBERED_DOCS = [
   'docs/03-open-questions.md',
   'docs/04-project-structure.md',
 ];
+
+/**
+ * 篇幅上限 —— 对应 `AGENTS.md` §6.4 那三条硬规则。
+ *
+ * ## 为什么需要机器检查
+ *
+ * §6.4 写的是「上限」，但**没有任何东西在数**。2026-10-26 实测：
+ * 给 README 加两行 pnpm 说明，它就从 80 变成 83，越限了 3 行，
+ * **是我自己数出来的**，不是错误提示告诉我的。
+ * 而 `AGENTS.md` 当时 233/240，只剩 7 行余量 —— 下一次谁加一句话都会超，且没人会去数。
+ *
+ * ## 三条规则的对应关系
+ *
+ * - 整文件上限：`FILE_LIMITS`
+ * - 单节上限（80 行）：按 `## ` 切节统计，**超了只警告不失败**（§6.4 原文是"考虑拆分"，
+ *   不是"必须拆"；已有 8 节经判断决定不拆，见记忆 2026-10-26）
+ * - 本文件上限：`AGENTS.md` 240 行
+ */
+const FILE_LIMITS = {
+  'README.md': 80,
+  'AGENTS.md': 240,
+};
+
+/** 单节上限。超出只提示，不判失败 —— §6.4 用的是"考虑拆分" */
+const SECTION_LIMIT = 80;
+
+/**
+ * 已知超限且**经判断决定不拆**的节。
+ *
+ * ⚠️ 这张表只能加"考虑过并写了理由"的条目，
+ * 加"暂时懒"的条目等于把检查关掉。
+ * 名单来源：记忆 2026-10-26「仍超 80 行但不建议硬拆的 8 节」。
+ *
+ * @type {Record<string, string>}
+ */
+const SECTION_LIMIT_WAIVED = {
+  'docs/01-architecture.md': '§4/§5/§9 是"最重要的一节"或由多个 ### 子节组成，硬拆会割裂阅读',
+  'docs/02-ui-spec.md': '§2 是 popup 规范主体，拆开读者要来回跳',
+  'docs/04-project-structure.md': '§2 分层禁令是全文最重要一节；§4/§6 同理',
+  'docs/guides/debugging.md': '§1 是 DNR 调试主流程，拆开就断',
+};
 
 /**
  * 递归收集 Markdown。
@@ -111,6 +153,76 @@ async function checkLinks(fileAbs, src) {
 }
 
 /**
+ * 检查文档里引用的**脚本文件**是否存在。
+ *
+ * ## 为什么需要这一项（2026-10-26 实装教训）
+ *
+ * 本轮精简时两度踩同一个坑：先只查了 `pnpm verify`，漏掉 `pnpm lint` / `pnpm test` / `pnpm build`；
+ * 改完后再查又说"清零"，其实 `04` 里还有两处 `pnpm check:boundaries`。
+ * **原因是靠"想起来 grep 哪些词"来保证覆盖，而不是靠结构化检查。**
+ *
+ * 所以这里反过来做：凡是形如 `scripts/xxx` 的路径引用，都必须真实存在。
+ * 脚本改名/删除后，文档里的引用会被立刻抓到。
+ *
+ * @param {string} src
+ * @returns {Array<{line:number, ref:string}>}
+ */
+function checkScriptRefs(src) {
+  const lines = src.split('\n');
+  const missing = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    for (const m of line.matchAll(/\b(scripts\/[A-Za-z0-9_.-]+\.(?:mjs|cjs|ts|js))/g)) {
+      const ref = m[1];
+      // 只校验仓库根下的 scripts/，其它路径（poc/…）不在本检查范围
+      if (!existsSync(join(ROOT, ref))) missing.push({ line: i + 1, ref });
+    }
+  }
+  return missing;
+}
+
+/**
+ * 篇幅上限检查。
+ *
+ * @param {string} rel 相对仓库根的路径
+ * @param {string} src
+ * @returns {{hard: Array<{kind:string, actual:number, limit:number}>, soft: string[]}}
+ */
+function checkLength(rel, src) {
+  const lines = src.split('\n');
+  // 文件末尾若以换行结束，split 会多出一个空字符串，不算实际行
+  const lineCount = lines[lines.length - 1] === '' ? lines.length - 1 : lines.length;
+
+  const hard = [];
+  const soft = [];
+
+  const fileLimit = FILE_LIMITS[rel];
+  if (fileLimit !== undefined && lineCount > fileLimit) {
+    hard.push({ kind: '全文', actual: lineCount, limit: fileLimit });
+  }
+
+  // 单节统计：从 `## ` 开始到下一个 `## ` 之前
+  const sections = [];
+  let cur = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    if (/^## /.test(line)) {
+      if (cur) cur.end = i;
+      cur = { title: line.replace(/^##\s*/, '').slice(0, 40), start: i, end: lines.length };
+      sections.push(cur);
+    }
+  }
+  for (const s of sections) {
+    const size = s.end - s.start;
+    if (size > SECTION_LIMIT) {
+      soft.push(`${s.title}（${size} 行，上限 ${SECTION_LIMIT}）`);
+    }
+  }
+
+  return { hard, soft };
+}
+
+/**
  * 章节编号连号检查。
  *
  * 规则：`## N` 出现的序列必须严格等于 0,1,2,…N（允许从 0 开始）。
@@ -158,6 +270,9 @@ async function main() {
 
   const deadLinks = [];
   const numberingIssues = [];
+  const missingScripts = [];
+  const lengthViolations = [];
+  const lengthWarnings = [];
 
   for (const file of uniqueFiles) {
     const src = await readFile(file, 'utf8');
@@ -165,6 +280,16 @@ async function main() {
 
     for (const d of await checkLinks(file, src)) {
       deadLinks.push({ file: rel, ...d });
+    }
+
+    for (const s of checkScriptRefs(src)) {
+      missingScripts.push({ file: rel, ...s });
+    }
+
+    const len = checkLength(rel, src);
+    for (const h of len.hard) lengthViolations.push({ file: rel, ...h });
+    if (!SECTION_LIMIT_WAIVED[rel]) {
+      for (const s of len.soft) lengthWarnings.push({ file: rel, section: s });
     }
 
     if (NUMBERED_DOCS.includes(rel)) {
@@ -175,11 +300,36 @@ async function main() {
   }
 
   console.log(`[docs] 扫描 ${uniqueFiles.length} 个 Markdown`);
-  console.log(`[docs] 死链检查 + ${NUMBERED_DOCS.length} 份主文档的章节连号检查`);
+  console.log(
+    `[docs] 死链 + scripts/ 引用 + 篇幅上限 + ${NUMBERED_DOCS.length} 份主文档的章节连号`,
+  );
 
-  if (deadLinks.length === 0 && numberingIssues.length === 0) {
-    console.log('[docs] ✅ 无死链、章节编号连号');
+  if (lengthWarnings.length > 0) {
+    console.log(
+      `[docs] ℹ️  ${lengthWarnings.length} 个单节超过 ${SECTION_LIMIT} 行（§6.4 是"考虑拆分"，不判失败）：`,
+    );
+    for (const w of lengthWarnings) console.log(`  ${w.file}  ${w.section}`);
+  }
+
+  const clean =
+    deadLinks.length === 0 &&
+    numberingIssues.length === 0 &&
+    missingScripts.length === 0 &&
+    lengthViolations.length === 0;
+
+  if (clean) {
+    console.log('[docs] ✅ 无死链、无失效脚本引用、篇幅达标、章节编号连号');
     return;
+  }
+
+  if (lengthViolations.length > 0) {
+    console.error(`\n[docs] ❌ ${lengthViolations.length} 个文件超出篇幅上限（AGENTS.md §6.4）\n`);
+    for (const v of lengthViolations) {
+      console.error(
+        `  ${v.file}  ${v.kind} ${v.actual} 行，上限 ${v.limit}（超 ${v.actual - v.limit} 行）`,
+      );
+      console.error(`    → 删"删掉也不影响该做什么"的段落；解释为什么的篇幅归 ADR\n`);
+    }
   }
 
   if (deadLinks.length > 0) {
@@ -187,6 +337,14 @@ async function main() {
     for (const d of deadLinks) {
       console.error(`  ${d.file}:${d.line}  → ${d.link}`);
       console.error(`    ${d.raw}\n`);
+    }
+  }
+
+  if (missingScripts.length > 0) {
+    console.error(`\n[docs] ❌ ${missingScripts.length} 处引用了不存在的脚本\n`);
+    for (const s of missingScripts) {
+      console.error(`  ${s.file}:${s.line}  → ${s.ref}`);
+      console.error(`    → 脚本已改名/删除，更新这处引用，或补回脚本\n`);
     }
   }
 

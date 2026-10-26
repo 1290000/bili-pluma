@@ -31,7 +31,7 @@
  *    操作步骤见 `docs/guides/methodology.md` §5 ⑤。
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -69,29 +69,49 @@ const STEPS = [
     first: true,
   },
   { name: 'docs', cmd: process.execPath, args: ['scripts/check-docs.mjs'], first: true },
+  { name: 'patch', cmd: process.execPath, args: ['scripts/check-patch-scope.mjs'], first: true },
   { name: 'test', cmd: binPath('vitest'), args: ['run'], first: false, slow: true },
 ];
 
 const HELP = `
 Pluma 验收入口（不依赖 pnpm 在 PATH 里）
 
-  node scripts/verify.mjs           跑全部八项
-  node scripts/verify.mjs --fast    跳过 vitest（改了文档/脚本时够用）
+  node scripts/verify.mjs           跑全部九项（约 40s）
+  node scripts/verify.mjs --fast    跳过 vitest，八项（约 15s，改文档/脚本时够用）
   node scripts/verify.mjs --help    显示本帮助
 
-检查项（顺序执行）：
+本脚本覆盖的九项（顺序执行）：
   typecheck  tsc --noEmit
   format     prettier --check .
   lint       eslint .
   boundaries core/shared 不许碰 chrome/window/document/fetch
   messages   messages.ts ↔ background.ts 路由对齐（抓孤儿消息）
   design     只有 entrypoints/* 可以引用 @design/*
-  docs       死链 + 主文档章节连号
+  docs       死链 + scripts/ 引用 + 篇幅上限 + 主文档章节连号
+  patch      PATCH_PATHS / PATCH_HOSTS 与 ADR 0013 授权集一致（防越权改写响应体）
   test       vitest run
 
-⚠️ 反例验证不在本脚本里 —— 它是人的判断，不是机器的检查。
-   规则：把被修的关键判据改回旧实现，相关测试必须变红，否则那条测试等于没写。
-   操作步骤见 docs/guides/methodology.md §5 ⑤（这里不复述，避免第二份漂移）。
+═══════════════════════════════════════════════════════════════
+⚠️ 本脚本**不等于**"全部自检"。另有两档它跑不了，必须单独做：
+═══════════════════════════════════════════════════════════════
+
+【第 2 档】DNR 真实浏览器回归 —— 改了 dnr.ts 就必须跑
+
+  node poc/verify/run-q2-auto.cjs        （约 10 分钟）
+
+  为什么不在本脚本里：它要启动真实 Edge、加载独立扩展、跑 180 并发。
+  塞进来会让每次交付都等 10 分钟，然后所有人开始用 --no-verify 绕过，
+  最后连上面八项也没人跑。所以改为**本脚本主动提醒**：
+  检测到 diff 里有 src/platform/http/dnr.ts 就打印警告（见 AGENTS.md §4.3 路由表）。
+
+【第 3 档】反例验证 —— 无法自动化，只能靠人
+
+  规则：把被修的关键判据改回旧实现 → 相关测试必须变红 → 恢复 → 必须全绿。
+  为什么不能自动化：脚本无法判断"你改回去的那个判断是不是关键的"。
+  操作步骤见 docs/guides/methodology.md §5 ⑤（这里不复述，避免第二份漂移）。
+
+⇒ 一句话：八项全绿只说明"静态检查 + 单测过了"，
+  不代表"改 dnr.ts 的回归跑过了"、更不代表"做过反例验证"。
 
 退出码：0 全绿｜1 有检查未通过｜2 脚本自身出错
 `.trimStart();
@@ -153,6 +173,66 @@ function pad(s, n) {
   return s.length >= n ? s : s + ' '.repeat(n - s.length);
 }
 
+/**
+ * 取本次改动涉及的文件（含未提交 + 未跟踪）。
+ *
+ * 拿不到 git 时返回 null —— verify 不该因为"不是 git 仓库"而失败。
+ *
+ * @returns {string[] | null}
+ */
+function changedFiles() {
+  const run = (args) => {
+    try {
+      const r = spawnSync('git', args, { cwd: ROOT, encoding: 'utf8' });
+      if (r.status !== 0) return '';
+      return r.stdout ?? '';
+    } catch {
+      return '';
+    }
+  };
+  const tracked = run(['diff', '--name-only', 'HEAD']).trim();
+  const untracked = run(['ls-files', '--others', '--exclude-standard']).trim();
+  const all = `${tracked}\n${untracked}`
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return all.length > 0 ? [...new Set(all)] : null;
+}
+
+/**
+ * AGENTS.md §4.3 里**脚本不能代跑、但必须提醒**的项。
+ *
+ * ⚠️ 能自动跑的检查已经在 STEPS 里（check-messages / check-design / check-docs）。
+ * 这里只放"跑不了但忘了会出事"的，重复提醒会让人不再读提示。
+ *
+ * @returns {Array<{signal: string, action: string}>}
+ */
+function detectRouteWarnings() {
+  const files = changedFiles();
+  if (!files) return [];
+
+  const out = [];
+  const hit = (p) => files.includes(p);
+
+  if (hit('src/platform/http/dnr.ts')) {
+    out.push({
+      signal: 'src/platform/http/dnr.ts 被改动',
+      action:
+        '必须重跑 `node poc/verify/run-q2-auto.cjs`。单测测不到 DNR 行为（AGENTS.md §5.4），不跑等于没验。',
+    });
+  }
+
+  if (hit('public/main-world.js')) {
+    out.push({
+      signal: 'public/main-world.js 被改动',
+      action:
+        '`node --check public/main-world.js`；若涉及轨道判定/角标，必须向用户要一次真机日志（自动化拿不到登录态 + 调试端口）。',
+    });
+  }
+
+  return out;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.includes('--help') || argv.includes('-h')) {
@@ -168,6 +248,20 @@ async function main() {
   }
 
   const steps = fast ? STEPS.filter((s) => !s.slow) : STEPS;
+
+  // ── 路由提醒（AGENTS.md §4.3）──
+  // 有些检查**不能**放在这里自动跑：最典型的是 dnr.ts 的 Q2 回归，
+  // 它要启动真实浏览器，属于用户环境操作，脚本代跑会变成"看起来验过了"。
+  // 所以这里只做提醒 —— 让"忘了跑"这件事至少有一次可见的提示。
+  const warnings = detectRouteWarnings();
+  if (warnings.length > 0) {
+    console.log('[verify] ⚠️  这次改动命中了 AGENTS.md §4.3 路由表：\n');
+    for (const w of warnings) {
+      console.log(`  ${w.signal}`);
+      console.log(`    → ${w.action}\n`);
+    }
+  }
+
   console.log(`[verify] 共 ${steps.length} 项${fast ? '（--fast：已跳过 vitest）' : ''}\n`);
 
   const results = [];
