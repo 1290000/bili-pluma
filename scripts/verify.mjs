@@ -88,7 +88,7 @@ Pluma 验收入口（不依赖 pnpm 在 PATH 里）
   messages   messages.ts ↔ background.ts 路由对齐（抓孤儿消息）
   design     只有 entrypoints/* 可以引用 @design/*
   docs       死链 + scripts/ 引用 + 篇幅上限 + 主文档章节连号
-  patch      PATCH_PATHS / PATCH_HOSTS 与 ADR 0013 授权集一致（防越权改写响应体）
+  patch      响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）
   test       vitest run
 
 ═══════════════════════════════════════════════════════════════

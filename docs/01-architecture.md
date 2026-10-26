@@ -159,6 +159,8 @@ v0.1 的三进程模型（扩展 + Rust Core + Flutter）在这个需求上**过
   │     └→ 返回 4K/HDR/Hi-Res 的 DASH 列表 → 交还给播放器 ✅
   ├─ 用户点赞  /x/web-interface/archive/like  → 不在白名单 → 正常用 A cookie ✅（记到 A）
   ├─ 播放器上报进度 /x/click-interface/web/heartbeat → 不在白名单 → 用 A cookie ✅（历史记到 A）
+  │     └→ ⚠️ 但**读回**进度是另一回事：playurl 响应里的 `last_play_time` / `last_play_cid`
+  │        是 B 的（0），播放器据此判定"没看过" → 从 0 开始。修复见 ADR 0017
   └─ 用户评论  /x/v2/reply/add            → 不在白名单 → A cookie ✅（评论发在 A）
 ```
 

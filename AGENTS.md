@@ -165,9 +165,9 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 
 ### 5.5 响应体改写范围（决策 5 的例外边界）
 
-`public/main-world.js` 的 `PATCH_PATHS` / `PATCH_HOSTS`：**加路径或主机 = 扩大越权，先改
-[ADR 0013](./docs/decisions/0013-patch-player-info-response.md) 再改代码**，`check-patch-scope.mjs` 强制一致。
-字段仍限于 `status`/`type`/`due_date`，**禁改 `mid`/`rights`**。
+`public/main-world.js` 有两类响应体改写，**各带一个 ADR + 路径常量，不许合并**；**加路径或主机 = 扩大越权，先改 ADR 再改代码**（`check-patch-scope.mjs` 强制一致）：
+- `PATCH_PATHS` → 会员字段伪装（[ADR 0013](./docs/decisions/0013-patch-player-info-response.md)）；字段限 `status`/`type`/`due_date`，**禁改 `mid`/`rights`**
+- `PROGRESS_PATCH_PATHS` → 只改 `last_play_time`/`last_play_cid`，把被换成"播放账号的 0"的进度还原成主账号自己的（[ADR 0017](./docs/decisions/0017-restore-primary-progress-in-playurl.md)）
 
 ---
 

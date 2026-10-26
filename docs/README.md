@@ -49,6 +49,7 @@
 | [0014](./decisions/0014-quality-compare-from-page-data.md) | **画质对比只用页面已有的数据**：主账号列取自 SSR，且不承诺 HDR |
 | [0015](./decisions/0015-lazy-health-check-no-alarms.md) | **凭据健康只做惰性检查**：不用 alarms，不做 cookie 刷新 |
 | [0016](./decisions/0016-drop-quality-report-page.md) | **砍掉画质体检表与音质自检独立页**：options 五分区降为三 |
+| [0017](./decisions/0017-restore-primary-progress-in-playurl.md) | **把主账号观看进度写回 playurl 响应**：修"看到一半重新打开从 0 开始" |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 
