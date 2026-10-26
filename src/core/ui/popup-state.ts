@@ -30,6 +30,13 @@ export interface PopupSnapshot {
   account: PopupAccount | null;
   /** 12 个时间窗的原始统计。用于算样本数与成功率 */
   buckets: StatBucket[];
+  /**
+   * 当前标签页是不是 B站视频页。
+   *
+   * popup 自己没有页面上下文，判断不了 —— 由 `entrypoints/popup/main.tsx`
+   * 查活动标签页后填入。规范里的「状态 5：非视频页」就靠它。
+   */
+  page: { kind: 'video' } | { kind: 'other' };
 }
 
 export type PopupTone = 'neutral' | 'good' | 'warn' | 'bad';
@@ -39,6 +46,7 @@ export type PopupState =
   | 'credential-missing'
   | 'expired'
   | 'stopped'
+  | 'not-video'
   | 'inconsistent'
   | 'degraded'
   | 'active';
@@ -98,15 +106,32 @@ export function sampleRate(buckets: readonly StatBucket[]): number | null {
  *      否则会引导用户去扫一个已经存在的账号
  *   3. **凭据失效** —— 必须排在"已接管"前面，否则用户以为在生效
  *   4. **已停用** —— 用户主动关的，**不是故障**，不能报警
- *   5. **不一致** —— 开关开着但 0 条规则
- *   6. **已降级** —— 成功率低
- *   7. **已接管**
+ *   5. **未生效**（当前页不是视频页）—— 能解释结果，但不如用户自己的操作直接
+ *   6. **不一致** —— 开关开着但 0 条规则
+ *   7. **已降级** —— 成功率低
+ *   8. **已接管**
  *
  * 第 4 条排在降级前面很关键：用户自己关掉的，成功率低是预期结果，
  * 不该跳出来说"代理有问题"。
  */
 export function describePopup(snap: PopupSnapshot): PopupView {
-  const { proxy, configured, account, buckets } = snap;
+  const { proxy, configured, account, buckets, page } = snap;
+
+  /**
+   * 「未生效」：有播放账号、开关开着，但当前页不是视频页。
+   *
+   * 排序依据（02-ui-spec §3）：**能解释当前结果的状态优先**。
+   *   - 用户自己关掉开关（已停用）> 当前页不对（未生效）
+   *   - 凭据失效 > 未生效 ？反过来：用户在首页时，"凭据失效"要他去重扫，
+   *     而他此刻并不在看视频，扫完也没得看。所以未生效排在凭据校验之前。
+   */
+  const notVideo = (): PopupView => ({
+    state: 'not-video',
+    pill: '未生效',
+    tone: 'neutral',
+    line: '当前页不是视频页，打开任意视频查看效果',
+    needsLogin: false,
+  });
 
   if (!configured) {
     return {
@@ -151,6 +176,8 @@ export function describePopup(snap: PopupSnapshot): PopupView {
      * 不是"需要重新扫码"。
      */
     if (proxy.hasCredential) {
+      // 有凭据但不在视频页 → 说「未生效」比说「已接管」诚实
+      if (page.kind !== 'video') return notVideo();
       return {
         state: 'active',
         pill: '已接管',
@@ -186,6 +213,15 @@ export function describePopup(snap: PopupSnapshot): PopupView {
       needsLogin: false,
     };
   }
+
+  /**
+   * 顺序说明：**已停用 > 未生效 > 凭据校验**。
+   *
+   * 用户自己关掉开关时，那是当下最能解释"为什么没 4K"的事实（02-ui-spec §3 状态 6）；
+   * 排在它后面的是"当前页不对"——同样能解释，但与用户操作无关；
+   * 再往后才是后台校验（凭据失效 / 异常 / 降级）。
+   */
+  if (page.kind !== 'video') return notVideo();
 
   if (!account.healthy) {
     /**

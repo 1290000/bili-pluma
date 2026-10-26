@@ -91,21 +91,13 @@ export interface BadgeInput {
 /**
  * 高度 → 画质短语。
  *
- * ⚠️ 只认**实际播放高度**，不认 `accept_quality`。
- * 后者在未登录时就返回含 8K 的完整数组（实测），拿它做展示是骗人。
- *
- * ⚠️ 8K 必须排在 4K 前面。曾经写成 `if (height >= 2160) return '4K'`，
- * 于是 4320p 被说成 4K —— 用户明确报过这个 bug。
+ * ⚠️ 实现已移到 `@shared/utils/quality`（popup §2.3 也要用，而 core 不许依赖 content）。
+ * 这里**保留导出**，因为角标的既有测试与调用方都从这里取；
+ * 不要再写第二份 —— 8K/4K 的顺序曾经写反过，一份就够复发一次了。
  */
-export function heightLabel(height: number): string {
-  if (height >= 4320) return '8K';
-  if (height >= 2160) return '4K';
-  if (height >= 1440) return '2K';
-  if (height >= 1080) return '1080P';
-  if (height >= 720) return '720P';
-  if (height > 0) return `${String(height)}P`;
-  return '';
-}
+import { heightLabel } from '@shared/utils/quality';
+
+export { heightLabel };
 
 /**
  * 从 HEVC 的 level 推断"这条轨是否可能是 HDR"，返回理由字符串或 null。

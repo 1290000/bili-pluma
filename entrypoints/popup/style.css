@@ -130,6 +130,84 @@ body {
   color: var(--pluma-danger);
 }
 
+/* ── §2.3 当前页解锁画质（核心价值区）──
+   规范要求：必须有对比锚点、徽章换行不横向滚动、最多 6 个。 */
+
+.unlock {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.unlock-bv {
+  margin: 0;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+.unlock-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-card);
+}
+
+.unlock-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 「已解锁」用信息色；「没有提升」用正文色 —— 后者不是好消息，但也不是故障 */
+.unlock-title {
+  font-size: var(--pluma-font-title);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.unlock-title.good {
+  color: var(--pluma-accent);
+}
+
+.unlock-title.muted {
+  color: var(--pluma-text);
+}
+
+/* 价值锚点：这行小字是用户能感知到"插件做了什么"的唯一依据 */
+.unlock-anchor {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  text-align: right;
+  line-height: 1.35;
+}
+
+/* 换行，不横向滚动（规范 §2.3 明确禁止横向滚动） */
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-accent);
+  background: var(--pluma-accent-bg);
+  white-space: nowrap;
+}
+
+.unlock-empty {
+  margin: 0;
+  padding: 10px 0;
+  text-align: center;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
 /* ── 账号卡片：信任建立区 ──
    视觉上刻意做得"受控"：不是头像卡片，是一行摘要。
    目的是让用户确信这只是一个取流工具，不是另一个活跃账号。 */

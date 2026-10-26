@@ -38,6 +38,7 @@ function snap(over: Partial<PopupSnapshot> = {}): PopupSnapshot {
     configured: true,
     account: healthyAccount,
     buckets: [],
+    page: { kind: 'video' },
     ...over,
   };
 }
@@ -355,5 +356,43 @@ describe('ruleCount = -1 表示"读不到"而不是"没有规则"', () => {
   it('ruleCount=0 + 开关开 → 才是真的不一致', () => {
     const v = describePopup(snap({ proxy: { enabled: true, hasCredential: true, ruleCount: 0 } }));
     expect(v.state).toBe('inconsistent');
+  });
+});
+
+describe('状态 5：当前页不是视频页（2026-10-26 新增）', () => {
+  it('有账号、开关开、但在首页 → 未生效（不是「已接管」）', () => {
+    const v = describePopup(snap({ page: { kind: 'other' } }));
+    expect(v.state).toBe('not-video');
+    expect(v.pill).toBe('未生效');
+    // 中性色：这不是故障，不该报警
+    expect(v.tone).toBe('neutral');
+    expect(v.needsLogin).toBe(false);
+  });
+
+  it('⚠️ 用户自己关掉开关时，「已停用」优先于「未生效」', () => {
+    // 排序依据：与用户操作相关的状态 > 与页面上下文相关的状态
+    const v = describePopup(
+      snap({
+        page: { kind: 'other' },
+        proxy: { enabled: false, hasCredential: true, ruleCount: 0 },
+      }),
+    );
+    expect(v.state).toBe('stopped');
+  });
+
+  it('未配置时仍然说「未配置」——引导扫码比说"页面不对"有用', () => {
+    const v = describePopup(snap({ page: { kind: 'other' }, configured: false, account: null }));
+    expect(v.state).toBe('not-configured');
+    expect(v.needsLogin).toBe(true);
+  });
+
+  it('拿不到账号资料但有凭据 + 不在视频页 → 未生效（不说「已接管」）', () => {
+    // 这条曾经会返回 active 并写"取流已由播放账号接管"，而用户根本不在视频页
+    const v = describePopup(snap({ page: { kind: 'other' }, account: null }));
+    expect(v.state).toBe('not-video');
+  });
+
+  it('在视频页时不受影响（回归）', () => {
+    expect(describePopup(snap({ page: { kind: 'video' } })).state).toBe('active');
   });
 });

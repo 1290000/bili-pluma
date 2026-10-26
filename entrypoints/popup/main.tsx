@@ -18,12 +18,14 @@
  * 属于 P3 的范围，这里不做。
  */
 
+import { describeUnlock } from '@core/playinfo/summary-view';
 import {
   describePopup,
   describeVip,
   type PopupAccount,
   type PopupSnapshot,
 } from '@core/ui/popup-state';
+import type { PageTracksView } from '@shared/types/playinfo';
 import { render } from 'preact';
 import { useCallback, useEffect, useState } from 'preact/hooks';
 
@@ -35,6 +37,38 @@ type LoadState =
 
 type LoginHint = null | 'incognito-disabled' | 'opened' | 'failed';
 
+/**
+ * 当前标签页是不是视频页，以及 content 报来的取流数据。
+ *
+ * popup 自己没有页面上下文，只能查活动标签页 —— **popup 不会变成标签页**，
+ * 所以这里的 `active: true` 拿到的确实是用户正在看的那个页面
+ * （诊断页不同：它是 `open_in_tab`，会把自己变成活动标签页，见那个文件的注释）。
+ */
+type PageView = { kind: 'video'; view: PageTracksView | null } | { kind: 'other' };
+
+const VIDEO_URL_RE = /^https?:\/\/(www\.)?bilibili\.com\/video\//;
+
+async function readPageView(): Promise<PageView> {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (typeof tab?.id !== 'number' || !VIDEO_URL_RE.test(tab.url ?? '')) return { kind: 'other' };
+
+    try {
+      const reply = (await chrome.tabs.sendMessage(tab.id, { type: 'page/summary:get' })) as
+        { type?: string; view?: PageTracksView } | undefined;
+      if (reply?.type === 'page/summary:ok' && reply.view)
+        return { kind: 'video', view: reply.view };
+      // content 在但还没报到（刚注入 / 页面还没解析出 bvid）
+      return { kind: 'video', view: null };
+    } catch {
+      // 没有 content script：页面在扩展安装/更新之前就打开了
+      return { kind: 'video', view: null };
+    }
+  } catch {
+    return { kind: 'other' };
+  }
+}
+
 function App() {
   const [load, setLoad] = useState<LoadState>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
@@ -42,6 +76,8 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   /** 切换后被锁定旧画质的标签页。空数组表示不用提示 */
   const [affected, setAffected] = useState<number[]>([]);
+  /** 当前页的取流数据（主账号基线 + 播放账号实际拿到的） */
+  const [page, setPage] = useState<PageView>({ kind: 'other' });
   /** 到期日的相对描述依赖"现在"，渲染期取一次即可 */
   const [now] = useState(() => Date.now());
 
@@ -56,13 +92,17 @@ function App() {
    */
   const refresh = useCallback(async (recheckSummary = false) => {
     try {
-      const [proxyRes, acctRes, statsRes] = await Promise.all([
+      const [proxyRes, acctRes, statsRes, pageView] = await Promise.all([
         chrome.runtime.sendMessage({ type: 'proxy/status' }).catch(() => null),
         chrome.runtime
           .sendMessage({ type: 'account/summary', recheck: recheckSummary })
           .catch(() => null),
         chrome.runtime.sendMessage({ type: 'stats/recent' }).catch(() => null),
+        // 直连 content，不经 SW：数据只对当前页有意义（docs/protocols/messages.md 通道 D）
+        readPageView(),
       ]);
+
+      setPage(pageView);
 
       if (proxyRes?.type !== 'proxy/status:ok') {
         setLoad({ kind: 'error', detail: '状态读取失败' });
@@ -97,6 +137,7 @@ function App() {
           configured: (acctOk && acctRes.configured) || proxyRes.hasCredential,
           account,
           buckets: statsRes?.type === 'stats/recent:ok' ? statsRes.buckets : [],
+          page: pageView.kind === 'video' ? { kind: 'video' } : { kind: 'other' },
         },
       });
     } catch (e) {
@@ -195,6 +236,8 @@ function App() {
 
   const snap = load.kind === 'ok' ? load.snap : null;
   const view = snap ? describePopup(snap) : null;
+  /** §2.3 的视图模型（纯函数在 core，可单测） */
+  const unlock = describeUnlock(page.kind === 'video' ? page.view : null);
 
   const pillCls = load.kind === 'loading' ? 'pill-idle' : `pill-${view?.tone ?? 'danger'}`;
   const pillText = load.kind === 'loading' ? '读取中' : (view?.pill ?? '异常');
@@ -213,7 +256,41 @@ function App() {
 
         {load.kind === 'ok' && snap && view && (
           <div class="content">
-            <p class={`line ${view.tone}`}>{view.line}</p>
+            {/* 「已解锁」已经说明结果时不再重复一句话，避免 popup 变啰嗦 */}
+            {!unlock?.improved && <p class={`line ${view.tone}`}>{view.line}</p>}
+
+            {/* ── §2.3 当前页解锁画质（核心价值区）──
+                规范原文："整个 popup 唯一不能省的部分"。
+                必须有对比锚点 —— 没有"主账号仅可用 1080P"这行，
+                用户感受不到这个插件做了什么。 */}
+            {page.kind === 'video' ? (
+              unlock && page.view ? (
+                <div class="unlock">
+                  <p class="unlock-bv">当前页面 · {page.view.bvid}</p>
+                  <div class="unlock-card">
+                    <div class="unlock-head">
+                      <span class={`unlock-title ${unlock.improved ? 'good' : 'muted'}`}>
+                        {unlock.title}
+                      </span>
+                      <span class="unlock-anchor">{unlock.anchor}</span>
+                    </div>
+                    {unlock.badges.length > 0 && (
+                      <div class="badges">
+                        {unlock.badges.map((b) => (
+                          <span class="badge" key={b}>
+                            {b}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <p class="unlock-empty">正在读取本页取流数据…</p>
+              )
+            ) : (
+              <p class="unlock-empty">打开任意视频页查看效果</p>
+            )}
 
             {/* 账号卡片：信任建立区。
                 刻意做成"一行摘要"而不是头像卡片——让用户确信这只是
