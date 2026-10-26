@@ -198,7 +198,16 @@ function listenMainWorld(): void {
     }
 
     if (d.type === 'ready') {
-      tellMainWorld(true);
+      /**
+       * ⚠️ **不要在这里回 `cfg`。**
+       *
+       * 主世界收到 `cfg` 会回 `ready`，收到 `ready` 再回 `cfg` 就是无限回环。
+       * 2026-10-26 因此出过 **Out of Memory**（视频页停留几十秒后页面崩溃，
+       * 普通与 InPrivate 都会），根因是回环里每轮都夹带一份完整的 `__playinfo__`。
+       *
+       * 配置只下发一次（`hello` 那一次）。开关变化本来就靠刷新页面生效
+       * （popup 上写着"刷新后生效"），不需要热切换通道。
+       */
       return;
     }
 

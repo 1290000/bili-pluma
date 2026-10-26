@@ -1019,3 +1019,55 @@ describe('Hi-Res 闪烁：判据必须按创建顺序（BV1jt421t7XH 实测）',
     expect(report).toContain('audioFamily(audio)');
   });
 });
+
+/**
+ * 2026-10-26 真实故障：视频页停留几十秒后 **Out of Memory**（普通与 InPrivate 都中）。
+ *
+ * 根因是 `ready ↔ cfg` 无限回环 —— ISOLATED 收到 `ready` 回 `cfg`，
+ * 主世界收到 `cfg` 回 `ready`。这个回环本来就在（每轮两个小消息，表现为空转 CPU），
+ * 后来往 `cfg` 里加了一份完整的 `__playinfo__` 上报，于是每轮克隆几十 KB → 崩溃。
+ *
+ * 下面三条钉住"回环断了"和"配置没僵死"两件事。
+ */
+describe('配置握手：只回一次 ready（防 ready↔cfg 回环）', () => {
+  it('连发 3 次 cfg 只回 1 次 ready', async () => {
+    const sb = boot();
+    enable(sb);
+    await flush();
+    enable(sb);
+    await flush();
+    enable(sb);
+    await flush();
+
+    expect(sb.sent.filter((m) => m.type === 'ready')).toHaveLength(1);
+  });
+
+  it('cfg 不再夹带 ssr-playinfo（握手消息里不许放大对象）', async () => {
+    const sb = boot();
+    // ⚠️ jsdom 的 postMessage 是**异步排队**的，boot 后要等一轮才能读到 hello 那批
+    await flush();
+    const before = sb.sent.filter((m) => m.type === 'ssr-playinfo').length;
+    expect(before).toBeGreaterThan(0); // 立即上报那一份
+
+    enable(sb);
+    await flush();
+    enable(sb);
+    await flush();
+
+    // 基线数据只走 hello + 两次延迟补报，不搭 cfg 的车
+    expect(sb.sent.filter((m) => m.type === 'ssr-playinfo')).toHaveLength(before);
+  });
+
+  it('enabled 变化仍然生效（回执只发一次，但配置不僵死）', async () => {
+    const sb = boot();
+    sb.page.__playinfo__ = { marker: 1 };
+
+    enable(sb, true);
+    await flush();
+    expect(sb.page.__playinfo__).toBeUndefined(); // 藏起来，逼播放器走 API
+
+    enable(sb, false);
+    await flush();
+    expect(sb.page.__playinfo__).toEqual({ marker: 1 }); // 关掉就还回去
+  });
+});

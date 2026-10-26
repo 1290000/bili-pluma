@@ -107,6 +107,14 @@
   var anyPlayurlSeen = false;
   /** 原文只上报一次，避免每次切 P 都传几十 KB */
   var rawPlayurlPosted = false;
+  /**
+   * 配置回执是否已发过。
+   *
+   * ⚠️ **必须只发一次。** ISOLATED 侧收到 `ready` 会回 `cfg`，这里若每次回 `ready`
+   * 就是无限回环 —— 2026-10-26 因此出过 Out of Memory（页面崩溃）。
+   * 详见「通信」一节的长注释。
+   */
+  var cfgApplied = false;
 
   try {
     Object.defineProperty(window, '__playinfo__', {
@@ -1534,13 +1542,32 @@
       return;
     }
 
-    enabled = !!d.enabled;
-    syncHooks();
+    // 配置变化仍然生效（将来若要支持热切换），但**回执只发一次**
+    if (!!d.enabled !== enabled) {
+      enabled = !!d.enabled;
+      syncHooks();
+    }
+
+    /**
+     * ⚠️ **`ready` 只能回一次 —— 这是防无限回环的唯一闸门。**
+     *
+     * ISOLATED 侧收到 `ready` 会回发 `cfg`，而这里收到 `cfg` 又回 `ready`。
+     * 2026-10-26 实测：这个回环本来就在（当时每轮只发两个小消息，表现为空转 CPU），
+     * 后来往 `cfg` 里加了一份完整的 `__playinfo__` 上报，于是每轮都结构化克隆几十 KB，
+     * 视频页停留几十秒就 **Out of Memory**（页面崩溃，两种模式都会）。
+     *
+     * 两道保险：
+     *   1. 这里用 `cfgApplied` 卡住回执
+     *   2. ISOLATED 侧也不再对 `ready` 回 `cfg`（见 `entrypoints/content.ts`）
+     * 只留一道也能断环，但**任何一道被后人"优化"掉都会立刻复发**，所以两道都留。
+     *
+     * 顺带：**握手消息里不许放大对象**。基线数据走 `hello` + 两次延迟补报，
+     * 不搭 `cfg` 的车 —— 握手有回程，数据没有。
+     */
+    if (cfgApplied) return;
+    cfgApplied = true;
 
     safePost({ __ns: NS, type: 'ready', token: token, enabled: enabled });
-
-    // 配置到手（token 也定了）后再报一次基线，这次带上 user
-    postSsrPlayinfo();
   });
 
   // ── 就绪握手 ──

@@ -356,6 +356,64 @@ spy 打错地方等于没测。
 
 ---
 
+## 8. 视频页停留一会儿就 `Out of Memory`（2026-10-26 已修）
+
+### 症状
+
+视频详情页停留几十秒到一两分钟，整页被替换成错误页：
+
+```
+此页存在问题 请稍后再尝试访问。
+错误代码: Out of Memory
+```
+
+**普通窗口和 InPrivate 都会**，与账号状态无关。
+
+### 根因：`ready ↔ cfg` 无限回环
+
+`MAIN world` 与 `ISOLATED world` 的配置握手写成了互相应答：
+
+```
+content 收到 ready  → 发 cfg
+main-world 收到 cfg → syncHooks() + 发 ready (+ 当时还夹带一份 __playinfo__)
+content 收到 ready  → 发 cfg  → ...
+```
+
+这个回环**本来就在**（2026-10-26 之前每轮只发两个小消息，表现为空转 CPU、费电，
+不容易被察觉）。后来往 `cfg` 里加了一份完整的 `__playinfo__` 上报
+（`postSsrPlayinfo()`，几十 KB），于是每轮都结构化克隆一次，
+渲染进程内存几十秒内被打爆。
+
+**教训**：**握手消息里不许放大对象**。握手有回程，数据没有。
+基线数据现在只走 `hello` + 两次延迟补报，不搭 `cfg` 的车。
+
+### 修法（两道保险，缺一不可）
+
+| 位置 | 做法 |
+| --- | --- |
+| `public/main-world.js` | `cfgApplied` 闸门：`ready` 只回一次（`enabled` 变化仍然生效） |
+| `entrypoints/content.ts` | 收到 `ready` 后**不再回 `cfg`** |
+
+只留一道也能断环，但**任何一道被后人"优化"掉都会立刻复发**。
+
+### 怎么确认修好了
+
+```bash
+node_modules/.bin/vitest run tests/unit/content/main-world-real.test.ts
+```
+
+（`vitest` 在 `node_modules/.bin` 下，不依赖包管理器在 PATH 里。也可以直接 `node scripts/verify.mjs`。）
+`main-world-real.test.ts` 末尾有一组用例专门守这个：
+
+- 连发 3 次 `cfg` 只回 1 次 `ready`
+- `cfg` 不再产生额外的 `ssr-playinfo`
+- `enabled` 变化仍然生效（回执只发一次，但配置不僵死）
+
+⚠️ **反例验证**：把 `if (cfgApplied) return;` 改成 `if (cfgApplied && false) return;`，
+第一条必须变红。绿的话说明用例没真正测到回环。
+
+---
+
 ## 相关
 
 - DNR 决策与风险：[decisions/0002](../decisions/0002-dnr-to-replace-cookie-header.md)
