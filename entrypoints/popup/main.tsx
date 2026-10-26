@@ -48,6 +48,11 @@ type PageView = { kind: 'video'; view: PageTracksView | null } | { kind: 'other'
 
 const VIDEO_URL_RE = /^https?:\/\/(www\.)?bilibili\.com\/video\//;
 
+/** 打开设置页；`hash` 用来深链到某个分区（`#/quality` 等，见 options/main.tsx 的路由） */
+function openOptions(hash = ''): void {
+  void chrome.tabs.create({ url: chrome.runtime.getURL(`options.html${hash}`) });
+}
+
 async function readPageView(): Promise<PageView> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -76,6 +81,10 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   /** 切换后被锁定旧画质的标签页。空数组表示不用提示 */
   const [affected, setAffected] = useState<number[]>([]);
+  /** 「播放账号」就地展开的菜单 */
+  const [menuOpen, setMenuOpen] = useState(false);
+  /** 退出是两步：点一次变成"确认退出"，再点一次才执行（不用 confirm，见 02 §7） */
+  const [confirmRemove, setConfirmRemove] = useState(false);
   /** 当前页的取流数据（主账号基线 + 播放账号实际拿到的） */
   const [page, setPage] = useState<PageView>({ kind: 'other' });
   /** 到期日的相对描述依赖"现在"，渲染期取一次即可 */
@@ -234,6 +243,27 @@ function App() {
     }
   }, [refresh]);
 
+  /**
+   * 退出播放账号。
+   *
+   * 退出会清凭据 + 关代理 + 清健康与统计（background 里一次做完），
+   * 所以刷新一次状态就够，不需要额外动作。
+   */
+  const removeAccount = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    const res = await chrome.runtime.sendMessage({ type: 'account/remove' }).catch(() => null);
+    setBusy(false);
+    setConfirmRemove(false);
+    setMenuOpen(false);
+
+    if (res?.type === 'account/remove:ok') {
+      await refresh();
+    } else {
+      setError(res?.detail ?? '退出失败');
+    }
+  }, [refresh]);
+
   const snap = load.kind === 'ok' ? load.snap : null;
   const view = snap ? describePopup(snap) : null;
   /** §2.3 的视图模型（纯函数在 core，可单测） */
@@ -346,9 +376,6 @@ function App() {
                 )}
 
                 <div class="actions">
-                  <button class="ghost small" disabled={busy} onClick={() => void openLogin()}>
-                    重新登录
-                  </button>
                   <button class="ghost small" disabled={busy} onClick={() => void recheck()}>
                     {busy ? '检查中…' : '重新检查'}
                   </button>
@@ -366,8 +393,58 @@ function App() {
         )}
       </main>
 
+      {/* ── §2.6 底部操作：三档视觉权重 ──
+          「画质体检」放第一个，因为它是这个项目最好的"功能自证"。
+          「播放账号」就地展开，不跳转 —— 避免丢掉"我刚才在看哪个页面"的上下文。 */}
       <footer class="foot">
-        <span>B站双账号画质助手</span>
+        {menuOpen && (
+          <div class="foot-menu">
+            <button class="ghost small" disabled={busy} onClick={() => void openLogin()}>
+              重新登录
+            </button>
+            {confirmRemove ? (
+              <button
+                class="ghost small danger-text"
+                disabled={busy}
+                onClick={() => void removeAccount()}
+              >
+                确认退出
+              </button>
+            ) : (
+              <button class="ghost small" disabled={busy} onClick={() => setConfirmRemove(true)}>
+                退出播放账号
+              </button>
+            )}
+            <button
+              class="ghost small"
+              disabled={busy}
+              onClick={() => {
+                setMenuOpen(false);
+                setConfirmRemove(false);
+              }}
+            >
+              取消
+            </button>
+          </div>
+        )}
+
+        <div class="foot-actions">
+          <button class="foot-btn primary-weight" onClick={() => openOptions('#/quality')}>
+            画质体检
+          </button>
+          <button
+            class={`foot-btn ${menuOpen ? 'active' : ''}`}
+            onClick={() => {
+              setMenuOpen((v) => !v);
+              setConfirmRemove(false);
+            }}
+          >
+            播放账号
+          </button>
+          <button class="foot-btn" onClick={() => openOptions()}>
+            设置
+          </button>
+        </div>
       </footer>
     </div>
   );

@@ -649,7 +649,7 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 | `src/platform/runtime/messaging.ts` | 无独立封装，页面直接 `sendMessage` | 只有 3 个 UI 页面，封装收益低于成本 |
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
 | `entrypoints/popup/` | 🟡 **部分实现**（P2-c：状态框架 + 开关 + 登录入口 + 受影响标签页提示）；§2.3 / §2.4 / §2.6 顺延到 P3 | 依赖 options 页与 `core/playinfo` 解析 |
-| `entrypoints/options/` | 🟡 **骨架 + 账号页已落地（2026-10-26）**：五分区导航（hash 路由）、账号页可用（两张卡片 + 扫码/退出）；其余四页仍是占位清单 | 先铺结构，避免"画空壳" |
+| `entrypoints/options/` | 🟡 **骨架 + 账号页 + 显示页已落地（2026-10-26）**：五分区导航（hash 路由）、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）；体检/音质/诊断三页仍是占位清单 | 先铺结构，避免"画空壳" |
 | `scripts/check-*.mjs`（5 个检查脚本 + `verify.mjs` 入口） | ✅ **已实现**（`node scripts/verify.mjs`，9 项） | 边界 / 消息路由 / 设计令牌 / 文档 / 改写范围；**检查命令的唯一权威位置是 `scripts/`** |
 | ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`；跑 `node scripts/verify.mjs`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
 | Prettier 配置 | ✅ **已实现**（`.prettierrc`；跑 `node scripts/verify.mjs`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |

@@ -318,3 +318,88 @@ button:disabled {
   opacity: 0.55;
   cursor: default;
 }
+
+/* ── 偏好行（§4.5 显示）──
+   开关本体直接沿用 popup 的实现：原生 checkbox 隐藏、用 span 画。
+   不用 appearance:none 直接改 checkbox —— 深色模式下各浏览器表现不一致。 */
+
+.pref {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-control);
+  cursor: pointer;
+}
+
+/* 只读行不该看起来可点 */
+.pref.readonly {
+  cursor: default;
+}
+
+.pref + .pref {
+  margin-top: 8px;
+}
+
+.pref-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--pluma-font-body);
+}
+
+.pref-hint {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  line-height: 1.45;
+}
+
+.pref-value {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  white-space: nowrap;
+}
+
+.switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--pluma-border);
+  transition: background-color 0.15s;
+}
+
+.switch.on {
+  background: var(--pluma-accent);
+}
+
+.switch.busy {
+  opacity: 0.6;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch .knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  transition: transform 0.15s;
+  pointer-events: none;
+}
+
+.switch.on .knob {
+  transform: translateX(16px);
+}

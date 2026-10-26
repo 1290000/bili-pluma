@@ -14,6 +14,7 @@ import { browser } from 'wxt/browser';
 
 import { renderBadge, removeBadge } from '@/src/content/isolated/badge';
 import { PageState } from '@/src/content/isolated/page-state';
+import { BADGE_ENABLED_KEY, readBadgeEnabled } from '@platform/storage/ui-prefs-store';
 import {
   parseVideoPage,
   readDeviceCookies,
@@ -87,8 +88,21 @@ const badgeState = {
   dolbyVisionAvailable: false,
 };
 
+/**
+ * 用户是否允许显示页内角标（设置页「显示」分区控制）。
+ *
+ * 默认 `true`；只有显式关过才不画。读到之前先按 `true` 处理 ——
+ * 反正角标本来就要等 `page/activate` 回来才出现，这几毫秒看不出来。
+ */
+let badgeEnabled = true;
+
 /** 重画角标。所有字段变化后统一调这一个入口 */
 function paintBadge(): void {
+  // 关掉时不只是"不画"，还要把已经画出来的摘掉
+  if (!badgeEnabled) {
+    removeBadge();
+    return;
+  }
   renderBadge(tokensCss, badgeState);
 }
 
@@ -551,6 +565,24 @@ export default defineContentScript({
           : { type: 'page/summary:none', reason: 'not-ready' },
       );
       return false;
+    });
+
+    /**
+     * 角标开关（设置页「显示」分区）。
+     *
+     * 读一次 + 监听变化：设置页保存后**不用刷新页面**角标就消失/出现，
+     * 因为它只是不再渲染，不涉及 DNR 规则（那是总开关的事）。
+     */
+    void readBadgeEnabled().then((enabled) => {
+      badgeEnabled = enabled;
+      paintBadge();
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local') return;
+      const change = changes[BADGE_ENABLED_KEY];
+      if (!change) return;
+      badgeEnabled = change.newValue !== false;
+      paintBadge();
     });
 
     listenMainWorld();

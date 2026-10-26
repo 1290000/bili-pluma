@@ -408,10 +408,58 @@ button:disabled {
   border-color: var(--pluma-accent);
 }
 
+/* ── §2.6 底部操作：三档视觉权重 ──
+   「画质体检」最重（它是功能自证），「播放账号」中等（就地展开），「设置」最轻。 */
+
 .foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding-top: 8px;
   border-top: 0.5px solid var(--pluma-border);
+}
+
+/* 就地展开的菜单：不跳转，避免丢掉"我刚才在看哪个页面"的上下文 */
+.foot-menu {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+}
+
+.foot-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.foot-btn {
+  padding: 6px 0;
   font-size: var(--pluma-font-caption);
   color: var(--pluma-text-muted);
-  text-align: center;
+  background: transparent;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-control);
+}
+
+.foot-btn:hover {
+  color: var(--pluma-accent);
+  border-color: var(--pluma-accent);
+}
+
+/* 比 popup 的主按钮弱一档：它不是这个界面的主动作，只是"去看数据" */
+.foot-btn.primary-weight {
+  color: var(--pluma-accent);
+  border-color: var(--pluma-accent);
+  background: var(--pluma-accent-bg);
+}
+
+.foot-btn.active {
+  color: var(--pluma-accent);
+  border-color: var(--pluma-accent);
+}
+
+/* 危险色只用于"退出账号"这类不可逆动作 */
+.danger-text {
+  color: var(--pluma-danger);
+  border-color: var(--pluma-danger);
 }
