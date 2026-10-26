@@ -82,6 +82,32 @@
   var defineResult = 'skipped';
   var hadExisting = typeof window.__playinfo__ !== 'undefined';
 
+  /**
+   * ── 主账号基线（ADR 0014）──
+   *
+   * ## 为什么不能只判断"有没有 __playinfo__"
+   *
+   * 有两份说法互相矛盾：ADR 0010 说它是**服务端 SSR** 的；
+   * `poc/verify/RESULT.md` §一.2 说是**页面发完 playurl 之后自己写**的。
+   *
+   * 如果是后者，那份数据来自**已被 DNR 代理**的请求 = 播放账号身份。
+   * 拿它当"主账号基线"，对比会永远显示"主账号也有 4K"，
+   * 也就是"扩展没起作用"——不报错、不崩溃，只是静默谎报。
+   *
+   * ## 所以判据是"时机"，不是"存在"
+   *
+   * 记下第一次看到它的时机（`ssrFirstSeen`）以及那一刻之前有没有发过 playurl
+   * （`ssrPlayurlBefore`）。两个值一起交给 ISOLATED 侧判定，
+   * 判定逻辑在 `src/content/isolated/page-state.ts`（纯函数，可单测）。
+   */
+  var ssrPlayinfo = hadExisting ? playinfoValue : null;
+  var ssrFirstSeen = hadExisting ? 'initial' : 'none';
+  var ssrPlayurlBefore = false;
+  /** 页面是否发出过 playurl —— 由 noteRequest 置位 */
+  var anyPlayurlSeen = false;
+  /** 原文只上报一次，避免每次切 P 都传几十 KB */
+  var rawPlayurlPosted = false;
+
   try {
     Object.defineProperty(window, '__playinfo__', {
       configurable: true,
@@ -91,6 +117,12 @@
       },
       set: function (v) {
         playinfoValue = v;
+        // 只记第一次赋值：之后播放器自己写的值都是客户端数据，不能当主账号基线
+        if (ssrFirstSeen === 'none') {
+          ssrFirstSeen = 'set';
+          ssrPlayurlBefore = anyPlayurlSeen;
+          ssrPlayinfo = v;
+        }
       },
     });
     defineResult = 'ok';
@@ -110,37 +142,7 @@
     return 'present:' + typeof v;
   }
 
-  // ── 2. 伪装 SSR 里的本地会员状态 ──
-  //
-  // ⚠️ 用 Object.defineProperty 拦 setter，**不用 setInterval 轮询**。
-  //
-  // 曾经是 `setInterval(patchSsUser, 100)`——那是本扩展"后台挂久了白屏卡死"的元凶之一：
-  //   - 100ms 一次、永不停止，页面在后台也照跑（后台标签的 timer 被限流到 1s，但仍一直在跑）
-  //   - 每次都在访问 window.__INITIAL_STATE__ 这一整棵巨大对象树
-  //   - 页面本身也在用这个树（Vue/NanoPlayer 的响应式系统），高频读写加剧了它的重渲染
-  // 现在改成"只在赋值那一刻改一次"，之后零开销。
-
-  var ssPatched = false;
-
-  function patchSsUser() {
-    try {
-      var s = window.__INITIAL_STATE__;
-      if (!s || !s.user || typeof s.user !== 'object') return false;
-
-      if (typeof s.user.vipStatus === 'number' && s.user.vipStatus !== 1) s.user.vipStatus = 1;
-      if (typeof s.user.vipType === 'number' && s.user.vipType !== 2) s.user.vipType = 2;
-
-      if (s.user.vip && typeof s.user.vip === 'object') {
-        if (typeof s.user.vip.status === 'number' && s.user.vip.status !== 1) s.user.vip.status = 1;
-        if (typeof s.user.vip.type === 'number' && s.user.vip.type !== 2) s.user.vip.type = 2;
-      }
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-
-  // ── 2b. 会员状态伪装：**绝不接管 __INITIAL_STATE__** ──
+  // ── 2. 会员状态伪装：**绝不接管 __INITIAL_STATE__** ──
   //
   // ## 血泪教训：不能用 defineProperty 替换它
   //
@@ -643,6 +645,8 @@
   function noteRequest(url, method) {
     try {
       if (!/\/x\/player\/(wbi\/)?playurl/.test(url)) return;
+      // 供"主账号基线"判定：这条一旦置位，之后才出现的 __playinfo__ 就是客户端数据
+      anyPlayurlSeen = true;
       var key = url.split('?')[0] + '|' + (method || 'GET');
       if (reported[key]) return;
       reported[key] = 1;
@@ -1462,7 +1466,59 @@
       // 记住轨道清单，供 quality id 反查
       rememberVideoTracks(s);
       safePost({ __ns: NS, type: 'playurl-tracks', token: token, summary: s });
+
+      /**
+       * 再上报一次**原文**（只一次）。
+       *
+       * 为什么原文也要：ISOLATED 侧用 `core/playinfo/parse.ts` 统一解析，
+       * 这样"主账号基线"和"播放账号实际拿到"走**同一套解析逻辑**，
+       * 不会出现两套归一化互相漂移。上面的 summary 仍保留给角标/诊断用。
+       */
+      if (!rawPlayurlPosted) {
+        rawPlayurlPosted = true;
+        safePost({ __ns: NS, type: 'playurl-raw', token: token, json: j });
+      }
     } catch (e) {}
+  }
+
+  /**
+   * 主账号的**显示**信息（uname / face）。
+   *
+   * ⚠️ 只取这两个字段，**不碰任何凭据**。`mid` 由 ISOLATED 侧从页面 cookie 读
+   * （`readPrimaryMidFromCookie`），不在这里重复取。
+   * 游客态下 `__INITIAL_STATE__.user` 存在但没有 uname，返回 null。
+   */
+  function primaryUser() {
+    try {
+      var s = window.__INITIAL_STATE__;
+      var u = s && s.user;
+      if (!u) return null;
+      var uname = typeof u.uname === 'string' ? u.uname : '';
+      var face = typeof u.face === 'string' ? u.face : null;
+      if (!uname && !face) return null;
+      return { uname: uname, face: face };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * 上报主账号基线（ADR 0014）。
+   *
+   * 会被调用多次（hello / ready / 延迟补报）：`__playinfo__` 与 `__INITIAL_STATE__`
+   * 谁先就绪不确定，多报几次让 ISOLATED 侧做合并。重复上报是幂等的
+   * （能力只在可用时接受，user 后到覆盖先到）。
+   */
+  function postSsrPlayinfo() {
+    safePost({
+      __ns: NS,
+      type: 'ssr-playinfo',
+      token: token,
+      firstSeen: ssrFirstSeen,
+      playurlBefore: ssrPlayurlBefore,
+      data: ssrPlayinfo || null,
+      user: primaryUser(),
+    });
   }
 
   // ── 通信 ──
@@ -1482,6 +1538,9 @@
     syncHooks();
 
     safePost({ __ns: NS, type: 'ready', token: token, enabled: enabled });
+
+    // 配置到手（token 也定了）后再报一次基线，这次带上 user
+    postSsrPlayinfo();
   });
 
   // ── 就绪握手 ──
@@ -1499,4 +1558,15 @@
       },
     },
     '*',);
+
+  /**
+   * 主账号基线：立刻报一次，再延迟补两次。
+   *
+   * 为什么延迟：`document_start` 时 `__INITIAL_STATE__`（uname）通常还没就绪，
+   * 而 `__playinfo__` 可能在页面脚本跑完之后才被赋值。
+   * 补报不改变判定 —— `ssrFirstSeen` 在第一次赋值时就定死了。
+   */
+  postSsrPlayinfo();
+  setTimeout(postSsrPlayinfo, 1500);
+  setTimeout(postSsrPlayinfo, 5000);
 })();

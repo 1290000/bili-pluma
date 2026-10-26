@@ -11,7 +11,7 @@
 import type { AccountSummary } from './account';
 import type { ErrorCode } from './errors';
 import type { QrLoginStatus } from './login';
-import type { PlayInfo } from './playinfo';
+import type { PageTracksView, PlayInfo } from './playinfo';
 import type { StatBucket } from './stats';
 
 /** 这次请求用的是哪个身份 */
@@ -31,7 +31,16 @@ export type RequestMsg =
    * 惰性检查的理由见 docs/04-project-structure.md §6「凭据健康检查：惰性，不用 alarms」。
    */
   | { type: 'account/summary'; recheck?: boolean }
-  /** 用**播放账号**身份取一次 playurl（options 体检表用） */
+  /**
+   * 用**播放账号**身份取一次 playurl（options 体检表用）。
+   *
+   * ⚠️ **当前只有类型，没有 handler**（`entrypoints/background.ts` 里没有分支处理它）。
+   * 发送它只会拿到 `undefined`。P3 做体检表时才补。
+   *
+   * ⚠️ 它**只能取播放账号身份**：总开关打开后全局路径规则会覆盖任何 playurl 请求的 Cookie，
+   * 想用主账号身份请求是做不到的（见 docs/decisions/0014-quality-compare-from-page-data.md）。
+   * 主账号那一列必须走页面 SSR 的数据，不要试图在这里加 `identity` 参数。
+   */
   | { type: 'playinfo/get'; bvid: string; cid: number; qn: number | null }
   | { type: 'qr/generate' }
   | { type: 'qr/poll'; qrcodeKey: string }
@@ -147,6 +156,23 @@ export type ResponseMsg =
   | { type: 'stats/recent:err'; detail: string };
 
 export type Msg = RequestMsg | ResponseMsg;
+
+// ── content ↔ 扩展页面（popup / 诊断页）的**直连**查询 ──
+//
+// 为什么不走 SW：这份数据只对"当前这个标签页"有意义，而 content 本来就在那个页面里。
+// 绕一圈到 SW 再回来，除了多一份要维护的缓存（和缓存过期问题）没有任何收益。
+// 用 `chrome.tabs.sendMessage(tabId, …)` 直连，拿到的一定是最新的。
+//
+// ⚠️ 目标标签页没有 content script（不是视频页 / 还没注入）时，
+// `sendMessage` 会**抛异常**而不是返回 `none` —— 调用方必须自己 catch。
+
+/** 扩展页面 → content：要当前页的取流数据 */
+export type PageQueryMsg = { type: 'page/summary:get' };
+
+export type PageQueryReply =
+  | { type: 'page/summary:ok'; view: PageTracksView }
+  /** content 在，但还没报到（脚本刚注入、页面还没解析出 bvid） */
+  | { type: 'page/summary:none'; reason: 'not-ready' };
 
 /** 穷举检查：任何未处理的分支都会在这里编译失败 */
 export function assertNever(value: never): never {

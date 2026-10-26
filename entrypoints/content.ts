@@ -13,6 +13,7 @@
 import { browser } from 'wxt/browser';
 
 import { renderBadge, removeBadge } from '@/src/content/isolated/badge';
+import { PageState } from '@/src/content/isolated/page-state';
 import {
   parseVideoPage,
   readDeviceCookies,
@@ -25,6 +26,13 @@ import tokensCss from '@/src/design/tokens.css?raw';
 /** 跨 world 通信的随机令牌。页面脚本能读到它，只用于防盲注 */
 const CHANNEL_TOKEN = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
 const NS = '__PLUMA__';
+
+/**
+ * 当前页的取流数据（主账号基线 + 播放账号实际拿到的）。
+ *
+ * 纯逻辑在 `page-state.ts`（可单测）；这里只负责把消息喂给它、以及应答 UI 的查询。
+ */
+const pageState = new PageState();
 
 /**
  * 角标需要的状态。
@@ -157,6 +165,13 @@ function listenMainWorld(): void {
           video?: string;
           w?: number;
           h?: number;
+          /** 主世界 `ssr-playinfo` 用 */
+          firstSeen?: string;
+          playurlBefore?: boolean;
+          data?: unknown;
+          user?: { uname?: string; face?: string | null } | null;
+          /** 主世界 `playurl-raw` 用 */
+          json?: unknown;
           flags?: {
             define?: string;
             hadExisting?: boolean;
@@ -184,6 +199,41 @@ function listenMainWorld(): void {
 
     if (d.type === 'ready') {
       tellMainWorld(true);
+      return;
+    }
+
+    /**
+     * 主账号基线（ADR 0014）。
+     *
+     * ⚠️ 这里**不判断"有没有数据"就收下**，而是把 `firstSeen` / `playurlBefore` 一起交给
+     * `PageState` 判定 —— 因为页面在发过 playurl 之后自己写的那份 `__playinfo__`
+     * 属于播放账号身份，拿它当基线会让对比永远显示"没有提升"。
+     */
+    if (d.type === 'ssr-playinfo') {
+      const firstSeen =
+        d.firstSeen === 'initial' || d.firstSeen === 'set' || d.firstSeen === 'none'
+          ? d.firstSeen
+          : 'none';
+      const user =
+        d.user && typeof d.user.uname === 'string'
+          ? {
+              uname: d.user.uname,
+              face: typeof d.user.face === 'string' ? d.user.face : null,
+            }
+          : null;
+
+      pageState.applySsr({
+        firstSeen,
+        playurlBefore: d.playurlBefore === true,
+        data: d.data ?? null,
+        user,
+      });
+      return;
+    }
+
+    /** 页面自己的 playurl 响应原文（播放账号身份）—— 用同一套解析器算能力 */
+    if (d.type === 'playurl-raw') {
+      pageState.applyPlayback(d.json ?? null);
       return;
     }
 
@@ -388,6 +438,11 @@ function report(): void {
   const info = parseVideoPage(location.href);
   if (!info) return;
 
+  // 先登记当前页，再报到。这样即使 background 没应答（未配置 / SW 冷启动），
+  // popup 也能从 content 问到"这是哪个视频"。
+  // bvid 或分 P 变化时 PageState 会清空两侧数据，避免上一 P 的轨道冒充本 P。
+  pageState.setPage(info.bvid, info.p);
+
   void browser.runtime
     .sendMessage({
       type: 'page/activate',
@@ -458,6 +513,25 @@ export default defineContentScript({
   // - playurl 只在页面加载时调一次，晚了就没机会
   runAt: 'document_start',
   main() {
+    /**
+     * popup / 诊断页**直连**查询当前页数据（不经 SW）。
+     *
+     * 用原生 `chrome.runtime.onMessage` 而不是 `browser.*`：
+     * Edge 自带的 `browser` 命名空间会让 `sendResponse` + `return true` 静默失效
+     * （见 `entrypoints/background.ts` 顶部注释）。这里同步应答，不返回 true。
+     */
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if ((msg as { type?: string } | undefined)?.type !== 'page/summary:get') return false;
+
+      const view = pageState.view();
+      sendResponse(
+        view
+          ? { type: 'page/summary:ok', view }
+          : { type: 'page/summary:none', reason: 'not-ready' },
+      );
+      return false;
+    });
+
     listenMainWorld();
 
     injectMainWorld((ok, detail) => {

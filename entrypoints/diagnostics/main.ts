@@ -8,10 +8,127 @@
 import '@/src/design/tokens.css';
 import './style.css';
 
+import type { PageTracksView, PrimaryBaselineReason } from '@shared/types/playinfo';
+
 interface Row {
   label: string;
   value: string;
   ok?: boolean;
+}
+
+/**
+ * 主账号基线不可用的原因，翻成人话。
+ *
+ * ⚠️ `client-written` 是**最需要警惕**的一条：它意味着 `__playinfo__` 是页面发完
+ * playurl 之后自己写的，那份数据属于播放账号身份。拿它当基线会让画质对比
+ * 永远显示"没有提升"（ADR 0014 的验证门就是查这个）。
+ */
+const REASON_TEXT: Record<PrimaryBaselineReason, string> = {
+  ssr: 'SSR，可用',
+  'client-written': '⚠️ 客户端写入（播放账号身份）→ 不可用',
+  absent: '页面没有 __playinfo__',
+  unparsable: '有数据但解析不出轨道',
+};
+
+/**
+ * 找"要查哪个标签页"。
+ *
+ * ⚠️ **不能用 `query({ active: true, currentWindow: true })`。**
+ * 本页是 `options_ui.open_in_tab` 打开的，它自己就是活动标签页 ——
+ * 那样查到的永远是自检页，`sendMessage` 必然失败，看起来像"没有 content script"。
+ *
+ * 所以按 URL 过滤 B站视频页，再在其中优先选活动的、否则选最近访问的。
+ */
+async function pickVideoTab(): Promise<chrome.tabs.Tab | null> {
+  const tabs = await chrome.tabs
+    .query({ url: ['*://*.bilibili.com/video/*'] })
+    .catch(() => [] as chrome.tabs.Tab[]);
+  if (tabs.length === 0) return null;
+
+  const active = tabs.find((t) => t.active);
+  if (active) return active;
+
+  // 没有活动的就取最近访问的（`lastAccessed` 缺失时退化成第一个）
+  return tabs.reduce<chrome.tabs.Tab>((best, t) => {
+    const a = t.lastAccessed ?? 0;
+    const b = best.lastAccessed ?? 0;
+    return a > b ? t : best;
+  }, tabs[0] as chrome.tabs.Tab);
+}
+
+/** 直连当前标签页的 content script，取两侧取流数据 */
+async function readPageTracks(): Promise<Row[]> {
+  const rows: Row[] = [];
+
+  const tab = await pickVideoTab();
+  if (!tab || typeof tab.id !== 'number') {
+    rows.push({
+      label: '当前页取流数据',
+      value: '没有打开的 B站视频页 —— 先打开一个视频，再回到这里',
+    });
+    return rows;
+  }
+
+  let reply: { type?: string; view?: PageTracksView; reason?: string } | undefined;
+  try {
+    reply = await chrome.tabs.sendMessage(tab.id, { type: 'page/summary:get' });
+  } catch {
+    // 没有 content script（页面在扩展安装前就打开了 / 扩展刚更新）时 sendMessage 会抛
+    rows.push({
+      label: '当前页取流数据',
+      value: `标签页「${tab.title ?? tab.url ?? '?'}」没有 content script —— 刷新那个视频页再试`,
+    });
+    return rows;
+  }
+
+  if (reply?.type !== 'page/summary:ok' || !reply.view) {
+    rows.push({ label: '当前页取流数据', value: 'content 在，但还没报到（稍等再点一次）' });
+    return rows;
+  }
+
+  const v = reply.view;
+  const primary = v.primary;
+  const playback = v.playback?.capability ?? null;
+
+  rows.push({
+    label: `主账号基线 · ${v.bvid} P${String(v.p)}`,
+    value:
+      `${REASON_TEXT[primary.reason]}` +
+      (primary.capability ? ` · 最高 ${String(primary.capability.maxHeight)}p` : ''),
+    ok: primary.usable,
+  });
+
+  rows.push({
+    label: '播放账号（页面 playurl 响应）',
+    value:
+      playback !== null
+        ? `最高 ${String(playback.maxHeight)}p · ${String(playback.videoCount)} 条视频轨` +
+          (playback.hasHiRes ? ' · Hi-Res' : '') +
+          (playback.hasDolbyAudio ? ' · 杜比音频' : '')
+        : v.playback === null
+          ? '尚未收到 playurl 响应'
+          : '收到但解析不出轨道',
+    ...(playback !== null ? { ok: true } : {}),
+  });
+
+  rows.push({
+    label: '对比结论',
+    value: v.diff
+      ? v.diff.improved
+        ? `提升 ${String(v.diff.heightGain)}p` +
+          (v.diff.frameRateGain > 0 ? ` · +${String(v.diff.frameRateGain)}fps` : '') +
+          (v.diff.hiResGained ? ' · +Hi-Res' : '')
+        : '无提升（两侧能力相同，或播放账号更弱）'
+      : '无法比较（缺一侧数据）',
+    ...(v.diff ? { ok: v.diff.improved } : {}),
+  });
+
+  rows.push({
+    label: '主账号昵称（页面读取）',
+    value: primary.user?.uname || '（未读到，可能未登录或页面还没就绪）',
+  });
+
+  return rows;
 }
 
 /**
@@ -44,6 +161,9 @@ async function collect(): Promise<Row[]> {
   } catch (e) {
     put('InPrivate 权限', '读取失败: ' + String(e));
   }
+
+  // 1b) ★ 当前页的取流数据 —— ADR 0014 的验证门就查这几行
+  for (const r of await readPageTracks()) rows.push(r);
 
   // 2) 窗口
   try {
@@ -197,7 +317,20 @@ function render(rows: Row[]): void {
   const pathRow = rows.find((r) => r.label === 'DNR 全局路径规则');
   const tabRow = rows.find((r) => r.label === 'DNR 标签页规则');
 
-  if (!proxyRow?.ok) {
+  // 主账号基线优先：它是 ADR 0014 的验证门，比 DNR 状态更值得先看
+  const primaryRow = rows.find((r) => r.label.startsWith('主账号基线'));
+  const playbackRow = rows.find((r) => r.label.startsWith('播放账号（页面'));
+
+  if (primaryRow && primaryRow.ok === false) {
+    tip.textContent =
+      '主账号基线不可用 —— 这正是 ADR 0014 验证门没过的样子：画质对比会显示「未知」' +
+      '而不是编一个数字。若原因写着「客户端写入」，说明 __playinfo__ 不是 SSR 的，' +
+      '需要回到决策阶段重选基线来源。';
+  } else if (primaryRow?.ok && playbackRow?.ok) {
+    tip.textContent =
+      '两侧数据都在。「对比结论」那行就是 popup §2.3 将要显示的内容 —— ' +
+      '先确认它符合预期，再做界面。';
+  } else if (!proxyRow?.ok) {
     tip.textContent = '代理已关闭，所有请求以主账号身份发出（开关在 P2 的 popup 里）。';
   } else if (!pathRow?.ok) {
     tip.textContent =
