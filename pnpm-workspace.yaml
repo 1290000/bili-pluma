@@ -1,10 +1,26 @@
-# pnpm 10+ 的配置位置（.npmrc 里的 node-linker 在 pnpm 12 上不生效）
+# pnpm 配置。⚠️ 从 pnpm v10 起，非 auth / registry 类配置**只认这个文件**，
+# `.npmrc` 里的同名项不生效。
+
+# ── node_modules 布局 ──
 #
-# 为什么必须用 hoisted：
-# Windows 下 isolated 布局需要为每个直接依赖创建顶层 symlink，本项目路径含空格时
-# 创建失败且不报错，表现为 node_modules/wxt 不存在、wxt prepare 报 MODULE_NOT_FOUND。
+# 必须用 hoisted。Windows 下 isolated 布局要为每个直接依赖创建顶层 symlink，
+# 本项目路径含空格时创建会**静默失败**，表现为 node_modules/wxt 不存在、
+# wxt prepare 报 MODULE_NOT_FOUND，而 install 却显示成功。
 nodeLinker: hoisted
 
-# 允许这些包执行安装脚本（pnpm 10+ 默认拦截）
-onlyBuiltDependencies:
-  - esbuild
+# ── 依赖构建脚本白名单 ──
+#
+# pnpm 默认不允许依赖执行安装脚本（防供应链投毒）。未列出的包被当作"未审查"，
+# 安装会以 ERR_PNPM_IGNORED_BUILDS **非零退出**。
+#
+# ⚠️ 写法是 **map**（`包名: true/false`），不是列表。
+# 旧写法 `onlyBuiltDependencies: [esbuild]` 从 pnpm **v11 起已被移除**——
+# 写了不报错、但完全不生效，install 每次都会失败。本项目在 v12.15 上踩过。
+# 另注意：pnpm 会把"发现但未裁决"的包自动追加到本段，可能插在文件开头，
+# 手工编辑前先读一遍，避免出现重复的 `allowBuilds:` 键（YAML 会直接解析失败）。
+# 文档：https://pnpm.io/settings/build#allowbuilds
+#
+# 为什么只放行 esbuild：wxt / vite / vitest / tsx 都靠它的平台二进制，
+# 装不上整个工具链都起不来。其余依赖都不需要执行脚本，一律不放行。
+allowBuilds:
+  esbuild: true

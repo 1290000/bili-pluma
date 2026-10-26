@@ -58,6 +58,8 @@ desktop.ini
 # 记忆文件是开发过程中的工作记录，属于本地产物，不入库
 .workbuddy-ai/
 .wbapp_*
+# playwright-cli 的页面快照缓存，属本地排查产物
+.playwright-cli/
 
 # ---------- 本地备份 ----------
 *.bak
