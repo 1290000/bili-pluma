@@ -113,10 +113,24 @@ export async function enableProxy(cookie: string, paths?: string[]): Promise<voi
  *
  * 这是凭据失效时的兜底 —— 不删的话所有 playurl 会一起变未登录，
  * 用户会以为网站坏了。
+ *
+ * ## ⚠️ 必须同时删**两类**规则（2026-10-27 修的真实 bug）
+ *
+ * 曾经这里只调 `removeAllPathRules()`，删的是 10000 段的全局路径规则。
+ * **20000 段的标签页规则从来没被删过。**
+ *
+ * 后果：用户关掉总开关 → 刷新视频页 → **画质不回落，还是 4K/杜比**。
+ * 因为标签页规则 priority 2（高于全局的 1）、带 `tabIds`、覆盖 playurl，
+ * 刷新不换标签页 ID，它就一直在生效。而 popup 因为读了 `enabled=false`
+ * 而显示「已停用」—— **界面说停了，实际还在代理**，这是最坏的一类不一致。
+ *
+ * 验收判据 5（关开关 → 刷新后画质回落）当时就是这么漏过去的：
+ * 它验的是"界面显示对"，没验"真的没在代理"。
  */
 export async function disableProxy(): Promise<void> {
   await chrome.storage.local.set({ [ENABLED_KEY]: false });
   await removeAllPathRules();
+  await removeAllTabRules();
 }
 
 /**
@@ -225,6 +239,24 @@ async function removeAllPathRules(): Promise<number> {
   const rules = await chrome.declarativeNetRequest.getSessionRules().catch(() => []);
   const ours = rules
     .filter((r) => r.id >= PATH_RULE_BASE && r.id < PATH_RULE_BASE + PATH_RULE_SPAN)
+    .map((r) => r.id);
+
+  if (ours.length === 0) return 0;
+  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: ours }).catch(() => {});
+  return ours.length;
+}
+
+/**
+ * 删掉**所有**标签页限定规则，返回删除数量。
+ *
+ * 与 `removeStaleTabRules` 的区别：那个只删"标签页已不存在"的，
+ * 这个**无条件全删**——关总开关时用。两者不能互相代替：
+ * 关开关时标签页还活着，`removeStaleTabRules` 一条都不会删。
+ */
+async function removeAllTabRules(): Promise<number> {
+  const rules = await chrome.declarativeNetRequest.getSessionRules().catch(() => []);
+  const ours = rules
+    .filter((r) => r.id >= TAB_RULE_BASE && r.id < TAB_RULE_BASE + TAB_RULE_SPAN)
     .map((r) => r.id);
 
   if (ours.length === 0) return 0;

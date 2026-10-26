@@ -119,7 +119,14 @@ export type ResponseMsg =
   | {
       type: 'page/activate:ok';
       activated: boolean;
-      reason: 'ok' | 'not-configured' | 'same-account' | 'error';
+      /**
+       * `disabled` —— 总开关关着，**不装规则**（2026-10-27 新增）。
+       *
+       * 与 `not-configured` 不同：那时是还没配置账号；这里是用户主动关了开关。
+       * 两者都不能算"取流失败"，`recordStat` 要区分对待，
+       * 否则关掉开关会把统计打成一片红。
+       */
+      reason: 'ok' | 'not-configured' | 'same-account' | 'disabled' | 'error';
     }
   /**
    * 登录窗口是否打开成功。

@@ -12,9 +12,10 @@
 
 import { diag } from '@platform/storage/diag-store';
 import { buildCookieHeader } from '@platform/http/playurl';
-import { installTabRule, removeTabRule } from '@platform/http/dnr';
+import { installTabRule, isProxyEnabled, removeTabRule } from '@platform/http/dnr';
 import { readPersistedCredential } from '@platform/storage/credential-store';
 import { readDeviceCookies, writeDeviceCookies } from '@platform/storage/device-cookies-store';
+import type { ResponseMsg } from '@shared/types/messages';
 
 export interface ActivatePayload {
   tabId: number;
@@ -25,9 +26,19 @@ export interface ActivatePayload {
   primaryMid: string | null;
 }
 
+/**
+ * `page/activate` 的结果。
+ *
+ * ⚠️ `reason` **从消息协议派生**，不在这里另写一份字面量联合。
+ *
+ * 踩过：这里原本是独立的 `'ok' | 'not-configured' | 'same-account' | 'error'`，
+ * 与 `messages.ts` 里的定义各存一份。2026-10-27 加 `'disabled'` 时只改了一处，
+ * `tsc` 立刻报"两个类型不重叠" —— **是类型系统救了这次**，
+ * 但那说明这个重复本身就该消掉。现在只有一个真相源。
+ */
 export interface ActivateResult {
   activated: boolean;
-  reason: 'ok' | 'not-configured' | 'same-account' | 'error';
+  reason: Extract<ResponseMsg, { type: 'page/activate:ok' }>['reason'];
 }
 
 /**
@@ -49,6 +60,26 @@ export async function handlePageActivate(payload: ActivatePayload): Promise<Acti
       await diag('page/activate', '未配置凭据 → 不代理');
       // 没配置就静默退出——用户还没扫码，不该弹错
       return { activated: false, reason: 'not-configured' };
+    }
+
+    /**
+     * ## 总开关关着就必须拒绝（2026-10-27 修的真实 bug）
+     *
+     * 踩到的现象：用户关掉总开关 → 刷新视频页 → **画质没回落**，还是 4K/杜比。
+     *
+     * 原因是这里**从来没检查过 `enabled`**：只要页面报到就装标签页规则。
+     * 而那条规则 priority 2（高过全局的 1）、带 `tabIds`，刷新后 tabId 不变，
+     * 于是它一直生效 —— popup 显示「已停用」，实际还在代理。
+     *
+     * `disableProxy()` 现在也会清标签页规则，但那只管"关的那一刻"。
+     * 之后任何一次刷新都会把规则重新装回来，所以**必须在这里也拦住**。
+     *
+     * 判据是 `isProxyEnabled()` 而不是参数传入：这是唯一真相源，
+     * 避免"调用方以为开着、实际已关"的分歧。
+     */
+    if (!(await isProxyEnabled())) {
+      await diag('page/activate', '总开关已关闭 → 不装规则');
+      return { activated: false, reason: 'disabled' };
     }
 
     await diag(

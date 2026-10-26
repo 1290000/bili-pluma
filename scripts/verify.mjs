@@ -218,7 +218,7 @@ function detectRouteWarnings() {
     out.push({
       signal: 'src/platform/http/dnr.ts 被改动',
       action:
-        '必须重跑 `node poc/verify/run-q2-auto.cjs`。单测测不到 DNR 行为（AGENTS.md §5.4），不跑等于没验。',
+        '必须重跑 `node poc/verify/run-q2-auto.cjs`（并发安全）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则都得清零）。单测测不到 DNR 行为（AGENTS.md §5.4），不跑等于没验。',
     });
   }
 

@@ -186,8 +186,13 @@ export default defineBackground(() => {
         .then((r) => {
           // 记一次取流结果 —— 这是**唯一**已知的真实成败信号，
           // 比 background 另发一个探测请求更贴近用户体感。
-          // 只统计"配置了账号"的情况：not-configured 不是失败，是还没开始用。
-          if (r.reason !== 'not-configured') {
+          //
+          // ⚠️ 两类**不算失败**的情况必须排除，否则统计会谎报：
+          //   - `not-configured`：还没扫码，是"还没开始用"
+          //   - `disabled`：用户主动关了总开关（2026-10-27 新增）。
+          //     不排除的话，关掉开关后每刷一个视频页都记一次 fail，
+          //     条形图会变成一片红，指向一个不存在的问题。
+          if (r.reason !== 'not-configured' && r.reason !== 'disabled') {
             void recordStat(r.activated);
           }
           sendResponse({ type: 'page/activate:ok', ...r });
