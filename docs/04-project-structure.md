@@ -524,7 +524,7 @@ node scripts/verify.mjs   # boundaries 是其中一项
 | **P2-b 总开关** | popup 接上 `proxy/set`；`tabs.handler.ts` 统计受影响标签页 | ✅ 2026-10-25 |
 | **P2-c 界面** | `entrypoints/popup/`（7 种状态）+ 登录窗口 + 登录入口迁移 | 🟡 **部分完成**：状态框架 / 开关 / 登录 / 受影响标签页提示已做；**§2.3 核心价值区、§2.4 双账号卡片、§2.6 底部三按钮未做**（见下） |
 | **P2-d 页面侧** | 页内角标（Shadow DOM） | ✅ 2026-10-26 |
-| **P3 完善** | `entrypoints/options/` **三**分区内容（账号/诊断/显示） | 🟡 **进行中**：popup §2.3/§2.4/§2.6/状态 5、options 骨架+账号页+显示页 已落地（2026-10-26）；**剩余：诊断页内容（日志/导出/音质块）、成功率条形图、路径版本号**。体检表与音质自检独立页已砍（[ADR 0016](./decisions/0016-drop-quality-report-page.md)） |
+| **P3 完善** | `entrypoints/options/` **三**分区内容（账号/诊断/显示） | 🟡 **进行中**：popup §2.3/§2.4/§2.6/状态 5、options 骨架+账号页+显示页 已落地（2026-10-26）；**剩余：无（诊断页、条形图、路径版本号均已完成）**。体检表与音质自检独立页已砍（[ADR 0016](./decisions/0016-drop-quality-report-page.md)） |
 | **预留** | `platform/browsers/firefox.ts` | ⬜ v1.5 |
 
 > **判断某文件是否存在，用 `git ls-files`，不要看 §1 的那棵树。**

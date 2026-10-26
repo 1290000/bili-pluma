@@ -15,6 +15,7 @@
  */
 
 import { queryPageState } from '@platform/page/page-state-client';
+import { ROUTES_CHECKED_AT, ROUTES_REVISION } from '@shared/constants/routes';
 import { readDiag } from '@platform/storage/diag-store';
 import type { PrimaryBaselineReason } from '@shared/types/playinfo';
 
@@ -119,6 +120,18 @@ async function proxyState(): Promise<{ enabled: boolean; ruleCount: number }> {
   return { enabled: false, ruleCount: 0 };
 }
 
+/** 最近 1 小时的取流失败次数。读不到就当 0（不因为读不到而报警） */
+async function recentFailures(): Promise<number> {
+  try {
+    const r = (await chrome.runtime.sendMessage({ type: 'stats/recent' })) as
+      { type?: string; buckets?: { ok: number; fail: number }[] } | undefined;
+    if (r?.type !== 'stats/recent:ok' || !Array.isArray(r.buckets)) return 0;
+    return r.buckets.reduce((n, b) => n + b.fail, 0);
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * 采集全部自检事实。
  *
@@ -216,6 +229,22 @@ export async function collectFacts(): Promise<DiagRow[]> {
     put('manifest incognito', manifest.incognito ?? '(未设置)');
   } catch {
     put('manifest incognito', '读取失败');
+  }
+
+  // 9) 白名单版本 —— **纯信息，永远中性色**
+  //
+  // 不做"超过 N 天就变琥珀"：B站 一年不改接口的话白名单一年不用动，
+  // 那个颜色会一直亮着，最后没人看。日期回答的是"这份清单是哪天的"，不是"它过期了"。
+  put('代理路径白名单', `r${String(ROUTES_REVISION)} · 核对于 ${ROUTES_CHECKED_AT}`);
+
+  // 10) **按证据报警**：只有真的出现取流失败，才提示"可能是接口变了"
+  const fails = await recentFailures();
+  if (fails > 0) {
+    put(
+      '白名单是否过期',
+      `最近 ${String(fails)} 次取流失败 —— 如果刷新后仍持续，可能是接口路径变了，` +
+        '去仓库看看有没有新版本',
+    );
   }
 
   return rows;
