@@ -87,6 +87,12 @@ Release 说明的措辞与结构看 [guides/release-notes-template.md](./guides/
 
 读 [decisions/0002](./decisions/0002-dnr-to-replace-cookie-header.md) 的"已知风险"一节，以及 [guides/debugging.md](./guides/debugging.md)。
 
+### 用户说"Hi-Res 显示了但没声音"/"杜比放不出来"
+
+读 [guides/audio-environment.md](./guides/audio-environment.md)。
+杜比要三条同时成立（EC-3 解码器 / media foundation flag / 系统空间音频），
+缺一条就静默降级。**扩展不解码，这条链路永远是浏览器 + 系统的事。**
+
 ---
 
 ## 已定事项与进度
