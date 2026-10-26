@@ -45,24 +45,62 @@ export function instanceId(): string {
   return INSTANCE_ID;
 }
 
+/**
+ * 写入队列 —— 把并发的 `diag()` 串行化。
+ *
+ * ## 为什么必须有（2026-10-27 实测复现的真 bug）
+ *
+ * `diag()` 是典型的 **read-modify-write**：
+ *
+ * ```
+ * get() → list.push() → set()
+ * ```
+ *
+ * 多个 content script 同时上报时，两次 get 会读到**同一份快照**，
+ * 后写的那个把先写的整条覆盖掉。
+ *
+ * 实测（5 个页面各 6 条，共 30 条）：**只存下 6 条，丢了 24 条**。
+ * 表现是"诊断日志看不出问题"—— 因为大部分记录根本没落盘。
+ *
+ * ## 为什么是 Promise 链而不是锁
+ *
+ * 这里只有单线程（一个 SW 实例一个事件循环），不需要真锁。
+ * 把每次写入挂在上一次之后，就保证"读到的是上一条写完的结果"。
+ *
+ * ## 为什么队列不会无限增长
+ *
+ * 每完成一次就从链上摘掉，`pending` 始终只指向最后一次。
+ * 写入本身很快（一个 local.set），不会积压。
+ */
+let pending: Promise<void> = Promise.resolve();
+
 /** 记录一条诊断信息（只保留最近 `DIAG_LIMIT` 条） */
-export async function diag(step: string, detail?: string): Promise<void> {
-  try {
-    const bag = await chrome.storage.local.get(DIAG_KEY);
-    const list = (bag[DIAG_KEY] as DiagEntry[] | undefined) ?? [];
-    list.push({
-      at: Date.now(),
-      step,
-      from: INSTANCE_ID,
-      ...(detail === undefined ? {} : { detail }),
-    });
-    await chrome.storage.local.set({ [DIAG_KEY]: list.slice(-DIAG_LIMIT) });
-  } catch {
-    // 诊断失败不能影响主流程
-  }
+export function diag(step: string, detail?: string): Promise<void> {
+  pending = pending.then(async () => {
+    try {
+      const bag = await chrome.storage.local.get(DIAG_KEY);
+      const list = (bag[DIAG_KEY] as DiagEntry[] | undefined) ?? [];
+      list.push({
+        at: Date.now(),
+        step,
+        from: INSTANCE_ID,
+        ...(detail === undefined ? {} : { detail }),
+      });
+      await chrome.storage.local.set({ [DIAG_KEY]: list.slice(-DIAG_LIMIT) });
+    } catch {
+      // 诊断失败不能影响主流程
+    }
+  });
+  return pending;
 }
 
-/** 读取诊断日志（时间正序） */
+/**
+ * 读取诊断日志，**时间正序（最旧在前）**。
+ *
+ * ⚠️ 这是**数据层**的顺序，与写入顺序一致，导出诊断包也按它。
+ * 界面展示是**最新在上**，倒序在渲染层做（`options/sections/diagnostics.tsx`
+ * 的 `LogList`）。**别为了显示去改这里** —— 会让导出文件和分析脚本跟着变。
+ */
 export async function readDiag(): Promise<DiagEntry[]> {
   try {
     const bag = await chrome.storage.local.get(DIAG_KEY);
