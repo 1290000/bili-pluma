@@ -264,10 +264,7 @@ export function tipFor(rows: readonly DiagRow[]): string {
   const playbackRow = rows.find((r) => r.label.startsWith('播放账号（页面'));
 
   if (primaryRow && primaryRow.ok === false) {
-    return (
-      '主账号基线不可用 —— 这正是 ADR 0014 验证门没过的样子：画质对比会显示「未知」' +
-      '而不是编一个数字。若原因写着「客户端写入」，说明 __playinfo__ 不是 SSR 的。'
-    );
+    return '主账号基线不可用';
   }
   if (primaryRow?.ok && playbackRow?.ok) {
     return '两侧数据都在。「对比结论」那行就是 popup §2.3 显示的内容。';

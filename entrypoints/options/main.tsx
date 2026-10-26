@@ -30,15 +30,13 @@ import { DisplaySection } from './sections/display';
 interface Section {
   id: string;
   label: string;
-  /** 一句话说明这一页回答什么问题 —— 分区按"回答什么"切，不是按功能数量切 */
-  hint: string;
   render: ComponentType;
 }
 
 const SECTIONS: Section[] = [
-  { id: 'account', label: '账号', hint: '两个身份分别是谁', render: AccountSection },
-  { id: 'diagnostics', label: '诊断', hint: '出问题时看这里', render: DiagnosticsSection },
-  { id: 'display', label: '显示', hint: '界面上显示什么', render: DisplaySection },
+  { id: 'account', label: '账号', render: AccountSection },
+  { id: 'diagnostics', label: '诊断', render: DiagnosticsSection },
+  { id: 'display', label: '显示', render: DisplaySection },
 ];
 
 const DEFAULT_ID = 'account';
@@ -67,7 +65,6 @@ function App() {
         <div class="brand">
           Pluma <span class="brand-sub">B站双账号画质助手</span>
         </div>
-        <div class="head-hint">{active?.hint}</div>
       </header>
 
       <div class="layout">

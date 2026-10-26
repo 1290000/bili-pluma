@@ -179,11 +179,6 @@ export function AccountSection(): JSX.Element {
   return (
     <>
       <Card title="主账号">
-        <p class="lede">
-          就是你浏览器当前登录的那个号，负责收藏、点赞、评论、历史。
-          <strong>扩展不读取它的凭据</strong>，也不存储、不切换它。
-        </p>
-
         {primary.loggedIn === 'yes' ? (
           <div class="acct">
             <div class="acct-main">
@@ -206,8 +201,6 @@ export function AccountSection(): JSX.Element {
       </Card>
 
       <Card title="播放账号">
-        <p class="lede">只提供取流，不参与任何社交行为。凭据加密存在本地。</p>
-
         {play ? (
           <>
             <div class="acct">

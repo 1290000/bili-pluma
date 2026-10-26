@@ -51,13 +51,7 @@ body {
   color: var(--pluma-text-muted);
 }
 
-.head-hint {
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-}
-
 /* ── 布局：侧栏 + 内容 ── */
-
 .layout {
   display: grid;
   grid-template-columns: 168px minmax(0, 1fr);

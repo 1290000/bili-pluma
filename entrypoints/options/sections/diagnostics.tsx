@@ -167,10 +167,7 @@ export function DiagnosticsSection(): JSX.Element {
       </Card>
 
       <Card title="音质环境">
-        <p class="lede">
-          Hi-Res 通常开箱可用；杜比全景声需要系统层面配合。
-          <strong>扩展不做任何解码</strong>，这里只告诉你缺什么。
-        </p>
+        <p class="lede">Hi-Res 通常开箱可用；杜比全景声需要系统层面配合。</p>
         <details class="fold">
           <summary>这台机器能放 Hi-Res / 杜比吗</summary>
           <AudioCheck />
@@ -189,10 +186,6 @@ export function DiagnosticsSection(): JSX.Element {
       </Card>
 
       <Card title="诊断日志">
-        <p class="lede">
-          最近 {logs.length} 条，时间正序。`split` 模式下普通 / 无痕是两个 SW 实例， 靠方括号里的 ID
-          区分。
-        </p>
         {logs.length === 0 ? (
           <p class="empty">（空）</p>
         ) : (

@@ -40,8 +40,6 @@ export function DisplaySection(): JSX.Element {
 
   return (
     <Card title="显示">
-      <p class="lede">播放器右下角的角标，以及界面是否跟随系统深色模式。</p>
-
       <label class="pref">
         <span class="pref-label">
           页内角标
