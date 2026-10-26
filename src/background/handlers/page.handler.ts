@@ -10,7 +10,7 @@
  * ⚠️ 凭据只在这个函数栈里出现，不进返回值、不进日志。
  */
 
-import { diag } from '@/src/background/login-window';
+import { diag } from '@platform/storage/diag-store';
 import { buildCookieHeader } from '@platform/http/playurl';
 import { installTabRule, removeTabRule } from '@platform/http/dnr';
 import { readPersistedCredential } from '@platform/storage/credential-store';

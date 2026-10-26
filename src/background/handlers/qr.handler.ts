@@ -18,7 +18,7 @@
  */
 
 import { generateQr, pollQr } from '@core/auth/qrcode';
-import { diag } from '@/src/background/login-window';
+import { diag } from '@platform/storage/diag-store';
 import { probeAndCacheSummary } from '@/src/background/handlers/account.handler';
 import { createHttpClient } from '@platform/http/fetcher';
 import { enableProxy } from '@platform/http/dnr';

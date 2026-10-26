@@ -10,7 +10,8 @@
  * 详见 docs/guides/debugging.md。
  */
 
-import { diag, forgetLoginWindow, openLoginWindow } from '@/src/background/login-window';
+import { diag } from '@platform/storage/diag-store';
+import { forgetLoginWindow, openLoginWindow } from '@/src/background/login-window';
 import { clearLoginReady, markLoginReady } from '@/src/background/login-handshake';
 import { handleAccountSummary } from '@/src/background/handlers/account.handler';
 import { handleAccountRemove } from '@/src/background/handlers/account-remove.handler';

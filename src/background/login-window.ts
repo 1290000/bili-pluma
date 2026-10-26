@@ -16,6 +16,10 @@
  *   - 跨实例协调：只信 `chrome.storage.local`（跨分区共享），不信内存变量和窗口列表
  */
 
+import { diag } from '@platform/storage/diag-store';
+
+// 诊断日志（`diag` / `readDiag` / `instanceId`）已下沉到 `platform/storage/diag-store`，
+// 因为 options 的「诊断」分区也要读它，而 entrypoints 不许依赖 background。
 const LOGIN_WINDOW = { width: 420, height: 600 } as const;
 
 const LOGIN_URL = '/login-window.html';
@@ -157,56 +161,4 @@ export async function closeLoginWindow(): Promise<void> {
 /** 窗口被用户手动关闭时清理本实例状态 */
 export function forgetLoginWindow(): void {
   currentWindowId = null;
-}
-
-// ── 诊断日志 ──
-//
-// 权限类问题光看现象猜不出来（本模块的 3 个坑都是这么踩的）。
-// 每次点图标把真实判定过程写入 storage，自检页能直接读出来。
-
-const DIAG_KEY = 'pluma:diag';
-
-export interface DiagEntry {
-  at: number;
-  step: string;
-  detail?: string;
-  /** 哪个实例写的：partitioned=无痕实例，regular=普通实例 */
-  from?: string;
-}
-
-/**
- * 本实例的随机 ID。
- *
- * 模块级变量在同一个 background 进程里是稳定的，而 split 模式下普通/无痕
- * 是两个独立进程 → 各自生成不同的 ID。
- * **这比任何 API 探测都可靠**：不依赖"能否看到对方分区"这类不确定行为。
- */
-const INSTANCE_ID = Math.random().toString(36).slice(2, 8);
-
-/** 本实例 ID（诊断用） */
-export function instanceId(): string {
-  return INSTANCE_ID;
-}
-
-/** 记录一条诊断信息（只保留最近 30 条） */
-export async function diag(step: string, detail?: string): Promise<void> {
-  try {
-    const bag = await chrome.storage.local.get(DIAG_KEY);
-    const list = (bag[DIAG_KEY] as DiagEntry[] | undefined) ?? [];
-    list.push({
-      at: Date.now(),
-      step,
-      from: INSTANCE_ID,
-      ...(detail === undefined ? {} : { detail }),
-    });
-    await chrome.storage.local.set({ [DIAG_KEY]: list.slice(-30) });
-  } catch {
-    // 诊断失败不能影响主流程
-  }
-}
-
-/** 读取诊断日志（自检页用） */
-export async function readDiag(): Promise<DiagEntry[]> {
-  const bag = await chrome.storage.local.get(DIAG_KEY);
-  return (bag[DIAG_KEY] as DiagEntry[] | undefined) ?? [];
 }

@@ -24,7 +24,7 @@
  */
 
 import { describeRules, disableProxy, enableProxy, isProxyEnabled } from '@platform/http/dnr';
-import { diag } from '@/src/background/login-window';
+import { diag } from '@platform/storage/diag-store';
 
 /**
  * `ruleCount` 的"未知"哨兵值。
