@@ -124,41 +124,31 @@ async function walkFiles(dir, base = dir) {
   return out;
 }
 
-/** 安装说明全文。**文案的权威位置是 releasing.md，改动请先改文档** */
-function installReadme(version) {
-  return `Pluma ${version} — 安装说明
-
-一、必须先解压
-   不能直接在压缩包里选文件夹。请先右键 → 全部解压到当前文件夹。
-
-二、加载扩展（Edge / Chrome 都一样）
-   1. 地址栏输入  edge://extensions  （Chrome 用 chrome://extensions）
-   2. 打开左下角「开发者模式」
-   3. 点「加载解压缩的扩展」
-   4. 选择解压出来的这个文件夹 —— 里面有 manifest.json
-
-   ⚠️ 最常见的错误：选了上一级目录，或者选进了某个子文件夹。
-      只要报「清单文件缺失或不可读取」，就是选错了层级。
-      正确的层级是「选中 manifest.json 所在的那个文件夹」。
-
-三、第一次使用
-   1. 点工具栏的 Pluma 图标
-   2. 按提示扫码登录你的大会员账号（会开一个独立窗口，不会动你当前登录的号）
-   3. 打开任意 B站视频，画质菜单里应该出现 4K / 1080P60
-
-四、本扩展不做什么
-   · 不绕过付费墙（会员专享番剧、电影仍需购买）
-   · 不伪装会员标识（界面显示你的真实状态）
-   · 不解锁地区限制
-
-五、出问题怎么办
-   · 画质没变：确认总开关是开的，并且刷新过页面
-   · 提示凭据失效：重新扫码登录播放账号
-   · 其他：设置页 →「诊断」分区可以导出诊断信息
-
-许可证：GPL-3.0-only + 附加条款，完整文本见仓库根目录。
-本项目与哔哩哔哩官方无任何关联，仅供学习交流使用。
-`;
+/**
+ * 安装说明全文。
+ *
+ * ## ⚠️ 文案**不在这里**，在 `assets/install-readme.txt`
+ *
+ * 第一版是把整段文案内嵌在这个函数里的（2026-10-27）。那造成同一个问题：
+ * `releasing.md` 里展示了一份全文，脚本里又存一份 —— **改文档不会改产物**。
+ * 这正是本项目反复踩的「两处各写一份，最后必然不一样」。
+ *
+ * 现在只有一个真相源：`assets/install-readme.txt`。`releasing.md` 只引用它，
+ * 脚本只读它。改文案只需改那一个文件。
+ *
+ * 占位符 `{{VERSION}}` 在这里替换成实际版本号 —— 文案里要写版本，
+ * 但版本号是打包时才知道的，所以不能硬编码进 txt。
+ */
+async function buildInstallReadme(version) {
+  const tpl = await readFile(join(ROOT, 'assets', 'install-readme.txt'), 'utf8');
+  if (!tpl.includes('{{VERSION}}')) {
+    fail(
+      'assets/install-readme.txt 缺少 {{VERSION}} 占位符',
+      '安装说明标题要带版本号。没有占位符就意味着版本号写死在里面了，必然过期。',
+    );
+    return tpl;
+  }
+  return tpl.split('{{VERSION}}').join(version);
 }
 
 /** Release 说明。**结构与语气见 docs/guides/release-notes-template.md** */
@@ -285,7 +275,13 @@ async function main() {
    */
   const staging = join(DIST_DIR, '.staging-light');
   await cp(BUILD_DIR, staging, { recursive: true });
-  await writeFile(join(staging, '安装说明.txt'), installReadme(version), 'utf8');
+  const readmeText = await buildInstallReadme(version);
+  if (problems.length > 0) {
+    console.error(`\n[package] ❌ 安装说明有误（${String(problems.length)} 项）\n`);
+    for (const p of problems) console.error(`  ${p.what}\n    ${p.why}\n`);
+    process.exit(1);
+  }
+  await writeFile(join(staging, '安装说明.txt'), readmeText, 'utf8');
   zipDir(staging, join(DIST_DIR, lightName), ['.']);
   await rm(staging, { recursive: true, force: true });
 
