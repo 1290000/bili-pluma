@@ -12,11 +12,17 @@
  *
  * 散装命令的问题是：**要先想起来去跑它**。固化成一个命令、并进 `verify` 链，才是真防住。
  *
- * ## 检查三项
+ * ## 检查五项
  *
  * 1. **死链**：`[text](./relative/path)` 指向的文件必须存在
  * 2. **章节编号连号**：`## N` 必须从 0 起、步长为 1、不许重复
  * 3. **只读引用完整性**：被 `AGENTS.md` / `docs/` 引用的文件必须真实存在（由 1 覆盖）
+ * 4. **`scripts/` 引用**：文中写的 `scripts/xxx` 必须真实存在（防脚本改名后文档悬空）
+ * 5. **换行符**：Markdown 必须是 LF（`.editorconfig` 的要求，2026-10-26 加）
+ *
+ * > 第 5 项来自一次真实事故：Windows 上用 Python 文本模式改写文档，`\n` 被换成 `\r\n`，
+ * > 于是「改 30 行」的提交在 git 里变成「改 1000 行」，review 完全没法看。
+ * > 它不报错、不影响运行，只毁提交历史 —— 只能靠检查发现。
  *
  * ## 用法
  *
@@ -273,10 +279,23 @@ async function main() {
   const missingScripts = [];
   const lengthViolations = [];
   const lengthWarnings = [];
+  /** 含 CRLF 的文件。`.editorconfig` 写的是 `end_of_line = lf`，但没有任何东西在强制它 */
+  const crlfFiles = [];
 
   for (const file of uniqueFiles) {
     const src = await readFile(file, 'utf8');
     const rel = relative(ROOT, file).split(sep).join('/');
+
+    /**
+     * 换行符检查（2026-10-26 加）。
+     *
+     * 起因：一次用 Windows 上的 Python 文本模式改写文档，`\n` 被悄悄换成 `\r\n`，
+     * 于是「改 30 行」的提交在 git 里变成「改 1000 行」，review 完全没法看。
+     * 这类问题不会报错、不会影响运行，只毁掉提交历史 —— 只能靠检查发现。
+     */
+    if (src.includes('\r\n')) {
+      crlfFiles.push({ file: rel, count: (src.match(/\r\n/g) ?? []).length });
+    }
 
     for (const d of await checkLinks(file, src)) {
       deadLinks.push({ file: rel, ...d });
@@ -301,7 +320,7 @@ async function main() {
 
   console.log(`[docs] 扫描 ${uniqueFiles.length} 个 Markdown`);
   console.log(
-    `[docs] 死链 + scripts/ 引用 + 篇幅上限 + ${NUMBERED_DOCS.length} 份主文档的章节连号`,
+    `[docs] 死链 + scripts/ 引用 + 篇幅上限 + 换行符 + ${NUMBERED_DOCS.length} 份主文档的章节连号`,
   );
 
   if (lengthWarnings.length > 0) {
@@ -315,10 +334,11 @@ async function main() {
     deadLinks.length === 0 &&
     numberingIssues.length === 0 &&
     missingScripts.length === 0 &&
-    lengthViolations.length === 0;
+    lengthViolations.length === 0 &&
+    crlfFiles.length === 0;
 
   if (clean) {
-    console.log('[docs] ✅ 无死链、无失效脚本引用、篇幅达标、章节编号连号');
+    console.log('[docs] ✅ 无死链、无失效脚本引用、篇幅达标、换行符全 LF、章节编号连号');
     return;
   }
 
@@ -338,6 +358,18 @@ async function main() {
       console.error(`  ${d.file}:${d.line}  → ${d.link}`);
       console.error(`    ${d.raw}\n`);
     }
+  }
+
+  if (crlfFiles.length > 0) {
+    console.error(`\n[docs] ❌ ${crlfFiles.length} 个文件含 CRLF（.editorconfig 要求 LF）\n`);
+    for (const c of crlfFiles) {
+      console.error(`  ${c.file}  ${c.count} 行 CRLF`);
+    }
+    console.error(
+      `\n    → Windows 上某些工具（Python 文本模式写文件）会把 \\n 换成 \\r\\n，` +
+        `提交里会出现整文件 diff。\n` +
+        `    → 修法：把该文件的 \\r\\n 换成 \\n，再重新提交。\n`,
+    );
   }
 
   if (missingScripts.length > 0) {
