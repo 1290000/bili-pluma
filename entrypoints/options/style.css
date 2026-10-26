@@ -132,6 +132,11 @@ body {
   border-radius: var(--pluma-radius-card);
 }
 
+/* 卡片之间要留间距：诊断分区有三张卡，贴在一起读不出边界 */
+.card + .card {
+  margin-top: 14px;
+}
+
 .card-title {
   margin: 0 0 10px;
   font-size: var(--pluma-font-title);
@@ -402,4 +407,91 @@ button:disabled {
 
 .switch.on .knob {
   transform: translateX(16px);
+}
+
+/* ── 诊断分区：事实表 + 折叠块（§4.2）──
+   视觉沿用旧自检页：斑马纹 + 等宽值，方便逐行对照（迁移期要两处对比）。 */
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-control);
+  overflow: hidden;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 11px;
+  background: var(--pluma-surface);
+}
+
+.row:nth-child(odd) {
+  background: var(--pluma-accent-bg);
+}
+
+.key {
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+  white-space: nowrap;
+}
+
+.val {
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+  text-align: right;
+  word-break: break-all;
+}
+
+.val.good {
+  color: var(--pluma-accent);
+  font-weight: 500;
+}
+
+.val.bad {
+  color: var(--pluma-danger);
+  font-weight: 500;
+}
+
+/* ── 折叠块：给"不常看但需要时很想看"的内容（音质自检） ── */
+
+.fold {
+  margin-top: 4px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-control);
+  padding: 10px 12px;
+}
+
+.fold summary {
+  cursor: pointer;
+  font-size: var(--pluma-font-body);
+}
+
+.fold[open] summary {
+  margin-bottom: 10px;
+  font-weight: 500;
+}
+
+.fold-note {
+  margin: 12px 0 4px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+.fold-list {
+  margin: 0;
+  padding-left: 20px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+  line-height: 1.7;
+}
+
+.fold-list code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--pluma-accent-bg);
+  color: var(--pluma-accent);
 }
