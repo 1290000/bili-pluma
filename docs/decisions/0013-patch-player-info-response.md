@@ -20,16 +20,20 @@
 
 ## 决策
 
-**允许改写 `/x/player/wbi/v2`、`/x/player/v2` 这两个接口响应体里的会员字段。除此之外的一切伪造都在禁止范围内。**
+**允许改写 `/x/player/wbi/v2`、`/x/player/v2`、`/x/web-interface/nav` 这三个接口响应体里的会员字段。
+除此之外的一切伪造都在禁止范围内。**
 
 授权范围精确到字段与方法，不做含糊表述：
 
 ```
-允许改写的接口：  /x/player/wbi/v2、/x/player/v2   （仅 https、仅 api.bilibili.com）
+允许改写的接口：  /x/player/wbi/v2、/x/player/v2、/x/web-interface/nav
+                （仅 https、仅 api.bilibili.com）
 允许改写的字段：  vip.status、vip.type、vip.due_date
                 vipStatus、vipType（同源字段）
 禁止改写的字段：  mid、rights（权限位）、以及任何身份归属相关字段
 ```
+
+> `/x/web-interface/nav` 于 2026-10-26 追加授权，理由与边界见文末「补充授权」一节。
 
 `mid` 与 `rights` 被显式排除，因为它们决定**身份归属**与**实际权益判定**——改了会让诊断失真，
 且违反「宁可少代理，不可错代理」这条原则（见 `src/core/identity/router.ts`）。
@@ -67,6 +71,34 @@ DNR 换完 Cookie 服务端照样返回低画质——这条链路不会因为�
 - `public/main-world.js` 的 `PATCH_PATHS` 常量是这条授权的**唯一落地点**，
   加任何新路径都必须回来更新本 ADR。
 - 若将来 B 站改成在别的接口里给会员状态，本 ADR 需要重新评估，**不要顺手扩 `PATCH_PATHS`**。
+
+## 补充授权：`/x/web-interface/nav`（2026-10-26）
+
+### 为什么追加
+
+`public/main-world.js` 的 `PATCH_PATHS` 实际是三个路径，比本文原授权多一个 `nav`。
+按本文「加任何新路径都必须回来更新本 ADR」的要求，这里补授权，**不是**默许既有代码。
+
+追加的事实依据（来自实装后的用户反馈，不是推测）：
+
+- `nav` 是**账号信息接口**，返回 `vipStatus` / `vipType`，播放器与 B站前端其它模块都读它判断当前身份有没有会员权限
+- 只改 `/x/player/wbi/v2` 时，用户在播放器里**切高清 / 开 Hi-Res 会弹充值页**——因为 `nav` 那一路仍然回答"你不是会员"
+- 补上 `nav` 之后该现象消失
+
+### 边界没有放宽
+
+| 项 | 状态 |
+| --- | --- |
+| 允许改写的字段 | 仍是 `vip.status` / `vip.type` / `vip.due_date` / `vipStatus` / `vipType` |
+| `mid` | **仍禁止**。`nav` 的 `data.mid` 是身份归属的核心字段，改它会污染诊断、也会让"点赞归主账号"这条验收失去意义 |
+| `rights` / 权限位 | **仍禁止** |
+| 改写范围 | 仍是 `patchVipScoped()` 的递归白名单，不是整份响应替换 |
+| 开关 | 仍随总开关关闭即停（`patchResponseText` 第一行 `if (!enabled ...) return text`） |
+
+### 仍然是"例外"而不是"翻案"
+
+Q12 一个字没改：**界面上的会员标识不做伪装**。`nav` 属于"播放器判断能不能去请求高清"这一层，
+和"让头像旁边显示大会员"是两件事。改写后能否真的拿到 4K，仍取决于服务端对播放账号的真实响应。
 
 ## 相关
 

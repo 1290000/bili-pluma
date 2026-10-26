@@ -46,6 +46,8 @@
 | [0011](./decisions/0011-playback-login-overwrites-primary.md) | 登录播放账号会覆盖主账号登录态（问题记录） |
 | [0012](./decisions/0012-isolated-window-login.md) | **播放账号在隔离窗口登录**：凭据脱离浏览器登录态 |
 | [0013](./decisions/0013-patch-player-info-response.md) | **允许改写 `/x/player/wbi/v2` 响应体**（Q12 的例外，精确到字段） |
+| [0014](./decisions/0014-quality-compare-from-page-data.md) | **画质对比只用页面已有的数据**：主账号列取自 SSR，且不承诺 HDR |
+| [0015](./decisions/0015-lazy-health-check-no-alarms.md) | **凭据健康只做惰性检查**：不用 alarms，不做 cookie 刷新 |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 
@@ -96,17 +98,12 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 ### 文档检查命令
 
 ```bash
-# 1. 死链检查
-for f in README.md ADDITIONAL-TERMS.md AGENTS.md docs/*.md docs/*/*.md; do
-  dir=$(dirname "$f")
-  grep -o "\](\.\.\?/[^)#]*)" "$f" 2>/dev/null | sed 's/](//;s/)$//' | while read -r link; do
-    [ -e "$dir/$link" ] || echo "❌ $f → $link"
-  done
-done
-
-# 2. 章节编号连号检查（以 03 为例）
-grep -n "^## [0-9]" docs/03-open-questions.md
+node scripts/check-docs.mjs
 ```
+
+死链 + 4 份主文档的章节连号（含重复编号检测）。
+
+**改了文档跑 `node scripts/verify.mjs --fast` 就够** —— 文档检查已在那条链里，不用单独跑。
 
 **任何一项输出异常，先修完再交付。**
 
