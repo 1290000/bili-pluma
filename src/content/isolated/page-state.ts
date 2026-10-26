@@ -53,6 +53,16 @@ export class PageState {
   /** 是否收到过播放账号侧的响应（区分"还没来"和"来了但解析不出"） */
   private sawPlayback = false;
 
+  /**
+   * 主账号 mid（来自 `document.cookie` 的 `DedeUserID`）。
+   *
+   * ⚠️ `null` 有两种含义，靠 `midSettled` 区分：
+   *   - `midSettled === false`：还没到能读的时候（`document_start` 时 cookie 常为空）
+   *   - `midSettled === true` 且 `mid === null`：确实没登录
+   */
+  private primaryMid: string | null = null;
+  private midSettled = false;
+
   private updatedAt = 0;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
@@ -72,6 +82,28 @@ export class PageState {
     this.user = null;
     this.playbackCap = null;
     this.sawPlayback = false;
+    this.primaryMid = null;
+    this.midSettled = false;
+    this.touch();
+  }
+
+  /**
+   * 记录主账号是否登录。
+   *
+   * @param mid 从 `DedeUserID` 读到的 mid，读不到就是 `null`
+   * @param settled 这次读取是否发生在**能读到 cookie 的时机**（DOM 就绪后）。
+   *   `document_start` 那次要传 `false` —— 那时 cookie 常为空，读不到不代表游客。
+   *
+   * 判定规则：**读到过真实 mid 就永久算已登录**（账号不会在同一页面里变成游客）；
+   * 只有在"该读到的时机"仍读不到，才判为未登录。
+   */
+  setPrimaryMid(mid: string | null, settled: boolean): void {
+    if (mid !== null) {
+      this.primaryMid = mid;
+      this.midSettled = true;
+    } else if (settled) {
+      this.midSettled = true;
+    }
     this.touch();
   }
 
@@ -133,6 +165,7 @@ export class PageState {
         reason: this.primaryReason,
         capability: this.primaryCap,
         user: this.user,
+        loggedIn: this.midSettled ? (this.primaryMid === null ? 'no' : 'yes') : 'unknown',
       },
       playback: this.sawPlayback ? { capability: this.playbackCap } : null,
       diff: diffCapability(this.primaryCap, this.playbackCap),

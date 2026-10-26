@@ -199,3 +199,54 @@ describe('PageState：时间戳来自注入的时钟（可测）', () => {
     expect(s.view()?.updatedAt).toBe(T0 + 5000);
   });
 });
+
+describe('PageState：主账号是否登录（三态，不许把"还没读到"当游客）', () => {
+  it('没调用过 setPrimaryMid → unknown', () => {
+    const s = freshState();
+    s.setPage('BV1', 1);
+    expect(s.view()?.primary.loggedIn).toBe('unknown');
+  });
+
+  it('⚠️ document_start 那次读不到（settled=false）→ 仍是 unknown', () => {
+    // 这是最容易写错的一处：document_start 时 document.cookie 往往是空的，
+    // 把 null 当"游客"会让每个刚打开的页面都闪一下「未登录主账号」
+    const s = freshState();
+    s.setPage('BV1', 1);
+    s.setPrimaryMid(null, false);
+    expect(s.view()?.primary.loggedIn).toBe('unknown');
+  });
+
+  it('DOM 就绪后仍读不到（settled=true）→ no', () => {
+    const s = freshState();
+    s.setPage('BV1', 1);
+    s.setPrimaryMid(null, true);
+    expect(s.view()?.primary.loggedIn).toBe('no');
+  });
+
+  it('读到真实 mid → yes（即使那次是 document_start）', () => {
+    const s = freshState();
+    s.setPage('BV1', 1);
+    s.setPrimaryMid('{{primary_mid}}', false);
+    expect(s.view()?.primary.loggedIn).toBe('yes');
+  });
+
+  it('先判成 no，之后读到 mid 会翻回 yes（账号不会在同一页里变成游客）', () => {
+    const s = freshState();
+    s.setPage('BV1', 1);
+    s.setPrimaryMid(null, true);
+    expect(s.view()?.primary.loggedIn).toBe('no');
+
+    s.setPrimaryMid('{{primary_mid}}', true);
+    expect(s.view()?.primary.loggedIn).toBe('yes');
+  });
+
+  it('换页后回到 unknown（新页面要重新判断）', () => {
+    const s = freshState();
+    s.setPage('BV1', 1);
+    s.setPrimaryMid('{{primary_mid}}', true);
+    expect(s.view()?.primary.loggedIn).toBe('yes');
+
+    s.setPage('BV1', 2);
+    expect(s.view()?.primary.loggedIn).toBe('unknown');
+  });
+});

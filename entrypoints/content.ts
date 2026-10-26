@@ -452,6 +452,18 @@ function report(): void {
   // bvid 或分 P 变化时 PageState 会清空两侧数据，避免上一 P 的轨道冒充本 P。
   pageState.setPage(info.bvid, info.p);
 
+  /**
+   * 主账号是否登录 —— 从页面 cookie 的 `DedeUserID` 判断（不读任何凭据）。
+   *
+   * ⚠️ `document_start` 时 `document.cookie` 往往是空的，读不到**不代表**游客，
+   * 所以传 `settled: document.readyState !== 'loading'`：
+   * 只有 DOM 就绪后的那次读取，才允许把"读不到"判成"未登录"。
+   */
+  pageState.setPrimaryMid(
+    readPrimaryMidFromCookie(document.cookie),
+    document.readyState !== 'loading',
+  );
+
   void browser.runtime
     .sendMessage({
       type: 'page/activate',

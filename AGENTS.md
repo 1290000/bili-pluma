@@ -87,7 +87,7 @@ bash poc/probe/run-all.sh            # 启动带端口的 Edge → 等就绪 →
 | 2 | **请求级代理，不切 cookie** | 提议"切一下 cookie 更简单" |
 | 3 | **`declarativeNetRequest` 换 Cookie 头，不用 `chrome.debugger`** | 提议"用 debugger 能改响应体" |
 | 4 | **主账号不归扩展管理**，就是浏览器当前登录态 | 提议"加个主账号管理页" |
-| 5 | **不做伪装的会员标识**，连开关都不放（**例外**：可改写 `/x/player/wbi/v2`、`/x/player/v2` 响应体的 vip 字段，仅限 [ADR 0013](./docs/decisions/0013-patch-player-info-response.md)） | 提议"让画质菜单看起来正常点"；或往 `PATCH_PATHS` 加新接口 |
+| 5 | **不做伪装的会员标识**，连开关都不放（**例外**：可改写 `/x/player/wbi/v2`、`/x/player/v2`、`/x/web-interface/nav` 响应体的 vip 字段，仅限 [ADR 0013](./docs/decisions/0013-patch-player-info-response.md)；加路径必须同时改 ADR，`check-patch-scope` 会红） | 提议"让画质菜单看起来正常点"；或往 `PATCH_PATHS` 加新接口 |
 | 6 | **不做远程配置**，只本地版本号 + 升级提示 | 提议"加个远程白名单热更新" |
 | 7 | **GPL-3.0-only + 第 7 条附加条款** | 提议"换成 MIT 更容易被采用" |
 | 8 | **只发源码**，不上架商店、不发预编译包 | 提议"打包个 zip 方便用户" |

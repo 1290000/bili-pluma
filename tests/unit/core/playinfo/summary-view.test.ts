@@ -43,6 +43,7 @@ function view(over: Partial<PageTracksView> = {}): PageTracksView {
         hasHiRes: false,
       }),
       user: { uname: '{{primary_name}}', face: null },
+      loggedIn: 'yes',
     },
     playback: { capability: cap() },
     diff: {
@@ -90,7 +91,7 @@ describe('describeUnlock：没有提升的两种原因必须分开说', () => {
     const playback = cap({ maxHeight: 1080, hasHiRes: false });
     const s = describeUnlock(
       view({
-        primary: { usable: true, reason: 'ssr', capability: primary, user: null },
+        primary: { usable: true, reason: 'ssr', capability: primary, user: null, loggedIn: 'yes' },
         playback: { capability: playback },
         diff: {
           heightGain: 0,
@@ -109,7 +110,13 @@ describe('describeUnlock：没有提升的两种原因必须分开说', () => {
   it('播放账号反而更弱 → 「没有提升」（这是异常，不是源限制）', () => {
     const s = describeUnlock(
       view({
-        primary: { usable: true, reason: 'ssr', capability: cap({ maxHeight: 2160 }), user: null },
+        primary: {
+          usable: true,
+          reason: 'ssr',
+          capability: cap({ maxHeight: 2160 }),
+          user: null,
+          loggedIn: 'yes',
+        },
         playback: { capability: cap({ maxHeight: 1080, hasHiRes: false }) },
         diff: {
           heightGain: -1080,
@@ -127,7 +134,13 @@ describe('describeUnlock：没有提升的两种原因必须分开说', () => {
   it('有播放账号数据但没有对比结论 → 「无法对比」', () => {
     const s = describeUnlock(
       view({
-        primary: { usable: false, reason: 'client-written', capability: null, user: null },
+        primary: {
+          usable: false,
+          reason: 'client-written',
+          capability: null,
+          user: null,
+          loggedIn: 'yes',
+        },
         diff: null,
       }),
     );
@@ -142,14 +155,20 @@ describe('describeUnlock：基线不可用时锚点必须说清原因', () => {
     ['unparsable', '主账号基线未知（数据解析失败）'],
   ] as const)('%s → %s', (reason, expected) => {
     const s = describeUnlock(
-      view({ primary: { usable: false, reason, capability: null, user: null }, diff: null }),
+      view({
+        primary: { usable: false, reason, capability: null, user: null, loggedIn: 'yes' },
+        diff: null,
+      }),
     );
     expect(s?.anchor).toBe(expected);
   });
 
   it('usable 为真但能力为空（不该出现）时也不编数字', () => {
     const s = describeUnlock(
-      view({ primary: { usable: true, reason: 'ssr', capability: null, user: null }, diff: null }),
+      view({
+        primary: { usable: true, reason: 'ssr', capability: null, user: null, loggedIn: 'yes' },
+        diff: null,
+      }),
     );
     expect(s?.anchor).toBe('主账号基线未知');
   });
@@ -185,5 +204,124 @@ describe('unlockedBadges', () => {
 
   it('null → 空数组', () => {
     expect(unlockedBadges(null)).toEqual([]);
+  });
+});
+
+describe('describeUnlock：主账号未登录（Q1 的 A 部分）', () => {
+  /** 游客态：两侧都是 480P，diff 判成"两侧相同" */
+  const guestView = (): PageTracksView =>
+    view({
+      primary: {
+        usable: true,
+        reason: 'ssr',
+        capability: cap({
+          maxHeight: 480,
+          maxFrameRate: 30,
+          maxFrameRateAtTopHeight: 30,
+          hasHiRes: false,
+        }),
+        user: null,
+        loggedIn: 'no',
+      },
+      playback: {
+        capability: cap({
+          maxHeight: 480,
+          maxFrameRate: 30,
+          maxFrameRateAtTopHeight: 30,
+          hasHiRes: false,
+        }),
+      },
+      diff: {
+        heightGain: 0,
+        frameRateGain: 0,
+        hiResGained: false,
+        dolbyAudioGained: false,
+        dolbyVisionGained: false,
+        improved: false,
+      },
+    });
+
+  it('⚠️ 说「未登录主账号」，不许说「无提升（源限制）」', () => {
+    // 游客两侧都是 480P，若走"两侧相同"分支就会谎报成"这个视频本来只有 480P"
+    const s = describeUnlock(guestView());
+    expect(s?.title).toBe('未登录主账号');
+    expect(s?.title).not.toBe('无提升（源限制）');
+  });
+
+  it('锚点也不说"仅可用 480P"——那读起来像"你这个号只有 480P"', () => {
+    expect(describeUnlock(guestView())?.anchor).toBe('主账号未登录，无对比基线');
+  });
+
+  it('徽章仍按播放账号实际拿到的显示（不因为没登录就隐藏事实）', () => {
+    expect(describeUnlock(guestView())?.badges).toEqual(['480P']);
+  });
+
+  it('若游客态真的拿到了提升，仍如实说「已解锁」（不被未登录盖掉）', () => {
+    // Q1 的 B 部分尚未实测，这里只保证：万一代理对游客有效，UI 不会把成绩藏起来
+    const s = describeUnlock(
+      view({
+        primary: {
+          usable: true,
+          reason: 'ssr',
+          capability: cap({ maxHeight: 480 }),
+          user: null,
+          loggedIn: 'no',
+        },
+      }),
+    );
+    expect(s?.title).toBe('已解锁');
+    expect(s?.improved).toBe(true);
+  });
+
+  it('loggedIn 为 unknown（还没读到 cookie）时不改变原有判定', () => {
+    const s = describeUnlock(
+      view({
+        // ⚠️ 两侧必须**完全一致**才算"源限制"，所以 hasHiRes 也要显式给 false
+        // （cap() 的默认值有 Hi-Res，漏写就会走到"没有提升"分支）
+        primary: {
+          usable: true,
+          reason: 'ssr',
+          capability: cap({ maxHeight: 480, hasHiRes: false }),
+          user: null,
+          loggedIn: 'unknown',
+        },
+        playback: { capability: cap({ maxHeight: 480, hasHiRes: false }) },
+        diff: {
+          heightGain: 0,
+          frameRateGain: 0,
+          hiResGained: false,
+          dolbyAudioGained: false,
+          dolbyVisionGained: false,
+          improved: false,
+        },
+      }),
+    );
+    expect(s?.title).toBe('无提升（源限制）');
+  });
+});
+
+describe('describeUnlock：游客页没有 __playinfo__（2026-10-26 InPrivate 实测）', () => {
+  it('⚠️ diff 为 null 时也要说「未登录主账号」，不是「无法对比」', () => {
+    // 实测：游客页 B站不 SSR __playinfo__，所以基线恒为 absent、diff 恒为 null。
+    // 若按"先判 diff 再判登录"的顺序，会显示「无法对比」——
+    // 那句话只说明"数据缺"，不告诉用户"该去登录"。
+    const s = describeUnlock(
+      view({
+        primary: { usable: false, reason: 'absent', capability: null, user: null, loggedIn: 'no' },
+        diff: null,
+      }),
+    );
+    expect(s?.title).toBe('未登录主账号');
+    expect(s?.anchor).toBe('主账号未登录，无对比基线');
+  });
+
+  it('徽章仍按播放账号实际拿到的显示（实测 2160p 在响应里）', () => {
+    const s = describeUnlock(
+      view({
+        primary: { usable: false, reason: 'absent', capability: null, user: null, loggedIn: 'no' },
+        diff: null,
+      }),
+    );
+    expect(s?.badges).toContain('4K');
   });
 });

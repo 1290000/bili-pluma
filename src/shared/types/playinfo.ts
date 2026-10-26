@@ -174,6 +174,14 @@ export interface PageTracksView {
     reason: PrimaryBaselineReason;
     capability: Capability | null;
     user: PrimaryUser | null;
+    /**
+     * 主账号是否登录。
+     *
+     * ⚠️ **三态，不是布尔。** `document_start` 时 `document.cookie` 往往是空的，
+     * 那时读不到 `DedeUserID` 不代表游客 —— 必须等 DOM 就绪后再下结论。
+     * 把"还没读到"当成"没登录"，会让每个刚打开的页面都闪一下"未登录主账号"。
+     */
+    loggedIn: 'yes' | 'no' | 'unknown';
   };
   /** 播放账号实际拿到的（页面自己的 playurl 响应，已被 DNR 换成播放账号身份） */
   playback: { capability: Capability | null } | null;

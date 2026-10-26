@@ -62,6 +62,15 @@ export interface UnlockSummary {
 
 /** 锚点小字 —— 价值锚点，没有它用户感受不到插件做了什么 */
 function anchorText(view: PageTracksView): string {
+  /**
+   * ⚠️ **未登录主账号时，锚点不能说"仅可用 480P"。**
+   *
+   * 那句话读起来像"你这个号只有 480P"，而真实原因是"没有号"。
+   * 而且游客态两侧都是 480P，`diff` 会判成"两侧相同"，
+   * 于是标题落到「无提升（源限制）」—— 双重误导。
+   */
+  if (view.primary.loggedIn === 'no') return '主账号未登录，无对比基线';
+
   const cap = view.primary.capability;
   if (view.primary.usable && cap) {
     const label = heightLabel(cap.maxHeight);
@@ -100,13 +109,26 @@ export function describeUnlock(view: PageTracksView | null): UnlockSummary | nul
 
   const badges = unlockedBadges(playback);
 
+  // 「已解锁」是事实陈述：两侧能比、且播放账号更强，就先说这个（与登录状态无关）
+  if (view.diff?.improved) {
+    return { title: '已解锁', badges, anchor, improved: true };
+  }
+
+  /**
+   * 未登录主账号 → 排在「无法对比」之前。
+   *
+   * 有实测依据：**游客页根本没有 `__playinfo__`**（2026-10-26 InPrivate 实测，
+   * 见 `poc/verify/RESULT.md` §六），所以游客态的 `diff` 恒为 null。
+   * 若按"先判 diff"的顺序会显示「无法对比」—— 那句话只说明"数据缺"，
+   * 不告诉用户"该去登录"，而登录是他唯一能做的动作。
+   */
+  if (view.primary.loggedIn === 'no') {
+    return { title: '未登录主账号', badges, anchor, improved: false };
+  }
+
   // 没有对比就没有"已解锁" —— 只能陈述事实
   if (!view.diff) {
     return { title: '无法对比', badges, anchor, improved: false };
-  }
-
-  if (view.diff.improved) {
-    return { title: '已解锁', badges, anchor, improved: true };
   }
 
   /**
@@ -114,6 +136,8 @@ export function describeUnlock(view: PageTracksView | null): UnlockSummary | nul
    *   - 主账号本来就能拿到同样的画质 → 视频源限制
    *   - 代理没生效（两个身份拿到的一样）→ 用户该去查开关
    * 判据是两侧能力是否完全相同；相同就说"源限制"，不同（播放账号更弱）就是异常。
+   *
+   * （"未登录主账号"已在函数前段拦掉，不会走到这里。）
    */
   const primaryCap = view.primary.capability;
   const same =
