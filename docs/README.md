@@ -48,6 +48,7 @@
 | [0013](./decisions/0013-patch-player-info-response.md) | **允许改写 `/x/player/wbi/v2` 响应体**（Q12 的例外，精确到字段） |
 | [0014](./decisions/0014-quality-compare-from-page-data.md) | **画质对比只用页面已有的数据**：主账号列取自 SSR，且不承诺 HDR |
 | [0015](./decisions/0015-lazy-health-check-no-alarms.md) | **凭据健康只做惰性检查**：不用 alarms，不做 cookie 刷新 |
+| [0016](./decisions/0016-drop-quality-report-page.md) | **砍掉画质体检表与音质自检独立页**：options 五分区降为三 |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 

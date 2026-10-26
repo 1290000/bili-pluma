@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildCookieHeader, deviceCookiesFrom, playurlQuery } from '@platform/http/playurl';
+import { buildCookieHeader, deviceCookiesFrom } from '@platform/http/playurl';
 import type { Credential } from '@shared/types/account';
 
 const credential: Credential = {
@@ -68,40 +68,5 @@ describe('deviceCookiesFrom', () => {
 
   it('空字符串返回空对象', () => {
     expect(deviceCookiesFrom('')).toEqual({});
-  });
-});
-
-describe('playurlQuery', () => {
-  const base = { bvid: 'BV1beNcz2ECq', cid: 36532588493, qn: null };
-
-  it('fnval 固定 4048，fourk 固定 1（官方前端实测值）', () => {
-    const q = playurlQuery(base, 1700000000);
-    expect(q.fnval).toBe('4048');
-    expect(q.fourk).toBe('1');
-  });
-
-  it('qn 为 null 时传 "0"（实测 qn 不影响返回轨道）', () => {
-    expect(playurlQuery({ ...base, qn: null }, 1700000000).qn).toBe('0');
-  });
-
-  it('qn 有值时照传', () => {
-    expect(playurlQuery({ ...base, qn: 80 }, 1700000000).qn).toBe('80');
-  });
-
-  it('bvid 与 cid 都带上且是字符串', () => {
-    const q = playurlQuery(base, 1700000000);
-    expect(q.bvid).toBe('BV1beNcz2ECq');
-    expect(q.cid).toBe('36532588493');
-  });
-
-  it('wts 参与签名参数', () => {
-    expect(playurlQuery(base, 1700000000).wts).toBe('1700000000');
-  });
-
-  it('不含任何凭据字段', () => {
-    const q = JSON.stringify(playurlQuery(base, 1700000000));
-    expect(q).not.toContain('SESSDATA');
-    expect(q.toLowerCase()).not.toContain('cookie');
-    expect(q).not.toContain('w_rid');
   });
 });

@@ -457,8 +457,8 @@ button:disabled {
   border-color: var(--pluma-accent);
 }
 
-/* ── §2.6 底部操作：三档视觉权重 ──
-   「画质体检」最重（它是功能自证），「播放账号」中等（就地展开），「设置」最轻。 */
+/* ── §2.6 底部操作 ──
+   两个按钮：「播放账号」就地展开，「设置」跳 options。 */
 
 .foot {
   display: flex;
@@ -477,7 +477,7 @@ button:disabled {
 
 .foot-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 6px;
 }
 
@@ -493,13 +493,6 @@ button:disabled {
 .foot-btn:hover {
   color: var(--pluma-accent);
   border-color: var(--pluma-accent);
-}
-
-/* 比 popup 的主按钮弱一档：它不是这个界面的主动作，只是"去看数据" */
-.foot-btn.primary-weight {
-  color: var(--pluma-accent);
-  border-color: var(--pluma-accent);
-  background: var(--pluma-accent-bg);
 }
 
 .foot-btn.active {

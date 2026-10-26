@@ -524,7 +524,7 @@ node scripts/verify.mjs   # boundaries 是其中一项
 | **P2-b 总开关** | popup 接上 `proxy/set`；`tabs.handler.ts` 统计受影响标签页 | ✅ 2026-10-25 |
 | **P2-c 界面** | `entrypoints/popup/`（7 种状态）+ 登录窗口 + 登录入口迁移 | 🟡 **部分完成**：状态框架 / 开关 / 登录 / 受影响标签页提示已做；**§2.3 核心价值区、§2.4 双账号卡片、§2.6 底部三按钮未做**（见下） |
 | **P2-d 页面侧** | 页内角标（Shadow DOM） | ✅ 2026-10-26 |
-| **P3 完善** | `entrypoints/options/` 五分区内容、`core/playinfo/diagnose.ts`；**并承接 P2 顺延项**（见下） | 🟡 **进行中**：`core/playinfo/{parse,rank,summary-view}.ts` + 页面数据通道 + popup §2.3/状态 5 + **options 骨架**已落地（2026-10-26，全仓 450 测试）；options 五个分区的内容、§2.4/§2.6 未开始 |
+| **P3 完善** | `entrypoints/options/` **三**分区内容（账号/诊断/显示） | 🟡 **进行中**：popup §2.3/§2.4/§2.6/状态 5、options 骨架+账号页+显示页 已落地（2026-10-26）；**剩余：诊断页内容（日志/导出/音质块）、成功率条形图、路径版本号**。体检表与音质自检独立页已砍（[ADR 0016](./decisions/0016-drop-quality-report-page.md)） |
 | **预留** | `platform/browsers/firefox.ts` | ⬜ v1.5 |
 
 > **判断某文件是否存在，用 `git ls-files`，不要看 §1 的那棵树。**
@@ -539,7 +539,7 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 | --- | --- | --- | --- |
 | **当前页解锁画质（核心价值区）** ✅ 2026-10-26 已完成 | §2.3 | `core/playinfo/parse.ts` `rank.ts` `summary-view.ts` + content 上报 playurl | 需要 `accept_quality` 与主/副账号对比，这套解析是 P3 的核心模块 |
 | 双账号卡片（主 A / 播放 B 对比） ✅ 2026-10-26 已完成 | §2.4 | 同 §2.3 | 当前 popup 只有播放账号一行摘要 |
-| popup 底部三按钮（体检 / 切换账号 / 设置） | §2.6 | `entrypoints/options/` | 三个按钮**全部**指向 options 页，页不存在时是死链 |
+| popup 底部按钮（§2.6） ✅ 2026-10-26 已完成（两个：播放账号 / 设置） | §2.6 | `entrypoints/options/` | 按钮指向 options 页，页不存在时是死链 |
 | 角标「设置里可关闭」 | §5 | `entrypoints/options/` | 设置页不存在；且 §2.5 明确「popup 只放一个开关」，不能再往 popup 塞 |
 
 > ⚠️ **§2.3 是规范里写的"整个 popup 唯一不能省的部分"**。
@@ -649,7 +649,7 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 | `src/platform/runtime/messaging.ts` | 无独立封装，页面直接 `sendMessage` | 只有 3 个 UI 页面，封装收益低于成本 |
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
 | `entrypoints/popup/` | 🟡 **部分实现**（P2-c：状态框架 + 开关 + 登录入口 + 受影响标签页提示）；§2.3 / §2.4 / §2.6 顺延到 P3 | 依赖 options 页与 `core/playinfo` 解析 |
-| `entrypoints/options/` | 🟡 **骨架 + 账号页 + 显示页已落地（2026-10-26）**：五分区导航（hash 路由）、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）；体检/音质/诊断三页仍是占位清单 | 先铺结构，避免"画空壳" |
+| `entrypoints/options/` | 🟡 **骨架 + 账号页 + 显示页已落地（2026-10-26）**：**三分区**导航（hash 路由）、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）；诊断页目前只有"打开自检页"入口 | 先铺结构，避免"画空壳"；体检/音质两页已砍（ADR 0016） |
 | `scripts/check-*.mjs`（5 个检查脚本 + `verify.mjs` 入口） | ✅ **已实现**（`node scripts/verify.mjs`，9 项） | 边界 / 消息路由 / 设计令牌 / 文档 / 改写范围；**检查命令的唯一权威位置是 `scripts/`** |
 | ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`；跑 `node scripts/verify.mjs`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
 | Prettier 配置 | ✅ **已实现**（`.prettierrc`；跑 `node scripts/verify.mjs`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |

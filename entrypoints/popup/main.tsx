@@ -439,9 +439,10 @@ function App() {
         )}
       </main>
 
-      {/* ── §2.6 底部操作：三档视觉权重 ──
-          「画质体检」放第一个，因为它是这个项目最好的"功能自证"。
-          「播放账号」就地展开，不跳转 —— 避免丢掉"我刚才在看哪个页面"的上下文。 */}
+      {/* ── §2.6 底部操作 ──
+          只有两个：「播放账号」就地展开（不跳转，避免丢掉上下文）、「设置」跳 options。
+          「画质体检」按钮 2026-10-26 删除 —— 它指向的页面被砍了（ADR 0016），
+          而那份对比数据本来就在上面的 §2.3 里。 */}
       <footer class="foot">
         {menuOpen && (
           <div class="foot-menu">
@@ -475,9 +476,6 @@ function App() {
         )}
 
         <div class="foot-actions">
-          <button class="foot-btn primary-weight" onClick={() => openOptions('#/quality')}>
-            画质体检
-          </button>
           <button
             class={`foot-btn ${menuOpen ? 'active' : ''}`}
             onClick={() => {

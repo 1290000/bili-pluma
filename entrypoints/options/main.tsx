@@ -24,10 +24,8 @@ import '@/src/design/tokens.css';
 import './style.css';
 
 import { AccountSection } from './sections/account';
-import { AudioSection } from './sections/audio';
 import { DiagnosticsSection } from './sections/diagnostics';
 import { DisplaySection } from './sections/display';
-import { QualitySection } from './sections/quality';
 
 interface Section {
   id: string;
@@ -39,8 +37,6 @@ interface Section {
 
 const SECTIONS: Section[] = [
   { id: 'account', label: '账号', hint: '两个身份分别是谁', render: AccountSection },
-  { id: 'quality', label: '画质体检', hint: '当前页解锁了什么', render: QualitySection },
-  { id: 'audio', label: '音质自检', hint: '你的环境能放什么', render: AudioSection },
   { id: 'diagnostics', label: '诊断', hint: '出问题时看这里', render: DiagnosticsSection },
   { id: 'display', label: '显示', hint: '界面上显示什么', render: DisplaySection },
 ];
