@@ -124,7 +124,7 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 
 | 信号（`git diff --name-only` 命中） | 动作 |
 | --- | --- |
-| `src/platform/http/dnr.ts` | **重跑 `node poc/verify/run-q2-auto.cjs`**（单测测不到 DNR，见 §5.4） |
+| `src/platform/http/dnr.ts` | **重跑两个脚本**：`node poc/verify/run-q2-auto.cjs`（并发安全）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则都得清零）。单测测不到 DNR，见 §5.4 |
 | `public/main-world.js` | `node --check` 它；涉及轨道判定/角标时必须向用户要一次真机日志 |
 | `src/shared/types/messages.ts` | 新增类型时单跑 `node scripts/check-messages.mjs` 看白名单（verify 内已含） |
 | `docs/**`、`*.md` | `node scripts/verify.mjs --fast` |
@@ -158,7 +158,8 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 
 ### 5.4 DNR 相关
 
-- 所有 DNR 代码只在 `src/platform/http/dnr.ts`，对外只暴露 `withCookieFor()`。
+- 所有 DNR 代码只在 `src/platform/http/dnr.ts`；它导出的函数分四组（装/删/自愈/只读诊断），
+  各有用途。⚠️ 曾写「只对外暴露 `withCookieFor()`」——**那函数从不存在**，是 ADR 0006 之前的残留。
 - **按白名单路径各建一条常驻 session 规则，不带 nonce**；不要每请求 add/remove，也不要规则 ID 池（[ADR 0006](./docs/decisions/0006-no-per-request-nonce.md)）。
 - 必须实现总开关 + SW 启动自愈重建，否则凭据失效时所有 playurl 一起变未登录。
 - `/ogv/player/playview` 是 POST、csrf 在 body 里，DNR 改不了 → 走 JS 拦截重建。
@@ -229,7 +230,7 @@ ADR 记理由，正文只记结论。超限且判断不拆的例外写在 `check
 **一条命令跑完全部**：`node scripts/verify.mjs`（`--help` 看检查项）
 
 - [ ] `node scripts/verify.mjs` 全绿（`--fast` 只够改文档时用）
-- [ ] §4.3 路由表的提醒都处理了（尤其 `dnr.ts` → Q2 回归）
+- [ ] §4.3 路由表的提醒都处理了（尤其 `dnr.ts` → **两个** DNR 回归脚本）
 - [ ] 没有新增"两边都写同一件事"的重复
 - [ ] 没有偷偷改 §3 的 12 条决策
 

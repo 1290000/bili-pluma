@@ -152,7 +152,7 @@ bili-pluma/
 │   │   ├── playinfo/       # 取流解析与选轨（parse/rank/diagnose 属 P3）
 │   │   └── wbi/            # WBI 签名
 │   ├── platform/           # 适配层：唯一允许碰 chrome.* 的地方
-│   │   ├── http/           # ★ dnr.ts = 风险最高，只对外暴露 withCookieFor()
+│   │   ├── http/           # ★ dnr.ts = 风险最高（装/删/自愈/诊断四组函数）
 │   │   ├── storage/
 │   │   └── qr/
 │   ├── background/         # SW 内部实现（handlers/ 按消息域拆分）
@@ -317,7 +317,7 @@ document.body.appendChild(host);
 
 `entrypoints/popup/` **没有按状态拆目录**，只有三个文件：`index.html` / `main.tsx` / `style.css`。
 状态判定放在 `src/core/ui/popup-state.ts`（纯函数，可单测），渲染在 `main.tsx` 一个组件里。
-7 种状态各是什么见 `docs/02-ui-spec.md` §3。
+`PopupState` 共 **8** 种（`not-configured`/`credential-missing`/`expired`/`stopped`/`not-video`/`inconsistent`/`degraded`/`active`），各是什么见 `docs/02-ui-spec.md` §3。
 
 > 原设计稿写的是"每个状态一个文件"，实装时发现状态之间共享大量结构，拆开反而重复，所以没采用。
 
@@ -492,11 +492,20 @@ node scripts/verify.mjs   # boundaries 是其中一项
 所以目录结构上要让它**可以被独立验证、独立替换**：
 
 - `platform/http/dnr.ts` 是**唯一**碰 DNR 的地方
-- 它对外只暴露 `withCookieFor<T>(url, cookie, fn: () => Promise<T>): Promise<T>` 这一个函数
-- 这个函数不关心 bilibili、不关心账号、不关心路径白名单——**只关心"把某个请求的 Cookie 头换成指定值，且并发安全"**
+- 它的导出分成四组，**按用途区分，不要合并**：
+  - 装/删全局路径规则：`enableProxy` / `disableProxy`（`disableProxy` **必须同时删标签页规则**，
+    否则关开关后画质不回落 —— 2026-10-27 修过的真实 bug）
+  - 装/删标签页规则：`installTabRule` / `removeTabRule`
+  - 自愈：`rebuildRulesIfEnabled` / `reconcileTabRules`
+  - 只读诊断：`isProxyEnabled` / `countPathRules` / `describeRules`
+- 它不关心 bilibili、不关心账号——只关心"把某些请求的 Cookie 头换成指定值，且能干净撤销"
 - 如果 DNR 方案失败要换成油猴式 hook，**只换这一个文件的实现**，`core` 一行不改
 
-这就是解耦最实际的收益：**你的最大风险被关在一个 200 行的文件里。**
+> ⚠️ 曾经这里写的是「对外只暴露 `withCookieFor<T>(url, cookie, fn)` 这一个函数」——
+> **那个函数从来没有被实现过**，是 ADR 0006 之前的残留设计。现行实现是常驻规则 + 总开关，
+> 不需要"包一个请求"的形态。别按那句旧话去设计。
+
+这就是解耦最实际的收益：**你的最大风险被关在一个文件里。**
 
 ---
 
@@ -522,9 +531,9 @@ node scripts/verify.mjs   # boundaries 是其中一项
 | **骨架** | WXT 初始化 → `shared/` `core/identity/` `core/vault/` `platform/` `entrypoints/background.ts` `src/background/` | ✅ 2026-10-25 |
 | **P2-a 数据源** | `core/auth/health.ts` `core/auth/account-info.ts` `core/playinfo/stats.ts` `background/handlers/account.handler.ts` `stats.handler.ts` | ✅ 2026-10-25 |
 | **P2-b 总开关** | popup 接上 `proxy/set`；`tabs.handler.ts` 统计受影响标签页 | ✅ 2026-10-25 |
-| **P2-c 界面** | `entrypoints/popup/`（7 种状态）+ 登录窗口 + 登录入口迁移 | 🟡 **部分完成**：状态框架 / 开关 / 登录 / 受影响标签页提示已做；**§2.3 核心价值区、§2.4 双账号卡片、§2.6 底部三按钮未做**（见下） |
+| **P2-c 界面** | `entrypoints/popup/`（8 种状态）+ 登录窗口 + 登录入口迁移 | ✅ 已完成（P2 阶段做了框架；§2.3/§2.4/§2.6 在 P3 补齐） |
 | **P2-d 页面侧** | 页内角标（Shadow DOM） | ✅ 2026-10-26 |
-| **P3 完善** | `entrypoints/options/` **三**分区内容（账号/诊断/显示） | 🟡 **进行中**：popup §2.3/§2.4/§2.6/状态 5、options 骨架+账号页+显示页 已落地（2026-10-26）；**剩余：无（诊断页、条形图、路径版本号均已完成）**。体检表与音质自检独立页已砍（[ADR 0016](./decisions/0016-drop-quality-report-page.md)） |
+| **P3 完善** | `entrypoints/options/` **三**分区内容（账号/诊断/显示） | ✅ **已完成（2026-10-27，六条验收全过）**：popup §2.3/§2.4/§2.6/状态 5、options 三分区、条形图、路径版本号全部落地。体检表与音质自检独立页已砍（[ADR 0016](./decisions/0016-drop-quality-report-page.md)） |
 | **预留** | `platform/browsers/firefox.ts` | ⬜ v1.5 |
 
 > **判断某文件是否存在，用 `git ls-files`，不要看 §1 的那棵树。**
@@ -637,7 +646,7 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 
 ---
 
-## 9. 实现现状（2026-10-26，P2 完成时）
+## 9. 实现现状（2026-10-27，v0.9.0 发布时）
 
 §1 那棵树是设计稿。实际实现与它的**差异**如下，避免把设计当成事实：
 
@@ -648,9 +657,9 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 | `src/background/index.ts` | `entrypoints/background.ts` | WXT 约定 |
 | `src/platform/runtime/messaging.ts` | 无独立封装，页面直接 `sendMessage` | 只有 3 个 UI 页面，封装收益低于成本 |
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
-| `entrypoints/popup/` | 🟡 **部分实现**（P2-c：状态框架 + 开关 + 登录入口 + 受影响标签页提示）；§2.3 / §2.4 / §2.6 顺延到 P3 | 依赖 options 页与 `core/playinfo` 解析 |
-| `entrypoints/options/` | 🟡 **骨架 + 账号页 + 显示页已落地（2026-10-26）**：**三分区**导航（hash 路由）、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）、诊断页（自检信息 + 音质折叠块 + 日志 + 导出）| 先铺结构，避免"画空壳"；体检/音质两页已砍（ADR 0016）；独立自检页已并入诊断分区 |
-| `scripts/check-*.mjs`（5 个检查脚本 + `verify.mjs` 入口） | ✅ **已实现**（`node scripts/verify.mjs`，9 项） | 边界 / 消息路由 / 设计令牌 / 文档 / 改写范围；**检查命令的唯一权威位置是 `scripts/`** |
+| `entrypoints/popup/` | ✅ **完整实现**（P3 补齐 §2.3 解锁画质对比 / §2.4 双账号卡片 / §2.6 底部两按钮） | 此前依赖 options 页与 `core/playinfo` 解析 |
+| `entrypoints/options/` | ✅ **三分区全部完成（2026-10-27）**：hash 路由导航、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）、诊断页（自检信息 + 音质折叠块 + 日志 + 导出 + 白名单版本） | 体检/音质两页已砍（ADR 0016）；独立自检页已并入诊断分区 |
+| `scripts/`（4 个 `check-*` + `verify.mjs` 入口 + `package.mjs`） | ✅ **已实现**（`node scripts/verify.mjs`，9 项） | 边界 / 消息路由 / 设计令牌 / 文档 / 改写范围；**检查命令的唯一权威位置是 `scripts/`**。`package.mjs` 是打包，不在 verify 链里 |
 | ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`；跑 `node scripts/verify.mjs`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
 | Prettier 配置 | ✅ **已实现**（`.prettierrc`；跑 `node scripts/verify.mjs`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |
 | `.eslintrc.cjs` | `eslint.config.mjs` | ESLint 9 默认 flat config |
@@ -665,7 +674,8 @@ src/core/playinfo/{stats,parse,rank}.ts     ✅（parse/rank 为 P3 首批；dia
 src/platform/{http,storage,qr}         ✅
 src/background/{login-window,login-handshake,handlers/}  ✅
 src/content/isolated/{badge,badge-content,page-state}.ts  ✅（badge 为 P2-d；page-state 为 P3 Step 2）
-entrypoints/{background,content,popup,login-window,need-incognito,diagnostics}  ✅
+entrypoints/{background,content,popup,options,login-window,need-incognito}  ✅
+# ⚠️ 没有 entrypoints/diagnostics —— 诊断是 options 的一个分区（sections/diagnostics.tsx）
 public/main-world.js                   ✅
 ```
 
