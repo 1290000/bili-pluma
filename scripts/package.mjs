@@ -34,7 +34,6 @@
  * 退出码：0 成功｜1 自检未通过｜2 脚本自身出错
  */
 
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
@@ -185,23 +184,194 @@ GPL-3.0-only + 附加条款（见仓库根目录 \`ADDITIONAL-TERMS.md\`）
 `;
 }
 
-/** 用系统 zip 打包（Windows 有 bsdtar，可用 -a 自动按扩展名选格式） */
-function zipDir(cwd, outFile, entries) {
-  if (process.platform === 'win32') {
-    /**
-     * ⚠️ `--force-local` 不能省。
-     *
-     * Windows 的 bsdtar 会把 `D:\...` 里的 `D:` 当成**远程主机名**，
-     * 报 `tar: Cannot connect to D: resolve failed`。
-     * 加了这个开关才把参数当本地路径。（2026-10-27 首次打包时踩到）
-     */
-    execFileSync('tar', ['--force-local', '-a', '-c', '-f', outFile, ...entries], {
-      cwd,
-      stdio: 'pipe',
-    });
-  } else {
-    execFileSync('zip', ['-r', '-q', outFile, ...entries], { cwd, stdio: 'pipe' });
+/**
+ * ## 为什么自己写 zip，不调系统 `tar` / `zip`（2026-10-27）
+ *
+ * 原来的实现调 `tar --force-local -a -c -f out.zip`（Windows）或 `zip -r`
+ * （其他平台）。**这台机器上两个都不能用**：
+ *
+ * - 没有 `zip` 命令（`command not found`）
+ * - `tar -a` 按扩展名选格式时，**exit code 是 0，但产出的 zip 全是 0 字节**，
+ *   只有开头留了个 `./`。`unzip -l` 报 `End-of-central-directory signature
+ *   not found`。
+ *
+ * 最要命的是**它不报错**：脚本照样打印「自检通过」，用户拿到的是坏包。
+ *
+ * 所以：自己按 ZIP 规范写，写完再用自己的解析器验一遍。
+ * 不压缩（stored，method=0）就够用 —— 扩展产物本来就不大，
+ * 少一个 zlib 依赖少一处出错可能。
+ *
+ * 格式参考 PKWARE APPNOTE.TXT：本地头(30B) + 文件名 + 数据，
+ * 中央目录项(46B) + 文件名，末尾 EOCD(22B)。
+ */
+
+/** ZIP 用 CRC-32（IEEE 802.3） */
+function crc32(buf) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i];
+    for (let k = 0; k < 8; k++) crc = crc & 1 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
   }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+/** 收集目录下所有文件，返回 `{ name, data }[]`。`name` 用 `/` 分隔 */
+async function collectFiles(rootDir, prefix = '') {
+  const out = [];
+  const entries = await readdir(rootDir, { withFileTypes: true });
+  for (const e of entries.sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    const abs = join(rootDir, e.name);
+    const name = prefix ? `${prefix}/${e.name}` : e.name;
+    if (e.isDirectory()) {
+      out.push(...(await collectFiles(abs, name)));
+    } else if (e.isFile()) {
+      out.push({ name, data: await readFile(abs) });
+    }
+    // 符号链接与其他类型一律跳过：分发包里不该有
+  }
+  return out;
+}
+
+/**
+ * 生成 zip 的 Buffer。
+ *
+ * @param files `{ name, data }[]`，`name` 是 zip 内路径
+ */
+function buildZip(files) {
+  const parts = [];
+  const central = [];
+  let offset = 0;
+
+  for (const { name, data } of files) {
+    const nameBuf = Buffer.from(name, 'utf8');
+    const crc = crc32(data);
+
+    // ---- 本地文件头 30 字节 ----
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); // 签名
+    local.writeUInt16LE(20, 4); // 解压所需版本 2.0
+    local.writeUInt16LE(0x0800, 6); // bit11 = UTF-8 文件名（中文路径必须）
+    local.writeUInt16LE(0, 8); // method 0 = stored，不压缩
+    local.writeUInt16LE(0, 10); // 修改时间
+    local.writeUInt16LE(0x21, 12); // 修改日期 1980-01-01（固定值，保证可复现）
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18); // 压缩后大小（stored 时相等）
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuf.length, 26);
+    local.writeUInt16LE(0, 28); // extra 长度
+    parts.push(local, nameBuf, data);
+
+    // ---- 中央目录项 46 字节 ----
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0); // 签名
+    ch.writeUInt16LE(20, 4); // 创建者版本
+    ch.writeUInt16LE(20, 6); // 解压所需版本
+    ch.writeUInt16LE(0x0800, 8);
+    ch.writeUInt16LE(0, 10);
+    ch.writeUInt16LE(0, 12);
+    ch.writeUInt16LE(0x21, 14);
+    ch.writeUInt32LE(crc, 16);
+    ch.writeUInt32LE(data.length, 20);
+    ch.writeUInt32LE(data.length, 24);
+    ch.writeUInt16LE(nameBuf.length, 28);
+    ch.writeUInt16LE(0, 30); // extra
+    ch.writeUInt16LE(0, 32); // comment
+    ch.writeUInt16LE(0, 34); // 起始磁盘号
+    ch.writeUInt16LE(0, 36); // 内部属性
+    ch.writeUInt32LE(0, 38); // 外部属性
+    ch.writeUInt32LE(offset, 42); // 本地头偏移
+    central.push(ch, nameBuf);
+
+    offset += local.length + nameBuf.length + data.length;
+  }
+
+  const centralBuf = Buffer.concat(central);
+
+  // ---- EOCD 22 字节 ----
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralBuf.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20); // 注释长度
+
+  return Buffer.concat([...parts, centralBuf, end]);
+}
+
+/**
+ * 自检：读回刚写的 zip，确认结构完整。
+ *
+ * **光靠 `writeFile` 成功不算数** —— 原来 `tar` 的失败方式就是
+ * "exit 0 + 坏文件"。这里按 ZIP 结构真正解析一遍：
+ * 找 EOCD → 定位中央目录 → 核对条目数与每个本地头签名。
+ *
+ * @returns 条目名列表；结构不对时抛错
+ */
+function verifyZip(buf, expectCount) {
+  if (buf.length < 22) throw new Error(`zip 只有 ${String(buf.length)} 字节，太短`);
+
+  // EOCD 在末尾，可能带注释；从后往前找签名
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error('找不到 EOCD 签名（文件不是合法 zip）');
+
+  const count = buf.readUInt16LE(eocd + 10);
+  if (count !== expectCount) {
+    throw new Error(`中央目录条目数 ${String(count)}，期望 ${String(expectCount)}`);
+  }
+
+  const cdOffset = buf.readUInt32LE(eocd + 16);
+  if (cdOffset >= buf.length) throw new Error('中央目录偏移越界');
+
+  const names = [];
+  let p = cdOffset;
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(p) !== 0x02014b50) {
+      throw new Error(`第 ${String(i + 1)} 个中央目录项签名不对（偏移 ${String(p)}）`);
+    }
+    const nameLen = buf.readUInt16LE(p + 28);
+    const localOffset = buf.readUInt32LE(p + 42);
+    if (buf.readUInt32LE(localOffset) !== 0x04034b50) {
+      throw new Error(`第 ${String(i + 1)} 项的本地头签名不对`);
+    }
+    names.push(buf.subarray(p + 46, p + 46 + nameLen).toString('utf8'));
+    p += 46 + nameLen + buf.readUInt16LE(p + 30) + buf.readUInt16LE(p + 32);
+  }
+  return names;
+}
+
+/**
+ * 把目录打成 zip 并**当场验证**。
+ *
+ * @param topDir 非空时，所有条目放在这层目录下。
+ *   **必须给**：解压后会得到一个规整的文件夹，
+ *   而不是把 manifest.json 撒在用户的下载目录里。
+ *   安装说明也因此能写死"选哪一个文件夹"。
+ */
+async function zipDir(cwd, outFile, topDir) {
+  const files = await collectFiles(cwd);
+  if (files.length === 0) throw new Error('目录是空的，拒绝打包');
+
+  const entries = topDir ? files.map((f) => ({ ...f, name: `${topDir}/${f.name}` })) : files;
+  const buf = buildZip(entries);
+
+  await writeFile(outFile, buf);
+
+  // 写完立刻验，坏包不能流到产物目录
+  const names = verifyZip(buf, entries.length);
+  if (names.length !== entries.length) throw new Error('自检条数不一致');
+  if (topDir && !names.every((n) => n.startsWith(`${topDir}/`))) {
+    throw new Error('自检：条目没有全部落在顶层目录下');
+  }
+  return names;
 }
 
 async function sha256(file) {
@@ -251,6 +421,18 @@ async function main() {
   const lightName = `pluma-${version}.zip`;
   const srcName = `pluma-${version}-with-source.zip`;
 
+  /**
+   * zip 内的顶层目录名。
+   *
+   * **必须有这一层**，不能把 manifest.json 直接撒在 zip 根。
+   * 理由：用户解压后要的是「一个能选中的文件夹」。
+   * 平铺的话，解压到当前目录会把一堆文件倒进下载文件夹，
+   * 用户还得自己建文件夹收拢 —— 这正是"选哪个文件夹"讲不清的根源。
+   *
+   * 有了这层，安装说明就能写死"选 pluma-0.9.0 这个文件夹"。
+   */
+  const TOP_DIR = `pluma-${version}`;
+
   if (problems.length > 0) {
     console.error(`\n[package] ❌ 自检未通过（${String(problems.length)} 项）\n`);
     for (const p of problems) console.error(`  ${p.what}\n    ${p.why}\n`);
@@ -282,7 +464,7 @@ async function main() {
     process.exit(1);
   }
   await writeFile(join(staging, '安装说明.txt'), readmeText, 'utf8');
-  zipDir(staging, join(DIST_DIR, lightName), ['.']);
+  await zipDir(staging, join(DIST_DIR, lightName), TOP_DIR);
   await rm(staging, { recursive: true, force: true });
 
   // ── 6. 打源码版：产物放 extension/，源码在旁边 ──
@@ -297,7 +479,7 @@ async function main() {
     present.push(entry);
   }
 
-  zipDir(stagingSrc, join(DIST_DIR, srcName), ['.']);
+  await zipDir(stagingSrc, join(DIST_DIR, srcName), TOP_DIR);
   await rm(stagingSrc, { recursive: true, force: true });
 
   // ── 7. Release 说明 ──
