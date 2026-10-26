@@ -61,15 +61,11 @@ GPL-3.0-only · Chrome 120+ / Edge · **v0.9.0（2026-10-26）**：v1 范围已�
 
 ## 安装
 
-**不上架任何商店，也不提供预编译安装包**，请自行构建：
+**从源码构建（推荐）**：`pnpm install && pnpm build` —— `packageManager` 锁在 `pnpm@12`，换 npm/yarn 会与 lockfile 不一致。
 
-```bash
-pnpm install && pnpm build
-```
+然后 `chrome://extensions/` 或 `edge://extensions/` → 开「开发者模式」→「加载已解压的扩展程序」→ 选 **`.output/chrome-mv3`**（**不是**仓库根目录，`manifest.json` 是构建产物）。
 
-`packageManager` 锁在 `pnpm@12`，换 npm/yarn 会与 `pnpm-lock.yaml` 不一致；没装就 `npm i -g pnpm@12`。
-
-然后 `chrome://extensions/` 或 `edge://extensions/` → 开「开发者模式」→「加载已解压的扩展程序」→ 选 **`.output/chrome-mv3`**（**不是**仓库根目录，`manifest.json` 是构建产物，理由见 [releasing.md](./docs/guides/releasing.md)）。
+**不想构建？** 去仓库的 **Releases** 页下载 `pluma-<版本>.zip`，**解压**后加载那个文件夹。⚠️ 该产物未经扩展商店签名，仅供学习交流使用；介意请自行编译。
 
 ## 致谢
 

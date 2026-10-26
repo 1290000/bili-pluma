@@ -65,7 +65,7 @@ bash poc/probe/run-all.sh            # 启动带端口的 Edge → 等就绪 →
 
 ## 2. 先读什么（按此顺序，不要跳）
 
-1. [README.md](./README.md) —— 这是什么、边界在哪、为什么只发源码
+1. [README.md](./README.md) —— 这是什么、边界在哪、怎么装
 2. **本文件** —— 硬约束
 3. [docs/03-open-questions.md](./docs/03-open-questions.md) §0 总览表 —— **还剩几件事没定**，哪些已定不要翻案
 4. [docs/04-project-structure.md](./docs/04-project-structure.md) §〇 + §1 + §2 —— 技术选型、目录、分层禁令
@@ -90,7 +90,7 @@ bash poc/probe/run-all.sh            # 启动带端口的 Edge → 等就绪 →
 | 5 | **不做伪装的会员标识**，连开关都不放（**例外**：可改写 `/x/player/wbi/v2`、`/x/player/v2`、`/x/web-interface/nav` 响应体的 vip 字段，仅限 [ADR 0013](./docs/decisions/0013-patch-player-info-response.md)；加路径必须同时改 ADR，`check-patch-scope` 会红） | 提议"让画质菜单看起来正常点"；或往 `PATCH_PATHS` 加新接口 |
 | 6 | **不做远程配置**，只本地版本号 + 升级提示 | 提议"加个远程白名单热更新" |
 | 7 | **GPL-3.0-only + 第 7 条附加条款** | 提议"换成 MIT 更容易被采用" |
-| 8 | **只发源码**，不上架商店、不发预编译包 | 提议"打包个 zip 方便用户" |
+| 8 | **不上架商店**；分发方式见 [ADR 0018](./docs/decisions/0018-ship-built-artifacts.md)（可发 zip，但必须同时提供带源码的版本） | 提议"上架商店能扩大用户量"；或只发 zip 不发源码版 |
 | 9 | **v1 只支持 Chrome + Edge** | 提议"顺手适配 Firefox" |
 | 10 | **WXT 的 `entrypoints/` 约定** 优先于个人目录偏好 | 提议"把入口改回 `src/content/`" |
 | 11 | **用无痕分区（`incognito: "split"`）登录播放账号** —— 推翻原"不支持无痕"（[ADR 0012](./docs/decisions/0012-isolated-window-login.md)） | 提议"直接在普通窗口扫码更简单" |

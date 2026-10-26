@@ -50,12 +50,20 @@
 | [0015](./decisions/0015-lazy-health-check-no-alarms.md) | **凭据健康只做惰性检查**：不用 alarms，不做 cookie 刷新 |
 | [0016](./decisions/0016-drop-quality-report-page.md) | **砍掉画质体检表与音质自检独立页**：options 五分区降为三 |
 | [0017](./decisions/0017-restore-primary-progress-in-playurl.md) | **把主账号观看进度写回 playurl 响应**：修"看到一半重新打开从 0 开始" |
+| [0018](./decisions/0018-ship-built-artifacts.md) | **放宽「只发源码」**：可发 zip，但必须同时提供带源码版本 |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 
 ### 我要改代码 / 加功能
 
 先读 [04-project-structure.md](./04-project-structure.md) §2「各层职责与禁令」。**别凭直觉往目录里塞文件**——禁令都是有原因的。
+
+### 我要发布一个版本
+
+读 [guides/releasing.md](./guides/releasing.md)（命名、zip 结构、发布步骤）
+与 [guides/versioning.md](./guides/versioning.md)（版本号怎么定）。
+Release 说明的措辞与结构看 [guides/release-notes-template.md](./guides/release-notes-template.md)。
+分发边界为什么这样划，看 [ADR 0018](./decisions/0018-ship-built-artifacts.md)。
 
 ### 我要动消息协议
 

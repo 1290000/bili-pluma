@@ -1,6 +1,8 @@
 # 发布流程
 
-> 本项目**只发源码**。本节说明为什么，以及如果将来改变主意要注意什么。
+> 分发方式见 [ADR 0018](../decisions/0018-ship-built-artifacts.md)：**不上架商店、不发 crx、可以发 zip
+> 但必须同时提供带源码的版本**。本文负责**怎么发**（命名、结构、步骤、文案），
+> 为什么这么发归 ADR 0018，不在这里复述。
 
 ---
 
@@ -9,7 +11,8 @@
 | 红线 | 原因 |
 | --- | --- |
 | **不上架 Chrome / Edge 商店** | B站投诉后必下架；且"修改请求头"类扩展审核本就严格。详见 Q16 |
-| **不发预编译 zip / crx** | 减少"提供可用侵权工具"的观感。bilibili-API-collect 只删文档就过关了 |
+| **不发 crx** | 商店签名的 crx 才是可安装的；自己签的浏览器直接拒绝，发了只会制造"下载了装不上"。见 [ADR 0018](../decisions/0018-ship-built-artifacts.md) |
+| **发 zip 必须同时发 `-with-source` 版** | 让产物可被独立重建比对。**这是唯一能区分"构建产物"与"黑盒分发"的凭证** |
 | **不提供跳过付费墙的能力** | 这是能否站住的分界线，也是免责声明里"不绕过付费墙"这句话的前提（见 Q4） |
 | **不做任何形式商业化** | 收钱会把性质从"个人工具"变成"商业服务"（见 Q10） |
 | **不主动做 SEO / 推广** | 降低被发现概率（但别指望有效） |
@@ -17,52 +20,123 @@
 
 ---
 
-## 发布流程（源码版）
+## 产物命名（唯一规范）
+
+```
+pluma-<版本>.zip              构建产物，解压后可在开发者模式加载
+pluma-<版本>-with-source.zip  同上 + 完整源码
+```
+
+例：`pluma-0.9.0.zip`、`pluma-0.9.0-with-source.zip`
+
+| 规则 | 理由 |
+| --- | --- |
+| `版本` **取自 `manifest.version`**，不手写 | 手写必然与 `wxt.config.ts` 漂移。脚本自动读 |
+| **不带浏览器名**（不写 `-edge` / `-chrome`） | 写了会让用户以为要区分下载。本项目只支持 Chrome+Edge，产物**同一份** |
+| **不带日期** | 同版本重打包必须覆盖，不允许两个文件并存（否则用户会问"哪个新"） |
+| **不带 `v` 前缀** | `v0.9.0` 是 git tag 的写法，文件名不用，避免两种写法混用 |
+| GitHub 自动生成的 `Source code (zip)` **不要重命名** | 名字固定，不会与上面两个冲突 |
+
+---
+
+## zip 内结构（唯一规范）
+
+### `pluma-<版本>.zip` — 扁平，`manifest.json` 在**根**
+
+```
+manifest.json          ← 必须在根，浏览器靠它识别
+background.js
+main-world.js
+popup.html
+options.html
+login-window.html
+need-incognito.html
+content-scripts/       ← 目录，内含 content.js
+chunks/                ← 目录，内含各页面 chunk
+assets/                ← 目录，内含 CSS
+安装说明.txt            ← 脚本自动生成
+```
+
+⚠️ **不许包一层顶层目录**。套一层会解压出 `pluma-0.9.0/manifest.json`，
+用户选上层就报「清单文件缺失或不可读取」—— 这是最高频的安装失败原因。
+
+### `pluma-<版本>-with-source.zip` — 产物在子目录
+
+```
+extension/             ← 构建产物放这里（结构与上面完全相同）
+src/
+entrypoints/
+public/
+scripts/
+docs/
+tests/
+package.json
+pnpm-lock.yaml
+wxt.config.ts
+tsconfig.json
+README.md
+LICENSE
+ADDITIONAL-TERMS.md
+```
+
+⚠️ **这个 zip 里不放 `安装说明.txt`**：它里面有源码，放进说明会诱导用户
+去加载整个目录（会失败）。安装说明只属于能直接加载的那一份。
+
+### 两个 zip 都不含
+
+`.git/` · `node_modules/` · `.output/chrome-mv3-dev/`（HMR 产物） · `.workbuddy-ai/` ·
+`coverage/` · `dist/` · `*.log`
+
+---
+
+## 安装说明.txt（轻量版专用，全文）
+
+> 由脚本生成，标题里的版本号自动替换。**改文案就改这里**，别在脚本里另存一份。
+
+```
+Pluma <版本> — 安装说明
+
+一、必须先解压
+   不能直接在压缩包里选文件夹。请先右键 → 全部解压到当前文件夹。
+
+二、加载扩展（Edge / Chrome 都一样）
+   1. 地址栏输入  edge://extensions  （Chrome 用 chrome://extensions）
+   2. 打开左下角「开发者模式」
+   3. 点「加载解压缩的扩展」
+   4. 选择解压出来的这个文件夹 —— 里面有 manifest.json
+
+   ⚠️ 最常见的错误：选了上一级目录，或者选进了某个子文件夹。
+      只要报「清单文件缺失或不可读取」，就是选错了层级。
+      正确的层级是「选中 manifest.json 所在的那个文件夹」。
+
+三、第一次使用
+   1. 点工具栏的 Pluma 图标
+   2. 按提示扫码登录你的大会员账号（会开一个独立窗口，不会动你当前登录的号）
+   3. 打开任意 B站视频，画质菜单里应该出现 4K / 1080P60
+
+四、本扩展不做什么
+   · 不绕过付费墙（会员专享番剧、电影仍需购买）
+   · 不伪装会员标识（界面显示你的真实状态）
+   · 不解锁地区限制
+
+五、出问题怎么办
+   · 画质没变：确认总开关是开的，并且刷新过页面
+   · 提示凭据失效：重新扫码登录播放账号
+   · 其他：设置页 →「诊断」分区可以导出诊断信息
+
+许可证：GPL-3.0-only + 附加条款，完整文本见仓库根目录。
+本项目与哔哩哔哩官方无任何关联，仅供学习交流使用。
+```
+
+---
+
+## 发布流程
 
 ### 1. 版本号
 
-**格式 `MAJOR.MINOR.PATCH`，当前 `0.9.0`。**
+规范在 **[versioning.md](./versioning.md)** —— 含为什么是 0.9.0、分段怎么涨、两个硬限制。
 
-#### 先认清这个号在这里的作用
-
-三段式版本的每个约定，前提都是**有下游在看**：商店靠它判断推不推更新、下游库靠它判断升级风险。
-本项目三条硬约束把这两类下游都排除了——**不上架商店**（没有自动更新，Chrome 从不比较版本号）、
-**只发源码**（没有"下载新版覆盖旧版"的动作）、**没有依赖它的代码**。
-
-所以版本号在这里只剩一个作用：**给人看，让人知道"这是哪一版、变化有多大"**。
-判断标准因此不是"符不符合 semver 教科书"，而是"**第一眼读起来对不对**"。
-
-#### 为什么是 0.9.0
-
-- **`0.9.0`** = 「v1 范围已完整落地、通过六条验收，但明确还在观察期」。
-  既不是"刚开了个头"（那是 `0.0.1` 的误读），也把 `1.0.0` 留给"首个稳定版"。
-- 不用 `0.0.1`：读起来像未完成，而 `0.x` 在 semver 里表示"API 可能随时破坏"，
-  这里没有接收方消费这个承诺，写成 0.0.x 只会显得没做完。
-- 不用 `1.0.0-rc.1`：Chrome 的 `manifest.version` **只接受 1–4 段数字**，
-  预发布后缀要另用 `version_name` 字段。为了一个没人读的后缀多一个字段，不值得。
-
-#### 分段怎么涨
-
-| 段 | 什么时候 +1 | 例子 |
-| --- | --- | --- |
-| `MAJOR` | **用户能感知的行为不兼容**，或白名单/协议破坏性变化 | 放弃某个已支持场景；`messages.ts` breaking change |
-| `MINOR` | 新增支持的场景或界面 | 支持番剧取流；新增设置项 |
-| `PATCH` | 修 bug、调文案 | 修续播失效（[ADR 0017](../decisions/0017-restore-primary-progress-in-playurl.md)） |
-
-#### 两个必须知道的事实
-
-1. **`manifest.version` 每段上限 65535**（Chrome 规范）。**别把日期塞进任何一段** ——
-   `20261026` 是 2689 万，超限，**装不上**。这排除了 `YYYYMMDD` 类方案。
-   （`minimum_chrome_version: '120'` 这类形似版本号的值不受此限，但 `version` 本身受。）
-2. **白名单修订号是另一个号**（`ROUTES_REVISION`，见 `src/shared/constants/routes.ts`）。
-   它只在路径字符串或 `enabled` 开关变化时 +1，**与发布版本不同步**：
-   改 UI 会升 PATCH 但修订号不动；补一条路径会升修订号但可以不发版。
-   **两者不要混用**——用户报 bug 时问的是修订号（"我这份清单是哪一版"）。
-
-同步更新两处，缺一不可：
-
-- `wxt.config.ts` 的 `manifest.version`（WXT 没有独立的 `src/manifest.json`）
-- `package.json` 的 `version`
+只需记住：同步改 `wxt.config.ts` 的 `manifest.version` 与 `package.json` 的 `version`。
 
 ### 2. 发布前检查
 
@@ -75,46 +149,56 @@ npm test               # vitest，core 层单测
 npm run build          # 打包，检查产物体积
 ```
 
-### 3. 人工冒烟测试
-
-在 Chrome 和 Edge 各跑一遍：
-
-- [ ] 首次安装 → badge 出现小圆点 → popup 显示"未配置"
-- [ ] 扫码登录播放账号 → 成功 → popup 显示"已接管"
-- [ ] 打开一个 4K 视频 → 画质菜单出现 4K/1080P60
-- [ ] 点赞一条视频 → 检查是否记在主账号（不是播放账号）
-- [ ] 播放 30 秒 → 检查历史记录是否出现在主账号
-- [ ] 拔掉播放账号凭据（模拟失效）→ popup 显示"凭据失效"
-- [ ] 打开非视频页 → popup 显示"未生效"
-
-### 4. 更新 CHANGELOG.md
-
-格式：
-
-```markdown
-## [1.0.0] - 2026-11-XX
-
-### 新增
-- 支持 4K / 1080P60 / HDR / Hi-Res 取流
-
-### 变更
-- 白名单新增 XXX 路径
-
-### 修复
-- 修复多标签页并发时的规则冲突
-```
-
-**不要在这个时候写"修复了某某接口破解"这种措辞**。全部用中性描述。
-
-### 5. 打 Tag 并发布
+### 3. 打包
 
 ```bash
-git tag -a v1.0.0 -m "v1.0.0"
-git push origin v1.0.0
-gh release create v1.0.0 --notes-file CHANGELOG.md
+node scripts/package.mjs
 ```
 
-**Release 只放源码归档（GitHub 自动生成），不上传任何构建产物。**
+产出 `dist/pluma-<版本>.zip` 与 `dist/pluma-<版本>-with-source.zip`。
+脚本会自检：`manifest.json` 在根、版本号一致、不含被排除的目录。任一不符直接报错退出。
+
+### 4. 人工冒烟测试（**硬性，不可省**）
+
+这是唯一无法自动化的环节 —— 它验的是"用户拿到 zip 之后能不能装上"。
+
+**必须用 zip 本身验，不能直接加载 `.output/`**：
+
+```bash
+# 解压到临时目录（模拟用户操作）
+```
+
+- [ ] 解压 `pluma-<版本>.zip` → 打开 `edge://extensions` → 加载解压缩的扩展 → **能装上**
+- [ ] 装完 badge 出现小圆点 → popup 显示"未配置"
+- [ ] 扫码登录播放账号 → popup 显示"已接管"
+- [ ] 打开 4K 视频 → 画质菜单出现 4K/1080P60 → 实际播放 ≥2160p
+- [ ] 点赞一条视频 → 记在主账号
+- [ ] 播放 30 秒 → 历史出现在主账号
+- [ ] 关掉总开关 → 刷新 → 画质回落到 1080P（判据见验收清单 §5）
+- [ ] 打开非视频页 → popup 显示"未生效"
+
+### 5. 更新 CHANGELOG.md
+
+格式见 [release-notes-template.md](./release-notes-template.md)。**不要写"修复了某某接口破解"
+这种措辞**，全部用中性描述。
+
+### 6. 打 Tag 并发布
+
+```bash
+git tag -a v0.9.0 -m "v0.9.0"
+git push origin main --tags
+
+gh release create v0.9.0 \
+  dist/pluma-0.9.0.zip \
+  dist/pluma-0.9.0-with-source.zip \
+  --title "Pluma 0.9.0" \
+  --notes-file dist/release-notes.md
+```
+
+**Release 说明按 [release-notes-template.md](./release-notes-template.md) 写**，
+脚本会把模板填好版本号落在 `dist/release-notes.md`。
+
+⚠️ 只上传这两个 zip。GitHub 自动生成的 `Source code (zip)` 保留，不要删也不要改名。
 
 ---
 
@@ -138,6 +222,9 @@ gh release create v1.0.0 --notes-file CHANGELOG.md
 
 ## 如果将来要改分发方式
 
+> 现状：**发 zip（含源码版）已由 [ADR 0018](../decisions/0018-ship-built-artifacts.md) 授权**。
+> 本节是「再往下放宽」（比如上架商店）时要过的关。
+
 **先问自己三个问题**：
 
 1. 这么做能带来什么，是用户真的需要，还是我想让项目"看起来更正式"？
@@ -157,6 +244,8 @@ gh release create v1.0.0 --notes-file CHANGELOG.md
 
 ## 相关
 
+- 分发方式决策：[decisions/0018](../decisions/0018-ship-built-artifacts.md)
+- Release 说明模板：[release-notes-template.md](./release-notes-template.md)
 - 待确认问题 Q16（分发与预案）：[03-open-questions.md](../03-open-questions.md)
 - 协议决策：[decisions/0003](../decisions/0003-gplv3-with-additional-terms.md)
 - 合规表述：同文档 Q10
