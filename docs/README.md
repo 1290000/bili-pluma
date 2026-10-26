@@ -67,6 +67,12 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 
 具体怎么调 DNR、抓包、看日志，看 [guides/debugging.md](./guides/debugging.md)。
 
+### 我要在真实登录态下验证画质 / 抓 playurl
+
+`poc/verify/` 那套是干净 profile，拿不到你的登录态。要用 `bsk`（browser-skill）：
+配置、三个坑、验证命令见 [guides/browser-skill-setup.md](./guides/browser-skill-setup.md)。
+**这是本机环境快照，不是通用安装指南**；通用安装看官方 `AGENT_INSTALL.md`。
+
 ### 我在调 DNR 相关的问题
 
 读 [decisions/0002](./decisions/0002-dnr-to-replace-cookie-header.md) 的"已知风险"一节，以及 [guides/debugging.md](./guides/debugging.md)。

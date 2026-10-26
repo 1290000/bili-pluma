@@ -4,7 +4,7 @@
 >
 > 用主账号浏览、点赞、收藏、评论，让一个大会员账号专门负责播放。
 
-GPL-3.0-only · Chrome 120+ / Edge · **P2 可用（2026-10-26）**：画质提升与社交归属已真机验收，界面待 P3
+GPL-3.0-only · Chrome 120+ / Edge · **P3 进行中（2026-10-26）**：画质解锁与 §2.3 对比卡已落地，options 与 §2.4/§2.6 未完
 
 ## 请先读
 
@@ -67,9 +67,9 @@ GPL-3.0-only · Chrome 120+ / Edge · **P2 可用（2026-10-26）**：画质提�
 pnpm install && pnpm build
 ```
 
-然后 `chrome://extensions/` 或 `edge://extensions/` → 开「开发者模式」→「加载已解压的扩展程序」→ 选 **`.output/chrome-mv3`**。
+`packageManager` 锁在 `pnpm@12`，换 npm/yarn 会与 `pnpm-lock.yaml` 不一致；没装就 `npm i -g pnpm@12`。
 
-> ⚠️ **选仓库根目录会报「清单文件丢失或不可读取」**——WXT 项目的 `manifest.json` 是构建产物，根目录本来就没有。没找到就先跑 `pnpm build`。理由见 [docs/guides/releasing.md](./docs/guides/releasing.md)。
+然后 `chrome://extensions/` 或 `edge://extensions/` → 开「开发者模式」→「加载已解压的扩展程序」→ 选 **`.output/chrome-mv3`**（**不是**仓库根目录，`manifest.json` 是构建产物，理由见 [releasing.md](./docs/guides/releasing.md)）。
 
 ## 致谢
 

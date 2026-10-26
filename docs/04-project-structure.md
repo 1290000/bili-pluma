@@ -421,7 +421,7 @@ v1 只做纯 MV3 扩展。
 
 ### 保险 2：ESLint 的 `no-restricted-imports` 限定层间引用 ✅ 已落地
 
-实现见 `eslint.config.mjs`，跑 `pnpm lint`。核心规则：
+实现见 `eslint.config.mjs`，跑 `node scripts/verify.mjs`。核心规则：
 
 ```js
 // src/core/**、src/shared/** 下
@@ -650,8 +650,8 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
 | `entrypoints/popup/` | 🟡 **部分实现**（P2-c：状态框架 + 开关 + 登录入口 + 受影响标签页提示）；§2.3 / §2.4 / §2.6 顺延到 P3 | 依赖 options 页与 `core/playinfo` 解析 |
 | `entrypoints/options/` | **尚未实现**（P3） | — |
-| `scripts/check-boundaries.ts` | ✅ **已实现**（`node scripts/verify.mjs` 中的一项） | — |
-| ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`，`pnpm lint`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
+| `scripts/check-*.mjs`（5 个检查脚本 + `verify.mjs` 入口） | ✅ **已实现**（`node scripts/verify.mjs`，9 项） | 边界 / 消息路由 / 设计令牌 / 文档 / 改写范围；**检查命令的唯一权威位置是 `scripts/`** |
+| ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`；跑 `node scripts/verify.mjs`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
 | Prettier 配置 | ✅ **已实现**（`.prettierrc`；跑 `node scripts/verify.mjs`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |
 | `.eslintrc.cjs` | `eslint.config.mjs` | ESLint 9 默认 flat config |
 
