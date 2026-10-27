@@ -35,13 +35,12 @@ function closeIfReadyElsewhere(): void {
     if (m) window.close();
   });
 
-  // 8 秒后还没就绪 → 更新提示，告诉用户确实需要手动开启
+  // 8 秒后还没就绪 → 说明权限确实没开，把提示高亮出来
   window.setTimeout(() => {
     void readLoginReady().then((m) => {
       if (m) return;
-      // 不能再说"请按下面两步操作" —— 上面已经是步骤列表了，重复只会让人以为多了一组步骤
-      tipEl.textContent =
-        '登录窗口没有自动打开，说明权限还没开：请照上面三步做一遍，然后重新点图标。';
+      // 只说"还没开成"，不再复述步骤 —— 上面就是步骤列表
+      tipEl.textContent = '登录窗口还没打开 —— 上面的权限应该没生效，开完记得重新点图标。';
       tipEl.classList.add('show');
     });
   }, 8000);

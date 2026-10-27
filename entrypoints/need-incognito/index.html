@@ -9,12 +9,6 @@
     <div class="wrap">
       <h1 class="title">还差一步：开启无痕窗口权限</h1>
 
-      <p class="lead">
-        播放账号要登录在
-        <strong>无痕窗口</strong>
-        里，才能和你主账号的登录状态互相隔离。浏览器默认不允许扩展打开这个窗口，需要你手动开一次。
-      </p>
-
       <p class="steps-title">按下面三步操作（只用做一次）：</p>
       <ol class="steps">
         <li>
@@ -38,15 +32,20 @@
         </li>
       </ol>
 
+      <p class="footnote" id="auto-tip">设置一次即可，之后点图标会直接打开登录窗口。</p>
+
       <details class="why">
         <summary class="why-title">为什么要开这个权限？</summary>
         <p class="why-body">
-          B站的登录态是存在 Cookie 里的，而同一个浏览器里 bilibili.com 只能有一份
-          Cookie。在普通窗口登录播放账号会把主账号顶掉，所以必须用无痕分区来隔离两套登录态。
+          播放账号要登录在
+          <strong>无痕窗口</strong>
+          里，才能和你主账号的登录状态互相隔离。浏览器默认不允许扩展打开这个窗口，所以需要你手动开一次。
+        </p>
+        <p class="why-body">
+          B站的登录态存在 Cookie 里，而同一个浏览器里 bilibili.com 只能有一份
+          Cookie。在普通窗口登录播放账号会把主账号顶掉，所以必须用无痕窗口隔开两套登录态。
         </p>
       </details>
-
-      <p class="footnote" id="auto-tip">设置一次即可，之后点图标会直接打开登录窗口。</p>
     </div>
     <script type="module" src="./main.ts"></script>
   </body>

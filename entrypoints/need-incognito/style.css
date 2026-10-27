@@ -71,6 +71,11 @@ body {
   line-height: 1.7;
 }
 
+/* 两段说明之间留一点呼吸，但不要和首段的 8px 叠加 */
+.why-body + .why-body {
+  margin-top: 6px;
+}
+
 .steps-title {
   margin: 0 0 6px;
   font-weight: 500;
