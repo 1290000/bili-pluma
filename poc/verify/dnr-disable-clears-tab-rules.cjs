@@ -18,11 +18,35 @@
  * 单测环境（Vitest + jsdom）没有。所以归到这一档：
  * **改过 `dnr.ts` 就必须跑**（AGENTS.md §4.3 路由表）。
  *
- * ## 判据（三条，缺一不可）
+ * ## 为什么不再需要真实登录态（2026-10-27 改造）
  *
- * 1. 开关**开着**时：标签页规则存在（否则功能根本没工作）
- * 2. 关掉开关后：**path 和 tab 两类规则都为 0**
- * 3. 再打开开关并刷新页面后：规则重新出现（证明不是"关掉就再也起不来"）
+ * 旧版要求"已登录播放账号的 profile"，否则**整个脚本跳过**。两个问题：
+ *
+ * 1. 它用 `launchPersistentContext('')` —— 空字符串 = 每次新建临时 profile，关掉就删。
+ *    所以旧提示里那句"先在这个 browser 里扫码登录一次，再重跑"**根本做不到**：
+ *    扫完关掉窗口，profile 就没了。
+ * 2. 更关键：这条判据**不需要真实凭据**。它验的是 `disableProxy()` 删不删两类规则，
+ *    跟 cookie 是谁无关 —— `run-q2-auto.cjs` 早就用 `FAKE-1-0-xxx` 假 cookie 验过 DNR 行为。
+ *
+ * 现在改成**手工造状态**：直接在 SW 里装一条 10000 段 + 一条 20000 段规则
+ * （形态与 `dnr.ts` 的 `buildPathRule` / `installTabRule` 一致），
+ * 然后发 `proxy/set {enabled:false}`，看它删不删。
+ *
+ * ## 判据（四条，前三条零依赖）
+ *
+ * 1. **前置自检**：手工装的两类规则确实存在（`path=1 tab=1`）。
+ *    没有这一步，后面的"清零"可能只是"本来就没有"。
+ * 2. **反例自检**：只删 path 段时，tab 段**必须残留**。
+ *    这证明"如果代码只删 path，tab 会留下"——也就是那个 bug 的形状。
+ *    **这是本脚本能自证的关键**：不依赖"改代码让它变红"，而是在内部造出"只删一类"的情形。
+ * 3. **核心判据**：`proxy/set {enabled:false}` 后，两类都归零。
+ * 4. **状态一致**：`storage.local` 的 `pluma:proxy-enabled` 变成 `false`。
+ *
+ * ## 可选：真实登录态下的端到端
+ *
+ * 若当前 profile **碰巧**有播放账号凭据，额外验三条：真实视频页会装 tab 规则、
+ * 关开关后清零、刷新后不回来。**没有凭据时明确报「未验」，而不是跳过整个脚本**——
+ * 前三项无论如何都会给出结论。
  *
  * ## 用法
  *
@@ -30,7 +54,7 @@
  * node poc/verify/dnr-disable-clears-tab-rules.cjs
  * ```
  *
- * ⚠️ 需要**已加载扩展**且有真实登录态。无头环境跑不了，会直接报错退出。
+ * 需要先 `pnpm build`（读 `.output/chrome-mv3`）。会开一个可见窗口，约 15 秒。
  */
 
 const { chromium } = require('playwright-core');
@@ -52,13 +76,121 @@ const EDGE_PATH =
   process.env.EDGE_PATH ??
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 
-/** 从 target 页面里通过扩展页面拿规则 —— 实际用 background 的诊断消息更好 */
+/** 与 `dnr.ts` 的段位保持一致（10000 / 20000），否则 `removeAll*Rules` 认不出来 */
+const PATH_RULE_ID = 10001;
+const TAB_RULE_ID = 20001;
+const PATH_BAND = [10000, 11000];
+const TAB_BAND = [20000, 30000];
+
+/** 假凭据：内容不重要，只要是个非空 cookie 串（真凭据反而会被写进日志的风险） */
+const FAKE_COOKIE = 'sessdata=FAKE-DISABLE-TEST; bili_jct=jct0';
+
 const PASS = [];
 const FAIL = [];
+const SKIPPED = [];
 
 function check(name, ok, detail) {
   (ok ? PASS : FAIL).push({ name, detail });
   console.log(`${ok ? 'ok  ' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}`);
+}
+
+function skip(name, why) {
+  SKIPPED.push({ name, why });
+  console.log(`--    ${name}（未验：${why}）`);
+}
+
+/** 数当前会话里的两类规则 */
+function countRules(sw) {
+  return sw.evaluate(
+    ({ pathBand, tabBand }) =>
+      chrome.declarativeNetRequest.getSessionRules().then((rules) => ({
+        path: rules.filter((r) => r.id >= pathBand[0] && r.id < pathBand[1]).length,
+        tab: rules.filter((r) => r.id >= tabBand[0] && r.id < tabBand[1]).length,
+      })),
+    { pathBand: PATH_BAND, tabBand: TAB_BAND },
+  );
+}
+
+/** 手工装一条 path 规则 + 一条 tab 规则，形态与 dnr.ts 一致 */
+function installFakeRules(sw) {
+  return sw.evaluate(
+    ({ pathRuleId, tabRuleId, fakeCookie }) => {
+      const action = {
+        type: 'modifyHeaders',
+        requestHeaders: [{ header: 'cookie', operation: 'set', value: fakeCookie }],
+      };
+      const baseCondition = {
+        urlFilter: '/x/player/wbi/playurl',
+        requestDomains: ['api.bilibili.com'],
+        resourceTypes: ['xmlhttprequest'],
+        requestMethods: ['get'],
+      };
+
+      return chrome.declarativeNetRequest
+        .updateSessionRules({
+          removeRuleIds: [pathRuleId, tabRuleId],
+          addRules: [
+            { id: pathRuleId, priority: 1, action, condition: baseCondition },
+            // tabIds 只要求是数字；DNR 不校验该标签页是否真的存在
+            { id: tabRuleId, priority: 2, action, condition: { ...baseCondition, tabIds: [1] } },
+          ],
+        })
+        .then(() => undefined);
+    },
+    { pathRuleId: PATH_RULE_ID, tabRuleId: TAB_RULE_ID, fakeCookie: FAKE_COOKIE },
+  );
+}
+
+/** 只删 path 段（模拟旧 bug 的行为），用于反例自检 */
+function removePathBandOnly(sw) {
+  return sw.evaluate(
+    ({ pathBand }) =>
+      chrome.declarativeNetRequest.getSessionRules().then((rules) =>
+        chrome.declarativeNetRequest.updateSessionRules({
+          removeRuleIds: rules
+            .filter((r) => r.id >= pathBand[0] && r.id < pathBand[1])
+            .map((r) => r.id),
+        }),
+      ),
+    { pathBand: PATH_BAND },
+  );
+}
+
+/**
+ * 通过**真实消息**关掉总开关 —— 必须走 `proxy/set`，不能直接删规则，
+ * 否则测的是脚本自己而不是 `disableProxy()`。
+ *
+ * 优先在扩展页里发（那里一定有 `chrome.runtime`）；
+ * 扩展页打不开时退回到 SW 自发（SW 给自己发消息同样会触发 onMessage）。
+ */
+async function disableViaMessage(ctx, sw, extId) {
+  try {
+    const extPage = await ctx.newPage();
+    await extPage.goto(`chrome-extension://${extId}/options.html#/account`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 10000,
+    });
+    await extPage.evaluate(
+      () =>
+        new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'proxy/set', enabled: false }, () =>
+            resolve(undefined),
+          );
+        }),
+    );
+    await extPage.close();
+    return 'ext-page';
+  } catch {
+    await sw.evaluate(
+      () =>
+        new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'proxy/set', enabled: false }, () =>
+            resolve(undefined),
+          );
+        }),
+    );
+    return 'sw-self';
+  }
 }
 
 async function main() {
@@ -75,10 +207,7 @@ async function main() {
   const ctx = await chromium.launchPersistentContext('', {
     executablePath: EDGE_PATH,
     headless: false,
-    args: [
-      `--disable-extensions-except=${EXT_DIR}`,
-      `--load-extension=${EXT_DIR}`,
-    ],
+    args: [`--disable-extensions-except=${EXT_DIR}`, `--load-extension=${EXT_DIR}`],
   });
 
   try {
@@ -88,102 +217,108 @@ async function main() {
 
     const extId = new URL(sw.url()).host;
 
-    /**
-     * 在 **service worker 上下文**里执行 —— `chrome.declarativeNetRequest` 在那里可用。
-     *
-     * 这是本项目验证 DNR 的唯一可靠姿势：页面上下文拿不到这些 API，
-     * 扩展页又会被 bsk 的沙箱拒绝（见 `browser-skill-setup.md` §7a）。
-     */
-    const readRules = () =>
-      sw.evaluate(() =>
-        chrome.declarativeNetRequest.getSessionRules().then((rules) => ({
-          path: rules.filter((r) => r.id >= 10000 && r.id < 11000).length,
-          tab: rules.filter((r) => r.id >= 20000 && r.id < 30000).length,
-        })),
-      );
+    // ══════════════════════════════════════════════════════════════
+    // 阶段 A：零依赖，手工造状态（前三项判据）
+    // ══════════════════════════════════════════════════════════════
 
-    const page = await ctx.newPage();
+    await installFakeRules(sw);
+    const installed = await countRules(sw);
+    check(
+      '前置自检：两类规则都装上了',
+      installed.path === 1 && installed.tab === 1,
+      `path=${String(installed.path)} tab=${String(installed.tab)}`,
+    );
 
-    // ── 前置：必须有可用的播放账号凭据，否则根本装不了规则 ──
-    //
-    // ⚠️ **这一步漏了会让整个脚本变成空检验**：2026-10-27 首跑就是
-    // 全新 profile、没配账号 → `handlePageActivate` 在 `not-configured` 就返回 →
-    // path=0 tab=0 → 后面三条"清零"断言**全都轻松通过**，什么也没验。
-    //
-    // 这类"因为前提不成立所以测试永远绿"的问题，比 bug 本身更危险：
-    // 它会让人以为验过了。
+    // 反例自检：只删 path，tab 必须还在
+    await removePathBandOnly(sw);
+    const afterPathOnly = await countRules(sw);
+    check(
+      '反例自检：只删 path 段时，tab 段会残留（这就是那个 bug 的形状）',
+      afterPathOnly.path === 0 && afterPathOnly.tab === 1,
+      `path=${String(afterPathOnly.path)} tab=${String(afterPathOnly.tab)}`,
+    );
+
+    // 恢复成"两类都在"的状态，再走真实关开关流程
+    await installFakeRules(sw);
+    const beforeDisable = await countRules(sw);
+    check(
+      '重新装好后两类都在',
+      beforeDisable.path === 1 && beforeDisable.tab === 1,
+      `path=${String(beforeDisable.path)} tab=${String(beforeDisable.tab)}`,
+    );
+
+    const channel = await disableViaMessage(ctx, sw, extId);
+    await new Promise((r) => setTimeout(r, 800));
+
+    const afterDisable = await countRules(sw);
+    check('关掉开关后路径规则清零', afterDisable.path === 0, `path=${String(afterDisable.path)}`);
+    check(
+      '关掉开关后**标签页**规则清零（本次修的 bug）',
+      afterDisable.tab === 0,
+      `tab=${String(afterDisable.tab)}`,
+    );
+
+    const enabledFlag = await sw.evaluate(() =>
+      chrome.storage.local.get('pluma:proxy-enabled').then((b) => b['pluma:proxy-enabled']),
+    );
+    check('总开关状态置为 false', enabledFlag === false, `enabled=${String(enabledFlag)}`);
+    console.log(`     （关开关走的通道：${channel}）`);
+
+    // ══════════════════════════════════════════════════════════════
+    // 阶段 B：有真实凭据才跑的端到端（第四项判据）
+    // ══════════════════════════════════════════════════════════════
+
     const hasCred = await sw.evaluate(() =>
       chrome.storage.local.get('pluma:vault').then((b) => {
         const v = b['pluma:vault'];
         return Boolean(v && typeof v === 'object' && Object.keys(v).length > 0);
       }),
     );
+
     if (!hasCred) {
-      console.error(
-        [
-          '[dnr-disable] 跳过：当前 profile 没有播放账号凭据。',
-          '',
-          '  这个脚本**必须**在已登录播放账号的 profile 上跑，否则规则根本不会装，',
-          '  三条"清零"断言会全部空过 —— 看着是绿的，其实什么也没验。',
-          '',
-          '  做法：先在这个 browser 里手动扫码登录一次播放账号，再重跑。',
-        ].join('\n'),
+      skip(
+        '真实视频页会装 tab 规则 → 关开关清零 → 刷新后不回来',
+        '当前临时 profile 没有播放账号凭据（要验这三条得手动扫码，见文件头「可选」一节）',
       );
-      process.exitCode = 3;
-      return;
+    } else {
+      const page = await ctx.newPage();
+      await page.goto('https://www.bilibili.com/video/BV1jt421t7XH/', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000,
+      });
+      await page.waitForTimeout(4000);
+
+      const live = await countRules(sw);
+      check('真实视频页会装标签页规则', live.tab > 0, `path=${String(live.path)} tab=${String(live.tab)}`);
+
+      await disableViaMessage(ctx, sw, extId);
+      await new Promise((r) => setTimeout(r, 800));
+      const liveAfter = await countRules(sw);
+      check(
+        '关开关后清零（真实页面）',
+        liveAfter.path === 0 && liveAfter.tab === 0,
+        `path=${String(liveAfter.path)} tab=${String(liveAfter.tab)}`,
+      );
+
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForTimeout(4000);
+      const afterReload = await countRules(sw);
+      check(
+        '关掉后刷新页面，规则不许被重新装上',
+        afterReload.path === 0 && afterReload.tab === 0,
+        `path=${String(afterReload.path)} tab=${String(afterReload.tab)}`,
+      );
+      await page.close();
     }
-
-    // 打开一个视频页，让 content script 报到 → 装标签页规则
-    await page.goto('https://www.bilibili.com/video/BV1jt421t7XH/', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
-    });
-    await page.waitForTimeout(4000);
-
-    const before = await readRules();
-    check(
-      '开关开着时存在标签页规则',
-      before.tab > 0,
-      `path=${String(before.path)} tab=${String(before.tab)}`,
-    );
-
-    // ── 关掉总开关 ──
-    //
-    // ⚠️ 必须在**扩展页**里发这条消息。普通页面没有 `chrome.runtime`，
-    // 发了也是静默失败 —— 那会让下面的断言"看起来通过了"（因为规则本来就没删）。
-    // 这类"检测手段本身无效"的坑，比 bug 更难发现。
-    const extPage = await ctx.newPage();
-    await extPage.goto(`chrome-extension://${extId}/options.html#/account`);
-    await extPage.evaluate(
-      () =>
-        new Promise((resolve) => {
-          chrome.runtime.sendMessage({ type: 'proxy/set', enabled: false }, () => resolve(undefined));
-        }),
-    );
-    await extPage.waitForTimeout(800);
-
-    const after = await readRules();
-    check('关掉开关后路径规则清零', after.path === 0, `path=${String(after.path)}`);
-    check(
-      '关掉开关后**标签页**规则清零（本次修的 bug）',
-      after.tab === 0,
-      `tab=${String(after.tab)}`,
-    );
-
-    // ── 关掉后刷新视频页，规则不许回来 ──
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(4000);
-    const afterReload = await readRules();
-    check(
-      '关掉后刷新页面，规则不许被重新装上',
-      afterReload.path === 0 && afterReload.tab === 0,
-      `path=${String(afterReload.path)} tab=${String(afterReload.tab)}`,
-    );
   } finally {
     await ctx.close().catch(() => {});
   }
 
   console.log('');
+  if (SKIPPED.length > 0) {
+    console.log(`[dnr-disable] ⚠️  ${String(SKIPPED.length)} 项未验（不是失败，但别当它过了）`);
+    for (const s of SKIPPED) console.log(`  - ${s.name}：${s.why}`);
+  }
   if (FAIL.length === 0) {
     console.log(`[dnr-disable] ✅ ${String(PASS.length)} 项全过`);
     return;
