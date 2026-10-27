@@ -1,23 +1,15 @@
 #!/usr/bin/env node
 /**
- * 验收入口 —— 不依赖 pnpm 在 PATH 里。
+ * 验收入口 —— **唯一**的检查串联点，不依赖 pnpm 在 PATH 里。
  *
  * ## 为什么需要这个脚本
  *
- * `package.json` 里的 `verify` 需要 `pnpm`，而 2026-10-26 实测：
- *
- * ```
- * $ pnpm verify
- * bash: pnpm: command not found      # Git Bash
- * PS> pnpm verify
- * pnpm : 无法将"pnpm"项识别为 cmdlet…  # PowerShell
- * ```
- *
+ * 直接写 `pnpm verify` 时，在 Git Bash / PowerShell 里都可能报 `command not found`。
  * 结果是**谁想跑验收，都得先知道"要用 ./node_modules/.bin/"这个不成文的约定**。
  * 换机器、换 shell、换 Agent 平台后这个知识必然丢失，然后就少跑一步——**而且没有任何提示**。
  *
- * 这个脚本只做一件事：把五个工具用 node 直接串起来，`node scripts/verify.mjs` 在哪都能跑。
- * **它不新增任何检查**，新增的检查在 `check-*.mjs` 里。
+ * 所以检查项只在这里定义一次：`package.json` 的 `verify` 直接转调本脚本，
+ * 不再自己列一遍命令（两处各写一份必然漂移——曾经就是这样漏掉了 secrets 与 patch 两项）。
  *
  * ## 用法
  *
@@ -226,7 +218,7 @@ function detectRouteWarnings() {
     out.push({
       signal: 'src/platform/http/dnr.ts 被改动',
       action:
-        '必须重跑 `node poc/verify/run-q2-auto.cjs`（并发安全）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则都得清零）。单测测不到 DNR 行为（AGENTS.md §5.4），不跑等于没验。',
+        '必须重跑 `node poc/verify/run-q2-auto.cjs`（并发安全，约 3 分钟）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则清零，约 15 秒）。**两个都不需要登录态**；单测测不到 DNR 行为（AGENTS.md §5.4），不跑等于没验。',
     });
   }
 

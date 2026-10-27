@@ -21,7 +21,7 @@
     "check:messages": "node scripts/check-messages.mjs",
     "check:design": "node scripts/check-design-imports.mjs",
     "check:docs": "node scripts/check-docs.mjs",
-    "verify": "tsc --noEmit && prettier --check . && eslint . && tsx scripts/check-boundaries.ts && node scripts/check-messages.mjs && node scripts/check-design-imports.mjs && node scripts/check-docs.mjs && vitest run",
+    "verify": "node scripts/verify.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "postinstall": "wxt prepare"

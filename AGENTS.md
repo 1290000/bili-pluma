@@ -13,7 +13,7 @@
 ```bash
 git rev-parse --show-toplevel     # 必须能跑通（是 git 仓库）
 ls AGENTS.md docs/decisions/      # 必须都存在
-grep -q '"name": "pluma"' package.json   # 项目身份
+grep -q '"name": "bili-pluma"' package.json   # 项目身份（仓库名，不是项目名 Pluma）
 ```
 
 **三条全部满足 → 开工。任一不满足 → 停下来问用户，不要新建任何文件。**
@@ -36,13 +36,10 @@ grep -q '"name": "pluma"' package.json   # 项目身份
 ## 1.5 先实测，再动手（**优先级仅次于 §0**）
 
 **能实测就不要推理。** 2026-10-26 一轮连续六次"读代码 + 推理"判断根因，每次都被下次实测推翻。
-
-| 情况 | 正确做法（✗ 是错误做法） |
-| --- | --- |
-| 用户报"角标显示错了" | 把真实数据喂进真实函数看输出（✗ 推理"可能是 X 的锅"就改一版） |
-| 别人能做而我做不了 | 先完整读完那份能工作的实现逐项对照（✗ 在自己代码里找原因） |
-| 不确定某个 API 的语义 | 写最小复现脚本实测（✗ 按名字猜，如 `(dynamic-range)` vs `(video-dynamic-range)`） |
-| 不确定某条数据是否存在 | 抓**当前这个场景**的真实响应（✗ 从别的分 P / 别的样本推断） |
+四种典型：报"显示错了"→ 把真实数据喂进真实函数看输出（✗ 推理"可能是 X 的锅"）；
+别人能做而我做不了 → 读完那份能工作的实现逐项对照（✗ 在自己代码里找原因）；
+API 语义不确定 → 写最小复现脚本（✗ 按名字猜，如 `(dynamic-range)` vs `(video-dynamic-range)`）；
+某条数据是否存在 → 抓**当前这个场景**的真实响应（✗ 从别的分 P / 别的样本推断）。
 
 **任何"修好了"的结论，必须附一条能复现旧 bug 的验证**：把关键判断反向改回去，测试必须变红，
 否则那个测试等于没写。穷举法四步与"会不会翻车"七问 → [docs/guides/methodology.md](docs/guides/methodology.md)。
@@ -112,7 +109,7 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 动手前确认这四个文件：
 
 - [ ] `src/shared/constants/routes.ts` —— 路径白名单
-- [ ] `src/shared/types/messages.ts` —— 消息类型（判别联合，漏处理编译期报错）
+- [ ] `src/shared/types/messages.ts` —— 消息类型（⚠️ **漏处理不会编译报错**，靠 `check-messages.mjs` 兜）
 - [ ] `src/design/tokens.css` —— 视觉令牌（`core`/`shared` 不许引用 `@design/*`）
 - [ ] `src/platform/http/dnr.ts` —— **风险最高，且无法用 Vitest 测**，只能靠 `poc/verify/`
 
@@ -124,7 +121,7 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 
 | 信号（`git diff --name-only` 命中） | 动作 |
 | --- | --- |
-| `src/platform/http/dnr.ts` | **重跑两个脚本**：`node poc/verify/run-q2-auto.cjs`（并发安全）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则都得清零）。单测测不到 DNR，见 §5.4 |
+| `src/platform/http/dnr.ts` | **重跑两个脚本**：`node poc/verify/run-q2-auto.cjs`（并发安全，约 3 分钟）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则清零，约 15 秒）。**两个都不需要登录态**；单测测不到 DNR，见 §5.4 |
 | `public/main-world.js` | `node --check` 它；涉及轨道判定/角标时必须向用户要一次真机日志 |
 | `src/shared/types/messages.ts` | 新增类型时单跑 `node scripts/check-messages.mjs` 看白名单（verify 内已含） |
 | `docs/**`、`*.md` | `node scripts/verify.mjs --fast` |
@@ -149,7 +146,7 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 
 1. **`core/` 不许出现 `chrome.` / `window` / `document` / `fetch(`** —— 见 §5.1 的两道闸。
 2. **不许在 popup 里做长任务**——失焦即销毁。扫码走独立窗口（`chrome.windows.create`）。
-3. **不许把凭据下发给 UI**——UI 只能拿到 `{uname, mid, vipLabel, expireAt, healthy}`。
+3. **不许把凭据下发给 UI**——UI 只能拿到 `AccountSummary`（`src/shared/types/account.ts`，不含凭据字段）。
 
 ### 5.3 页内注入
 
@@ -209,7 +206,7 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 | --- | --- | --- |
 | 根 `README.md` 全文 | **95 行** | 门面 + 快速上手；80 装不下七类内容（2026-10-27 放宽，理由见 `check-docs.mjs`） |
 | 任何文档的单节 | **80 行** | 超了考虑拆分（`check-docs` 提示，不判失败） |
-| 本文件 `AGENTS.md` | **240 行** | 必须一次读完，长了就没人读 |
+| 本文件 `AGENTS.md` | **260 行** | 必须一次读完，长了就没人读（2026-10-27 从 240 放宽，理由见 `check-docs.mjs`） |
 
 **测试方法**：一段话删掉后读者仍知道"该做什么"，就该删。ADR 记理由，正文只记结论。
 超限且不拆的例外写在 `check-docs.mjs` 的 `SECTION_LIMIT_WAIVED`，**加条目必须写理由**。
