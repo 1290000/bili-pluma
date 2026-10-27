@@ -29,6 +29,9 @@ permissions:
 
 jobs:
   forward:
+    # 预发布（pre-release）不推送：那通常是内部测试，推到公开频道会让人当成正式版。
+    # 真要推就手动 Run workflow，手动触发不受这个条件限制。
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -76,11 +79,14 @@ jobs:
           fi
 
           echo "::error::chat_id 无效：$(echo "$RESP" | jq -r '.description // "未知错误"')"
-          echo "::error::下面是 bot 最近见过的所有 chat —— 频道那条（type=channel）用它的 id："
+          echo "::error::下面是 bot 最近见过的群与频道 —— 频道那条（type=channel）用它的 id："
+          # 只列 group/supergroup/channel，**过滤掉 private**：
+          # 公开仓库的 Actions 日志任何人都能看，不该把私聊对象的名字和 id 打出来。
           curl -sS "https://api.telegram.org/bot${TG_TOKEN}/getUpdates" \
             | jq -r '.result[]
                      | (.message?.chat // .channel_post?.chat // .my_chat_member?.chat)
                      | select(. != null)
+                     | select(.type != "private")
                      | "  \(.id)  \(.type)  \(.title // .username // "-")"' \
             | sort -u || true
           echo "::error::若上面没有 type=channel，说明 bot 还不是频道管理员（频道 → 管理员 → 添加 → 勾「发布消息」）"
@@ -149,8 +155,21 @@ jobs:
           TITLE_HTML=$(printf '%s' "$TITLE" | esc)
           SECTION_HTML=$(printf '%s' "$SECTION" | esc)
 
-          # <blockquote> 就是频道里常见的那个「左侧竖线 + 浅色底」效果
-          CAPTION=$(printf '<b>%s</b>\n<blockquote>%s</blockquote>' "$TITLE_HTML" "$SECTION_HTML")
+          # <blockquote> 就是频道里常见的那个「左侧竖线 + 浅色底」效果。
+          # 正文为空时（Release 没写说明）不能发空标签，Telegram 会拒。
+          if [ -n "$SECTION_HTML" ]; then
+            CAPTION=$(printf '<b>%s</b>\n<blockquote>%s</blockquote>' "$TITLE_HTML" "$SECTION_HTML")
+          else
+            CAPTION=$(printf '<b>%s</b>' "$TITLE_HTML")
+          fi
+
+          # Bot API 上传上限 50MB（自建 Bot API server 才能突破）。
+          # 提前拦一下，别等 Telegram 回一个没头没脑的 400。
+          SIZE=$(wc -c < "out/${ASSET}")
+          if [ "$SIZE" -gt 52428800 ]; then
+            echo "::error::${ASSET} 有 $((SIZE / 1024 / 1024)) MB，超过 Bot API 的 50 MB 上限"
+            exit 1
+          fi
 
           # 一条消息搞定：文件 + 更新日志。chat_id 必须用 --form-string，
           # 填 @用户名 时 -F 会把开头的 @ 当成「从文件读取」，请求根本发不出去。
