@@ -128,18 +128,29 @@ jobs:
           # 只取「本版内容」一节。下载 / 怎么用 / 边界 / 许可证都在 Release 页，
           # 群里重复一遍没意义，还会把 caption 撑爆。
           # 遇 h1–h3 视为本节结束；h4 子标题（#### 双账号分离）属于本节，继续保留。
+          # 用 f=0 而不是 exit —— exit 会让上游 printf 收到 SIGPIPE，
+          # 在 `set -o pipefail` 下整条命令变成 exit 141，正文越长越容易踩。
           BODY=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""')
           SECTION=$(printf '%s\n' "$BODY" \
-            | awk '/^### 本版内容/{f=1;next} f && /^#{1,3} /{exit} f' \
+            | awk '/^### 本版内容/{f=1;next} f && /^#{1,3} /{f=0} f' \
             | sed -E 's/^#{1,6} +//; s/\*\*//g; s/`//g' \
             | sed '/./,$!d')
           # 格式变了（找不到那一节）就退回整篇，总比发个空 caption 强
           [ -n "$SECTION" ] || SECTION=$(printf '%s\n' "$BODY" | sed -E 's/^#{1,6} +//; s/\*\*//g; s/`//g')
 
-          CAPTION=$(printf '%s\n\n%s' "$TITLE" "$SECTION")
-          if [ "${#CAPTION}" -gt 1024 ]; then
-            CAPTION=$(printf '%s\n\n%s\n\n完整说明见 %s' "$TITLE" "${SECTION:0:880}" "$URL")
+          # 超长时先截正文再包标签，别让 HTML 标签参与长度计算
+          if [ "${#SECTION}" -gt 780 ]; then
+            SECTION=$(printf '%s\n\n完整说明见 %s' "${SECTION:0:760}" "$URL")
           fi
+
+          # parse_mode 用 HTML 而不是 MarkdownV2：后者要转义 _ * [ ] ( ) ~ ` > # + - = | { } . !
+          # 这么一大堆，正文里遍地都是，漏一个就 400。HTML 只需转义 & < > 三个。
+          esc() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+          TITLE_HTML=$(printf '%s' "$TITLE" | esc)
+          SECTION_HTML=$(printf '%s' "$SECTION" | esc)
+
+          # <blockquote> 就是频道里常见的那个「左侧竖线 + 浅色底」效果
+          CAPTION=$(printf '<b>%s</b>\n<blockquote>%s</blockquote>' "$TITLE_HTML" "$SECTION_HTML")
 
           # 一条消息搞定：文件 + 更新日志。chat_id 必须用 --form-string，
           # 填 @用户名 时 -F 会把开头的 @ 当成「从文件读取」，请求根本发不出去。
@@ -147,6 +158,7 @@ jobs:
             "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
             -F "document=@out/${ASSET}" \
             --form-string "chat_id=${TG_CHAT}" \
+            --form-string "parse_mode=HTML" \
             --form-string "caption=${CAPTION}"; then
             echo "::error::发送失败，Telegram 返回：$(cat resp.json 2>/dev/null || echo '（无响应体）')"
             echo "::error::按顺序查：bot 是否还在频道里 → chat_id 是否正确 → 频道是否被迁移过"
