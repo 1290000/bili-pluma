@@ -422,16 +422,29 @@ async function main() {
   const srcName = `pluma-${version}-with-source.zip`;
 
   /**
-   * zip 内的顶层目录名。
+   * zip 内**不包顶层目录**，`manifest.json` 直接放在 zip 根。
    *
-   * **必须有这一层**，不能把 manifest.json 直接撒在 zip 根。
-   * 理由：用户解压后要的是「一个能选中的文件夹」。
-   * 平铺的话，解压到当前目录会把一堆文件倒进下载文件夹，
-   * 用户还得自己建文件夹收拢 —— 这正是"选哪个文件夹"讲不清的根源。
+   * ## 为什么（2026-10-27 实测推翻前一版做法）
    *
-   * 有了这层，安装说明就能写死"选 pluma-0.9.0 这个文件夹"。
+   * 我一度在这里加了一层 `pluma-<版本>/`，理由是"解压后只有一个文件夹可选中"。
+   * **实测发现那是错的**：Windows 资源管理器「全部解压」时，
+   * **总是先用 zip 文件名建一层目录**，再按 zip 内结构展开。于是变成
+   *
+   *     pluma-0.9.0.zip  →  pluma-0.9.0/pluma-0.9.0/manifest.json   ← 两层
+   *
+   * 用户选外层就报「清单文件丢失或不可读取」，必须再点进去一层才对。
+   *
+   * 平铺之后 Windows 解压得到恰好一层：
+   *
+   *     pluma-0.9.0.zip  →  pluma-0.9.0/manifest.json                ← 一层 ✅
+   *
+   * **代价**：极少数情况下用户「解压到当前文件夹」会把文件散出来。
+   * 但那是用户主动选择的行为，且安装说明里写了判据（那层应能看到 manifest.json）。
+   * 相比之下"每个用 Windows 的人都踩两层"是必然而非偶然。
+   *
+   * ⚠️ **不要再用 zip 内目录去控制解压后的层级** —— 那层名字由解压工具决定，不由我们决定。
    */
-  const TOP_DIR = `pluma-${version}`;
+  const TOP_DIR = '';
 
   if (problems.length > 0) {
     console.error(`\n[package] ❌ 自检未通过（${String(problems.length)} 项）\n`);
@@ -447,7 +460,7 @@ async function main() {
     return;
   }
 
-  // ── 5. 打轻量版：直接压 BUILD_DIR，绝不套一层目录 ──
+  // ── 5. 打轻量版：直接压 staging 内容（manifest.json 在 zip 根，理由见 TOP_DIR） ──
   await rm(DIST_DIR, { recursive: true, force: true });
   await mkdir(DIST_DIR, { recursive: true });
 

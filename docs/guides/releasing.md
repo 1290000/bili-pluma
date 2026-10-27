@@ -41,67 +41,70 @@ pluma-<版本>-with-source.zip  同上 + 完整源码
 
 ## zip 内结构（唯一规范）
 
-### `pluma-<版本>.zip` — **有顶层目录**，`manifest.json` 在它下面
+### `pluma-<版本>.zip` — **平铺**，`manifest.json` 在 zip 根
 
 ```
-pluma-0.9.0/           ← 顶层目录，名字 = 文件名去掉 .zip
-├── manifest.json      ← 在这一层，浏览器靠它识别
-├── background.js
-├── main-world.js
-├── popup.html
-├── options.html
-├── login-window.html
-├── need-incognito.html
-├── content-scripts/   ← 目录，内含 content.js
-├── chunks/            ← 目录，内含各页面 chunk
-├── assets/            ← 目录，内含 CSS
-└── 安装说明.txt        ← 脚本自动生成
+manifest.json          ← 必须在根，浏览器靠它识别
+background.js
+main-world.js
+popup.html
+options.html
+login-window.html
+need-incognito.html
+content-scripts/       ← 目录，内含 content.js
+chunks/                ← 目录，内含各页面 chunk
+assets/                ← 目录，内含 CSS
+安装说明.txt            ← 脚本自动生成
 ```
 
-**必须包一层顶层目录**（2026-10-27 起，此前规定相反）。
+**必须是平铺的。** 这条在 2026-10-27 反复过一次，记录如下。
 
-### 为什么改主意
+### 为什么不能包顶层目录（实测结论）
 
-旧规定是「不许包一层」，理由是套目录后用户选上层会报
-「清单文件缺失或不可读取」。那条理由没错，但它只看到了**一种**选错方式，
-漏了平铺带来的**另一种**：
+我曾加过一层 `pluma-<版本>/`，想的是"解压后只有一个文件夹可选中"。
+**实测发现那是错的。**
 
-| 做法 | 解压后用户看到 | 用户容易犯的错 |
+Windows 资源管理器「全部解压」时**总是先用 zip 文件名建一层目录**，
+再按 zip 内结构展开。所以：
+
+| zip 内结构 | Windows 解压结果 | 结果 |
 | --- | --- | --- |
-| 平铺 | 20 个文件散在下载文件夹里 | ① 选上级目录 → 报「清单文件缺失」<br>② 文件混进下载目录，得自己建文件夹收拢 |
-| **包顶层** | 一个 `pluma-0.9.0/` 文件夹 | 几乎没有 —— 只有一个东西可选 |
+| `pluma-0.9.0/manifest.json` | `pluma-0.9.0/pluma-0.9.0/manifest.json` | **两层**，选外层报「清单文件缺失」❌ |
+| `manifest.json`（平铺） | `pluma-0.9.0/manifest.json` | **一层**，直接选 ✅ |
 
-平铺时"选上层"极易发生，因为解压完用户**看到的就是一堆散文件**，
-会本能地往上找文件夹。包了顶层之后，解压结果只有一个文件夹，
-选错的空间基本消失。
+**"解压后的层级"不由 zip 内结构决定，由解压工具决定。**
+包里再套一层只会**叠加**，不会替换。
 
-而且安装说明现在能**写死文件夹名**（`pluma-0.9.0`），
-比"选中含 manifest.json 的那个文件夹"好懂 —— 后者要求用户先知道
-manifest.json 长什么样。
+平铺的代价是"用户若选『解压到当前文件夹』会把文件散开"——
+但那是用户主动选择，且安装说明给了判据（那层应能看到 `manifest.json`）。
+相比之下"每个用 Windows 的人都踩两层"是必然而非偶然。
 
-⚠️ **唯一残留的风险**：某些解压工具（含 Windows 自带）会在目标位置
-**再建一层同名目录**，变成 `pluma-0.9.0/pluma-0.9.0/manifest.json`。
-安装说明里已写明"如果里面还套了一层同名文件夹，再进去一层"。
+⚠️ **不要试图用 zip 内目录名去控制解压后的层级。**
 
 ### `pluma-<版本>-with-source.zip` — 产物在子目录
 
+同样**平铺在 zip 根**（规则与上面一致）：
+
 ```
-pluma-0.9.0/           ← 顶层目录，与其他 zip 同一个规则
-├── extension/         ← 构建产物放这里（结构同上，manifest.json 在这层）
-├── src/
-├── entrypoints/
-├── public/
-├── scripts/
-├── docs/
-├── tests/
-├── package.json
-├── pnpm-lock.yaml
-├── wxt.config.ts
-├── tsconfig.json
-├── README.md
-├── LICENSE
-└── ADDITIONAL-TERMS.md
+extension/             ← 构建产物放这里（manifest.json 在这层）
+src/
+entrypoints/
+public/
+scripts/
+docs/
+tests/
+package.json
+pnpm-lock.yaml
+wxt.config.ts
+tsconfig.json
+README.md
+LICENSE
+ADDITIONAL-TERMS.md
 ```
+
+Windows 解压后得到 `pluma-0.9.0/extension/manifest.json`，
+用户加载 `pluma-0.9.0/extension`。—— 这个 zip 本来就需要多一层
+`extension/`，因为源码要和产物分开摆。
 
 ⚠️ **这个 zip 里不放 `安装说明.txt`**：它里面有源码，放进说明会诱导用户
 去加载整个目录（会失败）。安装说明只属于能直接加载的那一份。
