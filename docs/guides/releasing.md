@@ -148,7 +148,7 @@ Windows 解压后得到 `pluma-0.9.0/extension/manifest.json`，
 ### 2. 发布前检查
 
 ```bash
-node scripts/verify.mjs     # 十项，全绿才能继续
+node scripts/verify.mjs     # 十一项，全绿才能继续
 ```
 
 `verify.mjs` 已含下面这些，**不要分别手跑**（会漏）：

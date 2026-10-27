@@ -124,6 +124,7 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 | `src/platform/http/dnr.ts` | **重跑两个脚本**：`node poc/verify/run-q2-auto.cjs`（并发安全，约 3 分钟）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则清零，约 15 秒）。**两个都不需要登录态**；单测测不到 DNR，见 §5.4 |
 | `public/main-world.js` | `node --check` 它；涉及轨道判定/角标时必须向用户要一次真机日志 |
 | `src/shared/types/messages.ts` | 新增类型时单跑 `node scripts/check-messages.mjs` 看白名单（verify 内已含） |
+| `.github/workflows/**` | `verify` 只抓 `set -x` / `printenv` 这类必泄露写法。**`echo "$RESP"` / `cat x.json` / `curl \| jq` 它抓不到** —— 必须**人工过一遍每个打印点**，判据只有一句：「这个响应里有没有属于别人的字段？」（`getUpdates` 有，`getMe` 没有） |
 | `docs/**`、`*.md` | `node scripts/verify.mjs --fast` |
 | `package.json` / `eslint.config.mjs` / `scripts/**` | 跑**完整** `node scripts/verify.mjs`（不是 `--fast`） |
 | 用户说"不生效 / 闪一下 / 偶尔 / 感觉不对" | **停**：先做能产出真实数据的工具，禁止读代码推理（§1.5） |

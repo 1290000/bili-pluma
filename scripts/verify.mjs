@@ -70,26 +70,37 @@ const STEPS = [
     first: true,
   },
   { name: 'patch', cmd: process.execPath, args: ['scripts/check-patch-scope.mjs'], first: true },
+  {
+    // 2026-10-27 加：secrets 查的是文件内容，泄露却发生在运行时打印。
+    // 诊断步骤把 getUpdates 的完整响应打进公开日志，secrets 全绿也拦不住。
+    // 这里只抓 100% 有害的写法（set -x / printenv），其余靠 AGENTS.md §4.3 人工审。
+    name: 'workflow-logs',
+    cmd: process.execPath,
+    args: ['scripts/check-workflow-logs.mjs'],
+    first: true,
+  },
   { name: 'test', cmd: binPath('vitest'), args: ['run'], first: false, slow: true },
 ];
 
 const HELP = `
 Pluma 验收入口（不依赖 pnpm 在 PATH 里）
 
-  node scripts/verify.mjs           跑全部十项（约 45s）
-  node scripts/verify.mjs --fast    跳过 vitest，九项（约 20s，改文档/脚本时够用）
+  node scripts/verify.mjs           跑全部十一项（约 45s）
+  node scripts/verify.mjs --fast    跳过 vitest，十项（约 20s，改文档/脚本时够用）
   node scripts/verify.mjs --help    显示本帮助
 
-本脚本覆盖的十项（顺序执行）：
-  typecheck  tsc --noEmit
-  format     prettier --check .
-  lint       eslint .
-  boundaries core/shared 不许碰 chrome/window/document/fetch
-  messages   messages.ts ↔ background.ts 路由对齐（抓孤儿消息）
-  design     只有 entrypoints/* 可以引用 @design/*
-  docs       死链 + scripts/ 引用 + 篇幅上限 + 主文档章节连号
-  patch      响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）
-  test       vitest run
+本脚本覆盖的十一项（顺序执行）：
+  typecheck      tsc --noEmit
+  format         prettier --check .
+  lint           eslint .
+  boundaries     core/shared 不许碰 chrome/window/document/fetch
+  messages       messages.ts ↔ background.ts 路由对齐（抓孤儿消息）
+  design         只有 entrypoints/* 可以引用 @design/*
+  docs           死链 + scripts/ 引用 + 篇幅上限 + 主文档章节连号
+  secrets        测试账号标识 / 凭据形态 / 本机路径
+  patch          响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）
+  workflow-logs  Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）
+  test           vitest run
 
 ═══════════════════════════════════════════════════════════════
 ⚠️ 本脚本**不等于**"全部自检"。另有两档它跑不了，必须单独做：
@@ -101,7 +112,7 @@ Pluma 验收入口（不依赖 pnpm 在 PATH 里）
 
   为什么不在本脚本里：它要启动真实 Edge、加载独立扩展、跑 180 并发。
   塞进来会让每次交付都等 10 分钟，然后所有人开始用 --no-verify 绕过，
-  最后连上面九项也没人跑。所以改为**本脚本主动提醒**：
+  最后连上面这些也没人跑。所以改为**本脚本主动提醒**：
   检测到 diff 里有 src/platform/http/dnr.ts 就打印警告（见 AGENTS.md §4.3 路由表）。
 
 【第 3 档】反例验证 —— 无法自动化，只能靠人
