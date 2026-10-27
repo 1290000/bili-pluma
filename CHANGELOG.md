@@ -9,10 +9,12 @@
 > 的 `extractChangelogSection`）。所以：
 >
 > - 版本节标题必须**严格**是 `## <版本号>`，与 `package.json` 的 version 一致
+> - **格式错会在 `verify` 阶段就报**（`check-docs.mjs` 的 `checkChangelogFormat`），
+>   不用等到打包 —— 写成 `## v1.0.0` 或 `## 1.0.0（日期）` 都会红
 > - 找不到对应小节时打包会**直接失败**（不会发出空正文的 Release）
 >
-> 措辞规则见 [docs/guides/release-notes-template.md](./docs/guides/release-notes-template.md)：
-> 中性动词，不用「破解」「解锁会员」「一键安装」「开箱即用」。
+> 写出什么、怎么分类、什么时候写，见
+> [docs/guides/release-notes-template.md](./docs/guides/release-notes-template.md)。
 
 ---
 

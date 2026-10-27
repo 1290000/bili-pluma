@@ -26,11 +26,14 @@
 
 #### 分段怎么涨
 
-| 段 | 什么时候 +1 | 例子 |
-| --- | --- | --- |
-| `MAJOR` | **用户能感知的行为不兼容**，或白名单/协议破坏性变化 | 放弃某个已支持场景；`messages.ts` breaking change |
-| `MINOR` | 新增支持的场景或界面 | 支持番剧取流；新增设置项 |
-| `PATCH` | 修 bug、调文案 | 修续播失效（[ADR 0017](../decisions/0017-restore-primary-progress-in-playurl.md)） |
+| 段 | 什么时候 +1 | 例子 | CHANGELOG 里必须有 |
+| --- | --- | --- | --- |
+| `MAJOR` | **用户能感知的行为不兼容**，或白名单/协议破坏性变化 | 放弃某个已支持场景；`messages.ts` breaking change | **「需要用户操作」说明** |
+| `MINOR` | 新增支持的场景或界面 | 支持番剧取流；新增设置项 | `### 新增` 至少一条 |
+| `PATCH` | 修 bug、调文案 | 修续播失效（[ADR 0017](../decisions/0017-restore-primary-progress-in-playurl.md)） | `### 修复` 至少一条；纯文案可只写一行 |
+
+**版本号与 CHANGELOG 是同一个动作的两半**：涨了号却写不出对应的变更条目，
+说明这个号可能涨错了。写法见 [release-notes-template.md](./release-notes-template.md#怎么写-changelogmd-里的本版内容)。
 
 #### 两个必须知道的事实
 

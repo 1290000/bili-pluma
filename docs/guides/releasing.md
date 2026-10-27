@@ -135,7 +135,9 @@ Windows 解压后得到 `pluma-0.9.0/extension/manifest.json`，
 
 ---
 
-## 发布流程
+## 发布流程：准备
+
+> 打完 tag 之前的所有事。执行部分见下一节。
 
 ### 1. 版本号
 
@@ -181,6 +183,10 @@ mid 不是密钥，可它能直接打开一个人的 B 站主页。
 - [ ] **抓包产物**：`poc/verify/` 下的 `bg-ssr.json`、`result-*.json` 不进仓库
   （已在 `.gitignore` 里，但新增文件时容易漏）
 
+---
+
+## 发布流程：执行
+
 ### 3. 打包
 
 ```bash
@@ -211,14 +217,23 @@ node scripts/package.mjs
 
 ### 5. 更新 CHANGELOG.md
 
-格式见 [release-notes-template.md](./release-notes-template.md)。**不要写"修复了某某接口破解"
-这种措辞**，全部用中性描述。
+**Release 正文的「本版内容」直接从这里提取**，所以这一步不是可选项 ——
+找不到 `## <版本号>` 那一节，打包会硬失败（退出码 2）。
+
+写法（子节怎么选、条目怎么写、需要用户操作时怎么说）见
+[release-notes-template.md](./release-notes-template.md#怎么写-changelogmd-里的本版内容)。
+
+三条底线：
+
+- **只写会随版本变的东西**。产品常量（不绕过付费墙、许可证、地区限制）归 `README.md`
+- **中性动词**，不写「破解」「解锁会员」「一键安装」「开箱即用」
+- **不写内部实现**：「重构了 DNR 规则管理」用户看不懂，写「修复关闭总开关后画质不回落」
 
 ### 6. 打 Tag 并发布
 
 ```bash
 git tag -a v0.9.0 -m "v0.9.0"
-git push origin main --tags
+git push origin v0.9.0          # 只推这个 tag，不要 --tags（会连历史 tag 一起推）
 
 gh release create v0.9.0 \
   dist/pluma-0.9.0.zip \
@@ -227,10 +242,24 @@ gh release create v0.9.0 \
   --notes-file dist/release-notes.md
 ```
 
-**Release 说明按 [release-notes-template.md](./release-notes-template.md) 写**，
-脚本会把模板填好版本号落在 `dist/release-notes.md`。
+**Release 说明由 `package.mjs` 生成**（CHANGELOG 的「本版内容」+ 固定的下载/用法/边界）。
 
 ⚠️ 只上传这两个 zip。GitHub 自动生成的 `Source code (zip)` 保留，不要删也不要改名。
+
+### 7. 发布后核对（**新增，2026-10-27**）
+
+发布完立刻验三件事，不要把第一次验证留到用户下载之后：
+
+```bash
+# 1. 附件对不对
+gh release view v0.9.0 --json assets --jq '.assets[].name'
+
+# 2. 正文与本地生成物是否一致（差一个尾部空行属正常）
+gh release view v0.9.0 --json body --jq '.body' | diff - dist/release-notes.md
+
+# 3. tag 是否指向预期的提交
+git ls-remote --tags origin | grep v0.9.0
+```
 
 ---
 

@@ -286,6 +286,64 @@ function checkNumbering(src) {
   return issues;
 }
 
+/**
+ * 校验 `CHANGELOG.md` 的版本节标题格式。
+ *
+ * ## 为什么需要它（2026-10-27）
+ *
+ * `package.mjs` 的 `extractChangelogSection()` 按字符串精确匹配 `## <版本号>`，
+ * 匹配不上会**硬失败**——但那只在**打包时**才发生，而打包往往离写 CHANGELOG 很久。
+ *
+ * 写的时候把 `## 1.0.0` 写成 `## v1.0.0` 或 `## 1.0.0（2026-10-27）`，
+ * 当时完全不会报错，等到发布日才发现，那个时间点最不该出岔子。
+ *
+ * 这里提前在 `verify` 里卡住，成本几毫秒。
+ *
+ * @returns `{ line, issue, actual }[]`
+ */
+function checkChangelogFormat(src) {
+  const issues = [];
+  const lines = src.split('\n');
+
+  // 允许的非版本号二级标题：文档自己约定的「未发布」收集节
+  const ALLOWED_H2 = new Set(['未发布']);
+
+  let versionCount = 0;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i] ?? '';
+    const m = /^## (.+)$/.exec(raw);
+    if (!m) continue;
+
+    const title = (m[1] ?? '').trim();
+
+    if (ALLOWED_H2.has(title)) continue;
+
+    if (!/^\d+\.\d+\.\d+$/.test(title)) {
+      issues.push({
+        line: i + 1,
+        issue:
+          '版本节标题必须是纯 x.y.z（不带 v、不带日期、不带括号说明）——' +
+          'package.mjs 按字符串精确匹配，格式不对会让打包硬失败',
+        actual: raw.slice(0, 60),
+      });
+      continue;
+    }
+
+    versionCount += 1;
+  }
+
+  if (versionCount === 0) {
+    issues.push({
+      line: 1,
+      issue: '没有任何 `## x.y.z` 版本节 —— 发布时 extractChangelogSection 会找不到内容',
+      actual: '(整个文件)',
+    });
+  }
+
+  return issues;
+}
+
 async function main() {
   const files = (await Promise.all(SCAN_TARGETS.map(collectMarkdown))).flat();
   const uniqueFiles = [...new Set(files)];
@@ -334,6 +392,18 @@ async function main() {
     }
   }
 
+  /**
+   * `CHANGELOG.md` 单独查 —— 它按 `## x.y.z` 分节，不能套用 `NUMBERED_DOCS`
+   * 的「章节连号」规则（会误报）。
+   */
+  const changelogIssues = [];
+  try {
+    const clSrc = await readFile(join(ROOT, 'CHANGELOG.md'), 'utf8');
+    for (const c of checkChangelogFormat(clSrc)) changelogIssues.push(c);
+  } catch {
+    // 文件不存在是合法的（比如从模板新建的仓库），跳过
+  }
+
   console.log(`[docs] 扫描 ${uniqueFiles.length} 个 Markdown`);
   console.log(
     `[docs] 死链 + scripts/ 引用 + 篇幅上限 + 换行符 + ${NUMBERED_DOCS.length} 份主文档的章节连号`,
@@ -351,11 +421,21 @@ async function main() {
     numberingIssues.length === 0 &&
     missingScripts.length === 0 &&
     lengthViolations.length === 0 &&
-    crlfFiles.length === 0;
+    crlfFiles.length === 0 &&
+    changelogIssues.length === 0;
 
   if (clean) {
     console.log('[docs] ✅ 无死链、无失效脚本引用、篇幅达标、换行符全 LF、章节编号连号');
+    console.log('[docs] ✅ CHANGELOG 版本节格式合规');
     return;
+  }
+
+  if (changelogIssues.length > 0) {
+    console.error(`\n[docs] ❌ CHANGELOG.md 有 ${changelogIssues.length} 处版本节格式问题\n`);
+    for (const c of changelogIssues) {
+      console.error(`  第 ${c.line} 行：${c.issue}`);
+      console.error(`    ${c.actual}\n`);
+    }
   }
 
   if (lengthViolations.length > 0) {
