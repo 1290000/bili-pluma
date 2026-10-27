@@ -133,14 +133,6 @@ export async function disableProxy(): Promise<void> {
   await removeAllTabRules();
 }
 
-/**
- * 更新已装规则的 Cookie 值（凭据刷新时用，不用删了重建）。
- */
-export async function refreshCookie(cookie: string): Promise<void> {
-  if (!(await isProxyEnabled())) return;
-  await enableProxy(cookie);
-}
-
 // ── 规则构建 ──
 
 /**

@@ -1,21 +1,22 @@
 /**
  * 跨环境消息协议。
  *
- * 用**判别联合**：新增消息若没在 switch 里处理，`assertNever` 会在编译期报错。
- * 文档：docs/protocols/messages.md（以本文件为准，文档从代码抄）
+ * 用**判别联合**定义：成功与失败靠 `type` 的 `:ok` / `:err` 后缀区分。
  *
- * 纪律：任何 `*:ok` 消息都**不得携带凭据**（见 AGENTS.md §4.2）。
+ * ⚠️ **漏处理一条消息，`tsc` 不会报错。** 分发处（`entrypoints/background.ts`）用的是
+ * `if (type === '...')` 链而不是 `switch`，判别联合的穷举能力用不上。
+ * 真正的防线是 `scripts/check-messages.mjs`（比对类型定义与路由分支），已在 `verify` 链里。
+ * 下面这个 `assertNever` 目前**没有任何调用方**，留着是为了将来改写成 `switch` 时能直接用。
+ *
+ * 纪律：任何 `*:ok` 消息都**不得携带凭据**（见 AGENTS.md §5.2）。
  * `qr/poll:ok` 只回报"存了没"，不回传内容。
  */
 
 import type { AccountSummary } from './account';
 import type { ErrorCode } from './errors';
 import type { QrLoginStatus } from './login';
-import type { PageTracksView, PlayInfo } from './playinfo';
+import type { PageTracksView } from './playinfo';
 import type { StatBucket } from './stats';
-
-/** 这次请求用的是哪个身份 */
-export type Identity = 'primary' | 'playback';
 
 /**
  * UI / content → background
@@ -31,17 +32,6 @@ export type RequestMsg =
    * 惰性检查的理由见 docs/04-project-structure.md §6「凭据健康检查：惰性，不用 alarms」。
    */
   | { type: 'account/summary'; recheck?: boolean }
-  /**
-   * 用**播放账号**身份取一次 playurl（options 体检表用）。
-   *
-   * ⚠️ **当前只有类型，没有 handler**（`entrypoints/background.ts` 里没有分支处理它）。
-   * 发送它只会拿到 `undefined`。P3 做体检表时才补。
-   *
-   * ⚠️ 它**只能取播放账号身份**：总开关打开后全局路径规则会覆盖任何 playurl 请求的 Cookie，
-   * 想用主账号身份请求是做不到的（见 docs/decisions/0014-quality-compare-from-page-data.md）。
-   * 主账号那一列必须走页面 SSR 的数据，不要试图在这里加 `identity` 参数。
-   */
-  | { type: 'playinfo/get'; bvid: string; cid: number; qn: number | null }
   | { type: 'qr/generate' }
   | { type: 'qr/poll'; qrcodeKey: string }
   /** 请求打开登录窗口（走 InPrivate 分区，不污染主账号） */
@@ -108,8 +98,6 @@ export type ResponseMsg =
   /** 退出播放账号的结果 */
   | { type: 'account/remove:ok' }
   | { type: 'account/remove:err'; detail: string }
-  | { type: 'playinfo/get:ok'; info: PlayInfo; via: Identity }
-  | { type: 'playinfo/get:err'; code: ErrorCode; detail: string | null }
   | { type: 'qr/generate:ok'; qrContent: string; qrcodeKey: string }
   | { type: 'qr/generate:err'; detail: string }
   /** credentialSaved：凭据是否已读入并落库。**不回报凭据内容** */
@@ -181,7 +169,12 @@ export type PageQueryReply =
   /** content 在，但还没报到（脚本刚注入、页面还没解析出 bvid） */
   | { type: 'page/summary:none'; reason: 'not-ready' };
 
-/** 穷举检查：任何未处理的分支都会在这里编译失败 */
+/**
+ * 穷举检查工具 —— ⚠️ **当前没有任何调用方**（分发处用 `if` 链，不是 `switch`）。
+ *
+ * 保留它是为了将来把 `entrypoints/background.ts` 改写成 `switch` 时能直接接上。
+ * **不要以为它已经在起作用**——现在的穷举保障来自 `scripts/check-messages.mjs`。
+ */
 export function assertNever(value: never): never {
   throw new Error(`未处理的消息类型: ${JSON.stringify(value)}`);
 }
