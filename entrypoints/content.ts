@@ -217,7 +217,25 @@ function tellMainWorld(enabled: boolean): void {
   window.postMessage({ __ns: NS, type: 'cfg', token: CHANNEL_TOKEN, enabled }, '*');
 }
 
-/** 监听主世界的回执 */
+/**
+ * 监听主世界的回执。
+ *
+ * ## ⚠️ 这里只校验 `__ns`，**不校验 token** —— 这是有意的，不是漏写
+ *
+ * token 只在**反方向**生效：MAIN 在第一个 `cfg` 里锁定 token，之后每条都校验。
+ * 本侧不校验的理由是威胁模型很窄：
+ *
+ * 1. 主世界上报的内容只影响**画质显示**（徽章、主账号基线），不驱动任何实际行为
+ * 2. 本侧**从不向 MAIN 发送凭据**；凭据只在 background，换 Cookie 由 DNR 在网络层完成
+ *
+ * 所以页面脚本伪造 `ssr-playinfo` 最多让 popup 显示一个错的画质数字 ——
+ * 拿不到凭据、改不了取流、也影响不了别的标签页。
+ *
+ * 要加固就得让本侧也知道 token（等于把 MAIN 已锁定的东西再验一遍），
+ * 收益是"防显示错误"，成本是改协议 + 两边同时改 + 重验跨 world 通道。v1 判断不值得。
+ *
+ * 详见 `docs/protocols/messages.md`「通道 A：防护做了什么、没做什么」。
+ */
 function listenMainWorld(): void {
   window.addEventListener('message', (ev) => {
     const d = ev.data as

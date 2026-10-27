@@ -149,7 +149,7 @@ bili-pluma/
 │   │   ├── identity/       # ★ router.ts = URL → 用哪个身份
 │   │   ├── auth/           # 扫码、凭据校验、健康度
 │   │   ├── vault/          # 凭据加密存储
-│   │   ├── playinfo/       # 取流解析与选轨（parse/rank/diagnose 属 P3）
+│   │   ├── playinfo/       # 取流解析与选轨（parse / rank / stats / summary-view）
 │   │   └── wbi/            # WBI 签名
 │   ├── platform/           # 适配层：唯一允许碰 chrome.* 的地方
 │   │   ├── http/           # ★ dnr.ts = 风险最高（装/删/自愈/诊断四组函数）
@@ -180,18 +180,18 @@ bili-pluma/
 **关键文件说明**：
 
 - `shared/constants/routes.ts` 是 **URL 白名单的唯一真相源**。所有匹配逻辑都必须引用它，不许在别处硬编码路径字符串。这样 B 站改路径时只改一个文件。
-- `shared/types/messages.ts` 用**判别联合（discriminated union）**定义所有消息：
+- `shared/types/messages.ts` 用**判别联合（discriminated union）**定义所有消息，
+  成功/失败靠 `type` 的 `:ok` / `:err` 后缀区分。摘三条示意（**完整清单以该文件为准，本文不抄第二份**）：
 
 ```ts
-type Msg =
-  | { type: 'account/list' }
-  | { type: 'account/list:ok'; accounts: Account[] }
-  | { type: 'playinfo/get'; bvid: string; cid: number; qn?: number }
-  | { type: 'playinfo/get:ok'; data: PlayInfo }
-  | { type: 'playinfo/get:err'; code: ErrCode; detail?: string };
+| { type: 'account/summary'; recheck?: boolean }
+| { type: 'account/summary:ok'; configured: boolean; account: AccountSummary | null; needsRecheck: boolean }
+| { type: 'account/summary:err'; code: ErrorCode; detail: string | null }
 ```
 
-好处：任何新增消息没处理，`switch` 的 `default` 分支里 TS 会报 `never` 不可赋值，编译期就能发现遗漏。
+**⚠️ 编译期不会替你抓漏**：分发处（`entrypoints/background.ts`）用的是 `if (type === '...')` 链，
+不是 `switch`，所以判别联合的穷举能力用不上——定义了类型却忘了加分支，`tsc` 完全看不出来，
+运行时只会静默拿到 `undefined`。真正的防线是 `scripts/check-messages.mjs`（比对类型与路由分支）。
 
 ### `core/` —— 业务逻辑，完全不知道浏览器的存在
 
@@ -202,21 +202,15 @@ type Msg =
 
 **为什么这条要卡死**：`core/identity/router.ts` 和 `core/wbi/signer.ts` 是最容易写错、最需要单测的部分。如果它们直接调 `chrome.*`，就没法在 Node 里测，只能靠手动装扩展点来点去验证——那是灾难。
 
-注入方式示例：
+注入方式示例（真实代码，见 `src/core/auth/qrcode.ts`）：
 
 ```ts
-// core/playinfo/request.ts
-export interface HttpClient {
-  get(url: string, opts: { identity: 'primary' | 'playback' }): Promise<Response>;
-}
-
-export function buildPlayurlRequest(
-  http: HttpClient,
-  params: { bvid: string; cid: number; qn: number; fnval: number },
-) { ... }
+// core 只声明"我需要一个能发请求的东西"，不关心它是 fetch 还是别的
+export async function generateQr(http: HttpClient): Promise<QrGenerateResult> { ... }
 ```
 
-测试时传一个假 `HttpClient` 就行，不需要浏览器。
+`HttpClient` 接口与 `createHttpClient()` 实现在 `src/platform/http/fetcher.ts`；
+测试时传一个假实现就行，不需要浏览器。
 
 ### `platform/` —— 唯一的"浏览器污染区"
 
@@ -531,7 +525,7 @@ node scripts/verify.mjs   # boundaries 是其中一项
 | **骨架** | WXT 初始化 → `shared/` `core/identity/` `core/vault/` `platform/` `entrypoints/background.ts` `src/background/` | ✅ 2026-10-25 |
 | **P2-a 数据源** | `core/auth/health.ts` `core/auth/account-info.ts` `core/playinfo/stats.ts` `background/handlers/account.handler.ts` `stats.handler.ts` | ✅ 2026-10-25 |
 | **P2-b 总开关** | popup 接上 `proxy/set`；`tabs.handler.ts` 统计受影响标签页 | ✅ 2026-10-25 |
-| **P2-c 界面** | `entrypoints/popup/`（8 种状态）+ 登录窗口 + 登录入口迁移 | ✅ 已完成（P2 阶段做了框架；§2.3/§2.4/§2.6 在 P3 补齐） |
+| **P2-c 界面** | `entrypoints/popup/`（7 种状态）+ 登录窗口 + 登录入口迁移 | ✅ 已完成（P2 阶段做了框架；§2.3/§2.4/§2.6 在 P3 补齐） |
 | **P2-d 页面侧** | 页内角标（Shadow DOM） | ✅ 2026-10-26 |
 | **P3 完善** | `entrypoints/options/` **三**分区内容（账号/诊断/显示） | ✅ **已完成（2026-10-27，六条验收全过）**：popup §2.3/§2.4/§2.6/状态 5、options 三分区、条形图、路径版本号全部落地。体检表与音质自检独立页已砍（[ADR 0016](./decisions/0016-drop-quality-report-page.md)） |
 | **预留** | `platform/browsers/firefox.ts` | ⬜ v1.5 |
@@ -659,7 +653,7 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
 | `entrypoints/popup/` | ✅ **完整实现**（P3 补齐 §2.3 解锁画质对比 / §2.4 双账号卡片 / §2.6 底部两按钮） | 此前依赖 options 页与 `core/playinfo` 解析 |
 | `entrypoints/options/` | ✅ **三分区全部完成（2026-10-27）**：hash 路由导航、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）、诊断页（自检信息 + 音质折叠块 + 日志 + 导出 + 白名单版本） | 体检/音质两页已砍（ADR 0016）；独立自检页已并入诊断分区 |
-| `scripts/`（4 个 `check-*` + `verify.mjs` 入口 + `package.mjs`） | ✅ **已实现**（`node scripts/verify.mjs`，9 项） | 边界 / 消息路由 / 设计令牌 / 文档 / 改写范围；**检查命令的唯一权威位置是 `scripts/`**。`package.mjs` 是打包，不在 verify 链里 |
+| `scripts/`（6 个 `check-*` + `verify.mjs` 入口 + `package.mjs`） | ✅ **已实现**（`node scripts/verify.mjs`，10 项） | 边界 / 消息路由 / 设计令牌 / 文档 / 敏感信息 / 改写范围；**检查命令的唯一权威位置是 `scripts/`**。`package.mjs` 是打包，不在 verify 链里 |
 | ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`；跑 `node scripts/verify.mjs`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
 | Prettier 配置 | ✅ **已实现**（`.prettierrc`；跑 `node scripts/verify.mjs`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |
 | `.eslintrc.cjs` | `eslint.config.mjs` | ESLint 9 默认 flat config |
@@ -670,7 +664,7 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 src/shared/{types,constants,utils}     ✅ 全部落地，零依赖
 src/design/tokens.css                  ✅
 src/core/{auth,vault,wbi,identity}     ✅
-src/core/playinfo/{stats,parse,rank}.ts     ✅（parse/rank 为 P3 首批；diagnose 待建）
+src/core/playinfo/{stats,parse,rank,summary-view}.ts     ✅
 src/platform/{http,storage,qr}         ✅
 src/background/{login-window,login-handshake,handlers/}  ✅
 src/content/isolated/{badge,badge-content,page-state}.ts  ✅（badge 为 P2-d；page-state 为 P3 Step 2）

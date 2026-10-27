@@ -1,5 +1,5 @@
 /**
- * 登录窗口 —— 独立 popup 窗口（420×560）。
+ * 登录窗口 —— 独立 popup 窗口（420×600，与 `src/background/login-window.ts` 的 LOGIN_WINDOW 保持一致）。
  *
  * 为什么不能放 popup：规范 §1「Popup 失焦即关闭」，用户拿手机扫的时候窗口已经没了。
  *
