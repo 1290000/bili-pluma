@@ -33,7 +33,7 @@ GPL-3.0-only · Chrome 120+ / Edge · 当前 v0.9.0（未进 1.0，仍在观察�
 
 ## 安装
 
-### 下载现成产物（推荐）
+### 下载现成产物
 
 1. 去 **Releases** 下载 `pluma-<版本>.zip`，解压
 2. 打开 `edge://extensions/`（Chrome 是 `chrome://extensions/`），开「开发者模式」

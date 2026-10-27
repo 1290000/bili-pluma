@@ -64,11 +64,41 @@ const SOURCE_ENTRIES = [
   'tsconfig.json',
   'README.md',
   'AGENTS.md',
+  'CHANGELOG.md',
   'LICENSE',
   'ADDITIONAL-TERMS.md',
   'eslint.config.mjs',
   '.prettierrc',
   '.prettierignore',
+];
+
+/**
+ * 白名单里**必须存在**的条目 —— 缺任何一个就判失败。
+ *
+ * ## 为什么需要这个（2026-10-27）
+ *
+ * `SOURCE_ENTRIES` 的遍历逻辑是 `if (!existsSync(...)) continue`，
+ * 也就是**不存在就静默跳过**。这对可选文件是合理的（不同机器可能没有 `.prettierrc`），
+ * 但对必需文件是危险的：
+ *
+ * > 白名单里写了 `CHANGELOG.md`，文件名却打错了 → 脚本照样"自检通过"，
+ * > 源码包里没有 CHANGELOG，而**没人会发现**。
+ *
+ * 判据是**缺了它源码包就不完整**：少了 README 无法了解项目，
+ * 少了 LICENSE 无法合规分发，少了 lockfile 无法重建依赖。
+ *
+ * ⚠️ 往这里加条目时问一句：**它缺失时，源码包还能独立使用吗？** 能，就只放白名单。
+ */
+const REQUIRED_SOURCE_ENTRIES = [
+  'src',
+  'entrypoints',
+  'package.json',
+  'pnpm-lock.yaml',
+  'wxt.config.ts',
+  'tsconfig.json',
+  'README.md',
+  'CHANGELOG.md',
+  'LICENSE',
 ];
 
 /** 无论在哪一层，出现这些目录名就直接判失败（不该被白名单带进来，但再防一道） */
@@ -412,8 +442,16 @@ async function main() {
   const version = await readVersion();
 
   // ── 4. 自检：源码版需要的顶层条目都在 ──
+  // REQUIRED 缺失直接判失败；其余缺失只记一条 note（允许可选文件不存在）
+  const requiredSet = new Set(REQUIRED_SOURCE_ENTRIES);
   for (const entry of SOURCE_ENTRIES) {
-    if (!existsSync(join(ROOT, entry))) {
+    if (existsSync(join(ROOT, entry))) continue;
+    if (requiredSet.has(entry)) {
+      fail(
+        `源码版必需条目缺失：${entry}`,
+        '它在 REQUIRED_SOURCE_ENTRIES 里，缺了源码包不完整。若确实该去掉，先改那个数组。',
+      );
+    } else {
       note(`源码版跳过不存在的条目：${entry}`);
     }
   }
