@@ -180,33 +180,120 @@ async function buildInstallReadme(version) {
   return tpl.split('{{VERSION}}').join(version);
 }
 
-/** Release 说明。**结构与语气见 docs/guides/release-notes-template.md** */
-function releaseNotes(version) {
+/**
+ * 从 `CHANGELOG.md` 抽出某个版本的小节。
+ *
+ * ## 为什么需要它（2026-10-27）
+ *
+ * 原来的 `releaseNotes()` 是**整段硬编码**的模板，只有版本号会变 ——
+ * 于是 1.0.0 的 Release 正文和 0.9.0 除了版本号一模一样，
+ * **完全看不到"这一版改了什么"**。
+ *
+ * 用户直接指出：「那后面推送 1.0.0 或者 1.5.0 的时候
+ * Release 里的内容不是应该写清楚一些 CHANGE 的吗？」
+ *
+ * 所以改成：**「本版内容」来自 CHANGELOG，其余（下载/怎么用/边界）来自模板。**
+ * CHANGELOG 成为"这个版本有什么"的唯一真相。
+ *
+ * @param changelog 全文
+ * @param version 版本号，如 `0.9.0`（对应 CHANGELOG 里的 `## 0.9.0`）
+ * @returns 该版本的正文（不含 `## 0.9.0` 这一行本身）；找不到返回 null
+ */
+function extractChangelogSection(changelog, version) {
+  const lines = changelog.split('\n');
+
+  const start = lines.findIndex((l) => l.trim() === `## ${version}`);
+  if (start < 0) return null;
+
+  // 到下一个二级标题为止（或文件末尾）
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+
+  // 去掉末尾的分隔线与空行
+  const body = lines.slice(start + 1, end);
+  while (
+    body.length > 0 &&
+    (body[body.length - 1].trim() === '' || body[body.length - 1].trim() === '---')
+  ) {
+    body.pop();
+  }
+
+  // 子节降一级 —— 它们要挂在「本版内容」下面用 ### 会和它平级，看不出从属关系
+  return body.join('\n').replace(/^### /gm, '#### ').trim();
+}
+
+/**
+ * Release 说明。
+ *
+ * **结构：**「本版内容」← CHANGELOG；「下载 / 怎么用 / 边界 / 许可证」← 本模板。
+ * 判据：**会不会随版本变？** 会变的放 CHANGELOG，不变的放这里。
+ * 规范说明见 `docs/guides/release-notes-template.md`。
+ */
+async function releaseNotes(version) {
+  const changelog = await readFile(join(ROOT, 'CHANGELOG.md'), 'utf8');
+  const section = extractChangelogSection(changelog, version);
+
+  if (section === null) {
+    /**
+     * 这里**不能只 `fail()`** —— `problems` 数组在更早的步骤就被检查完了，
+     * 而 releaseNotes() 在打包末尾才调用，`fail()` 记下的问题没人看。
+     *
+     * 实测：把 CHANGELOG 的 `## 0.9.0` 改成 `## 9.9.9` 后，脚本仍然「打包完成」，
+     * 只是 Release 正文里的「本版内容」变成空的。这种事必须硬失败。
+     */
+    throw new Error(
+      `CHANGELOG.md 里找不到 "## ${version}" 这一节。` +
+        '打 tag 前必须先写 CHANGELOG，否则 Release 正文的「本版内容」会是空的。',
+    );
+  }
+
   return `## Pluma ${version}
 
 B站双账号画质助手。用主账号浏览、点赞、收藏，让一个大会员账号专门负责取流。
+
+### 本版内容
+
+${section}
 
 ### 下载
 
 | 文件 | 内容 |
 | --- | --- |
-| \`pluma-${version}.zip\` | 构建产物，解压后在 \`edge://extensions\` 加载 |
+| \`pluma-${version}.zip\` | 构建产物，解压后在 \`edge://extensions\`（Chrome 用 \`chrome://extensions\`）加载 |
 | \`pluma-${version}-with-source.zip\` | 同上 + 完整源码 |
 
 也可以自己从源码构建：\`pnpm install && pnpm build\`，加载 \`.output/chrome-mv3\`。
 
 这份产物由本项目开发者构建，未经过浏览器扩展商店签名，仅供学习交流使用。
 
+### 怎么用
+
+1. 加载扩展后点工具栏图标
+2. 点「扫码登录播放账号」，用大会员账号扫码（独立窗口，不影响当前登录）
+3. 打开任意 B站视频，画质菜单里会出现 4K / 1080P60
+
+**加载后还要开一个权限**，否则扫码窗口打不开：
+\`edge://extensions\`（Chrome 用 \`chrome://extensions\`）→ Pluma →「详细信息」
+→ 打开「在 InPrivate 中允许」（Chrome 叫「在无痕模式下启用」）→ 重新加载扩展。
+
+需要 Chrome 120+ 或 Edge，两个浏览器共用同一份产物。
+
 ### 边界
 
 - **不绕过付费墙**：会员专享番剧、电影仍需购买
+- **不解锁你没有的权益**：4K / 1080P60 来自你登录的大会员账号
 - **不伪装会员标识**：界面显示你的真实状态
 - **不解锁地区限制**
 - **与哔哩哔哩官方无任何关联**，未获授权或认可
 
 ### 已知限制
 
-- 番剧 / 直播不支持
+- 番剧 / 直播不支持（番剧页取流走 SSR，扩展代理不到）
 
 ### 许可证
 
@@ -534,7 +621,7 @@ async function main() {
   await rm(stagingSrc, { recursive: true, force: true });
 
   // ── 7. Release 说明 ──
-  await writeFile(join(DIST_DIR, 'release-notes.md'), releaseNotes(version), 'utf8');
+  await writeFile(join(DIST_DIR, 'release-notes.md'), await releaseNotes(version), 'utf8');
 
   // ── 8. 报告 ──
   const light = join(DIST_DIR, lightName);

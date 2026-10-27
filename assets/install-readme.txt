@@ -36,6 +36,7 @@ Pluma {{VERSION}} 安装说明
 账号。没有这个权限，扫码窗口打不开。
 
 1. 在 edge://extensions 找到 Pluma
+   （Chrome 是 chrome://extensions）
 
 2. 点「详细信息」
 
