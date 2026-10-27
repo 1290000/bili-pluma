@@ -59,6 +59,33 @@ jobs:
             exit 1
           }
 
+      # chat not found 只有三种来源：频道没公开（没有 @用户名）、用户名拼错、
+      # 或者填成了 bot 自己的用户名。本地 curl 连不上 api.telegram.org 时没法自查，
+      # 所以让 Actions 在失败时把 bot 见过的所有 chat 打出来，省掉来回猜。
+      - name: 校验 chat_id
+        run: |
+          set -euo pipefail
+          RESP=$(curl -sS -G "https://api.telegram.org/bot${TG_TOKEN}/getChat" \
+            --data-urlencode "chat_id=${TG_CHAT}") || {
+            echo "::error::连不上 api.telegram.org"; exit 1
+          }
+
+          if echo "$RESP" | grep -q '"ok":true'; then
+            echo "$RESP" | jq -r '.result | "chat_id 解析成功：id=\(.id) type=\(.type) title=\(.title // .username // "-")"'
+            exit 0
+          fi
+
+          echo "::error::chat_id 无效：$(echo "$RESP" | jq -r '.description // "未知错误"')"
+          echo "::error::下面是 bot 最近见过的所有 chat —— 频道那条（type=channel）用它的 id："
+          curl -sS "https://api.telegram.org/bot${TG_TOKEN}/getUpdates" \
+            | jq -r '.result[]
+                     | (.message?.chat // .channel_post?.chat // .my_chat_member?.chat)
+                     | select(. != null)
+                     | "  \(.id)  \(.type)  \(.title // .username // "-")"' \
+            | sort -u || true
+          echo "::error::若上面没有 type=channel，说明 bot 还不是频道管理员（频道 → 管理员 → 添加 → 勾「发布消息」）"
+          exit 1
+
       # 正常情况下 `gh release create` 是先传完 asset 再发布，这里一次就能找到。
       # 重试只为兜住"网页上先点 Publish 再拖文件"的竞态。
       - name: 定位精简版 zip
