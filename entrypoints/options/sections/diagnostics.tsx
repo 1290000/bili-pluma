@@ -171,7 +171,10 @@ export function DiagnosticsSection(): JSX.Element {
         <details class="fold">
           <summary>这台机器能放 Hi-Res / 杜比吗</summary>
           <AudioCheck />
-          <p class="fold-note">杜比要三条同时成立，扩展读不到前两条，只能你自查：</p>
+          {/* ⚠️ 别说"扩展读不到前两条"——上面 AudioCheck 已经测了第 1 条
+              （EC-3 解码器），那样写会与同一张卡片的其他内容自相矛盾。
+              真正读不到的只有第 2 条 flags 和第 3 条系统设置。 */}
+          <p class="fold-note">第 1 条上面已经测了。第 2、3 条浏览器读不到，要你自己核：</p>
           <ol class="fold-list">
             <li>
               装 Microsoft 的 EC-3 解码扩展（Store ID <code>9nvjqjbdkn97</code>）
