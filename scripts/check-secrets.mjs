@@ -58,7 +58,10 @@ import { readFileSync } from 'node:fs';
 const SALT = 'pluma-secrets-v1';
 
 function hashOf(value) {
-  return createHash('sha256').update(SALT + ':' + value).digest('hex').slice(0, 32);
+  return createHash('sha256')
+    .update(SALT + ':' + value)
+    .digest('hex')
+    .slice(0, 32);
 }
 
 /**
