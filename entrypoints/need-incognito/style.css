@@ -38,15 +38,35 @@ body {
   margin-bottom: 18px;
 }
 
+/* 折叠态：原理默认收起，别让用户先读一段科普才看到步骤 */
 .why-title {
-  margin: 0 0 4px;
+  margin: 0;
   font-weight: 500;
   font-size: var(--pluma-font-caption);
   color: var(--pluma-accent);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+/* 去掉 Chrome / Edge 默认的三角，自己画一个，保证两边一致 */
+.why-title::-webkit-details-marker {
+  display: none;
+}
+
+.why-title::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.15s;
+}
+
+.why[open] .why-title::before {
+  transform: rotate(90deg);
 }
 
 .why-body {
-  margin: 0;
+  margin: 8px 0 0;
   font-size: var(--pluma-font-caption);
   line-height: 1.7;
 }

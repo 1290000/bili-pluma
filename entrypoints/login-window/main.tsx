@@ -193,8 +193,8 @@ function App() {
         <div class="save-failed">
           <p class="save-failed-title">账号已登录成功，但扩展读不到凭据</p>
           <p class="save-failed-note">
-            通常是因为 InPrivate 窗口允许扩展运行，但 cookies 权限未生效。 请在扩展详情页确认「在
-            InPrivate 中允许」已勾选，然后重新扫码。
+            通常是 InPrivate 窗口允许扩展运行了，但 cookies 权限没跟上。请在扩展详情页确认「在
+            InPrivate 中允许」已打开（Chrome 叫「在无痕模式下启用」），然后重新扫码。
           </p>
         </div>
       )}

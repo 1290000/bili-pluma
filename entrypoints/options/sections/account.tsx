@@ -139,7 +139,7 @@ export function AccountSection(): JSX.Element {
     if (res.opened !== true) {
       setHint(
         res.reason === 'incognito-disabled'
-          ? '需要先在扩展详情页勾选「在 InPrivate 中允许」，再点一次'
+          ? '需要先在扩展详情页打开「在 InPrivate 中允许」（Chrome 叫「在无痕模式下启用」），再点一次'
           : '登录窗口打不开，请重试',
       );
       return;

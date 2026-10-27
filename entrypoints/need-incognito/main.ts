@@ -39,7 +39,9 @@ function closeIfReadyElsewhere(): void {
   window.setTimeout(() => {
     void readLoginReady().then((m) => {
       if (m) return;
-      tipEl.textContent = '二维码窗口没有出现，请按下面两步手动开启 InPrivate 权限。';
+      // 不能再说"请按下面两步操作" —— 上面已经是步骤列表了，重复只会让人以为多了一组步骤
+      tipEl.textContent =
+        '登录窗口没有自动打开，说明权限还没开：请照上面三步做一遍，然后重新点图标。';
       tipEl.classList.add('show');
     });
   }, 8000);

@@ -459,7 +459,9 @@ function App() {
 
             {error && <p class="hint danger">{error}</p>}
             {loginHint === 'incognito-disabled' && (
-              <p class="hint danger">需要在扩展详情页勾选「在 InPrivate 中允许」</p>
+              <p class="hint danger">
+                需要在扩展详情页打开「在 InPrivate 中允许」（Chrome 叫「在无痕模式下启用」）
+              </p>
             )}
             {loginHint === 'opened' && <p class="hint">登录窗口已打开，请用手机扫码</p>}
             {loginHint === 'failed' && <p class="hint danger">登录窗口打不开，请重试</p>}

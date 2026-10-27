@@ -40,6 +40,7 @@ export default tseslint.config(
       'node_modules/**',
       '.output/**',
       '.wxt/**',
+      'dist/**', // 发布产物：构建结果 + 用户解压出来的副本，不该参与 lint
       'poc/**', // Q2 是独立扩展，裸 JS，不参与主项目 lint
       'public/**', // 注入页面的裸 JS
     ],
