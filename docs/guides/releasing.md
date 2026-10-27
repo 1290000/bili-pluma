@@ -146,13 +146,40 @@ Windows 解压后得到 `pluma-0.9.0/extension/manifest.json`，
 ### 2. 发布前检查
 
 ```bash
-# 全部通过才能发
-npm run typecheck      # tsc --noEmit
-npm run lint           # eslint，含依赖方向规则
-npm run check:boundaries   # scripts/check-boundaries.ts
-npm test               # vitest，core 层单测
-npm run build          # 打包，检查产物体积
+node scripts/verify.mjs     # 十项，全绿才能继续
 ```
+
+`verify.mjs` 已含下面这些，**不要分别手跑**（会漏）：
+
+`typecheck` · `format` · `lint` · `boundaries` · `messages` · `design` ·
+`docs` · **`secrets`** · `patch` · `test`
+
+#### ⚠️ `secrets` 这一项是 2026-10-27 补的，起因是真实事故
+
+准备发 0.9.0 时才发现：**测试用的主账号 mid、播放账号 mid、两个昵称**
+散落在 11 个文件里（docs 的验证记录、tests 的夹具、poc 的脚本），
+而它们**已经被推到了公开仓库**。
+
+当时我做过 `.env` / `SESSDATA` 检查 —— 但**没想到要查 mid**。
+mid 不是密钥，可它能直接打开一个人的 B 站主页。
+
+`scripts/check-secrets.mjs` 检查三类：
+
+| 类别 | 例子 |
+| --- | --- |
+| 禁用的字面量 | 真实账号的 mid / 昵称（**这张表只增不减**，泄露过的值永远留着） |
+| 凭据形态 | `SESSDATA=<长值>` / `bili_jct=<32位hex>` / 私钥头 |
+| 本机路径 | `C:\Users\<真实用户名>\` |
+
+**假值不算**：带 `fake` / `deadbeef` / `example` 等标记的样例放行
+（测试夹具需要真结构，比如 SESSDATA 必须含逗号才测得出分割逻辑）。
+
+#### 发布前还要人眼过的两项（脚本查不了）
+
+- [ ] **提交历史**：`git log -S "<敏感值>" --oneline --all`，确认历史里也没有
+  —— 只改文件不够，旧值仍能从历史翻出来
+- [ ] **抓包产物**：`poc/verify/` 下的 `bg-ssr.json`、`result-*.json` 不进仓库
+  （已在 `.gitignore` 里，但新增文件时容易漏）
 
 ### 3. 打包
 

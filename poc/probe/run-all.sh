@@ -2,7 +2,7 @@
 # 一条命令内完成：启动带调试端口的 Edge → 等待端口就绪 → 实测 4 个分 P → 关闭
 set -u
 EDGE="/c/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
-WD='C:/Users/<USER>/AppData/Local/pluma-edge-copy'
+WD='C:/Users/<你的用户名>/AppData/Local/pluma-edge-copy'
 
 echo "[1/3] 启动 Edge（profile 副本）"
 "$EDGE" --remote-debugging-port=9222 \

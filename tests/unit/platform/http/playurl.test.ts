@@ -6,7 +6,7 @@ import type { Credential } from '@shared/types/account';
 const credential: Credential = {
   sessdata: 'deadbeef,1700000000,1*FAKEsessdata',
   biliJct: '8bf1e88c2633143a485be4ad40e29c7e',
-  dedeUserId: '{{playback_mid}}',
+  dedeUserId: '1000002',
 };
 
 describe('buildCookieHeader', () => {

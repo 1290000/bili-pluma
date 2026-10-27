@@ -544,8 +544,8 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 >
 > | 项 | 结果 |
 > | --- | --- |
-> | 主账号登录态 | **未被覆盖**（头像仍是主账号 mid={{primary_mid}}） |
-> | 播放账号隔离 | ✅ 无痕分区，mid={{playback_mid}} |
+> | 主账号登录态 | **未被覆盖**（头像仍是主账号 mid={{主账号mid}}） |
+> | 播放账号隔离 | ✅ 无痕分区，mid={{播放账号mid}} |
 > | DNR 换 Cookie | ✅ `playurl 请求出现` → `页面实际播放 4320p` |
 > | SSR 拦截 | ✅ `playinfo=hidden-or-empty`，播放器改走 API |
 > | 会员状态伪装 | ✅ `已改写 /x/player/wbi/v2`，切换画质不弹框 |

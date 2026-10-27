@@ -2,7 +2,7 @@
  * Cookie 头的解析 / 序列化 / 合并 —— 纯函数，零依赖。
  *
  * 这些函数看着简单，但 B站的真实 Cookie 有几个坑：
- *   - `SESSDATA` 的值里含**逗号**（`deadbeef,1700000000,1*FAKEsessdata*...`）
+ *   - `SESSDATA` 的值里含**逗号**（`deadbeef,1700000000,1*FAKE...`）
  *   - `buvid4` 的值里含**等号**（base64 padding `==`）
  *   - 值里可能有 `%2C` 之类的 URL 编码，**不能解码**（服务端要原样）
  *

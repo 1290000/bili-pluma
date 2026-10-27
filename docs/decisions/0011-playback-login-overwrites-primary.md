@@ -11,10 +11,10 @@
 
 ```
 ① 登录主账号（普通用户）
-   dedeUserId = {{primary_mid}}      navMid = {{primary_mid}}      vip = 0
+   dedeUserId = {{主账号mid}}      navMid = {{主账号mid}}      vip = 0
 
 ② 用扩展扫码登录播放账号（大会员）
-   dedeUserId = {{playback_mid}}   navMid = {{playback_mid}}   vip = 1
+   dedeUserId = {{播放账号mid}}   navMid = {{播放账号mid}}   vip = 1
 
 cookieOverwritten: true
 ```

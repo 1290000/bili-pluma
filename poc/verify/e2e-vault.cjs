@@ -38,7 +38,7 @@ async function inspectLocal(sw) {
       hasKeyMaterial: typeof material === 'string' && material.length > 0,
       keyLooksBase64: typeof material === 'string' && /^[A-Za-z0-9+/=]+$/.test(material),
       leakedPlaintext:
-        raw.includes('SESSDATA') || raw.includes('bili_jct') || raw.includes('{{playback_mid}}'),
+        raw.includes('SESSDATA') || raw.includes('bili_jct') || raw.includes('1000002'),
     };
   });
 }

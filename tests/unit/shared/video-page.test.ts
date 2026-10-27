@@ -115,9 +115,7 @@ describe('readDeviceCookies', () => {
 
 describe('readPrimaryMidFromCookie', () => {
   it('从页面 cookie 读出主账号 mid', () => {
-    expect(readPrimaryMidFromCookie('buvid3=B3; DedeUserID={{primary_mid}}; bili_jct=x')).toBe(
-      '{{primary_mid}}',
-    );
+    expect(readPrimaryMidFromCookie('buvid3=B3; DedeUserID=1000001; bili_jct=x')).toBe('1000001');
   });
 
   it('读的是页面里的 DedeUserID，不是别的字段', () => {
@@ -139,6 +137,6 @@ describe('readPrimaryMidFromCookie', () => {
   });
 
   it('大 mid 也不丢精度（返回字符串）', () => {
-    expect(readPrimaryMidFromCookie('DedeUserID={{playback_mid}}')).toBe('{{playback_mid}}');
+    expect(readPrimaryMidFromCookie('DedeUserID=1000002')).toBe('1000002');
   });
 });

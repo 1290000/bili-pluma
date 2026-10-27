@@ -67,7 +67,6 @@ desktop.ini
 
 # ---------- 验证脚本的临时产物 ----------
 # poc/verify/ 下的诊断脚本会写这些：
-#   .tmp/            浏览器 profile（几百个文件，绝不能入库）
 #   *.png            截图
 #   result-*.json    验证原始数据
 # 这些是本地排查产物，不是成果。成果以 RESULT.md 为准。
@@ -75,6 +74,16 @@ desktop.ini
 poc/verify/*.png
 poc/verify/result-*.json
 poc/verify/.keep
+
+# git filter-branch 的临时工作目录（重写历史时生成）。
+# 里面是每个提交的完整文件快照，会被 lint / prettier 扫到。
+.git-rewrite/
+
+# 抓包快照：完整的服务端响应，含真实 aid/cid/封面 URL。
+# 脱敏检查时发现它入库了 —— 虽无凭据，但属于"原始抓包数据"，
+# 与 result-*.json 同类，不该进公开仓库。需要时重跑 probe 生成。
+poc/verify/bg-ssr.json
+poc/verify/bg.html
 
 # 例外：Q2 的汇总是**结论**不是原始数据，必须入库
 !poc/verify/result-q2-summary.json

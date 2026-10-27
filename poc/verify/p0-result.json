@@ -1,6 +1,6 @@
 {
   "startedAt": "2026-10-24T18:13:11.705Z",
-  "extPath": "D:\\workbuddy\\No Project\\2026-10-24-22-23-40\\poc\\q2-dnr-concurrency",
+  "extPath": "<POC_DIR>",
   "extId": "ddkcdhnpandlpepoaocadmidfemmoboh",
   "pageLoaded": true,
   "verdict": "GO —— 全部 6 项通过，耗时 973 ms。架构成立，可以进 P1。",

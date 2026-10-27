@@ -37,7 +37,7 @@ function memoryStorage(): VaultStorage & { dump(): Record<string, unknown> } {
 const credential: Credential = {
   sessdata: 'deadbeef,1700000000,1*FAKEsessdata',
   biliJct: '8bf1e88c2633143a485be4ad40e29c7e',
-  dedeUserId: '{{playback_mid}}',
+  dedeUserId: '1000002',
 };
 
 describe('saveCredential / loadCredential', () => {
@@ -53,7 +53,7 @@ describe('saveCredential / loadCredential', () => {
     const raw = JSON.stringify(s.dump());
     expect(raw).not.toContain('deadbeef');
     expect(raw).not.toContain('8bf1e88c');
-    expect(raw).not.toContain('{{playback_mid}}');
+    expect(raw).not.toContain('1000002');
     expect(raw).not.toContain('sessdata');
     expect(raw).not.toContain('biliJct');
   });

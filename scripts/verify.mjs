@@ -69,6 +69,14 @@ const STEPS = [
     first: true,
   },
   { name: 'docs', cmd: process.execPath, args: ['scripts/check-docs.mjs'], first: true },
+  {
+    // 2026-10-27 加：发布前才发现测试账号 mid 散在 11 个文件里。
+    // 凭据检查当时做了，mid 没想到 —— 这类"想不起来要查"的事必须机器化。
+    name: 'secrets',
+    cmd: process.execPath,
+    args: ['scripts/check-secrets.mjs'],
+    first: true,
+  },
   { name: 'patch', cmd: process.execPath, args: ['scripts/check-patch-scope.mjs'], first: true },
   { name: 'test', cmd: binPath('vitest'), args: ['run'], first: false, slow: true },
 ];
@@ -76,11 +84,11 @@ const STEPS = [
 const HELP = `
 Pluma 验收入口（不依赖 pnpm 在 PATH 里）
 
-  node scripts/verify.mjs           跑全部九项（约 40s）
-  node scripts/verify.mjs --fast    跳过 vitest，八项（约 15s，改文档/脚本时够用）
+  node scripts/verify.mjs           跑全部十项（约 45s）
+  node scripts/verify.mjs --fast    跳过 vitest，九项（约 20s，改文档/脚本时够用）
   node scripts/verify.mjs --help    显示本帮助
 
-本脚本覆盖的九项（顺序执行）：
+本脚本覆盖的十项（顺序执行）：
   typecheck  tsc --noEmit
   format     prettier --check .
   lint       eslint .
@@ -101,7 +109,7 @@ Pluma 验收入口（不依赖 pnpm 在 PATH 里）
 
   为什么不在本脚本里：它要启动真实 Edge、加载独立扩展、跑 180 并发。
   塞进来会让每次交付都等 10 分钟，然后所有人开始用 --no-verify 绕过，
-  最后连上面八项也没人跑。所以改为**本脚本主动提醒**：
+  最后连上面九项也没人跑。所以改为**本脚本主动提醒**：
   检测到 diff 里有 src/platform/http/dnr.ts 就打印警告（见 AGENTS.md §4.3 路由表）。
 
 【第 3 档】反例验证 —— 无法自动化，只能靠人
@@ -110,7 +118,7 @@ Pluma 验收入口（不依赖 pnpm 在 PATH 里）
   为什么不能自动化：脚本无法判断"你改回去的那个判断是不是关键的"。
   操作步骤见 docs/guides/methodology.md §5 ⑤（这里不复述，避免第二份漂移）。
 
-⇒ 一句话：八项全绿只说明"静态检查 + 单测过了"，
+⇒ 一句话：九项全绿只说明"静态检查 + 单测过了"，
   不代表"改 dnr.ts 的回归跑过了"、更不代表"做过反例验证"。
 
 退出码：0 全绿｜1 有检查未通过｜2 脚本自身出错

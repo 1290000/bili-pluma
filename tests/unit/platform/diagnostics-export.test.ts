@@ -47,7 +47,7 @@ function buildPayload(rows: DiagRow[], logs: DiagEntry[]): string {
 const SECRETS = [
   'deadbeef,1700000000,1*FAKEsessdata', // SESSDATA 的值
   '8bf1e88c2633143a485be4ad40e29c7e', // bili_jct 的值
-  '{{playback_mid}}', // 播放账号 DedeUserID
+  '1000002', // 播放账号 DedeUserID
   'SESSDATA=',
   'bili_jct=',
 ];

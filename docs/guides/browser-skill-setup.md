@@ -12,8 +12,8 @@
 ## 1. 唯一可用配置（照抄）
 
 ```bash
-export PATH="/c/Users/<USER>/.local/bin:$PATH"
-export BSK_HOME="C:\\Users\\<USER>\\.bsk-agent"   # 必须换 home，见坑 1
+export PATH="/c/Users/<你的用户名>/.local/bin:$PATH"
+export BSK_HOME="C:\\Users\\<你的用户名>\\.bsk-agent"   # 必须换 home，见坑 1
 export BSK_AUTO_START=0
 
 # 必须 run_in_background: true，用默认端口 52800
@@ -79,7 +79,7 @@ bsk evaluate --session <id> "JSON.stringify({w: document.querySelector('video')?
 `bsk install-skill --list` 支持 12 个 harness。**本机目前只装了 `workbuddy`**：
 
 ```
-C:\Users\<user>\.workbuddy\skills\browser-skill\
+C:\Users\<你的用户名>\.workbuddy\skills\browser-skill\
 ```
 
 换 Agent 平台（Cursor / Claude Code / Codex…）要重跑：

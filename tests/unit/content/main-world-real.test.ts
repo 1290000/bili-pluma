@@ -498,7 +498,7 @@ describe('XHR 会员状态改写：接管式（切画质不该弹充值页）', 
     // 造一个"主账号不是会员"的响应
     const body = JSON.stringify({
       code: 0,
-      data: { mid: {{primary_mid}}, vip: { status: 0, type: 0, due_date: 0 } },
+      data: { mid: 1000001, vip: { status: 0, type: 0, due_date: 0 } },
     });
 
     const fakeResp = {
@@ -641,7 +641,7 @@ describe('nav 接口也必须伪装（切画质弹充值页的根因）', () => 
       code: 0,
       data: {
         isLogin: true,
-        mid: {{primary_mid}},
+        mid: 1000001,
         uname: '主账号',
         vipStatus: 0,
         vipType: 0,
@@ -687,7 +687,7 @@ describe('nav 接口也必须伪装（切画质弹充值页的根因）', () => 
     enable(sb);
     await flush();
 
-    const body = JSON.stringify({ code: 0, data: { mid: {{primary_mid}}, vipStatus: 0, vipType: 0 } });
+    const body = JSON.stringify({ code: 0, data: { mid: 1000001, vipStatus: 0, vipType: 0 } });
     (sb.win as unknown as Record<string, unknown>).fetch = () =>
       Promise.resolve({
         ok: true,
@@ -712,7 +712,7 @@ describe('nav 接口也必须伪装（切画质弹充值页的根因）', () => 
 
     const parsed = JSON.parse(xhr.responseText) as { data: { mid: number } };
     // ADR 0013：mid 属于身份归属，禁止改
-    expect(parsed.data.mid).toBe({{primary_mid}});
+    expect(parsed.data.mid).toBe(1000001);
   });
 });
 

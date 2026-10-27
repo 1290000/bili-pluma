@@ -226,7 +226,7 @@ describe('PageState：主账号是否登录（三态，不许把"还没读到"�
   it('读到真实 mid → yes（即使那次是 document_start）', () => {
     const s = freshState();
     s.setPage('BV1', 1);
-    s.setPrimaryMid('{{primary_mid}}', false);
+    s.setPrimaryMid('1000001', false);
     expect(s.view()?.primary.loggedIn).toBe('yes');
   });
 
@@ -236,14 +236,14 @@ describe('PageState：主账号是否登录（三态，不许把"还没读到"�
     s.setPrimaryMid(null, true);
     expect(s.view()?.primary.loggedIn).toBe('no');
 
-    s.setPrimaryMid('{{primary_mid}}', true);
+    s.setPrimaryMid('1000001', true);
     expect(s.view()?.primary.loggedIn).toBe('yes');
   });
 
   it('换页后回到 unknown（新页面要重新判断）', () => {
     const s = freshState();
     s.setPage('BV1', 1);
-    s.setPrimaryMid('{{primary_mid}}', true);
+    s.setPrimaryMid('1000001', true);
     expect(s.view()?.primary.loggedIn).toBe('yes');
 
     s.setPage('BV1', 2);
@@ -255,8 +255,8 @@ describe('PageState：主账号 mid（账号页要显示它）', () => {
   it('读到 mid 后 view 里能拿到', () => {
     const s = freshState();
     s.setPage('BV1', 1);
-    s.setPrimaryMid('{{primary_mid}}', true);
-    expect(s.view()?.primary.mid).toBe('{{primary_mid}}');
+    s.setPrimaryMid('1000001', true);
+    expect(s.view()?.primary.mid).toBe('1000001');
   });
 
   it('没读到时是 null，不是空串（UI 靠 null 判断"还没拿到"）', () => {

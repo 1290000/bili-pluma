@@ -50,10 +50,10 @@ B站的凭据只通过 `Set-Cookie` 下发，而 JS 读不到这个响应头（W
 `poc/verify/result-incognito-probe.json`：
 
 ```
-主账号（普通窗口）       mid={{primary_mid}}  uname={{primary_name}}            vip=0
-播放账号（隔离 context） mid={{playback_mid}}  uname={{playback_name}}  vip=1
+主账号（普通窗口）       mid={{主账号mid}}  uname={{主账号昵称}}            vip=0
+播放账号（隔离 context） mid={{播放账号mid}}  uname={{播放账号昵称}}  vip=1
 
-登录播放账号后，主账号仍是 mid={{primary_mid}}
+登录播放账号后，主账号仍是 mid={{主账号mid}}
 isolationWorked:          true      ← 未被覆盖
 accountsDiffer:           true      ← 确实是两个号
 isolatedCookies.hasSessdata/hasJct/hasDedeUserId:  全部 true

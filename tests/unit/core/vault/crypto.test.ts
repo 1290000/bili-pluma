@@ -18,7 +18,7 @@ interface Sample {
 const sample: Sample = {
   sessdata: 'deadbeef,1700000000,1*FAKEsessdataSignature',
   biliJct: '8bf1e88c2633143a485be4ad40e29c7e',
-  dedeUserId: '{{playback_mid}}',
+  dedeUserId: '1000002',
 };
 
 describe('加解密往返', () => {

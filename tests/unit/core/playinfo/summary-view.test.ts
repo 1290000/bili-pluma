@@ -42,7 +42,7 @@ function view(over: Partial<PageTracksView> = {}): PageTracksView {
         maxFrameRateAtTopHeight: 30,
         hasHiRes: false,
       }),
-      user: { uname: '{{primary_name}}', face: null, level: 6 },
+      user: { uname: 'testuser-primary', face: null, level: 6 },
       mid: null,
       loggedIn: 'yes',
     },
