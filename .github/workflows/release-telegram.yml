@@ -116,28 +116,46 @@ jobs:
         run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" --dir out
 
       - name: 发送到群组
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
-          CAPTION=$(printf '%s\n' \
-            "Pluma ${TAG}" \
-            "" \
-            "构建产物，解压后在扩展页选「加载解压缩的扩展」，指向解压出来的目录。" \
-            "源码版与更新说明：${URL}")
 
-          # 不指定 parse_mode：tag / 正文里的下划线、方括号会让 MarkdownV2 直接 400。
-          #
-          # chat_id 必须用 --form-string：填 `@频道用户名` 时，`-F` 会把开头的 @ 当成
-          # 「从文件读取」，curl 报 (26) 且**请求根本不会发出** —— 日志里就是「无响应体」。
-          if ! curl -sS --fail-with-body -o response.json \
-            -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
+          # 标题和正文直接取 Release 的，不再自己拼文案。
+          TITLE=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json name --jq '.name // ""')
+          [ -n "$TITLE" ] || TITLE="$TAG"
+          # Telegram 不渲染 Markdown，只去掉语法标记（# ** 反引号），文字一个字不动。
+          BODY=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' \
+            | sed -E 's/^#{1,6} +//; s/\*\*//g; s/`//g')
+
+          # 统一处理失败：Telegram 的业务错误都是 4xx，--fail-with-body 会把响应体留在 resp.json
+          call() {
+            local method="$1"; shift
+            if ! curl -sS --fail-with-body -o resp.json -X POST \
+              "https://api.telegram.org/bot${TG_TOKEN}/${method}" "$@"; then
+              echo "::error::${method} 失败，Telegram 返回：$(cat resp.json 2>/dev/null || echo '（无响应体）')"
+              echo "::error::按顺序查：bot 是否还在频道里 → chat_id 是否正确 → 频道是否被迁移过"
+              exit 1
+            fi
+          }
+
+          # 1) 文件。caption 上限 1024，正文放不下，所以只放标题。
+          #    chat_id 必须用 --form-string：填 @用户名 时 -F 会把 @ 当成读文件。
+          call sendDocument \
             -F "document=@out/${ASSET}" \
             --form-string "chat_id=${TG_CHAT}" \
-            --form-string "caption=${CAPTION}"; then
-            echo "::error::发送失败，Telegram 返回：$(cat response.json 2>/dev/null || echo '（无响应体）')"
-            echo "::error::按顺序查：bot 是否还在群里 → chat_id 有没有写错 → 群是否被自动升级成了超级群"
-            echo "::error::（升级会换掉数字 id，旧 secret 就失效了；重新 getUpdates 取一次即可）"
-            exit 1
+            --form-string "caption=${TITLE}"
+
+          # 2) 正文，纯文本，单条上限 4096 字符
+          if [ -n "$BODY" ]; then
+            if [ "${#BODY}" -gt 3900 ]; then
+              BODY=$(printf '%s\n\n（正文超长，完整内容见 %s）' "${BODY:0:3900}" "$URL")
+            fi
+            call sendMessage \
+              --form-string "chat_id=${TG_CHAT}" \
+              --form-string "text=${BODY}" \
+              --form-string "disable_web_page_preview=true"
           fi
 
-          echo "发送成功：$(grep -o '"message_id":[0-9]*' response.json | head -1 || true)"
+          echo "发送成功：文件 + 正文"
