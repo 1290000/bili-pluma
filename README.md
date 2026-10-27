@@ -71,7 +71,9 @@ popup 里应显示「已接管」——这是生效的标志。
 ## 接手这个项目
 
 - **AI 代理 / 新来的开发者：先读 [AGENTS.md](./AGENTS.md)**
-- 改完代码跑 `node scripts/verify.mjs`（9 项检查，`--help` 看说明）
+- **clone 后先跑一次** `git config core.hooksPath .githooks`
+  —— 提交时会自动检查敏感信息，见 [.githooks/README.md](./.githooks/README.md)
+- 改完代码跑 `node scripts/verify.mjs`（10 项检查，`--help` 看说明）
 - 文档索引：[docs/README.md](./docs/README.md)　未决问题：[docs/03](./docs/03-open-questions.md) §0
 
 ## 致谢

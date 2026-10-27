@@ -67,23 +67,27 @@ desktop.ini
 
 # ---------- 验证脚本的临时产物 ----------
 # poc/verify/ 下的诊断脚本会写这些：
-#   *.png            截图
-#   result-*.json    验证原始数据
-# 这些是本地排查产物，不是成果。成果以 RESULT.md 为准。
+#   *.png / *.html   截图与页面快照
+#   *.json           抓包与验证原始数据
+# 这些是本地排查产物，不是成果。成果以 RESULT.md 与下面两个例外为准。
 .tmp/
 poc/verify/*.png
-poc/verify/result-*.json
+poc/verify/*.html
 poc/verify/.keep
+
+# ⚠️ 用**模式**而不是具体文件名。
+# 2026-10-27：只写了 `result-*.json`，结果 `bg-ssr.json` 漏了、
+# `bg.html` 也漏了 —— 补一个漏一个。判据应该是"这个目录下的抓包数据
+# 一律不入库"，而不是"我这次记得的那几个文件"。
+poc/verify/*.json
+
+# 例外：这些是**结论**不是原始数据，必须入库
+!poc/verify/result-q2-summary.json
+!poc/verify/p0-result.json
 
 # git filter-branch 的临时工作目录（重写历史时生成）。
 # 里面是每个提交的完整文件快照，会被 lint / prettier 扫到。
 .git-rewrite/
-
-# 抓包快照：完整的服务端响应，含真实 aid/cid/封面 URL。
-# 脱敏检查时发现它入库了 —— 虽无凭据，但属于"原始抓包数据"，
-# 与 result-*.json 同类，不该进公开仓库。需要时重跑 probe 生成。
-poc/verify/bg-ssr.json
-poc/verify/bg.html
 
 # 例外：Q2 的汇总是**结论**不是原始数据，必须入库
 !poc/verify/result-q2-summary.json

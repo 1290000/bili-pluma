@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+# pre-commit —— 提交前检查暂存区是否含敏感信息。
+#
+# ## 为什么有这个钩子
+#
+# 2026-10-27 一天之内因为敏感信息泄露返工三次：
+#   1. 测试账号 mid / 昵称 / SESSDATA 样例 / 开发机用户名被推到公开仓库
+#   2. 「修复泄露」的提交信息里又把值列了一遍
+#   3. 检查器自己（`check-secrets.mjs`）源码里写着明文
+#
+# `check-secrets.mjs` 早就有了，但**没人（包括我）会记得每次提交前手动跑**。
+# 所以把它接进 git 流程 —— 检查工具不能只靠自觉。
+#
+# ## 为什么只查暂存区（--staged）
+#
+# 不读整文件，只读本次改动的行。实测改 1 个文件约 250ms
+# （其中 210ms 是 Node 启动开销），改 50 个文件也差不多。
+#
+# ## 绕过方式
+#
+#     git commit --no-verify
+#
+# 允许绕过，但要自己承担后果 —— 发布前跑 `node scripts/check-secrets.mjs --history`
+# 仍会查出来（那也是 CI 与提 tag 之前该做的事）。
+
+node scripts/check-secrets.mjs --staged
+status=$?
+
+if [ $status -ne 0 ]; then
+  echo ''
+  echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+  echo '  提交已阻止：暂存区含敏感信息'
+  echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+  echo ''
+  echo '  修掉上面列出的内容，或确认是误报后在那一行加：'
+  echo '      secrets-ok: 说明理由'
+  echo ''
+  echo '  确实要跳过检查（不建议）：'
+  echo '      git commit --no-verify'
+  echo ''
+  exit 1
+fi
+
+exit 0
