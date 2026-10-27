@@ -44,6 +44,21 @@ jobs:
           fi
           echo "tag = ${TAG}"
 
+      # 404 是 token 无效的专属症状（chat_id 错会是 400/403），先单独验一次，
+      # 免得在发送步骤里把它和「群 id 不对」混在一起猜。
+      - name: 校验 token
+        run: |
+          set -euo pipefail
+          RESP=$(curl -sS "https://api.telegram.org/bot${TG_TOKEN}/getMe") || {
+            echo "::error::连不上 api.telegram.org"; exit 1
+          }
+          echo "token 长度 ${#TG_TOKEN}（正确的约 46 字符：<数字>:<35 位字母数字>）"
+          echo "$RESP" | head -c 300; echo ""
+          echo "$RESP" | grep -q '"ok":true' || {
+            echo "::error::token 无效。重新去 @BotFather 复制，注意不要带上多余的空格或换行"
+            exit 1
+          }
+
       # 正常情况下 `gh release create` 是先传完 asset 再发布，这里一次就能找到。
       # 重试只为兜住"网页上先点 Publish 再拖文件"的竞态。
       - name: 定位精简版 zip
