@@ -261,6 +261,19 @@ gh release view v0.9.0 --json body --jq '.body' | diff - dist/release-notes.md
 git ls-remote --tags origin | grep v0.9.0
 ```
 
+### 8. 自动转发到 Telegram 群
+
+Release 发布后自动把**精简版** zip 发到指定群组。实现、一次性配置步骤与失败排查都在
+[`.github/workflows/release-telegram.yml`](../../.github/workflows/release-telegram.yml) 的文件头注释里，本文不复述。
+
+只发 `pluma-<版本>.zip`，不发 `-with-source` 版 —— 想拿源码的人点 Release 链接即可。
+
+**当前形态：公开频道 + 关联讨论群。** bot 作为频道管理员发布，频道自动同步到关联群，
+群里署名是频道而不是 bot。`TELEGRAM_CHAT_ID` 填**频道自己的** `@用户名`，不是 bot 的。
+
+代价是频道可被全局搜索到，与「降低暴露面」（[ADR 0018](../decisions/0018-ship-built-artifacts.md)）
+有张力 —— 这是已知取舍，不是疏漏。
+
 ---
 
 ## 收到律师函怎么办

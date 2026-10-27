@@ -1,0 +1,98 @@
+name: Release → Telegram
+
+# 把每个 Release 的「精简版」zip 转发到指定 Telegram 群组。
+#
+# 为什么只发精简版：群里要的是"能直接装的那个"。`-with-source` 版体积大 7 倍，
+# 想拿源码的人自然会点 Release 链接。分发边界见 docs/decisions/0018。
+#
+# 前置（一次性，见 docs/guides/releasing.md）：
+#   Settings → Secrets and variables → Actions
+#     TELEGRAM_BOT_TOKEN   @BotFather 给的 token
+#     TELEGRAM_CHAT_ID     群组 id，负数。超级群 -100 开头，普通群不是 —— 两种都能发，
+#                          不需要先把群转成超级群。只有群后来被自动升级时 id 才会变，见下面发送步骤的报错提示。
+#                          也可以填频道 id（同样 -100 开头）或 @频道用户名：发给频道会自动同步到
+#                          它关联的讨论群，群里署名是频道而不是 bot。代价见 docs/guides/releasing.md。
+#
+# 手动补发：Actions → 本 workflow → Run workflow，填 tag。
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag（例：v0.9.0）'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  forward:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TG_CHAT: ${{ secrets.TELEGRAM_CHAT_ID }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: 检查 secrets 是否配好
+        run: |
+          if [ -z "${TG_TOKEN}" ] || [ -z "${TG_CHAT}" ]; then
+            echo "::error::缺少 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，见仓库 Settings → Secrets"
+            exit 1
+          fi
+          echo "tag = ${TAG}"
+
+      # 正常情况下 `gh release create` 是先传完 asset 再发布，这里一次就能找到。
+      # 重试只为兜住"网页上先点 Publish 再拖文件"的竞态。
+      - name: 定位精简版 zip
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            ASSET=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+              --jq '[.assets[].name
+                     | select(startswith("pluma-"))
+                     | select(endswith(".zip"))
+                     | select(contains("with-source") | not)] | .[0] // ""')
+            if [ -n "$ASSET" ]; then
+              echo "ASSET=${ASSET}" >> "$GITHUB_ENV"
+              echo "找到 ${ASSET}"
+              exit 0
+            fi
+            echo "第 ${i} 次没找到，10s 后重试"
+            sleep 10
+          done
+          echo "::error::${TAG} 的附件里没有 pluma-*.zip（排除 with-source 后为空）"
+          exit 1
+
+      - name: 下载
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET" --dir out
+
+      - name: 发送到群组
+        run: |
+          set -euo pipefail
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+          CAPTION=$(printf '%s\n' \
+            "Pluma ${TAG}" \
+            "" \
+            "构建产物，解压后在扩展页选「加载解压缩的扩展」，指向解压出来的目录。" \
+            "源码版与更新说明：${URL}")
+
+          # 不指定 parse_mode：tag / 正文里的下划线、方括号会让 MarkdownV2 直接 400。
+          if ! curl -sS --fail-with-body -o response.json \
+            -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
+            -F "chat_id=${TG_CHAT}" \
+            -F "document=@out/${ASSET}" \
+            --form-string "caption=${CAPTION}"; then
+            echo "::error::发送失败，Telegram 返回：$(cat response.json 2>/dev/null || echo '（无响应体）')"
+            echo "::error::按顺序查：bot 是否还在群里 → chat_id 有没有写错 → 群是否被自动升级成了超级群"
+            echo "::error::（升级会换掉数字 id，旧 secret 就失效了；重新 getUpdates 取一次即可）"
+            exit 1
+          fi
+
+          echo "发送成功：$(grep -o '"message_id":[0-9]*' response.json | head -1 || true)"
