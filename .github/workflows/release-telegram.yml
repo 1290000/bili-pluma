@@ -84,10 +84,13 @@ jobs:
             "源码版与更新说明：${URL}")
 
           # 不指定 parse_mode：tag / 正文里的下划线、方括号会让 MarkdownV2 直接 400。
+          #
+          # chat_id 必须用 --form-string：填 `@频道用户名` 时，`-F` 会把开头的 @ 当成
+          # 「从文件读取」，curl 报 (26) 且**请求根本不会发出** —— 日志里就是「无响应体」。
           if ! curl -sS --fail-with-body -o response.json \
             -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendDocument" \
-            -F "chat_id=${TG_CHAT}" \
             -F "document=@out/${ASSET}" \
+            --form-string "chat_id=${TG_CHAT}" \
             --form-string "caption=${CAPTION}"; then
             echo "::error::发送失败，Telegram 返回：$(cat response.json 2>/dev/null || echo '（无响应体）')"
             echo "::error::按顺序查：bot 是否还在群里 → chat_id 有没有写错 → 群是否被自动升级成了超级群"
