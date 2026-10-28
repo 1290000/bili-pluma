@@ -42,7 +42,18 @@ export default tseslint.config(
       '.wxt/**',
       'dist/**', // 发布产物：构建结果 + 用户解压出来的副本，不该参与 lint
       'poc/**', // Q2 是独立扩展，裸 JS，不参与主项目 lint
-      'public/**', // 注入页面的裸 JS
+      /**
+       * 主世界脚本：**唯一一个不进 lint 的业务文件**，故意如此。
+       *
+       * 它是近 3000 行纯 JS，职责是 hook 页面的 `fetch` / `XHR` / `MediaSource`
+       * 并改写响应体 —— 大量 `var`、`arguments`、被 hook 的原函数签名，
+       * 按项目规则（`no-var` / `prefer-const` / 类型推断）改一遍只会增加行为风险，
+       * 换不来任何正确性。它的保护手段是 `tests/unit/content/main-world-*.test.ts`
+       * 里那套 `eval` 真源码的行为断言（见 docs/04-project-structure.md §6）。
+       *
+       * ⚠️ 别"顺手"把它加回 lint：这条豁免是**明确决策**，不是遗漏。
+       */
+      'src/content/main-world.js',
     ],
   },
 

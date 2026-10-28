@@ -211,7 +211,7 @@ export async function loadCachedVideoInfo(
 }
 
 /**
- * 同步缓存的键前缀 —— **必须与 `public/main-world.js` 的 `PGC_SS_PREFIX` 一致**。
+ * 同步缓存的键前缀 —— **必须与 `src/content/main-world.js` 的 `PGC_SS_PREFIX` 一致**。
  *
  * 两处各有一份是因为主世界是裸 JS（不参与 TS 编译），没法共享常量。
  * 改的时候要同时改两个文件；不一致的后果是"注入静默失效"，很难查。
@@ -221,7 +221,7 @@ export const PGC_SS_PREFIX = 'pluma:pgc-vi:';
 /**
  * `ep_id → cid` 映射的键前缀。
  *
- * ⚠️ **必须与 `public/main-world.js` 的 `pgcSwapPlayviewBody` 里用的字符串一致**
+ * ⚠️ **必须与 `src/content/main-world.js` 的 `pgcSwapPlayviewBody` 里用的字符串一致**
  * （那边是裸 JS，无法共享常量）。
  *
  * 用途：SPA 切集时 `/ogv/player/playview` 只给 `ep_id`，缓存却按 `cid` 存。

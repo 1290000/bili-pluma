@@ -13,7 +13,7 @@
  * ## 为什么同时接受 snake_case 和 camelCase
  *
  * 实测 wbi 版和旧版接口的字段名不完全一致（`frame_rate` / `frameRate`），
- * `public/main-world.js` 的 `summarizePlayurl()` 也是两个都试。
+ * `src/content/main-world.js` 的 `summarizePlayurl()` 也是两个都试。
  * 这不是防御性编程，是**已知的真实差异**。
  */
 

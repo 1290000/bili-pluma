@@ -13,8 +13,9 @@ poc/
 # 且 git diff 噪音极大。proseWrap=preserve 之外再整体排除。
 *.md
 
-# 注入页面的裸 JS：保留手写布局可读性，禁止重排
-public/
+# 主世界脚本：保留手写布局可读性，禁止重排
+# （它已从 public/ 移到 src/content/，但豁免规则不变）
+src/content/main-world.js
 
 # 锁文件由 pnpm 生成，格式化会破坏完整性校验
 pnpm-lock.yaml

@@ -6,7 +6,7 @@
  * ## 为什么测真文件，而不是复刻函数
  *
  * 此前 `main-world-logic.test.ts` 用"复刻一份判断函数"的方式测，文件头上写着
- * "改 `public/main-world.js` 必须同步改这里"——那是一条**靠人记住**的约束，迟早漂移。
+ * "改 `src/content/main-world.js` 必须同步改这里"——那是一条**靠人记住**的约束，迟早漂移。
  *
  * 现在把真实文件读进来在 jsdom 里求值，断言的是"页面实际看到的行为"。
  * 见 `docs/04-project-structure.md` §6「主世界脚本怎么测」。
@@ -34,7 +34,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 // 不用 `import.meta.url`：jsdom 环境下它不是 file:// 协议，fileURLToPath 会抛。
 // `process.cwd()` 在 vitest 里恒为仓库根。
-const SOURCE = readFileSync(resolve(process.cwd(), 'public/main-world.js'), 'utf8');
+const SOURCE = readFileSync(resolve(process.cwd(), 'src/content/main-world.js'), 'utf8');
 
 interface Sandbox {
   win: JSDOM['window'];

@@ -4,7 +4,7 @@
  *
  * ## 为什么需要这个脚本
  *
- * `public/main-world.js` 会**改写 B 站接口响应**（把会员字段改成"已开通"），
+ * `src/content/main-world.js` 会**改写 B 站接口响应**（把会员字段改成"已开通"），
  * 好让播放器不弹充值页。这是 [ADR 0013] 明确授权的唯一例外 —— 而
  * `AGENTS.md` §3 决策 5 写的是「**不做伪装的会员标识，连开关都不放**」，
  * 例外范围必须精确。
@@ -46,7 +46,7 @@ import { join } from 'node:path';
 const ROOT = process.cwd();
 
 /** 实际执行改写的文件（裸 JS，main world） */
-const MAIN_WORLD = 'public/main-world.js';
+const MAIN_WORLD = 'src/content/main-world.js';
 
 /** 授权的唯一来源（会员字段伪装） */
 const ADR_0013 = 'docs/decisions/0013-patch-player-info-response.md';

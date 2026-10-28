@@ -25,7 +25,7 @@ import { resolve } from 'node:path';
 import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 
-const SOURCE = readFileSync(resolve(process.cwd(), 'public/main-world.js'), 'utf8');
+const SOURCE = readFileSync(resolve(process.cwd(), 'src/content/main-world.js'), 'utf8');
 
 const PGC_URL = 'https://www.bilibili.com/bangumi/play/ss34412';
 const VIDEO_URL = 'https://www.bilibili.com/video/BV1xx411c7mD';

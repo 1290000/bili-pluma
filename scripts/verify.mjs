@@ -233,11 +233,11 @@ function detectRouteWarnings() {
     });
   }
 
-  if (hit('public/main-world.js')) {
+  if (hit('src/content/main-world.js')) {
     out.push({
-      signal: 'public/main-world.js 被改动',
+      signal: 'src/content/main-world.js 被改动',
       action:
-        '`node --check public/main-world.js`；若涉及轨道判定/角标，必须向用户要一次真机日志（自动化拿不到登录态 + 调试端口）。',
+        '`node --check src/content/main-world.js`；若涉及轨道判定/角标，必须向用户要一次真机日志（自动化拿不到登录态 + 调试端口）。',
     });
   }
 

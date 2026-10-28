@@ -3,13 +3,13 @@ import { describe, expect, it } from 'vitest';
 /**
  * 主世界脚本的纯逻辑测试。
  *
- * `public/main-world.js` 是纯 JS、不参与 TS 编译，所以这里**复刻**它的
+ * `src/content/main-world.js` 是纯 JS、不参与 TS 编译，所以这里**复刻**它的
  * 判断函数来测。这不算理想（有漂移风险），但比重写整个文件为 TS 更务实。
  *
- * ⚠️ 改 `public/main-world.js` 里这几个函数时，必须同步改这里。
+ * ⚠️ 改 `src/content/main-world.js` 里这几个函数时，必须同步改这里。
  */
 
-// ── 复刻自 public/main-world.js ──
+// ── 复刻自 src/content/main-world.js ──
 
 function codecFamily(codec: string): string {
   if (!codec || codec === '?') return 'unknown';
