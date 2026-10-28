@@ -729,8 +729,19 @@
    *
    * 参考实现用的是数组 + `indexOf`，理由是同路径可能出现在别的域上，
    * 写死单个域名会漏。这里保留数组形式，方便以后加 `api.live.bilibili.com`。
+   *
+   * ## ⚠️ `api.biliapi.net` 必须在（2026-10-29 真机）
+   *
+   * **播放器对同一次画质切换会同时向两个域名发 playurl 请求**，
+   * 并采用备选域名那条的结果。只写主域名 → 备选那条：
+   *   - DNR 不换 Cookie（`routes.ts` 的 `BILI_API_HOSTS` 控制）→ 主账号身份，拿不到 4K
+   *   - 这里的响应体改写也不生效 → 会员字段没伪装 → 播放器判「无权限」
+   *
+   * 两个都要改，缺一个就是上面那种「点击 4K，菜单变了但画面没变」。
+   * 必须与 `src/shared/constants/routes.ts` 的 `BILI_API_HOSTS` 保持一致
+   * （主世界是裸 JS，没法 import 那个常量）。
    */
-  var PATCH_HOSTS = ['api.bilibili.com'];
+  var PATCH_HOSTS = ['api.bilibili.com', 'api.biliapi.net'];
 
   function matchPath(url, list) {
     try {

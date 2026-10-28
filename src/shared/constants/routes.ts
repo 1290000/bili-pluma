@@ -12,6 +12,36 @@ export const BILI_API_HOST = 'api.bilibili.com';
 export const BILI_WEB_HOST = 'www.bilibili.com';
 
 /**
+ * 取流接口可能出现的**全部**主机。
+ *
+ * ## 为什么必须有第二个（2026-10-29 真机）
+ *
+ * 用户报「限免/免费集切换大会员画质会切换失败」。抓包抓到决定性证据：
+ *
+ * ```
+ * 200 api.bilibili.com/pgc/player/web/playurl?…qn=120…  → DNR 命中 → 2160 ✅
+ * 200 api.biliapi.net/pgc/player/web/playurl?…qn=120…   → DNR 未命中 → 480  ❌
+ * 200 …/log/web…quality_toast_show|{"TBD":3}            → 切换失败提示
+ * ```
+ *
+ * **播放器对同一次画质切换会同时发两条请求**，一条到 `api.bilibili.com`、
+ * 一条到 `api.biliapi.net`（B 站的备选 API 域名，用于容灾/灰度），
+ * 然后采用后者返回的结果。只代理主域名 → 备选域名那条仍是主账号身份 →
+ * 拿不到 4K → 播放器判定切换失败。
+ *
+ * ## 这不是扩大越权范围
+ *
+ * 同一个接口、同一个用途、同一个身份。**路径白名单仍然限制着**
+ * （`isProxyPath()` 只放行那几条 playurl），这个域名上的其它接口不会被代理。
+ *
+ * ⚠️ 加主机必须同步三处，缺一处就会静默失效：
+ *   1. 本常量（DNR 的 `requestDomains`）
+ *   2. `src/content/main-world.js` 的 `PATCH_HOSTS`（响应体改写）
+ *   3. 跑 `poc/verify/run-q2-auto.cjs`（DNR 并发回归）
+ */
+export const BILI_API_HOSTS = [BILI_API_HOST, 'api.biliapi.net'] as const;
+
+/**
  * `nav` 接口 —— 用于探测播放账号凭据是否有效。
  *
  * ⚠️ **它不在代理白名单里**，也不需要：探活必须用**指定账号**的凭据，
@@ -46,6 +76,11 @@ export interface ProxyRoute {
  *   1 → 2026-10-26 普通视频两条
  *   2 → 2026-10-27 打开 `/pgc/player/web/playurl`（ADR 0019，实测接口有效）
  *   3 → 2026-10-28 打开 `/ogv/player/playview`（实测是 GET，SPA 切集时页面会调用）
+ *
+ * ⚠️ **2026-10-29 增加了域名 `api.biliapi.net`（ADR 0027），修订号不变。**
+ * 规则是「只在**路径字符串**或 `enabled` 开关变化时 +1」——
+ * 路径一条没动、开关一个没改，所以不 +1。
+ * 域名变化体现在 `BILI_API_HOSTS`，它有自己的注释说明。
  */
 export const ROUTES_REVISION = 3;
 
@@ -61,7 +96,7 @@ export const ROUTES_REVISION = 3;
  * 正确的做法是**按证据报警**：只有真的出现取流失败时，才在诊断页提示"可能是接口变了"。
  * 日期本身回答的是"这份清单是哪天的"，不是"它过期了" —— 让人自己判断。
  */
-export const ROUTES_CHECKED_AT = '2026-10-28';
+export const ROUTES_CHECKED_AT = '2026-10-29';
 
 export const PROXY_ROUTES = [
   {

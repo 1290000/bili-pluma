@@ -27,13 +27,16 @@
 
 ```
 允许改写的接口：  /x/player/wbi/v2、/x/player/v2、/x/web-interface/nav
-                （仅 https、仅 api.bilibili.com）
+                （仅 https、仅 api.bilibili.com 与 api.biliapi.net）
 允许改写的字段：  vip.status、vip.type、vip.due_date
                 vipStatus、vipType（同源字段）
 禁止改写的字段：  mid、rights（权限位）、以及任何身份归属相关字段
 ```
 
 > `/x/web-interface/nav` 于 2026-10-26 追加授权，理由与边界见文末「补充授权」一节。
+>
+> `api.biliapi.net` 于 **2026-10-29** 追加为主机（见下方「主机追加」一节）。
+> **接口清单与字段边界一条没变**，只是"同一个接口出现在哪个域名上也算"。理由见 [ADR 0027](./0027-proxy-backup-api-host.md)：播放器对同一次画质切换会同时向两个域名发 playurl 并采用备选那条的结果，只写主域名会导致「点 4K 菜单变了但画面没变」。
 
 `mid` 与 `rights` 被显式排除，因为它们决定**身份归属**与**实际权益判定**——改了会让诊断失真，
 且违反「宁可少代理，不可错代理」这条原则（见 `src/core/identity/router.ts`）。

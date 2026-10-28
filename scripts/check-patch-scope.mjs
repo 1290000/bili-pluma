@@ -17,7 +17,7 @@
  *
  * 1. 代码里的 `PATCH_PATHS` 必须与 ADR 0013 授权集**完全一致**（会员字段伪装）
  * 2. 代码里的 `PROGRESS_PATCH_PATHS` 必须与 ADR 0017 授权集**完全一致**（观看进度还原）
- * 3. `PATCH_HOSTS` 必须是 `api.bilibili.com`（只有一条）
+ * 3. `PATCH_HOSTS` 必须是 `api.bilibili.com` + `api.biliapi.net`（ADR 0027）
  * 4. 两份 ADR 里的授权路径文本必须能被找到（ADR 被改坏了要能发现）
  *
  * ## 为什么是两份清单而不是一份
@@ -121,7 +121,7 @@ const AUTHORIZED_PGC_TOAST = ['.bpx-player-toast-item'];
 const AUTHORIZED_PGC_TOAST_MARK = '[class*="PromptBar"]';
 
 /** 授权的主机。扩展只改 B 站主站 API，别的域一律不许。 */
-const AUTHORIZED_HOSTS = ['api.bilibili.com'];
+const AUTHORIZED_HOSTS = ['api.bilibili.com', 'api.biliapi.net'];
 
 /**
  * 从源码里抽出一个 `var NAME = [...]` 形式的字符串数组字面量。

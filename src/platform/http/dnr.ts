@@ -32,7 +32,7 @@
  */
 
 import { readPersistedCredential } from '@platform/storage/credential-store';
-import { BILI_API_HOST, ENABLED_ROUTE_PATHS, isProxyPath } from '@shared/constants/routes';
+import { BILI_API_HOSTS, ENABLED_ROUTE_PATHS, isProxyPath } from '@shared/constants/routes';
 import { serializeCookie } from '@shared/utils/cookie';
 
 /**
@@ -161,7 +161,7 @@ function buildPathRule(path: string, cookie: string): chrome.declarativeNetReque
     },
     condition: {
       urlFilter: path,
-      requestDomains: ['api.bilibili.com'],
+      requestDomains: [...BILI_API_HOSTS],
       resourceTypes: ['xmlhttprequest'],
       // 只代理 GET。白名单里全部是 GET；`playview` 也是 GET，但**不能进白名单**
       // （换 Cookie 后返回 dash，与播放器期望的 durl 冲突 → 灰屏，见文件头第 3 条）
@@ -361,7 +361,7 @@ export async function installTabRule(
         },
         condition: {
           urlFilter,
-          requestDomains: [BILI_API_HOST],
+          requestDomains: [...BILI_API_HOSTS],
           resourceTypes: ['xmlhttprequest'],
           requestMethods: ['get'],
           tabIds: [tabId],

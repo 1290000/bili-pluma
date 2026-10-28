@@ -1084,3 +1084,48 @@ describe('配置握手：只回一次 ready（防 ready↔cfg 回环）', () => 
     expect(sb.page.__playinfo__).toEqual({ marker: 1 }); // 关掉就还回去
   });
 });
+
+/**
+ * 主机白名单必须与 `routes.ts` 的 `BILI_API_HOSTS` 一致 —— **2026-10-29 真机事故**。
+ *
+ * ## 事故现场
+ *
+ * 用户报「限免集切换大会员画质会切换失败」。抓包：
+ * ```
+ * 200 api.bilibili.com/pgc/player/web/playurl?…qn=120…  → 2160 ✅
+ * 200 api.biliapi.net/pgc/player/web/playurl?…qn=120…   → 480  ❌
+ * 200 …/log/web…quality_toast_show|{"TBD":3}            → 切换失败
+ * ```
+ * 播放器对同一次切换**同时向两个域名发请求**，用备选那条的结果。
+ * 只写主域名 → 备选那条不换 Cookie、也不伪装会员字段 → 判无权限。
+ *
+ * ## 为什么这条测试要用"读源码 + 正则"
+ *
+ * 主世界是裸 JS，**没法 import** `routes.ts` 的常量（它不参与 TS 编译）。
+ * 两边各写一份是必然的，所以必须有一条测试盯着它们别漂。
+ */
+describe('主机白名单与 routes.ts 一致', () => {
+  it('main-world.js 的 PATCH_HOSTS 包含全部 BILI_API_HOSTS', async () => {
+    const { BILI_API_HOSTS } = await import('@shared/constants/routes');
+
+    // 从源码里抠出 PATCH_HOSTS 数组字面量
+    const m = SOURCE.match(/var PATCH_HOSTS = \[([^\]]*)\]/);
+    expect(m).not.toBeNull();
+    const declared = (m?.[1] ?? '')
+      .split(',')
+      .map((x) => x.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean);
+
+    for (const host of BILI_API_HOSTS) {
+      expect(declared, `PATCH_HOSTS 缺 ${host} —— 那个域名上的响应体改写会静默失效`).toContain(
+        host,
+      );
+    }
+  });
+
+  it('BILI_API_HOSTS 必须包含备选域名 api.biliapi.net', async () => {
+    const { BILI_API_HOSTS } = await import('@shared/constants/routes');
+    expect(BILI_API_HOSTS).toContain('api.biliapi.net');
+    expect(BILI_API_HOSTS).toContain('api.bilibili.com');
+  });
+});
