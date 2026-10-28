@@ -20,8 +20,12 @@
  * 1. **总开关**：凭据失效时必须能一键停用（= 删掉所有规则）。
  *    规则常驻意味着凭据一失效，所有白名单路径一起变未登录 —— 没有开关就是不可用。
  * 2. **SW 启动自愈**：`sessionRules` 在浏览器重启后清空，SW 启动时必须**重建**。
- * 3. **POST 例外**：`/ogv/player/playview` 的 csrf 在请求体里，DNR 改不了 body，
- *    必须走 JS 拦截重建。**v1 不做番剧，所以这里不实现，但不能以为 DNR 能覆盖它。**
+ * 3. **`playview` 例外**：`/ogv/player/playview`（GET）**绝不能进白名单**。
+ *    一开 Cookie 就换成播放账号，服务端返回的流形态从「durl 4 组 × 6 分钟」变成
+ *    「完整集 dash」，而播放器已按 durl 分支准备好 → **灰屏**（两次实测）。
+ *    正确做法是主世界拦它的响应换流（[ADR 0023](../../../docs/decisions/0023-intercept-playview-durl-swap.md)）。
+ *    ⚠️ 曾在这里写「它是 POST、csrf 在 body 里，所以 DNR 改不了」——**方法就写错了**，
+ *    而且那个理由会把人引向"改成 JS 重建请求"的错路上。
  *
  * ⚠️ **本文件无法用 Vitest 测**（DNR 在 Node 里不存在）。
  * 改动后必须重跑 `poc/q2-dnr-concurrency/`，那是它唯一的自动化验证手段。
@@ -159,7 +163,8 @@ function buildPathRule(path: string, cookie: string): chrome.declarativeNetReque
       urlFilter: path,
       requestDomains: ['api.bilibili.com'],
       resourceTypes: ['xmlhttprequest'],
-      // 只代理 GET。POST 路径（playview）csrf 在 body 里，DNR 改不了，v1 不处理
+      // 只代理 GET。白名单里全部是 GET；`playview` 也是 GET，但**不能进白名单**
+      // （换 Cookie 后返回 dash，与播放器期望的 durl 冲突 → 灰屏，见文件头第 3 条）
       requestMethods: ['get'],
     },
   };
@@ -263,14 +268,31 @@ async function removeStaleTabRules(): Promise<number> {
     chrome.tabs.query({}).catch(() => []),
   ]);
 
-  const tabRuleIds = rules
-    .filter((r) => r.id >= TAB_RULE_BASE && r.id < TAB_RULE_BASE + TAB_RULE_SPAN)
-    .map((r) => r.id);
+  const tabRules = rules.filter(
+    (r) => r.id >= TAB_RULE_BASE && r.id < TAB_RULE_BASE + TAB_RULE_SPAN,
+  );
 
-  if (tabRuleIds.length === 0) return 0;
+  if (tabRules.length === 0) return 0;
 
   const liveTabs = new Set(tabs.map((t) => t.id).filter((x): x is number => typeof x === 'number'));
-  const stale = tabRuleIds.filter((id) => !liveTabs.has(id - TAB_RULE_BASE));
+
+  /**
+   * ⚠️ **不能用 `r.id - TAB_RULE_BASE` 反推 tabId。**
+   *
+   * 规则 ID 是 `TAB_RULE_BASE + (tabId % TAB_RULE_SPAN)`，取模之后信息已经丢了：
+   * tabId 10005 的规则 ID 是 20005，反推得 5，于是去问"标签页 5 还在吗"——
+   * 不在就**删掉 tab 10005 那条有效规则**，该页画质静默回落到主账号，且没有任何报错。
+   *
+   * 单个会话累计开满 10000 个标签页就会碰到（长期不重启的机器可达）。
+   * 正确做法是读规则自己带的 `tabIds` —— `tabs.handler.ts` 一直是这么写的。
+   */
+  const stale = tabRules
+    .filter((r) => {
+      const ids = r.condition.tabIds ?? [];
+      // 一条 tab 规则只该挂一个 tabId；挂了多个说明规则被人改过，按"任一存活即保留"处理
+      return ids.length > 0 && ids.every((id) => !liveTabs.has(id));
+    })
+    .map((r) => r.id);
 
   if (stale.length === 0) return 0;
   await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: stale }).catch(() => {});
