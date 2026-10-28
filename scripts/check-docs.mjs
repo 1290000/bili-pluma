@@ -33,6 +33,7 @@
  * 有违规时退出码 1。
  */
 
+import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -184,29 +185,131 @@ async function checkLinks(fileAbs, src) {
 }
 
 /**
- * 检查文档里引用的**脚本文件**是否存在。
+ * 文档里**故意**引用的不存在路径 —— 按「文件 → 路径」登记，不按行号（行号会漂）。
  *
- * ## 为什么需要这一项（2026-10-26 实装教训）
+ * 只收"这行本来就在讲一个不存在的东西"的情况。除此之外一律判失败：
+ * 宁可让人改一行文档，也不要把真过时藏进白名单。
+ */
+const PATH_REF_ALLOWED = {
+  'docs/04-project-structure.md': [
+    // §2 / §9 是「设计稿 vs 实际实现」对照，左列本来就是**没落地**的路径
+    'entrypoints/bili.content.ts',
+    'entrypoints/bili-main.content.ts',
+    'src/background/index.ts',
+    'src/platform/runtime/messaging.ts',
+    'src/manifest.json',
+  ],
+  'docs/protocols/messages.md': [
+    // 「相关代码位置」开头那段在讲**原规划**：这四个文件当年规划过、后来按 WXT 约定改掉了。
+    // 否定词只出现在段落最后一行，按行判断会误报，所以在这里显式登记。
+    'src/content/main-world/channel.ts',
+    'src/content/isolated/router.ts',
+    'src/background/index.ts',
+    'src/platform/runtime/messaging.ts',
+  ],
+};
+
+/**
+ * 一句话里出现这些词，说明这行在讲"它不存在"或"它曾经是别的样子"，跳过。
  *
- * 本轮精简时两度踩同一个坑：先只查了 `pnpm verify`，漏掉 `pnpm lint` / `pnpm test` / `pnpm build`；
- * 改完后再查又说"清零"，其实 `04` 里还有两处 `pnpm check:boundaries`。
+ * 这条规则救的是：`WXT 没有独立的 \`src/manifest.json\``、
+ * `原规划里的 \`src/content/main-world/channel.ts\`` —— 它们提到路径是为了否定它。
+ */
+const COUNTERFACTUAL_HINTS = [
+  '没有',
+  '不存在',
+  '从未',
+  '未按',
+  '已删',
+  '已移除',
+  '已作废',
+  '原规划',
+  '原设计',
+  '设计稿',
+  '曾',
+  '改为',
+  '搬到',
+  '计划',
+];
+
+/**
+ * 检查文档里引用的**仓库内路径**是否存在。
+ *
+ * ## 为什么需要这一项（2026-10-26 实装教训 → 2026-10-29 扩到全仓）
+ *
+ * 2026-10-26：本轮精简时两度踩同一个坑——先只查了 `pnpm verify`，漏掉 `pnpm lint` /
+ * `pnpm test` / `pnpm build`；改完再查又说"清零"，其实 `04` 里还有两处 `pnpm check:boundaries`。
  * **原因是靠"想起来 grep 哪些词"来保证覆盖，而不是靠结构化检查。**
+ * 当时的解法是只查 `scripts/` 下的引用。
  *
- * 所以这里反过来做：凡是形如 `scripts/xxx` 的路径引用，都必须真实存在。
- * 脚本改名/删除后，文档里的引用会被立刻抓到。
+ * 2026-10-29 审查：同一类问题在别处复发，而且更多 ——
+ * `public/main-world.js` 已搬到 `src/content/`、`src/content/main-world.ts` 从来不存在、
+ * `entrypoints/diagnostics/` 早已删除。**这些都是靠人肉读出来的**，
+ * 因为它们写在反引号里，而 `checkLinks` 只看 markdown 链接语法 `[]()`。
+ *
+ * 所以扩成"凡是形如 `<根目录>/…/文件.扩展名` 的引用，都必须真实存在"。
+ *
+ * ## 为什么用 `git ls-files` 而不是 `existsSync`
+ *
+ * 文档会引用**应该存在但还没创建**的文件吗？不该。而 `existsSync` 会把
+ * "本地有、仓库没有"（比如 `.output/`、本地备份）当成存在，掩盖真问题。
+ * 以 git 索引为准，等于"文档只许引用仓库里真有的东西"。
+ * 目录仍然用 `existsSync` 兜（git 不跟踪空目录，且文档会引用目录）。
+ *
+ * ## 刻意不查的形态（避免误报）
+ *
+ * - **围栏代码块内的路径**：那里是设计树、示例、命令清单，天然包含不存在的文件
+ * - 含 `{` `}` `*` `…` `<` `>` 的：`src/core/playinfo/{parse,rank}.ts`、`.github/workflows/**`
+ * - 没有扩展名的：`src/platform/http/`、`docs/decisions/` —— 目录，允许
+ * - 绝对路径与 URL：`D:\…`、`https://…`
+ * - 命中 `COUNTERFACTUAL_HINTS` 或 `PATH_REF_ALLOWED` 的
  *
  * @param {string} src
+ * @param {Set<string>} tracked `git ls-files` 的产物（相对仓库根，正斜杠）
+ * @param {string} rel 当前文件的相对路径（查白名单用）
  * @returns {Array<{line:number, ref:string}>}
  */
-function checkScriptRefs(src) {
+function checkRepoPaths(src, tracked, rel) {
+  /** 只认这些根目录，别的（如 `node_modules/`）不管 */
+  const ROOTS = [
+    'src',
+    'entrypoints',
+    'scripts',
+    'tests',
+    'poc',
+    'docs',
+    '.github',
+    '.githooks',
+    'public',
+  ];
+  const RE = new RegExp(
+    `(?<![A-Za-z0-9_./-])((?:${ROOTS.join('|')})/[A-Za-z0-9_./-]+\\.[A-Za-z0-9]+)`,
+    'g',
+  );
+  const allowed = new Set(PATH_REF_ALLOWED[rel] ?? []);
+
   const lines = src.split('\n');
   const missing = [];
+  /** 是否在围栏代码块内 */
+  let inFence = false;
+
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? '';
-    for (const m of line.matchAll(/\b(scripts\/[A-Za-z0-9_.-]+\.(?:mjs|cjs|ts|js))/g)) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (COUNTERFACTUAL_HINTS.some((h) => line.includes(h))) continue;
+
+    for (const m of line.matchAll(RE)) {
       const ref = m[1];
-      // 只校验仓库根下的 scripts/，其它路径（poc/…）不在本检查范围
-      if (!existsSync(join(ROOT, ref))) missing.push({ line: i + 1, ref });
+      if (/[{*…<>]/.test(ref)) continue;
+      if (allowed.has(ref)) continue;
+      if (tracked.has(ref)) continue;
+      // 目录（git 不跟踪空目录）与本地忽略产物用文件系统兜底
+      if (existsSync(join(ROOT, ref))) continue;
+      missing.push({ line: i + 1, ref });
     }
   }
   return missing;
@@ -357,9 +460,17 @@ async function main() {
   const files = (await Promise.all(SCAN_TARGETS.map(collectMarkdown))).flat();
   const uniqueFiles = [...new Set(files)];
 
+  /** 仓库里真实存在的文件（相对路径、正斜杠）。文档只许引用这些 */
+  const tracked = new Set(
+    execSync('git ls-files', { cwd: ROOT, encoding: 'utf8' })
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+
   const deadLinks = [];
   const numberingIssues = [];
-  const missingScripts = [];
+  const missingPaths = [];
   const lengthViolations = [];
   const lengthWarnings = [];
   /** 含 CRLF 的文件。`.editorconfig` 写的是 `end_of_line = lf`，但没有任何东西在强制它 */
@@ -384,8 +495,8 @@ async function main() {
       deadLinks.push({ file: rel, ...d });
     }
 
-    for (const s of checkScriptRefs(src)) {
-      missingScripts.push({ file: rel, ...s });
+    for (const s of checkRepoPaths(src, tracked, rel)) {
+      missingPaths.push({ file: rel, ...s });
     }
 
     const len = checkLength(rel, src);
@@ -428,13 +539,13 @@ async function main() {
   const clean =
     deadLinks.length === 0 &&
     numberingIssues.length === 0 &&
-    missingScripts.length === 0 &&
+    missingPaths.length === 0 &&
     lengthViolations.length === 0 &&
     crlfFiles.length === 0 &&
     changelogIssues.length === 0;
 
   if (clean) {
-    console.log('[docs] ✅ 无死链、无失效脚本引用、篇幅达标、换行符全 LF、章节编号连号');
+    console.log('[docs] ✅ 无死链、无失效路径引用、篇幅达标、换行符全 LF、章节编号连号');
     console.log('[docs] ✅ CHANGELOG 版本节格式合规');
     return;
   }
@@ -477,11 +588,11 @@ async function main() {
     );
   }
 
-  if (missingScripts.length > 0) {
-    console.error(`\n[docs] ❌ ${missingScripts.length} 处引用了不存在的脚本\n`);
-    for (const s of missingScripts) {
+  if (missingPaths.length > 0) {
+    console.error(`\n[docs] ❌ ${missingPaths.length} 处引用了仓库里不存在的路径\n`);
+    for (const s of missingPaths) {
       console.error(`  ${s.file}:${s.line}  → ${s.ref}`);
-      console.error(`    → 脚本已改名/删除，更新这处引用，或补回脚本\n`);
+      console.error(`    → 文件已改名/删除/搬家。改这处引用，或确认它是不是写错了\n`);
     }
   }
 
