@@ -40,7 +40,33 @@ export default defineConfig({
     // ⚠️ 声明 action 是必须的，否则工具栏图标不绑定任何行为、点了毫无反应也不报错。
     // P2 起加了 default_popup：**有 popup 时 `chrome.action.onClicked` 不再触发**，
     // 所以登录入口必须放在 popup 里（原 P1 的"点图标直接开登录窗口"已移除）。
-    action: { default_title: 'Pluma', default_popup: 'popup.html' },
+    //
+    // `default_icon` 与顶层 `icons` 是**两份不同的图**，都要给：
+    //   - `icons` 用于扩展管理页 / 商店列表 / 权限提示（最大用 128）
+    //   - `action.default_icon` 用于**工具栏**，实际只渲染 16（高分屏 32）
+    // 少写 `default_icon` 时 Chrome 会退回用 `icons` 里的图，但 Edge 在部分版本会
+    // 显示成灰色拼图占位 —— 所以两份都显式写。
+    //
+    // 路径不带 `public/`：`public/` 下的内容会被原样复制到产物根目录，
+    // 所以仓库里的 `public/icon/16.png` 在 manifest 里是 `icon/16.png`。
+    // 图标母版（1920×1920，带 alpha）在 `assets/icon-source.png`，那四个 PNG 是它的
+    // LANCZOS 缩放结果。母版**不要**放回 `public/`——它 600KB，会被打进 zip。
+    action: {
+      default_title: 'Pluma',
+      default_popup: 'popup.html',
+      default_icon: {
+        16: 'icon/16.png',
+        32: 'icon/32.png',
+        48: 'icon/48.png',
+        128: 'icon/128.png',
+      },
+    },
+    icons: {
+      16: 'icon/16.png',
+      32: 'icon/32.png',
+      48: 'icon/48.png',
+      128: 'icon/128.png',
+    },
     // 设置页（三分区：账号 / 诊断 / 显示）。体检表与音质自检独立页已砍（ADR 0016），
     // 原独立自检页的内容并入「诊断」分区。
     // ⚠️ `open_in_tab` 写在这里**不生效**，见上面的 hooks 注释。
