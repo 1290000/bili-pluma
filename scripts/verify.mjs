@@ -71,6 +71,16 @@ const STEPS = [
   },
   { name: 'patch', cmd: process.execPath, args: ['scripts/check-patch-scope.mjs'], first: true },
   {
+    // 2026-10-29 加：审查发现 popup 与 tabs.handler 各自写着 /video/ 正则，
+    // 而项目早有 parsePlayPage()（同时认 /video/ 与 /bangumi/play/）。
+    // 后果是番剧页 popup 谎报「未生效」、§2.3 画质对比永不显示 ——
+    // 而 tsc 不报错、571 个单测全绿、本脚本 11 项全绿。判据有测试，接线没有。
+    name: 'page-gate',
+    cmd: process.execPath,
+    args: ['scripts/check-page-gate.mjs'],
+    first: true,
+  },
+  {
     // 2026-10-27 加：secrets 查的是文件内容，泄露却发生在运行时打印。
     // 诊断步骤把 getUpdates 的完整响应打进公开日志，secrets 全绿也拦不住。
     // 这里只抓 100% 有害的写法（set -x / printenv），其余靠 AGENTS.md §4.3 人工审。
@@ -82,25 +92,36 @@ const STEPS = [
   { name: 'test', cmd: binPath('vitest'), args: ['run'], first: false, slow: true },
 ];
 
+/** 每项一句话说明。**项数不写死**：增删检查项时只改 STEPS，帮助文本自动跟上 */
+const STEP_DOC = {
+  typecheck: 'tsc --noEmit',
+  format: 'prettier --check .',
+  lint: 'eslint .',
+  boundaries: 'core/shared 不许碰 chrome/window/document/fetch',
+  messages: 'messages.ts ↔ background.ts 路由对齐（抓孤儿消息）',
+  design: '只有 entrypoints/* 可以引用 @design/*',
+  docs: '死链 + scripts/ 引用 + 篇幅上限 + 主文档章节连号',
+  secrets: '测试账号标识 / 凭据形态 / 本机路径',
+  patch:
+    '响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）',
+  'page-gate': '「是不是播放页」只许走 parsePlayPage()，路径字面量不许越界',
+  'workflow-logs': 'Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）',
+  test: 'vitest run',
+};
+
+const TOTAL = STEPS.length;
+const FAST_TOTAL = STEPS.filter((s) => !s.slow).length;
+const ITEM_LINES = STEPS.map((s) => `  ${s.name.padEnd(14)} ${STEP_DOC[s.name] ?? ''}`).join('\n');
+
 const HELP = `
 Pluma 验收入口（不依赖 pnpm 在 PATH 里）
 
-  node scripts/verify.mjs           跑全部十一项（约 45s）
-  node scripts/verify.mjs --fast    跳过 vitest，十项（约 20s，改文档/脚本时够用）
+  node scripts/verify.mjs           跑全部 ${TOTAL} 项（约 45s）
+  node scripts/verify.mjs --fast    跳过 vitest，${FAST_TOTAL} 项（约 20s，改文档/脚本时够用）
   node scripts/verify.mjs --help    显示本帮助
 
-本脚本覆盖的十一项（顺序执行）：
-  typecheck      tsc --noEmit
-  format         prettier --check .
-  lint           eslint .
-  boundaries     core/shared 不许碰 chrome/window/document/fetch
-  messages       messages.ts ↔ background.ts 路由对齐（抓孤儿消息）
-  design         只有 entrypoints/* 可以引用 @design/*
-  docs           死链 + scripts/ 引用 + 篇幅上限 + 主文档章节连号
-  secrets        测试账号标识 / 凭据形态 / 本机路径
-  patch          响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）
-  workflow-logs  Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）
-  test           vitest run
+本脚本覆盖的 ${TOTAL} 项（顺序执行）：
+${ITEM_LINES}
 
 ═══════════════════════════════════════════════════════════════
 ⚠️ 本脚本**不等于**"全部自检"。另有两档它跑不了，必须单独做：
@@ -121,7 +142,7 @@ Pluma 验收入口（不依赖 pnpm 在 PATH 里）
   为什么不能自动化：脚本无法判断"你改回去的那个判断是不是关键的"。
   操作步骤见 docs/guides/methodology.md §5 ⑤（这里不复述，避免第二份漂移）。
 
-⇒ 一句话：九项全绿只说明"静态检查 + 单测过了"，
+⇒ 一句话：本脚本全绿只说明"静态检查 + 单测过了"，
   不代表"改 dnr.ts 的回归跑过了"、更不代表"做过反例验证"。
 
 退出码：0 全绿｜1 有检查未通过｜2 脚本自身出错
