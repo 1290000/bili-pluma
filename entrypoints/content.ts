@@ -1,22 +1,55 @@
 /**
- * 内容脚本 —— 页面侧的编排层。
+ * 内容脚本（ISOLATED world）—— 页面侧的编排层。
  *
  * 三件事：
- *   1. **注入主世界脚本**（藏 `__playinfo__` + 伪装本地会员状态）
- *   2. **报到**：告诉 background「这个标签页要代理 playurl」
- *   3. 观测：记录页面实际播放画质（诊断用）
+ *   1. **报到**：告诉 background「这个标签页要代理取流」
+ *   2. 观测：记录页面实际播放画质（诊断用）
+ *   3. 把配置下发给主世界脚本
+ *
+ * ## 主世界脚本不在这个文件里注入（2026-10-27 改）
+ *
+ * 主世界部分是独立的 MAIN world 内容脚本 `entrypoints/main-hook.content.ts`。
+ * 两种"手工注入"都试过，都不行：
+ *
+ *   - `<script src=chrome-extension://…/main-world.js>`：**异步加载**，
+ *     `async = false` 只管动态脚本之间的执行顺序、不阻塞解析。PGC 页的
+ *     `window.nano = …` / `createPlayer(…)` 全在内联脚本里，所以 hook 装不上。
+ *     实测 `__PLUMA_MAIN__ === true` 但 `nano` 没被包住 → PGC 分支静默失效。
+ *   - `script.text = …`（内联）：MV3 的 `extension_pages` CSP **拒绝**
+ *     `script-src 'unsafe-inline'`，Edge 156 报「Insecure CSP value」且**装不上扩展**。
+ *
+ * 现在由浏览器在 `document_start` 直接把 MAIN world 入口注进去（`world: 'MAIN'`），
+ * 时机正确，也不碰 CSP。
  *
  * ⚠️ 本文件在 ISOLATED world：有 chrome API，但看不到页面的 JS 变量。
- * 碰页面变量的活交给 `public/main-world.js`（注入到主世界）。
  */
 
 import { browser } from 'wxt/browser';
 
 import { renderBadge, removeBadge } from '@/src/content/isolated/badge';
 import { PageState } from '@/src/content/isolated/page-state';
+import {
+  isPreviewSsr,
+  isStreamTruncated,
+  loadCachedVideoInfo,
+  readCidFromSsr,
+  writePgcSessionCache,
+} from '@/src/content/isolated/pgc-cache-inject';
+import { fetchPgcPlayurl } from '@/src/content/isolated/pgc-fetch';
+import {
+  GUARD_KEY_PREFIX,
+  buildPlayurlUrl,
+  isAlreadyTried,
+  makeGuard,
+  parseGuard,
+  shouldReload,
+} from '@/src/content/isolated/pgc-reload-plan';
+import { restoreResumeTime, saveResumeTime } from '@/src/content/isolated/pgc-resume';
+import { mergeVideoInfo } from '@core/playinfo/pgc-merge';
+import { writePgcCache } from '@platform/storage/pgc-cache-store';
 import { BADGE_ENABLED_KEY, readBadgeEnabled } from '@platform/storage/ui-prefs-store';
 import {
-  parseVideoPage,
+  parsePlayPage,
   readDeviceCookies,
   readPrimaryMidFromCookie,
 } from '@shared/utils/video-page';
@@ -148,6 +181,25 @@ const badgeState = {
  */
 let badgeEnabled = true;
 
+/**
+ * PGC 完整流缓存是否已经尝试下发过（ADR 0020）。
+ *
+ * `ssr-playinfo` 会被多次上报（hello + 两次延迟），只处理第一次，
+ * 否则会往主世界重复 postMessage 几十 KB。
+ */
+let pgcCacheTried = false;
+
+/**
+ * 上一次处理的 cid。
+ *
+ * ⚠️ **SPA 切集时要重置 `pgcCacheTried`**（2026-10-28 真机踩到）：
+ * 在播放器里点选集，页面不重载、`content script` 不重启，
+ * 而 `pgcCacheTried` 一直是 true —— 于是新集永远不会走取流流程。
+ * 实测：点「第 8 集」后 URL 变了，但 `__playinfo__.result.arc.cid` 还是第 7 集的，
+ * 播放器于是用 360 秒的流播新集，6 分 01 秒撞墙。
+ */
+let pgcHandledCid = '';
+
 /** 重画角标。所有字段变化后统一调这一个入口 */
 function paintBadge(): void {
   // 关掉时不只是"不画"，还要把已经画出来的摘掉
@@ -159,62 +211,19 @@ function paintBadge(): void {
 }
 
 /**
- * 注入主世界脚本。
- *
- * **必须用 src 引用扩展内的独立文件**，不能用内联 script：
- * MV3 默认 CSP 禁止执行内联脚本，内联方式会**静默失败**
- * ——插入语句成功返回，但脚本从未执行。这是排查了很久才发现的坑。
- *
- * `main-world.js` 在 `public/` 下，构建后位于扩展根目录，
- * 并由 manifest 的 `web_accessible_resources` 允许页面引用。
+ * 主世界脚本由 **MAIN world 内容脚本** entrypoints/main-hook.content.ts 注入。
+ * 本文件不再手工注入 —— 两种手工方式都被平台否掉了（见文件头注释）。
  */
-function injectMainWorld(onInjected: (ok: boolean, detail: string) => void): void {
-  const attach = (): boolean => {
-    const parent = document.documentElement ?? document.head;
-    if (!parent) return false;
 
-    try {
-      const script = document.createElement('script');
-      // 用原生 chrome.runtime.getURL：WXT 的包装版对路径做了类型约束，
-      // 只接受它识别的 HTML 入口，不认 public/ 下的静态资源
-      script.src = chrome.runtime.getURL('main-world.js');
-      script.async = false;
-      parent.appendChild(script);
-      // 不 remove：src 加载是异步的，提前移除会取消加载
-      script.addEventListener('load', () => onInjected(true, '已加载'));
-      script.addEventListener('error', () =>
-        onInjected(false, '资源加载失败（检查 web_accessible_resources）'),
-      );
-      return true;
-    } catch (e) {
-      onInjected(
-        false,
-        `插入 script 抛错: ${e instanceof Error ? e.message.slice(0, 60) : String(e)}`,
-      );
-      return false;
-    }
-  };
-
-  if (attach()) return;
-
-  // documentElement 还没出来，每 10ms 重试
-  let tries = 0;
-  const timer = window.setInterval(() => {
-    tries += 1;
-    if (attach()) {
-      window.clearInterval(timer);
-      return;
-    }
-    if (tries >= 200) {
-      window.clearInterval(timer);
-      onInjected(false, `重试 ${tries} 次仍无 documentElement`);
-    }
-  }, 10);
-}
-
-/** 告知主世界脚本：代理已启用 */
-function tellMainWorld(enabled: boolean): void {
-  window.postMessage({ __ns: NS, type: 'cfg', token: CHANNEL_TOKEN, enabled }, '*');
+/**
+ * 告知主世界脚本：代理是否已启用。
+ *
+ * @param enabled 扩展是否启用（主世界据此决定要不要藏 `__playinfo__` / 轮询会员状态）
+ * @param pgcActive `page/activate` 的结果。`false` 时主世界**不接管 PGC 播放器**
+ *   （没装规则就接管，取回来的还是主账号的试看，纯属浪费一次请求）
+ */
+function tellMainWorld(enabled: boolean, pgcActive?: boolean): void {
+  window.postMessage({ __ns: NS, type: 'cfg', token: CHANNEL_TOKEN, enabled, pgcActive }, '*');
 }
 
 /**
@@ -320,6 +329,57 @@ function listenMainWorld(): void {
         data: d.data ?? null,
         user,
       });
+
+      /**
+       * PGC 的完整流编排（ADR 0020）—— **只做一次**。
+       *
+       * 两条分支：
+       *   - 缓存命中 → 下发给主世界，让它同步注入；**不发请求、不刷新**
+       *   - 缓存未命中 → 取流 → 写缓存 → 刷新一次（护栏在 `pgc-reload-plan.ts`）
+       *
+       * ## 为什么这里每一层判定都要落日志（2026-10-28 真机踩到）
+       *
+       * 真机现场：`cacheBytes=0`、`lastStage='boot'` —— 主世界从未收到 `cfg`，
+       * 但**诊断页里一行 PGC 日志都没有**，于是无法判断是"消息没到 ISOLATED"
+       * 还是"到了但判定没过"。三个 if 连着 return，静默得像什么都没发生。
+       *
+       * 现在每一层都报一句：`收到 SSR` / `不是 PGC 播放页` / `非试看` / `无 cid`。
+       * **静默返回是这类 bug 的最大帮凶**（同一教训已踩过三次）。
+       */
+      const playInfo = parsePlayPage(location.href);
+      reportQuality({
+        height: 0,
+        note:
+          `[PGC] 收到 SSR playInfo=${String(!!d.data)} firstSeen=${firstSeen}` +
+          ` page=${playInfo?.kind ?? 'none'}` +
+          ` preview=${String(isPreviewSsr(d.data))}` +
+          ` truncated=${String(isStreamTruncated(d.data))}` +
+          ` cid=${readCidFromSsr(d.data) ?? 'none'}` +
+          ` tried=${String(pgcCacheTried)}`,
+      });
+
+      if (!playInfo || playInfo.kind !== 'pgc') return;
+      const cid = readCidFromSsr(d.data);
+      if (!cid) {
+        reportQuality({ height: 0, note: '[PGC] 读不出 cid，放弃' });
+        return;
+      }
+      /**
+       * cid 变了 = SPA 切集。重置"只做一次"的状态，让新集重新走完整流程。
+       * （同页重复上报同一个 cid 时保持 `pgcCacheTried === true`，不重复取流）
+       */
+      if (cid !== pgcHandledCid) {
+        pgcHandledCid = cid;
+        pgcCacheTried = false;
+      }
+      if (pgcCacheTried) return;
+      pgcCacheTried = true;
+
+      /**
+       * 编排逻辑抽到 `orchestratePgc` —— 只服务整页加载。
+       * SPA 切集由主世界在响应层拦 `/ogv/player/playview`（ADR 0023），不走这里。
+       */
+      void orchestratePgc(cid, d.data);
       return;
     }
 
@@ -498,18 +558,294 @@ function listenMainWorld(): void {
         height: 0,
         note: `playurl 请求出现: ${d.method ?? 'GET'} ${(d.url ?? '').split('?')[0]}`,
       });
+      return;
+    }
+
+    /**
+     * PGC 主世界分支的状态（ADR 0020）。
+     *
+     * 阶段：`cfg`（收到缓存）/ `patch`（已注入）/ `error`（放弃注入）。
+     * **必须每条都落日志**——注入失效时用户看到的是"还是试看"，不说就完全无法排查。
+     */
+    if (d.type === 'pgc') {
+      const p = d as unknown as { stage?: string; detail?: string };
+      reportQuality({ height: 0, note: `[PGC] ${p.stage ?? '?'} ${p.detail ?? ''}`.trim() });
+      return;
     }
   });
 }
 
+/**
+ * PGC 完整流编排：**一条 cid 走一遍**（**只服务整页加载**，见 ADR 0023）。
+ *
+ * ## ⚠️ SPA 切集不走这里
+ *
+ * 曾以为切集会走 `__playinfo__` 的 setter，于是加过 `epchange` 通知链路。
+ * 真机验证推翻了它：**切集后 `__playinfo__` 完全不重新赋值**，setter 不被调用
+ * （实测切到 `ep341210` 后 `arc.cid` 仍是上一集的 `248742156`）。
+ *
+ * 切集改由主世界在**响应层拦截 `/ogv/player/playview`**、当场换成完整集 durl
+ * 处理（ADR 0023）—— 那条路用户完全无感，不需要 reload。
+ *
+ * 所以这个函数**只负责整页加载**：缓存命中就下发（主世界在 setter 里同步注入），
+ * 未命中就取流 + 刷一次。
+ *
+ * ## 两条分支
+ *
+ *   - **缓存命中** → 写同步通道 + 异步下发（后者兜底，前者才是关键路径）
+ *   - **缓存未命中** → 取流 → 写缓存 → **立刻刷**（护栏见 `pgc-reload-plan.ts`）
+ *
+ * @param cid     章节 id
+ * @param ssrData 主世界报来的 SSR 数据（用于判断是否真的需要完整流）
+ */
+async function orchestratePgc(cid: string, ssrData?: unknown): Promise<void> {
+  const playInfo = parsePlayPage(location.href);
+  const epId = playInfo?.kind === 'pgc' ? playInfo.epId : null;
+
+  /**
+   * ## 只需要看的集数不必取流
+   *
+   * 免费集 / 主账号本来就有权益的集数，SSR 流长度与 `timelength` 相符 ——
+   * 注入完整流没有收益，反而可能把高清换成缓存里的旧 qn。
+   */
+  if (ssrData !== undefined && !isStreamTruncated(ssrData)) {
+    reportQuality({
+      height: 0,
+      note: '[PGC] 流长度与 timelength 相符 —— 无需注入',
+    });
+    return;
+  }
+
+  const cached = await loadCachedVideoInfo(cid);
+  if (cached) {
+    /**
+     * ## 先看 `sessionStorage` 里**本来**有没有这份缓存
+     *
+     * 两个存储的生命周期不同：
+     *   - `storage.local`：跨标签页、跨会话，有 LRU —— `loadCachedVideoInfo` 读它
+     *   - `sessionStorage`：只活在这个标签页会话里，但**能被主世界同步读**
+     *
+     * 主世界注入必须在 `__playinfo__` 被赋值那一刻同步完成（`createPlayer` 紧跟其后
+     * 0~2ms）。它只能读 `sessionStorage` —— 异步通道太慢。
+     *
+     * 真机实测（2026-10-28，ep3854815）：
+     * ```
+     * 第一趟（storage.local 命中、sessionStorage 空）
+     *   ssAt 613 → patchedAt 1842     差 1229ms → 播放器已用 180 秒数据建好 → dur 180
+     * 第二趟（sessionStorage 命中）
+     *   ssAt 476 → patchedAt 478      差 2ms    → 同步注入成功 → dur 1169 / 3840×2160
+     * ```
+     *
+     * **所以「`storage.local` 有、`sessionStorage` 没有」这个状态一定会失败**，
+     * 必须写完同步缓存后**刷一次**进第二趟。这正是原来缺的那一步 ——
+     * 旧代码在这里直接 `return`，用户就永远停在 180 秒试看，
+     * 而试看状态下切 4K 找不到轨 → "切换失败"。
+     */
+    let hadSync = false;
+    try {
+      hadSync = !!sessionStorage.getItem('pluma:pgc-vi:' + cid);
+    } catch {
+      /* 读不到当作没有 */
+    }
+
+    // 写同步通道 + 异步下发（后者兜底，前者才是关键路径）
+    writePgcSessionCache(cid, cached, epId);
+    window.postMessage(
+      { __ns: NS, type: 'cfg', token: CHANNEL_TOKEN, enabled: true, pgcVideoInfo: cached },
+      '*',
+    );
+    reportQuality({
+      height: 0,
+      note: `[PGC] 命中缓存并下发（cid=${cid} 时长=${String(cached.timelength ?? 0)} 同步缓存原有=${String(hadSync)}）`,
+    });
+
+    /**
+     * `sessionStorage` 本来就有 → 主世界在 setter 里已经同步注入成功，什么都不用做。
+     * 本来没有 → 这一趟必然错过注入窗口，刷一次进第二趟。
+     */
+    if (!hadSync) {
+      const guardKey = GUARD_KEY_PREFIX + cid;
+      let alreadyTried = false;
+      try {
+        alreadyTried = isAlreadyTried(parseGuard(sessionStorage.getItem(guardKey)), Date.now());
+      } catch {
+        /* 读不到就当没试过 */
+      }
+      if (shouldReload({ alreadyTried, hasStream: true })) {
+        reloadWithGuard(cid, `同步缓存刚写好（cid=${cid}），刷新进第二趟`);
+      } else {
+        reportQuality({
+          height: 0,
+          note: '[PGC] 同步缓存刚写好但本会话已刷过一次，不再刷新',
+        });
+      }
+    }
+    return;
+  }
+
+  /**
+   * 取流前的预判：**只看"这一集是不是已经试过了"**。
+   *
+   * 这里不能判 `active` / `hasStream` —— 两个值此刻都还不知道
+   * （`hasStream` 要等取流回来；`active` 依赖异步的 `page/activate`）。
+   * 真正的刷新判定在 `prepareFullStream` 内部，那里 `hasStream` 是真的。
+   */
+  const guardKey = GUARD_KEY_PREFIX + cid;
+  let alreadyTried = false;
+  try {
+    alreadyTried = isAlreadyTried(parseGuard(sessionStorage.getItem(guardKey)), Date.now());
+  } catch {
+    /* 读不到就当没试过 */
+  }
+  if (alreadyTried) {
+    reportQuality({
+      height: 0,
+      note: '[PGC] 这一集本会话已刷过一次，不再取流',
+    });
+    return;
+  }
+
+  await prepareFullStream(cid, ssrData ?? null);
+}
+
+/**
+ * 记进度 → 写护栏 → reload。
+ *
+ * 抽出来是因为"取流后刷"永远要做同样三件事，
+ * 而其中**写护栏**这一步失败就意味着刷新循环，不允许多处各写一遍。
+ *
+ * @param cid  章节 id
+ * @param why  日志里说明为什么要刷
+ */
+function reloadWithGuard(cid: string, why: string): void {
+  const guardKey = GUARD_KEY_PREFIX + cid;
+  const v = document.querySelector('video');
+  if (v && Number.isFinite(v.currentTime)) saveResumeTime(cid, v.currentTime);
+  try {
+    sessionStorage.setItem(guardKey, JSON.stringify(makeGuard(Date.now())));
+  } catch {
+    // 写不进去就不刷 —— 没有标记会变成循环
+    reportQuality({ height: 0, note: '[PGC] 无法写刷新标记（sessionStorage 不可用），不刷新' });
+    return;
+  }
+  reportQuality({ height: 0, note: `[PGC] ${why}，刷新一次` });
+  location.reload();
+}
+
+/**
+ * 取完整流 → 写缓存 → 刷新一次（P2 的第一趟）。
+ *
+ * ## 护栏全在 `pgc-reload-plan.ts`（纯函数，有单测）
+ *
+ * 这条链路最危险的失败模式是**刷新循环**：取流失败 → 还是没缓存 → 再取 → 再刷。
+ * 所以"能不能刷"由 `shouldReload` / `isAlreadyTried` 统一判定，
+ * 不在这个函数里临时加条件。
+ *
+ * ## 为什么刷新前要记播放位置
+ *
+ * 刷新会丢进度。用户从第 3 分钟开始，刷完回到第 0 分钟，体感很差。
+ * 记进 `sessionStorage`，第二趟由 `restoreResumeTime` 拉回去。
+ *
+ * @param cid  章节 id
+ * @param ssr  主世界报上来的 `ssr-playinfo` 的 `data`（用来取骨架 + 当前进度）
+ */
+async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
+  const guardKey = GUARD_KEY_PREFIX + cid;
+  let alreadyTried = false;
+  try {
+    alreadyTried = isAlreadyTried(parseGuard(sessionStorage.getItem(guardKey)), Date.now());
+  } catch {
+    /* 读不到就当没试过 */
+  }
+
+  const outcome = await fetchPgcPlayurl(cid, buildPlayurlUrl(cid));
+
+  if (outcome.kind !== 'ok') {
+    const why =
+      outcome.kind === 'denied'
+        ? `服务端拒绝（code=${outcome.code}）`
+        : `取流失败（${outcome.detail}）`;
+    reportQuality({ height: 0, note: `[PGC] ${why}，按试看播放，不刷新` });
+    return;
+  }
+
+  // 合并到 SSR 骨架（字段白名单在 core/playinfo/pgc-merge.ts）
+  const ssrVideoInfo = readSsrVideoInfo(ssr);
+  const merged = mergeVideoInfo(ssrVideoInfo, outcome.result);
+  if (!merged) {
+    reportQuality({ height: 0, note: '[PGC] 接口有流但合并不出可用字段，按试看播放' });
+    return;
+  }
+
+  await writePgcCache(cid, merged);
+
+  /**
+   * **同时写一份 `sessionStorage`** —— 这是第二趟能同步拿到的唯一途径。
+   *
+   * ## 为什么不能只靠 `storage.local`
+   *
+   * 真机 trace：`patchedAt: 2032` vs `createPlayer: 409ms`。
+   * 走 `chrome.storage`（异步）→ `postMessage`（排队）→ 106 KB 结构化克隆，
+   * 叠起来 1.6 秒，**必然错过播放器取数的那个窗口**。
+   *
+   * `sessionStorage` 是同步 API，主世界在 `__playinfo__` 的 setter 里直接
+   * `getItem()`，微秒级完成。两份都要写：
+   *   - `storage.local`：跨标签页、可清理、有 LRU
+   *   - `sessionStorage`：**同步读**，专供注入
+   */
+  // epId 从 URL 再解析一次（prepareFullStream 的签名里没有它，
+  // 但这里必须写映射，否则切集时找不到这份缓存）
+  const epFromUrl = parsePlayPage(location.href);
+  writePgcSessionCache(cid, merged, epFromUrl?.kind === 'pgc' ? epFromUrl.epId : null);
+
+  /**
+   * ## 走到这里，取流已经成功了
+   *
+   * **取流成功本身就是"DNR 已生效"的证明** —— 这个请求走
+   * `credentials: 'include'` + DNR 换 Cookie，才可能拿到播放账号的 4K dash。
+   * 所以这里**不再看 `badgeState.proxying`**：那是 `page/activate` 的异步回复，
+   * 晚到或失败都会让明明能刷的情况被拦住，用户就停在 180 秒试看
+   * （2026-10-28 真机定位，见 `shouldReload` 的注释）。
+   */
+  if (!shouldReload({ alreadyTried, hasStream: true })) {
+    reportQuality({
+      height: 0,
+      note: '[PGC] 已缓存但本轮不刷新（本会话已刷过一次）',
+    });
+    return;
+  }
+
+  reloadWithGuard(cid, `已取到完整流并缓存（cid=${cid}，时长=${String(merged.timelength ?? 0)}）`);
+}
+
+/** 从主世界报来的 `ssr-playinfo` 里取 `video_info`（骨架） */
+function readSsrVideoInfo(ssr: unknown): unknown {
+  if (!ssr || typeof ssr !== 'object') return null;
+  const o = ssr as Record<string, unknown>;
+  const result =
+    (o.result as Record<string, unknown> | undefined) ??
+    ((o.data as Record<string, unknown> | undefined)?.result as
+      Record<string, unknown> | undefined);
+  return result?.video_info ?? null;
+}
+
 function report(): void {
-  const info = parseVideoPage(location.href);
+  const info = parsePlayPage(location.href);
   if (!info) return;
 
-  // 先登记当前页，再报到。这样即使 background 没应答（未配置 / SW 冷启动），
-  // popup 也能从 content 问到"这是哪个视频"。
-  // bvid 或分 P 变化时 PageState 会清空两侧数据，避免上一 P 的轨道冒充本 P。
-  pageState.setPage(info.bvid, info.p);
+  /**
+   * 普通视频：登记页面，供 popup §2.3 的画质对比用。
+   *
+   * ⚠️ **PGC 页不登记**。§2.3 的对比依赖"`document_start` 那刻的 `__playinfo__`
+   * 是主账号基线"（ADR 0014），而 PGC 页的 SSR 数据会被主世界改写成播放账号的流
+   * （ADR 0019），那份基线不再可信。PGC 页的状态展示留给角标（走实际播放高度，不猜）。
+   */
+  if (info.kind === 'video') pageState.setPage(info.bvid, info.p);
+
+  /** 状态键：视频页用 bvid，PGC 页用 `ep:` / `ss:` */
+  const pageKey =
+    info.kind === 'video' ? info.bvid : info.epId ? `ep:${info.epId}` : `ss:${info.seasonId ?? ''}`;
+  const p = info.kind === 'video' ? info.p : 1;
 
   /**
    * 主账号是否登录 —— 从页面 cookie 的 `DedeUserID` 判断（不读任何凭据）。
@@ -532,8 +868,9 @@ function report(): void {
   void (async () => {
     const res = (await sendToBackground({
       type: 'page/activate',
-      bvid: info.bvid,
-      p: info.p,
+      kind: info.kind,
+      pageKey,
+      p,
       deviceCookies: readDeviceCookies(document.cookie),
       // 主账号 mid 从**页面** cookie 读（普通分区），不从 background 发 nav 猜。
       primaryMid: readPrimaryMidFromCookie(document.cookie),
@@ -545,6 +882,8 @@ function report(): void {
      */
     if (res?.type === 'page/activate:ok') {
       badgeState.proxying = res.activated === true;
+      // 把 activate 的结果转给主世界：PGC 分支据此决定要不要接管播放器
+      tellMainWorld(true, res.activated === true);
       if (badgeState.proxying) hasEverActivated = true;
       paintBadge();
       return;
@@ -603,7 +942,15 @@ function watchPlaybackQuality(send: (payload: { height: number; note?: string })
 }
 
 export default defineContentScript({
-  matches: ['*://*.bilibili.com/video/*'],
+  /**
+   * 两类页面：
+   *   - `/video/*` 普通视频（投稿）
+   *   - `/bangumi/play/*` 番剧 / 国创 / 电影（PGC，ADR 0019）
+   *
+   * 主世界那一半是 `entrypoints/main-hook.content.ts`（`world: 'MAIN'`），
+   * 匹配串必须与本文件保持一致 —— 只改一边会让某个页面"有 hook 没报到"或反之。
+   */
+  matches: ['*://*.bilibili.com/video/*', '*://*.bilibili.com/bangumi/play/*'],
   // document_start：必须早于播放器初始化。
   // - __playinfo__ 要在播放器读它之前藏好
   // - playurl 只在页面加载时调一次，晚了就没机会
@@ -701,11 +1048,38 @@ export default defineContentScript({
 
     listenMainWorld();
 
-    injectMainWorld((ok, detail) => {
-      reportQuality({ height: 0, note: `主世界注入${ok ? '成功' : '失败'}: ${detail}` });
+    /**
+     * 主世界脚本由浏览器在 `document_start` 直接注入
+     * （`entrypoints/main-hook.content.ts`，`world: 'MAIN'`），这里**不再手工注入**。
+     *
+     * 只留一条可观测的自检：确认它真的跑起来了。没跑起来时诊断日志会明确说出来，
+     * 而不是表现为"功能莫名其妙不生效"。
+     */
+    reportQuality({
+      height: 0,
+      note:
+        (window as unknown as Record<string, unknown>).__PLUMA_MAIN__ === true
+          ? '主世界已就绪（MAIN world 内容脚本）'
+          : '主世界未就绪（检查 manifest 里是否有 world:MAIN 的内容脚本）',
     });
 
     report();
+
+    /**
+     * PGC：刷新后把播放位置还原（P2 的代价补偿）。
+     *
+     * 只在 PGC 播放页跑；`restoreResumeTime` 内部会**先看有没有记录**，
+     * 没有记录就什么都不做 —— 所以普通视频页 / 首次进入都不会挂定时器。
+     */
+    const pgcPage = parsePlayPage(location.href);
+    if (pgcPage?.kind === 'pgc') {
+      const cid = pgcPage.epId ?? pgcPage.seasonId ?? '';
+      if (cid) {
+        restoreResumeTime(cid, (detail) =>
+          reportQuality({ height: 0, note: `[PGC] 位置恢复：${detail}` }),
+        );
+      }
+    }
 
     if (document.readyState === 'loading') {
       document.addEventListener(

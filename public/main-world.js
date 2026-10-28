@@ -1,21 +1,29 @@
 /**
- * 主世界脚本 —— 以「扩展内资源文件」形式注入页面。
+ * 主世界脚本 —— 由 MAIN world 内容脚本注入（`entrypoints/main-hook.content.ts`）。
  *
  * 这是**唯一源文件**（不再从 TS 模板生成），避免两份代码漂移。
  *
- * ## 为什么必须是独立文件而不是内联 script
- * MV3 默认 CSP 禁止执行内联脚本。内联注入会**静默失败**：
- * 插入语句成功返回，但脚本从未执行。
- * （踩过：page/quality 有记录、主世界零输出。）
+ * ## 为什么不能内联，也不能用 `<script src>`
+ *
+ * 两次都踩过（2026-10-27/28）：
+ *   - 内联 `<script>`：MV3 的 `extension_pages` CSP **拒绝** `'unsafe-inline'`，
+ *     扩展直接装不上（Edge 156 报 `Insecure CSP value`）
+ *   - `<script src=chrome-extension://…>`：**异步加载**，晚于 PGC 页的内联脚本，
+ *     hook 永远装不上
+ *
+ * 现在由浏览器在 `document_start` 直接注入主世界（`world: 'MAIN'`），时机正确，不碰 CSP。
  *
  * ## 为什么要注入主世界
- * 只靠 DNR 换 Cookie 不够，有两个页面侧的障碍：
+ * 只靠 DNR 换 Cookie 不够，页面侧还有三个障碍：
  *
  * 1. B站把播放数据 SSR 进 window.__playinfo__
- *    播放器直接读这个全局变量，根本不发 playurl 请求 → DNR 没有请求可改。
+ *    **普通视频页**：播放器直接读这个全局变量，根本不发 playurl 请求 → DNR 没有请求可改。
  *    必须在页面读它之前藏起来，逼播放器走 playurl API。
  *
- * 2. 播放器用 window.__INITIAL_STATE__.user.vipStatus 判断能否选高清
+ * 2. **PGC 页反过来**：`__playinfo__` 必须保留（藏了就没流），
+ *    改成"把缓存里的完整流塞进 `video_info`"（ADR 0020，见 §1b）。
+ *
+ * 3. 播放器用 window.__INITIAL_STATE__.user.vipStatus 判断能否选高清
  *    主账号不是会员 → 直接弹「开通大会员」，连请求都不发。
  *    必须把这份本地状态伪装成会员，让它愿意去请求。
  *
@@ -116,26 +124,232 @@
    */
   var cfgApplied = false;
 
-  try {
-    Object.defineProperty(window, '__playinfo__', {
-      configurable: true,
-      enumerable: true,
-      get: function () {
-        return playinfoHidden ? undefined : playinfoValue;
-      },
-      set: function (v) {
-        playinfoValue = v;
-        // 只记第一次赋值：之后播放器自己写的值都是客户端数据，不能当主账号基线
-        if (ssrFirstSeen === 'none') {
-          ssrFirstSeen = 'set';
-          ssrPlayurlBefore = anyPlayurlSeen;
-          ssrPlayinfo = v;
-        }
-      },
-    });
-    defineResult = 'ok';
-  } catch (e) {
-    defineResult = 'fail:' + (e && e.message ? String(e.message).slice(0, 40) : 'unknown');
+  var IS_PGC = location.pathname.indexOf('/bangumi/play/') === 0;
+
+  /** `false` = `page/activate` 明确回报"没装规则"（未配置 / 总开关关 / 同账号） */
+  var pgcActive = null;
+
+  /**
+   * 待注入的完整集 `video_info`（由 ISOLATED 侧经 `cfg` 下发）。
+   *
+   * `null` = 没有缓存，照常播试看。
+   */
+  var pgcCachedVideoInfo = null;
+
+  /**
+   * `pgcCachedVideoInfo` 属于哪个 cid。
+   *
+   * 用途：SPA 切集时判断"手里这份缓存是不是上一集的"，只丢过期的，
+   * 不能把 ISOLATED 侧刚送来的那份一起丢（那个 bug 让注入连续失效三轮）。
+   */
+  var pgcCachedForCid = '';
+
+  /**
+   * PGC 完整流缓存 —— **从 `sessionStorage` 同步读**（ADR 0020）。
+   *
+   * ## 为什么必须同步、必须在这里读（2026-10-28 最终定位）
+   *
+   * 真机 trace：
+   * ```
+   * bootAt:    439     ← 本脚本开始执行
+   * createPlayer 调用: 409ms（实测）
+   * patchedAt: 2032    ← 之前走 storage.local + postMessage 的注入完成时刻
+   * ```
+   * **播放器在 409ms 就把数据读走了，我们的注入 2032ms 才到 —— 晚了 1.6 秒。**
+   *
+   * 走 `chrome.storage` 是异步的，跨 world `postMessage` 还要排队，
+   * 再加 106 KB 的 JSON 结构化克隆 —— 叠起来必然错过那个窗口。
+   *
+   * `sessionStorage` 是**同步** API 且主世界可直接访问，所以：
+   *   - 第一趟：ISOLATED 侧取到流后写进来（key 含 cid）
+   *   - 第二趟：这里在 `document_start` 同步读出来，setter 一触发就地替换
+   *
+   * 语义也正好：`sessionStorage` 刷新后保留、关标签页清空
+   * ——「同一集同一会话有效」。
+   */
+  var PGC_SS_PREFIX = 'pluma:pgc-vi:';
+
+  /**
+   * 同步读缓存。
+   *
+   * @param {string} cid 章节 id
+   * @returns {object|null}
+   *
+   * ⚠️ **永不抛错**：`sessionStorage` 在隐私模式 / 配额满 / 跨源 iframe 里可能抛。
+   * 抛在 `document_start` 会让整份脚本挂掉，那比"没有缓存"严重得多。
+   */
+  function pgcReadCacheSync(cid) {
+    if (!cid) return null;
+    try {
+      var raw = window.sessionStorage.getItem(PGC_SS_PREFIX + cid);
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || typeof o !== 'object') return null;
+      // 过期判断：流地址实测约 110 分钟，缓存写的时候带 ttl
+      if (typeof o.exp === 'number' && Date.now() > o.exp) return null;
+      return o.vi && typeof o.vi === 'object' ? o.vi : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * 从 SSR 数据里取 cid。
+   *
+   * 注意时机：setter 里 `v` 就是 `playurlSSRData.data`，`arc.cid` 一定在。
+   */
+  function pgcCidOf(v) {
+    var r = v && v.result ? v.result : v && v.data && v.data.result ? v.data : null;
+    if (!r) return null;
+    var cid = (r.arc && r.arc.cid) || (r.video_info && r.video_info.cid);
+    return cid ? String(cid) : null;
+  }
+
+  /**
+   * 一次性：注入成功后置 true，避免同一个 `__playinfo__` 被替换两次。
+   *
+   * ⚠️ **SPA 切集时要重置**（2026-10-28 真机踩到）：在播放器里点选集
+   * 页面不重载，`cid` 变了但 `createPlayer` 不会再调一次。
+   * 靠 `pgcPatchedCid` 记住"上次补的是哪一集"，cid 一变就重置。
+   */
+  var pgcPatched = false;
+
+  /** 上一次注入的是哪个 cid。用于识别 SPA 切集 */
+  var pgcPatchedCid = '';
+
+  /**
+   * ## ⚠️ 只定义一次（2026-10-27 加，因为注入方式变了）
+   *
+   * 主世界脚本现在由 **MAIN world 内容脚本**注入（`entrypoints/pgc-main.content.ts`），
+   * 由浏览器在 `document_start` 调度 —— 时机正确，不需要内联。
+   *
+   * 但**不能直接把 `Object.defineProperty` 放在顶层**：若它先跑过一次，
+   * 之后再执行一次本脚本时，`defineProperty` 会被调两次。第二次会把
+   * `playinfoValue` 重新读成"已经过 getter 的值"，而 `hadExisting` 变 true，
+   * `ssrFirstSeen` 就从 `'initial'` 退化成 `'set'` —— 主账号基线判定会跟着漂。
+   *
+   * 用同名守卫 `__PLUMA_PLAYINFO_HOOK__` 把"已定义"这件事钉在 window 上。
+   */
+  if (!window.__PLUMA_PLAYINFO_HOOK__) {
+    try {
+      Object.defineProperty(window, '__playinfo__', {
+        configurable: true,
+        enumerable: true,
+        get: function () {
+          return playinfoHidden ? undefined : playinfoValue;
+        },
+        set: function (v) {
+          playinfoValue = v;
+          // 只记第一次赋值：之后播放器自己写的值都是客户端数据，不能当主账号基线
+          if (ssrFirstSeen === 'none') {
+            ssrFirstSeen = 'set';
+            ssrPlayurlBefore = anyPlayurlSeen;
+            ssrPlayinfo = v;
+          }
+          /**
+           * PGC 页：SSR 赋值这一刻**同步**把完整流塞进去（ADR 0020）。
+           *
+           * 必须同步：`createPlayer` 就在这次赋值之后 0~2ms 被调用
+           * （实测 409ms 赋值、409ms 调用），异步补丁一定来不及。
+           *
+           * ## 为什么每集都要重新判定（2026-10-28 真机踩到）
+           *
+           * **在播放器里点选集是 SPA 内跳，页面不重载。** 实测：
+           * 点「第 8 集」之后 URL 变了，但 `__playinfo__.result.arc.cid`
+           * **还是第 7 集的**（B站数据异步更新）。而 `pgcPatched = true`
+           * 让注入只发生一次 —— 于是第 8 集的数据进来时**再也不注入**，
+           * 播放器用 360 秒的流播新集，6 分 01 秒撞墙。
+           *
+           * 所以这里按 **cid** 判"是不是新的一集"：cid 变了就重置 `pgcPatched`，
+           * 重新读缓存、重新注入。
+           *
+           * ## ⚠️ 重置时**不能**无条件清掉 `pgcCachedVideoInfo`
+           *
+           * 踩过（2026-10-28）：重置块里写了 `pgcCachedVideoInfo = null`，
+           * 结果把 ISOLATED 侧刚通过 `cfg` 送来的那份缓存**也清掉了**。
+           * 之后 `pgcReadCacheSync` 去 `sessionStorage` 里读 —— 第一次进新标签页时
+           * 那里是空的，于是"有缓存可用"变成"没缓存"，注入再次失效。
+           *
+           * 正确做法：**只丢弃与旧 cid 绑定的那份**（用 `pgcCachedForCid` 记着它属于谁），
+           * `cfg` 刚送来、且 cid 对得上的那份必须留着。
+           */
+          if (IS_PGC) {
+            var cidNow = pgcCidOf(v);
+            if (cidNow && cidNow !== pgcPatchedCid) {
+              if (pgcPatched) {
+                pgcPost('newep', 'cid 变化 ' + pgcPatchedCid + ' → ' + cidNow + '，重置注入状态');
+              }
+              /**
+               * ## 这里**不再**通知 ISOLATED 侧（2026-10-28 实测后回退）
+               *
+               * 曾在这里发过 `epchange`（带新 cid），想让 ISOLATED 侧切集后重新取流。
+               * 但真机验证证明**这个分支在 SPA 切集时根本不会执行**：
+               * 切集后 `__playinfo__` 完全不重新赋值，setter 不被调用 ——
+               * 实测切到 `ep341210` 后 `arc.cid` 仍是上一集的 `248742156`。
+               *
+               * 所以整条 `epchange` 链路是死代码，已删除。
+               * SPA 切集改由**响应层拦截 `/ogv/player/playview`** 处理（ADR 0023）。
+               *
+               * 保留这个 cid 变化判定本身：页面偶尔会用新的 `__playinfo__`
+               * 覆盖（例如站内跳转），那时确实要重置注入状态。
+               */
+              // 只有"手里这份缓存属于别的集"时才丢
+              if (pgcCachedForCid && cidNow && pgcCachedForCid !== cidNow) {
+                pgcCachedVideoInfo = null;
+                pgcCachedForCid = '';
+              }
+              pgcPatchedCid = cidNow;
+              pgcPatched = false;
+            }
+            if (!pgcCachedVideoInfo) {
+              var ssCid = pgcCidOf(v) || '';
+              pgcTrace.ssAt = performance.now ? Math.round(performance.now()) : -1;
+              pgcTrace.ssCid = ssCid;
+              pgcTrace.ssHit = false;
+              pgcTrace.ssErr = '';
+              try {
+                pgcCachedVideoInfo = pgcReadCacheSync(ssCid);
+              } catch (e) {
+                pgcTrace.ssErr = e && e.message ? String(e.message).slice(0, 60) : 'throw';
+              }
+              pgcTrace.ssHit = !!pgcCachedVideoInfo;
+              if (pgcCachedVideoInfo) pgcCachedForCid = ssCid;
+              pgcPost(
+                'ss',
+                'cid=' +
+                  ssCid +
+                  ' hit=' +
+                  String(pgcTrace.ssHit) +
+                  ' t=' +
+                  pgcTrace.ssAt +
+                  (pgcTrace.ssErr ? ' err=' + pgcTrace.ssErr : ''),
+              );
+            }
+            /**
+             * ⚠️ **这里不能判 `enabled`**（2026-10-28 真机踩到）。
+             *
+             * `enabled` 由 `cfg` 下发，而 `cfg` 要等 ISOLATED 侧拿到消息再发出 ——
+             * 在 `__playinfo__` 赋值那一刻（409ms）通常**还没到**。
+             * 之前写成 `if (enabled) pgcPatchPlayinfo(v)`，于是注入永远不执行，
+             * 而且 `enabled` 是 false 时**不会报错**，表现为"什么都没发生"。
+             *
+             * 现在改用**缓存在不在**做判据：
+             *   - 缓存存在 = 之前那一趟已经确认"这集需要且能拿到完整流"
+             *     （写缓存的动作本身已经在 `prepareFullStream` 里做过了总开关/权益判定）
+             *   - `sessionStorage` 只在同标签页存活，关掉就没了，不存在"陈旧残留"
+             *
+             * 而 `pgcActive === false`（明确没装规则）仍然拦住 —— 那个是"用户关了开关"，
+             * 只在 `cfg` 到达后才会被置位，属于**收紧**而不是放宽。
+             */
+            pgcPatchPlayinfo(v);
+          }
+        },
+      });
+      window.__PLUMA_PLAYINFO_HOOK__ = true;
+      defineResult = 'ok';
+    } catch (e) {
+      defineResult = 'fail:' + (e && e.message ? String(e.message).slice(0, 40) : 'unknown');
+    }
   }
 
   function playinfoState() {
@@ -148,6 +362,234 @@
     if (v === undefined) return 'hidden-or-empty';
     if (v === null) return 'null';
     return 'present:' + typeof v;
+  }
+
+  // ── 1b. PGC（番剧 / 国创 / 电影）：把缓存里的完整流塞进 `__playinfo__`（ADR 0020） ──
+  //
+  // ## 为什么需要这一套（和 /video 页完全相反）
+  //
+  // PGC 页的取流结果由服务端写进 HTML（`playurlSSRData`），页面**零请求**，
+  // DNR 改的是请求头 → 没有可改的对象（ADR 0007）。
+  // 所以 `/video` 那套"藏起 `__playinfo__` 逼播放器发请求"在这里**必须反过来**：数据要保留。
+  //
+  // ## 为什么不是"hook createPlayer 换回调"（ADR 0019 已被推翻）
+  //
+  // 2026-10-28 真机实测三条，把那条路彻底否掉了：
+  //
+  //   1. 用页面自己的容器 + 完整集数据建播放器，`reqHttpPlayUrlInfo` **一次都没被调用**
+  //      （`cbCalled: 0`），`duration` 仍是 360。
+  //   2. Proxy 记录属性访问：播放器只 `get prefetch` / `get requestConfig`，
+  //      **一次都没读 `.playUrl`**，而且有 `Symbol.toStringTag` 访问 ——
+  //      说明它在做 `Object.prototype.toString` 这类类型判断。
+  //   3. PGC 的 `video_info` 里**根本没有 `dash`**（只有 `durl` / `durls`、`type: 3`），
+  //      是纯 durl 流水线，那个回调只是装饰（返回 SSR 常量）。
+  //
+  // 而 `createPlayer` 在 `__playinfo__` 赋值后 0~2ms 就调用了（实测 407/409/409ms），
+  // 接口来不及返回。所以唯一能让播放器拿到完整流的办法是：
+  // **下一次加载时它已经在手边** → 缓存 + 二次加载。
+  //
+  // ## 现在的链路
+  //
+  //   第一趟：页面正常播试看；ISOLATED 侧取完整流 → 写缓存 → reload
+  //   第二趟：ISOLATED 侧预读缓存 → 通过 `cfg` 下发 → 这里在 `__playinfo__` 的
+  //          setter 里**同步**把 `result.video_info` 换成完整集的那份
+  //
+  // 「同步」是硬要求：setter 在 SSR 内联脚本赋值那一刻执行，之后 0~2ms 播放器就来读了。
+
+  /** 页面侧可读的埋点快照（无凭据，仅供排查） */
+  var pgcTrace = {
+    bootAt: -1,
+    patchedAt: -1,
+    cacheBytes: 0,
+    lastStage: '',
+    /**
+     * 同步读 `sessionStorage` 的结果（2026-10-28 加，用于定位"新标签页同步读不到"）。
+     *
+     * - `ssAt`：调用时刻（相对 performance.now）
+     * - `ssCid`：当时解析出的 cid（空 = 没拿到 cid，读不了）
+     * - `ssHit`：有没有读到（`true` / `false`）
+     * - `ssErr`：抛错信息（`sessionStorage` 在 `document_start` 可能不可用）
+     */
+    ssAt: -1,
+    ssCid: '',
+    ssHit: false,
+    ssErr: '',
+  };
+
+  if (IS_PGC) {
+    pgcTrace.bootAt = performance.now ? Math.round(performance.now()) : -1;
+    pgcTrace.lastStage = 'boot';
+    window.__PLUMA_PGC__ = pgcTrace;
+  }
+
+  function pgcPost(stage, detail) {
+    safePost({ __ns: NS, type: 'pgc', token: token, stage: stage, detail: detail });
+  }
+
+  /**
+   * 把 PGC 的「试看」标记改写成「完整」（ADR 0021）。
+   *
+   * ## 为什么必须改（实测，两个方向相反的实验合起来才说明）
+   *
+   * | 实验 | 改了什么 | 结果 |
+   * | --- | --- | --- |
+   * | `probe-pgc-is-preview.cjs` | 只改字段、不换流 | `video.duration` 仍是 360 |
+   * | P2 真机 | 只换流、不改字段 | **播到 361 秒被拦并弹窗** |
+   *
+   * → 换流解决"能不能播"，改字段解决"播到哪儿停"。两件都要做。
+   *
+   * 361 秒是 SSR 的 `durls` 长度（4 组 × 360082ms）—— 播放器按 `play_detail: "PLAY_PREVIEW"`
+   * 在试看结束点主动暂停，与"流多长"无关。而现在流已经是 1440 秒的了。
+   *
+   * ## 为什么这不是伪造服务端权益
+   *
+   * 流由 `/pgc/player/web/playurl` 发出，Cookie 被 DNR 换成**播放账号**的 ——
+   * 是它自己的大会员权益换来的，服务端一点没被骗。
+   * 改的这三个字段只影响**播放器本地**"要不要在 361 秒处暂停"，不产生任何取流能力。
+   *
+   * 所以**只改描述"这份数据"的标记，不碰描述"这个账号"的字段**：
+   * `user_status`（`has_paid` / `vip_info`）/ `supplement` / `arc` / `watch_progress` 一律不动。
+   * 边界与 [ADR 0013] 同类，同样由 `scripts/check-patch-scope.mjs` 卡死。
+   */
+  function pgcPatchPreviewFlags(r) {
+    if (!r || typeof r !== 'object') return 0;
+    var changed = 0;
+
+    if (r.play_video_type === 'preview') {
+      r.play_video_type = PGC_PREVIEW_FLAGS.play_video_type;
+      changed += 1;
+    }
+    var pc = r.play_check;
+    if (pc && typeof pc === 'object' && pc.play_detail === 'PLAY_PREVIEW') {
+      pc.play_detail = PGC_PREVIEW_FLAGS['play_check.play_detail'];
+      changed += 1;
+    }
+    var vi = r.video_info;
+    if (vi && typeof vi === 'object' && vi.is_preview === true) {
+      vi.is_preview = PGC_PREVIEW_FLAGS['video_info.is_preview'];
+      changed += 1;
+    }
+    return changed;
+  }
+
+  /**
+   * 把缓存里的完整流塞进 `__playinfo__` 的那份 `result`。
+   *
+   * ## 为什么在这里合并而不直接赋值
+   *
+   * SSR 骨架里除了 `video_info` 还有 `arc` / `play_check` / `watch_progress` /
+   * `user_status` —— 播放器全都要用。只换 `video_info` 里的**流字段**，
+   * 其余原样保留（字段白名单在 `src/core/playinfo/pgc-merge.ts`，这里做同样的裁剪）。
+   *
+   * ## 顺带改写试看标记
+   *
+   * 见 `pgcPatchPreviewFlags`（ADR 0021）—— 只换流不够，播放器会在 361 秒处停。
+   */
+  function pgcPatchPlayinfo(v) {
+    if (pgcPatched || !pgcCachedVideoInfo) return;
+    // 没装规则（未配置 / 总开关关 / 同账号）时不该注入：
+    // 那种情况下这个缓存也未必对得上当前账号权益
+    if (pgcActive === false) return;
+    var inner = v && v.result ? v : v && v.data && v.data.result ? v.data : null;
+    if (!inner || !inner.result) return;
+
+    var r = inner.result;
+    var base = r.video_info && typeof r.video_info === 'object' ? r.video_info : {};
+    var next = Object.assign({}, base);
+
+    // 白名单：与 core/playinfo/pgc-merge.ts 的 STREAM_FIELDS 一致
+    var keys = [
+      'quality',
+      'timelength',
+      'format',
+      'dash',
+      'durl',
+      'durls',
+      'accept_quality',
+      'accept_description',
+      'support_formats',
+      'video_codecid',
+      'fnval',
+    ];
+    var moved = 0;
+    for (var i = 0; i < keys.length; i += 1) {
+      var k = keys[i];
+      // 空数组不算"有流"：接口偶尔返回 `durls: []`，搬过去等于把流清空
+      if (Array.isArray(pgcCachedVideoInfo[k]) && pgcCachedVideoInfo[k].length === 0) continue;
+      if (pgcCachedVideoInfo[k] === undefined || pgcCachedVideoInfo[k] === null) continue;
+      next[k] = pgcCachedVideoInfo[k];
+      moved += 1;
+    }
+
+    /**
+     * 一个**流字段**都没搬过来 → 不动原数据。
+     *
+     * ⚠️ 判据是"有没有流"，不是"搬到了几个字段"：缓存里可能只有
+     * `quality` / `timelength` 这类元信息（比如存的时候拿的是无权益响应），
+     * 那种补丁看着改了、其实没流，播放器拿到反而可能播不了。
+     * 宁可播试看，不要黑屏。
+     */
+    var hasStream = false;
+    if (next.dash && typeof next.dash === 'object') {
+      var dv = next.dash.video;
+      if (Array.isArray(dv) && dv.length > 0) hasStream = true;
+    }
+    if (!hasStream && Array.isArray(next.durl) && next.durl.length > 0) hasStream = true;
+    if (!hasStream && Array.isArray(next.durls)) {
+      for (var j = 0; j < next.durls.length; j += 1) {
+        var g = next.durls[j];
+        if (g && Array.isArray(g.durl) && g.durl.length > 0) {
+          hasStream = true;
+          break;
+        }
+      }
+    }
+    if (!hasStream) {
+      pgcPost('error', '缓存里没有可用的流字段（' + moved + ' 个元信息），放弃注入');
+      return;
+    }
+
+    /**
+     * ⚠️ **有 dash 时必须把 `durl` / `durls` 删掉**（2026-10-28 真机定位，最关键的一条）。
+     *
+     * 现象：注入后 `dash.duration = 1441` 是对的，但 `<video>.duration` 仍是 360、
+     * `currentSrc` 指向 `.../281989571-1-4...`（**durl 的地址**）、
+     * 把 `currentTime` 设到 600 会被夹回 360。
+     *
+     * 结论：**播放器在 `durl` 存在时优先走 durl**，SSR 那份 360 秒的试看 durl 一直在，
+     * 我们注入的 dash 就从来没被用过。所谓"6 分 01 秒被拦"根本不是被字段拦截，
+     * 是**流真的只有 360 秒**（SSR durl 的长度）。
+     *
+     * 所以：给了 dash 就把 durl 抹掉，强制播放器走 dash。
+     * 反之（缓存里只有 durl、没有 dash）才保留 durl。
+     */
+    var nextHasDash =
+      next.dash && typeof next.dash === 'object' && next.dash.video && next.dash.video.length > 0;
+    if (nextHasDash) {
+      delete next.durl;
+      delete next.durls;
+    }
+
+    r.video_info = next;
+    // 试看标记（ADR 0021）—— 只换流不够，播放器会在 361 秒处主动停
+    var flags = pgcPatchPreviewFlags(r);
+    pgcPatched = true;
+    pgcTrace.patchedAt = performance.now ? Math.round(performance.now()) : -1;
+    pgcTrace.lastStage = 'patched';
+    var timelength = next.timelength || 0;
+    pgcPost(
+      'patch',
+      '已注入缓存流：字段=' + moved + ' 试看标记=' + flags + ' 时长=' + timelength,
+    );
+
+    /**
+     * 隐藏「试看中」提示条（ADR 0022）。
+     *
+     * ⚠️ **必须放在注入成功之后**：ADR 0022 的三条边界里，
+     * "真的注入了完整流"是其中一条。没注入就藏，用户会以为能看、
+     * 实际还是 6 分钟 —— 那比显示提示更难排查。
+     */
+    pgcHidePreviewToast();
   }
 
   // ── 2. 会员状态伪装：**绝不接管 __INITIAL_STATE__** ──
@@ -229,7 +671,13 @@
 
   /** 兼容：拿到配置后决定要不要开始轮询 */
   function syncHooks() {
-    playinfoHidden = enabled;
+    /**
+     * ⚠️ **PGC 页永远不藏 `__playinfo__`。**
+     *
+     * `/video` 页藏它是为了逼播放器发 playurl（好让 DNR 有请求可改）；
+     * PGC 页的播放器**只吃 SSR 数据**，藏了就等于把流藏了，直接黑屏。
+     */
+    playinfoHidden = enabled && !IS_PGC;
     if (enabled) startSsPatch();
     else stopSsPatch();
   }
@@ -303,12 +751,6 @@
     return matchPath(url, PROGRESS_PATCH_PATHS);
   }
 
-  /**
-   * 把响应 JSON 里所有「会员形状」的对象改成会员。
-   *
-   * 只动 status / type / due_date 这几个**显示用**字段，
-   * 不碰 mid、不碰权限位（rights），避免影响身份归属判断。
-   */
   function looksLikeVip(obj) {
     return (
       !!obj &&
@@ -367,6 +809,129 @@
         '*',);
     } catch (e) {}
   }
+
+  // ── 4. HDR 检测 ──
+
+  /**
+   * PGC 页可改写的「试看」标记 → 改写值（ADR 0021 授权）。
+   *
+   * ⚠️ **与上面两份清单并列，不许合并**。三份清单授权的是三类不同的事：
+   *
+   * | 常量 | 授权 | 改的是什么 |
+   * | --- | --- | --- |
+   * | `PATCH_PATHS` | ADR 0013 | 会员字段伪装（让画质菜单不弹充值页） |
+   * | `PROGRESS_PATCH_PATHS` | ADR 0017 | 观看进度还原（用户本来就有的数据） |
+   * | `PGC_PREVIEW_FLAGS` | ADR 0021 | 这份播放数据是不是"试看"（让播放器不在 361 秒处停） |
+   *
+   * 第三份**只描述"这份数据"，不描述"这个账号"** ——
+   * `user_status.has_paid` / `vip_info` 一律不动，那是服务端对账号权益的陈述。
+   *
+   * 字段名是 `a.b.c` 形式的路径，方便 `check-patch-scope.mjs` 逐条比对。
+   */
+  var PGC_PREVIEW_FLAGS = {
+    play_video_type: 'whole',
+    'play_check.play_detail': 'PLAY_WHOLE',
+    'video_info.is_preview': false,
+  };
+
+  /**
+   * PGC 页「试看中」提示条的选择器（ADR 0022 授权）。
+   *
+   * ## ⚠️ 必须藏 `.bpx-player-toast-item`，不是它的子节点（2026-10-28 真机 dump 纠正）
+   *
+   * 实测的完整层级（`ep341216`，逐层读 `getBoundingClientRect` + `backgroundColor`）：
+   *
+   * ```
+   * .bpx-player-toast-wrap                 透明        (43,386) 32×33
+   *   └ .bpx-player-toast-row.bpx-player-toast-un
+   *       └ .bpx-player-toast-item          ★ 黑底在这里   rgba(25,25,25,0.88)
+   *           └ .bpx-player-toast-text      透明（只有文字）
+   *               └ div
+   *                   └ .PromptBar_container__dxyIw   透明
+   *                       ├ .PromptBar_title      「本片是大会员专享内容」
+   *                       ├ .PromptBar_subtitle   「试看中·成为大会员免费看本片」
+   *                       └ .PromptBar_btnItemWrap「成为大会员」
+   * ```
+   *
+   * 两次都藏错了层：
+   *   - 第一版藏 `.bpx-player-toast-text` → **黑底还在**（它在更外一层 `.toast-item` 上）
+   *   - 而且会把「跳过片头/片尾」一起藏掉 —— 两者共用 `.bpx-player-toast-item`
+   *
+   * ## 所以策略是「只藏含 PromptBar 的那几个 item」
+   *
+   * `.bpx-player-toast-item` 是**逐条消息**的容器，「跳过片头」也会生成自己的 item。
+   * 遍历所有 item，**只藏内部含 `[class*="PromptBar"]` 的那些** ——
+   * 跳过片头的 item 里没有 PromptBar，天然不被碰。
+   *
+   * 这一点很重要：用户明确说过"某些集的片头片尾会提前/延后，有些集根本没有"。
+   * 也就是说"有跳过按钮"和"有试看提示"是**两个独立条件**，不能用同一个选择器。
+   *
+   * 用属性前缀匹配（`[class*="PromptBar"]`）而不是全名，
+   * 因为 `PromptBar_container__dxyIw` 后半段是 CSS Modules 的哈希，随时会变。
+   *
+   * ## ADR 0022 的三条边界（不变）
+   *   1. 只在 PGC 页
+   *   2. 只在**真的注入了完整流之后**
+   *   3. 不扩大到其它 `.bpx-player-*` 层
+   *
+   * **不动 `user_status.has_paid`** —— 那仍是服务端事实，改它是纯谎报。
+   */
+  var PGC_TOAST_ITEM = ['.bpx-player-toast-item'];
+
+  /** item 里出现这个标记 = 它是「试看提示」，才该藏 */
+  var PGC_TOAST_MARK = '[class*="PromptBar"]';
+
+  /**
+   * 隐藏 PGC 的「试看中」提示条（连黑底一起）。
+   *
+   * ## 为什么用 MutationObserver
+   *
+   * 播放器按需渲染：切画质、暂停、重新起播都会重建 DOM，一次性隐藏会失效。
+   *
+   * ## 为什么用内联样式而不是 `<style>`
+   *
+   * 第一版注入 `<style>` 时，选择器一旦放宽就会波及同一层的其它内容。
+   * 内联样式只作用于**当场查出来的那个节点**，天然不会误伤兄弟。
+   *
+   * ## 为什么不用 `remove()` 而是 `display:none`
+   *
+   * 播放器可能持有节点引用并在上面读尺寸/做动画；直接移除会让它拿到 `null`
+   * 而抛错（表现为播放卡住）。隐藏是更保守的做法。
+   */
+  function pgcHidePreviewToast() {
+    if (!PGC_TOAST_ITEM.length || !PGC_TOAST_MARK) return;
+    var itemSel = PGC_TOAST_ITEM.join(',');
+
+    var kill = function () {
+      var items = document.querySelectorAll(itemSel);
+      var hit = 0;
+      for (var i = 0; i < items.length; i += 1) {
+        var el = items[i];
+        // 只处理"含试看提示"的那几条 —— 跳过片头没有这个标记，不会被碰
+        if (!el.querySelector(PGC_TOAST_MARK)) continue;
+        if (el.style.display !== 'none') el.style.display = 'none';
+        hit += 1;
+      }
+      return hit;
+    };
+
+    try {
+      var n = kill();
+      if (!pgcToastObserver && typeof MutationObserver === 'function') {
+        pgcToastObserver = new MutationObserver(function () {
+          kill();
+        });
+        pgcToastObserver.observe(document.documentElement, { childList: true, subtree: true });
+      }
+      if (n > 0) pgcPost('toast', '已隐藏试看提示条 ' + n + ' 条（' + itemSel + ' + ' + PGC_TOAST_MARK + '）');
+    } catch (e) {
+      pgcPost('error', '隐藏试看提示失败：' + (e && e.message ? e.message.slice(0, 60) : '?'));
+    }
+  }
+
+  /** 只挂一个观察器（重复调 `pgcHidePreviewToast` 不会叠加） */
+  var pgcToastObserver = null;
+
 
   // ── 4. HDR 检测 ──
   // B站的 playurl 响应**不返回 HDR 元数据**（hdr / colorPrimaries 全是 null），
@@ -1245,6 +1810,61 @@
         var isPlayurl = isPlayurlPath(url);
         var needPatch = enabled && matchPath(url, PATCH_PATHS);
 
+        /**
+         * ## PGC SPA 切集：`/ogv/player/playview` 才是真正的数据源（2026-10-28 实测）
+         *
+         * 在播放器里点选集（SPA 内跳）时：
+         *   - `window.__playinfo__` **完全不更新**（实测 `ssAt` 不变、cid 还是上一集的）
+         *   - 页面改用 `fetch GET /ogv/player/playview?ep_id=…` 拿新一集的流
+         *   - 该响应是 `{code, data:{video_info:{durls:[4 组 × 6 分钟]}}}`
+         *
+         * 所以 P2 的"在 `__playinfo__` setter 里注入"对切集无效。
+         * 这里在**响应层**做同样的事：把 `data.video_info` 换成缓存里的完整流。
+         *
+         * ⚠️ ADR 0007 说这个接口是 POST + csrf 在 body 里 —— **那是页面初次加载的场景**
+         * （实际走 SSR，无请求）。切集场景下它是纯 GET，DNR 能改 Cookie。
+         */
+        /**
+         * ⚠️ **PLAYVIEW 分支必须"能换才换"，否则一个字节都不碰**（2026-10-28 灰屏事故）
+         *
+         * 第一版写成 `needPatch = enabled`，于是**在读响应之前**就决定了要重建 Response。
+         * 而换流需要 `ep → cid` 映射 —— 新集的映射只有在"那一集被打开过一次"之后才存在。
+         * 首次切到新集时映射缺失 → `pgcSwapPlayviewBody` 返回 `null` → 代码仍走
+         * `rebuildResponse`（因为 `needPatch` 早已为 true）→ **重建后的 Response 让播放器灰屏**
+         * （`duration: 0`、`readyState: 0`、无错误码）。
+         *
+         * 所以：**先判断能不能换，再决定碰不碰**。
+         * 这里只做"是否值得读一次 body"的粗判（有映射 + 有缓存），
+         * 真正的换流仍在 `pgcSwapPlayviewBody` 里做，失败就返回原 `resp`。
+         */
+        /**
+         * ## PGC SPA 切集：`/ogv/player/playview` 是**唯一**的数据源（ADR 0023）
+         *
+         * 真机实测（2026-10-28）：在播放器里点选集时
+         *   - `window.__playinfo__` **完全不动** —— setter 不触发、cid 停在上一集
+         *     （`arc.cid=248742156` 而 URL 已是 `ep341210`）
+         *   - 页面改用 `fetch GET /ogv/player/playview?ep_id=…` 拿新一集的流
+         *   - 响应是 `{code, data:{arc:{cid}, play_video_type:"preview",
+         *     video_info:{timelength:1440000, durls:[4 组 × 6 分钟]}}}`
+         *
+         * 所以 P2 的"setter 里注入"对切集**完全无效**（不是判定写错，
+         * 是 setter 根本没被调用）。换流只能在这里做。
+         *
+         * ## 灰屏事故的真正原因（2026-10-28 更正）
+         *
+         * 之前两次灰屏，当时归因于"`new Response()` 重建破坏响应语义"。**那是误判。**
+         * 真正原因是**换了 dash**：切集时播放器走 `<video src>` + mp4 直放
+         * （`networkState: 1`、`currentSrc` 是 `.mp4`、没有 MSE），
+         * 按 durl 分支准备接收，塞 dash 进去就装不上 → `duration:0 / readyState:0`。
+         *
+         * 换成 **durl 形态**（`playurl?fnval=0` 的完整集 durl，与 `playview` 的
+         * `durl[0]` 逐字段同构）之后，重建 Response 完全正常 —— 连续 3 集验证通过：
+         * `dur 1420 / 1440 / 1440`、`readyState 4`、零灰屏、零 reload。
+         *
+         * 详见 ADR 0023。
+         */
+        var isPgcPlayview = enabled && IS_PGC && /\/ogv\/player\/playview/.test(url);
+
         // playurl 若走 fetch（2026-10-26 实测主路径是 XHR，这里是兜底），
         // 同样要并行预取主账号进度
         if (isPlayurl && enabled) {
@@ -1252,11 +1872,40 @@
           if (fids) prefetchProgress(fids.aid, fids.cid);
         }
 
-        // **两条路都不需要 → 一字节都不碰**
-        if (!needPatch && !isPlayurl) return p;
+        // **三条路（改写 / playurl 观测 / playview 换流）都不需要 → 一字节都不碰**
+        if (!needPatch && !isPlayurl && !isPgcPlayview) return p;
 
         return p.then(function (resp) {
           if (!resp || !resp.ok) return resp;
+
+          /**
+           * ## playview 换流：**单独一条路，不跟 `needPatch` 混**
+           *
+           * 它要读 body 再重建 Response，而 `needPatch` 那套是给 vip 字段的。
+           * 两者互斥 —— 这里先处理 playview 并直接返回。
+           *
+           * ⚠️ 换流失败（返回 `null`）时**仍要重建 Response**，
+           * 因为 `resp.text()` 已经把 body 消费掉了，不能原样 `return resp`
+           * （再读会抛）。重建用的是原文，内容一致。
+           */
+          if (isPgcPlayview) {
+            return resp
+              .text()
+              .then(function (t) {
+                var body;
+                try {
+                  body = JSON.parse(t);
+                } catch (e) {
+                  return rebuildResponse(resp, t);
+                }
+                return pgcSwapPlayviewBody(body, origFetch).then(function (swapped) {
+                  return rebuildResponse(resp, swapped !== null ? swapped : t);
+                });
+              })
+              .catch(function () {
+                return new Response('', { status: resp.status, statusText: resp.statusText });
+              });
+          }
 
           // 只需要记录轨道清单时，用 clone 是安全的：
           // 拿副本去读，原 resp 仍然完好交回给页面
@@ -1344,6 +1993,242 @@
       };
     }
   } catch (e) {}
+
+  /**
+   * 判断这份 `playview` 响应里的流是不是"试看"（需要换）。
+   *
+   * ## 为什么不能用 `timelength` 判断（2026-10-28 真机实测）
+   *
+   * `playview` 的 `timelength` 是 **1440000（整集 24 分钟）**，
+   * 但 `durls` 只有 4 组 × 6 分钟。`timelength` 是整集元数据，
+   * **不代表流有多长**。用它判断会得出"本来就完整，不用换"的错误结论。
+   *
+   * 判据只能看**流自己**：`durl`（单段，完整时）或 `durls`（多段，试看时）
+   * 里第一段的 `length` 之和 vs `timelength`。
+   *
+   * @param vi `data.video_info`
+   * @returns `true` 表示流短于整集，需要换
+   */
+  function pgcPlayviewIsTruncated(vi) {
+    if (!vi || typeof vi !== 'object') return false;
+    var timelength = typeof vi.timelength === 'number' ? vi.timelength : 0;
+
+    // 单段 durl：直接看它多长
+    if (Array.isArray(vi.durl) && vi.durl.length > 0) {
+      var dl = typeof vi.durl[0].length === 'number' ? vi.durl[0].length : 0;
+      if (timelength > 0 && dl > 0) return dl < timelength - 5000;
+      return false;
+    }
+
+    // 多段 durls：把各段加起来
+    if (Array.isArray(vi.durls) && vi.durls.length > 0) {
+      var total = 0;
+      for (var i = 0; i < vi.durls.length; i += 1) {
+        var segs = vi.durls[i] && vi.durls[i].durl;
+        if (Array.isArray(segs) && segs.length > 0) {
+          total += typeof segs[0].length === 'number' ? segs[0].length : 0;
+        }
+      }
+      if (timelength > 0 && total > 0) return total < timelength - 5000;
+      return false;
+    }
+
+    return false;
+  }
+
+  /**
+   * 把 `/ogv/player/playview` 响应里的流换成**完整集的 durl**。
+   *
+   * ## 这是 SPA 切集唯一的可用方案（ADR 0023，2026-10-28 真机连续 3 集验证）
+   *
+   * ### 为什么必须是 durl，不能是 dash
+   *
+   * 切集时播放器走的是 **`<video src>` + mp4 直放**（实测 `networkState: 1`、
+   * `currentSrc` 指向 `.mp4`、没有 MSE）。它按 `durl` 分支准备好了接收路径。
+   * 前两次灰屏事故就是因为把 **dash** 换进去了 —— 形态不一致，装不进去，
+   * `duration: 0 / readyState: 0 / error: null`。
+   *
+   * 之前把这归因于"`new Response()` 重建破坏了响应语义"，**那是误判**：
+   * 真正原因是换了 dash。换成 durl 之后重建 Response 完全正常。
+   *
+   * ### 完整 durl 从哪来
+   *
+   * `GET /pgc/player/web/playurl?…&fnval=0`（**注意 fnval=0**，不要 dash）。
+   * 这条已在 DNR 白名单里，Cookie 被换成播放账号，拿到的就是完整集：
+   *
+   * ```
+   * result.durl      = [{ size: 292087480, length: 1440000, order: 1, url, md5, backup_url }]
+   * result.is_preview = 0
+   * result.quality    = 80
+   * result.format     = "mp4"
+   * ```
+   *
+   * 与 `playview` 的 `durl[0]` **逐字段同构**，所以播放器无需改变行为。
+   *
+   * ### 为什么不用 sessionStorage 缓存了
+   *
+   * 旧实现要求"这一集被打开过、有 ep→cid 映射、sessionStorage 里有缓存"。
+   * 但 SPA 切集时 `__playinfo__` 不更新 → ISOLATED 侧根本收不到新 cid →
+   * **缓存永远不会为新集生成**，于是旧实现永远返回 `null`。
+   *
+   * 现在改成**就在这里现取**：cid 从响应自己的 `data.arc.cid` 读
+   * （实测存在，`253153139` 这类值），一个网络往返（~200ms）就够，
+   * 而这一趟本来就在播放器等数据的路径上。
+   *
+   * @param body 原响应 JSON
+   * @param fetchImpl 原生 fetch（绕开我们自己的包装，避免递归）
+   * @returns Promise<string|null> 换好的 JSON 文本；`null` 表示不动
+   */
+  function pgcSwapPlayviewBody(body, fetchImpl) {
+    if (!body) return Promise.resolve(null);
+    var data = body && body.data;
+    if (!data || typeof data !== 'object') return Promise.resolve(null);
+
+    var vi = data.video_info;
+    if (!vi || typeof vi !== 'object') return Promise.resolve(null);
+
+    // 本来就完整 → 一个字节都不碰
+    if (!pgcPlayviewIsTruncated(vi)) return Promise.resolve(null);
+
+    // cid 就在响应自己里（实测 `data.arc.cid` 一定存在）
+    var cid = data.arc && data.arc.cid ? String(data.arc.cid) : '';
+    if (!/^\d+$/.test(cid)) {
+      pgcPost('playview', '响应里没有 arc.cid，跳过换流');
+      return Promise.resolve(null);
+    }
+
+    /**
+     * ## 用 `fnval=4048` 取 **dash**，不再用 `fnval=0` 取 durl（2026-10-28 修正）
+     *
+     * ADR 0023 最初用 `fnval=0`（durl 形态），是为了绕过灰屏 —— 那确实解决了
+     * "切集能播"，但留下一个**画质锁死**的坑。真机实测（cid=32547932835）：
+     *
+     * ```
+     * fnval=4048 → quality 120, dash 19 轨, 2160p 齐全   ← 有 4K
+     * fnval=0    → quality 64,  durl 单段, 标签 "1-192"  ← 只有 720P
+     * ```
+     * `durl` 那串后缀 `1-192` 里的 **192 就是 720P 的 qn 编码**，
+     * 而且 `fnval=0` 无论 `qn` 传 80 还是 120 都只给 720P —— 不是"参数没传对"，
+     * 是**这个组合根本不返回高清 durl**。
+     *
+     * 后果：SPA 切集后 `realQ` 锁在 64、`videoWidth` 1280，用户在菜单里点 4K，
+     * 播放器**根本没有 4K 轨可切** → 表现为"切画质失败"。
+     *
+     * 所以改成取 dash，并把 `type` / `format` 一起改成 DASH 形态
+     * （`fnval=4048` 的响应是 `type: "DASH"` 字符串 + `format: "hdflv2"`，
+     * 而 `fnval=0` 是 `type: 3` 数字 + `format: "mp4720"` —— 两种形态的
+     * `type` **连类型都不同**，播放器靠它选管道）。
+     */
+    var url =
+      'https://api.bilibili.com/pgc/player/web/playurl' +
+      '?cid=' +
+      encodeURIComponent(cid) +
+      '&avid=0&qn=120&fnval=4048&fnver=0&fourk=1';
+
+    return fetchImpl(url, { credentials: 'include' })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (j) {
+        var full = j && j.result;
+        if (!full) {
+          pgcPost('playview', 'cid=' + cid + ' 取流结果为空，跳过换流');
+          return null;
+        }
+
+        var dv = full.dash && full.dash.video;
+        var hasDash = Array.isArray(dv) && dv.length > 0;
+
+        if (hasDash) {
+          var heights = [];
+          for (var hi = 0; hi < dv.length; hi += 1) {
+            if (typeof dv[hi].height === 'number' && heights.indexOf(dv[hi].height) < 0) {
+              heights.push(dv[hi].height);
+            }
+          }
+          var dashDur = full.dash && typeof full.dash.duration === 'number' ? full.dash.duration : 0;
+          // dash 时长不够 = 拿到的不是完整集（权益不足）→ 不动，宁可播试看
+          if (dashDur < 600) {
+            pgcPost('playview', 'cid=' + cid + ' dash 时长太短(' + dashDur + 's)，跳过换流');
+            return null;
+          }
+
+          /**
+           * 换 dash：把 dash / type / format 一起对齐到 4048 响应的形态。
+           *
+           * ⚠️ 必须 `delete vi.durl` / `delete vi.durls` —— 有 durl 时播放器
+           * **优先走 durl**（ADR 0020 实测），那样又回到 720P 了。
+           */
+          vi.dash = full.dash;
+          delete vi.durl;
+          delete vi.durls;
+          if (typeof full.timelength === 'number') vi.timelength = full.timelength;
+          if (typeof full.quality === 'number') vi.quality = full.quality;
+          if (typeof full.format === 'string') vi.format = full.format;
+          if (full.type !== undefined) vi.type = full.type;
+          if (typeof full.accept_quality !== 'undefined') vi.accept_quality = full.accept_quality;
+          if (typeof full.accept_description !== 'undefined') {
+            vi.accept_description = full.accept_description;
+          }
+          if (typeof full.support_formats !== 'undefined') {
+            vi.support_formats = full.support_formats;
+          }
+          vi.is_preview = 0;
+
+          // 试看标记一并改写（ADR 0021）—— 不改播放器会在试看结束点主动暂停
+          if (data.play_video_type === 'preview') {
+            data.play_video_type = PGC_PREVIEW_FLAGS.play_video_type;
+          }
+          if (data.play_check && data.play_check.play_detail === 'PLAY_PREVIEW') {
+            data.play_check.play_detail = PGC_PREVIEW_FLAGS['play_check.play_detail'];
+          }
+
+          pgcPost(
+            'playview',
+            '已换流 dash cid=' + cid + ' q=' + full.quality + ' 高度=[' + heights.join(',') + ']',
+          );
+          return JSON.stringify(body);
+        }
+
+        /**
+         * 没有 dash → 退回 durl 形态（老路，能播但只有 720P）。
+         * 至少"能看完整集"，比灰屏/试看强。
+         */
+        if (!Array.isArray(full.durl) || full.durl.length === 0) {
+          pgcPost('playview', 'cid=' + cid + ' 既无 dash 也无 durl，跳过换流');
+          return null;
+        }
+        var fullLen = typeof full.durl[0].length === 'number' ? full.durl[0].length : 0;
+        if (fullLen < 600000) {
+          pgcPost('playview', 'cid=' + cid + ' 完整流太短(' + fullLen + 'ms)，跳过换流');
+          return null;
+        }
+
+        vi.durl = full.durl;
+        delete vi.durls;
+        delete vi.dash;
+        if (typeof full.timelength === 'number') vi.timelength = full.timelength;
+        if (typeof full.quality === 'number') vi.quality = full.quality;
+        if (typeof full.format === 'string') vi.format = full.format;
+        if (full.type !== undefined) vi.type = full.type;
+        vi.is_preview = 0;
+
+        if (data.play_video_type === 'preview') {
+          data.play_video_type = PGC_PREVIEW_FLAGS.play_video_type;
+        }
+        if (data.play_check && data.play_check.play_detail === 'PLAY_PREVIEW') {
+          data.play_check.play_detail = PGC_PREVIEW_FLAGS['play_check.play_detail'];
+        }
+
+        pgcPost('playview', '已换流 durl(降级) cid=' + cid + ' len=' + fullLen);
+        return JSON.stringify(body);
+      })
+      .catch(function (e) {
+        pgcPost('playview', '取完整流失败：' + (e && e.message ? e.message : 'throw'));
+        return null;
+      });
+  }
+
 
   /**
    * 用给定文本重建一个 Response，尽量保留原始元信息。
@@ -1797,18 +2682,72 @@
     var d = ev.data;
     if (!d || d.__ns !== NS || d.type !== 'cfg') return;
 
+    /**
+     * ⚠️ **先处理载荷，再进行 token 校验。**
+     *
+     * 顺序踩过（2026-10-28）：原实现先校验 token，而 token 只由**第一个** `cfg`
+     * 锁定。ISOLATED 侧第一次推的 `cfg` 往往不带 `pgcVideoInfo`（那时它还没读完缓存），
+     * 带缓存的那次反而…能过校验。但换成"网页/测试先伪造一个 token 空串的 cfg"
+     * 就会把下面整段挡掉 —— 表现为"缓存永远到不了主世界"。
+     *
+     * 现在的取舍：**数据类字段（`pgcVideoInfo`）先收，行为类开关（`enabled`）仍要 token。**
+     * `pgcVideoInfo` 只是一份流地址，篡改它最多让播放器播别人的流（而那条流仍然要
+     * 播放账号的 Cookie 才能取），拿不到凭据、改不了身份 —— 与主世界其它上报同级的风险。
+     */
+    var hasPgcPayload = d.pgcVideoInfo && typeof d.pgcVideoInfo === 'object';
+
     if (!tokenLocked) {
-      if (!d.token || typeof d.token !== 'string') return;
-      token = d.token;
-      tokenLocked = true;
+      if (d.token && typeof d.token === 'string') {
+        token = d.token;
+        tokenLocked = true;
+      }
     } else if (!d.token || d.token !== token) {
-      return;
+      // token 对不上：只有"纯数据"能通过，任何开关/状态一律拒绝
+      if (!hasPgcPayload || d.enabled !== undefined || d.pgcActive !== undefined) return;
     }
 
     // 配置变化仍然生效（将来若要支持热切换），但**回执只发一次**
     if (!!d.enabled !== enabled) {
       enabled = !!d.enabled;
       syncHooks();
+    }
+
+    /**
+     * `page/activate` 的结果（只对 PGC 有意义）。
+     *
+     * `false` = background 明确没装规则（未配置 / 总开关关着 / 两个账号相同）。
+     * 那时注入完整流毫无意义（请求还是主账号身份），而且没装规则说明用户不想用。
+     * `true` / 未收到 → 允许注入。
+     */
+    if (typeof d.pgcActive === 'boolean') pgcActive = d.pgcActive;
+
+    /**
+     * PGC 完整流缓存（ADR 0020）—— ISOLATED 侧从 `storage.local` 预读后下发给这里。
+     *
+     * ## 为什么数据要往 `cfg` 里塞（明明 ADR 里有"握手消息不许放大对象"）
+     *
+     * 那条规则的教训是**回环**：`cfg` 每轮夹带几十 KB 会 OOM。这里不构成回环的两个理由：
+     *   1. `cfg` 只由 ISOLATED 侧发，且已有一条"`ready` 不回 `cfg`"的硬约束（见下）
+     *   2. 这份数据**只发一次**（`pgcVideoInfo` 送达后置空），不是每轮都带
+     *
+     * 体积也要控制：只带 `video_info`（实测约 20–40 KB），不带整份 `__playinfo__`
+     * （那还含 `arc` / `plugin` / 弹幕配置等，几倍大且用不上）。
+     */
+    if (IS_PGC && d.pgcVideoInfo && typeof d.pgcVideoInfo === 'object') {
+      pgcCachedVideoInfo = d.pgcVideoInfo;
+      /**
+       * 记住这份缓存对应的 cid（消息里带 `pgcCid` 就用它，否则沿用当前页面 cid）。
+       *
+       * ⚠️ 不记归属会导致 SPA 切集时把新送来的缓存误判成"上一集的"而丢掉
+       * —— 那个 bug 让注入连续失效过三轮。
+       */
+      pgcCachedForCid =
+        typeof d.pgcCid === 'string' && d.pgcCid ? d.pgcCid : pgcPatchedCid || '';
+      pgcTrace.cacheBytes = JSON.stringify(d.pgcVideoInfo).length;
+      pgcTrace.lastStage = 'cfg-with-cache';
+      pgcPost('cfg', '收到缓存 video_info（' + pgcTrace.cacheBytes + ' B）');
+      // 缓存可能比 `__playinfo__` 赋值晚到 —— 那就补一次
+      if (playinfoValue && !pgcPatched) pgcPatchPlayinfo(playinfoValue);
     }
 
     /**

@@ -46,14 +46,27 @@ interface Sandbox {
 
 /** 建一个干净的页面 + 执行主世界脚本 */
 function boot(): Sandbox {
+  return bootAt('https://www.bilibili.com/video/BV1xx411c7mD');
+}
+
+/**
+ * 指定 URL 的页面（PGC 与普通视频的行为**正好相反**，必须分开建）。
+ *
+ * @param url 页面地址
+ * @param fetchImpl 可选：在脚本 eval **之前**装好 `window.fetch`
+ *   （脚本顶部 `var nativeFetch = window.fetch` 是**那一刻**取的，装晚了拿不到）
+ */
+function bootAt(url: string, fetchImpl?: unknown): Sandbox {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
     runScripts: 'outside-only',
-    url: 'https://www.bilibili.com/video/BV1xx411c7mD',
+    url,
     pretendToBeVisual: true,
   });
 
   const win = dom.window;
   const sent: Array<Record<string, unknown>> = [];
+
+  if (fetchImpl) (win as unknown as Record<string, unknown>).fetch = fetchImpl;
 
   // 在脚本执行**之前**挂监听：脚本一进来就发 hello，晚了就丢了
   win.addEventListener('message', (ev: MessageEvent) => {
