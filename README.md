@@ -68,6 +68,7 @@ popup 里应显示「已接管」——这是生效的标志。
 - ❌ 不能防：本机程序（能读本机文件的同时拿得到密文和密钥）
 
 `cookies` 权限只在扫码那一刻读一次，不读主账号（[ADR 0008](./docs/decisions/0008-cookies-permission-for-playback-credential.md)）。
+**会记住主账号昵称**（非视频页也要显示）：不含 mid 与凭据、不记录你看过什么，7 天过期，退出即清（[ADR 0025](./docs/decisions/0025-cache-primary-display-profile.md)）。
 
 ## 音质需要你的环境配合
 

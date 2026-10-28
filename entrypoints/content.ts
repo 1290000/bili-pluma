@@ -53,6 +53,7 @@ import {
 import { restoreResumeTime, saveResumeTime } from '@/src/content/isolated/pgc-resume';
 import { mergeVideoInfo } from '@core/playinfo/pgc-merge';
 import { writePgcCache } from '@platform/storage/pgc-cache-store';
+import { savePrimaryProfile } from '@platform/storage/primary-profile-store';
 import { BADGE_ENABLED_KEY, readBadgeEnabled } from '@platform/storage/ui-prefs-store';
 import {
   parsePlayPage,
@@ -335,6 +336,32 @@ function listenMainWorld(): void {
         data: d.data ?? null,
         user,
       });
+
+      /**
+       * ## 主账号显示档案的回写（ADR 0025）—— **全项目唯一写入点**
+       *
+       * 目的：非播放页（首页 / 空间 / 收藏夹）点开 popup 时也能看到主账号昵称。
+       * 那些页面没有 content script，昵称唯一的来源就是这份缓存。
+       *
+       * ## 为什么守卫放在 `savePrimaryProfile` 里而不是这里
+       *
+       * 这里能做的判断只有"`user` 非空"，而那条**不够**：
+       * `ssr-playinfo` 走的是跨 world 通道，本侧**不校验 token**（见本文件
+       * `listenMainWorld()` 的注释）—— 因为"主世界上报的内容只影响画质显示"。
+       * 一旦它被持久化成"用户的账号"，页面脚本伪造一条消息就能把假昵称写进存储。
+       *
+       * 所以真正的闸门是「**同时读到真实的 `DedeUserID`**」，而 `mid` 只有这里
+       * 能从 `document.cookie` 读到。`savePrimaryProfile()` 的签名**强制**调用方
+       * 传 `mid`，拿不到的调用点根本写不出这段代码。
+       *
+       * ## `void` + 不 await
+       *
+       * 写缓存与画质显示完全无关，不该让它挡住后面 PGC 编排的同步路径。
+       * 函数内部已经把所有异常吞掉了（返回 `false`），所以 `void` 是安全的。
+       */
+      if (user) {
+        void savePrimaryProfile(user, readPrimaryMidFromCookie(document.cookie));
+      }
 
       /**
        * PGC 的完整流编排（ADR 0020）—— **只做一次**。
