@@ -23,9 +23,15 @@ import { handleStatsRecent } from '@/src/background/handlers/stats.handler';
 import { reconcileTabRules, rebuildRulesIfEnabled } from '@/src/platform/http/dnr';
 import { recordStat } from '@/src/platform/storage/stats-store';
 
-/** 是否 B站视频详情页。用于判断标签页导航后该不该保留代理规则 */
+/**
+ * 是否是"需要保留标签页代理规则"的播放页。
+ *
+ * 两类：普通视频 `/video/*`、PGC `/bangumi/play/*`（ADR 0019）。
+ * 离开这两类页面就把规则撤掉 —— 不撤的话，之后这个标签页里任何
+ * 命中白名单的请求都会带播放账号的 Cookie 发出去。
+ */
 function isVideoPageUrl(url: string): boolean {
-  return /^https?:\/\/(www\.)?bilibili\.com\/video\//.test(url);
+  return /^https?:\/\/(www\.)?bilibili\.com\/(video|bangumi\/play)\//.test(url);
 }
 
 /**
@@ -170,8 +176,9 @@ export default defineBackground(() => {
     }
 
     if (type === 'page/activate') {
-      const { bvid, p, deviceCookies, primaryMid } = message as {
-        bvid: string;
+      const { kind, pageKey, p, deviceCookies, primaryMid } = message as {
+        kind: 'video' | 'pgc';
+        pageKey: string;
         p: number;
         deviceCookies: Record<string, string>;
         primaryMid: string | null;
@@ -182,7 +189,7 @@ export default defineBackground(() => {
         return false;
       }
 
-      handlePageActivate({ tabId, bvid, p, deviceCookies, primaryMid })
+      handlePageActivate({ tabId, kind, pageKey, p, deviceCookies, primaryMid })
         .then((r) => {
           // 记一次取流结果 —— 这是**唯一**已知的真实成败信号，
           // 比 background 另发一个探测请求更贴近用户体感。

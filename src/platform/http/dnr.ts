@@ -280,19 +280,27 @@ async function removeStaleTabRules(): Promise<number> {
 // ── 页面代理：标签页限定规则（ADR 0010） ──
 
 /**
- * 普通视频页的取流路径。
+ * 标签页规则要代理的取流路径 —— 按页面类型分。
  *
- * 单独取出来是因为 `installTabRule` 只针对这一个接口 ——
- * 页面自己拼 URL（含实时 `w_rid`），我们预测不到完整地址，
- * 只能按路径前缀 + tabIds 限定。
+ * 两类页面取流接口不同：
+ *   - 普通视频：页面自己发 `/x/player/wbi/playurl`
+ *   - PGC（番剧/国创/电影）：页面**不发**，由主世界主动调 `/pgc/player/web/playurl`（ADR 0019）
+ *
+ * 一个标签页只会是其中一种，所以两者共用一个规则 ID 段、按 `kind` 选 `urlFilter` 即可。
  */
-const PLAYURL_PATH = '/x/player/wbi/playurl';
+const PLAYURL_PATH_BY_KIND = {
+  video: '/x/player/wbi/playurl',
+  pgc: '/pgc/player/web/playurl',
+} as const;
+
+/** 页面类型。与 `page/activate` 载荷的 `kind` 同源 */
+export type PageKind = keyof typeof PLAYURL_PATH_BY_KIND;
 
 /**
- * 给某个标签页装一条规则，把它的 playurl 请求 Cookie 换成播放账号的。
+ * 给某个标签页装一条规则，把它的取流请求 Cookie 换成播放账号的。
  *
  * 与全局路径规则的区别：多了 `tabIds` 限定，只对这一个标签页生效。
- * 用于普通视频页 —— 页面自己发请求，我们预测不到完整 URL（含实时 `w_rid`）。
+ * 用于普通视频页 / PGC 页 —— 页面自己发请求，我们预测不到完整 URL（含实时 `w_rid`）。
  *
  * ## 幂等性（重要）
  *
@@ -300,17 +308,23 @@ const PLAYURL_PATH = '/x/player/wbi/playurl';
  * 标签页从后台恢复时再一次。每次 `updateSessionRules` 都会让浏览器的规则表重算，
  * 同时触发所有已打开 B站标签页的 content script 重评估。
  *
- * 所以这里先比对现有规则：**Cookie 值一样就什么都不做**。
+ * 所以这里先比对现有规则：**Cookie 值与 urlFilter 都一样就什么都不做**。
  * 这不是微优化——反复重建规则是"恢复标签页时卡一下"的直接来源之一。
  */
-export async function installTabRule(tabId: number, cookie: string): Promise<void> {
+export async function installTabRule(
+  tabId: number,
+  cookie: string,
+  kind: PageKind = 'video',
+): Promise<void> {
   const id = TAB_RULE_BASE + (tabId % TAB_RULE_SPAN);
+  const urlFilter = PLAYURL_PATH_BY_KIND[kind];
 
   const existing = await chrome.declarativeNetRequest.getSessionRules().catch(() => []);
   const current = existing.find((r) => r.id === id);
   if (current) {
     const currentValue = current.action?.requestHeaders?.[0]?.value;
-    if (currentValue === cookie) return; // 完全一致，跳过重建
+    const currentFilter = current.condition?.urlFilter;
+    if (currentValue === cookie && currentFilter === urlFilter) return; // 完全一致，跳过重建
   }
 
   await chrome.declarativeNetRequest.updateSessionRules({
@@ -324,7 +338,7 @@ export async function installTabRule(tabId: number, cookie: string): Promise<voi
           requestHeaders: [{ header: 'cookie', operation: 'set', value: cookie }],
         },
         condition: {
-          urlFilter: PLAYURL_PATH,
+          urlFilter,
           requestDomains: [BILI_API_HOST],
           resourceTypes: ['xmlhttprequest'],
           requestMethods: ['get'],

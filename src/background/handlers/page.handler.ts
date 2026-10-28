@@ -12,14 +12,17 @@
 
 import { diag } from '@platform/storage/diag-store';
 import { buildCookieHeader } from '@platform/http/playurl';
-import { installTabRule, isProxyEnabled, removeTabRule } from '@platform/http/dnr';
+import { installTabRule, isProxyEnabled, removeTabRule, type PageKind } from '@platform/http/dnr';
 import { readPersistedCredential } from '@platform/storage/credential-store';
 import { readDeviceCookies, writeDeviceCookies } from '@platform/storage/device-cookies-store';
 import type { ResponseMsg } from '@shared/types/messages';
 
 export interface ActivatePayload {
   tabId: number;
-  bvid: string;
+  /** `video` = 普通视频；`pgc` = 番剧 / 国创 / 电影（ADR 0019） */
+  kind: PageKind;
+  /** 视频页 = bvid；PGC 页 = `ep:…` / `ss:…`。只进日志 */
+  pageKey: string;
   p: number;
   deviceCookies: Record<string, string>;
   /** 主账号 mid，由 content script 从页面 cookie 读取（普通分区） */
@@ -53,7 +56,10 @@ export interface ActivateResult {
  */
 export async function handlePageActivate(payload: ActivatePayload): Promise<ActivateResult> {
   try {
-    await diag('page/activate 收到', `tab=${payload.tabId} bvid=${payload.bvid} p=${payload.p}`);
+    await diag(
+      'page/activate 收到',
+      `tab=${payload.tabId} kind=${payload.kind} page=${payload.pageKey} p=${payload.p}`,
+    );
 
     const credential = await readPersistedCredential();
     if (!credential) {
@@ -144,8 +150,8 @@ export async function handlePageActivate(payload: ActivatePayload): Promise<Acti
         .join(',')}`,
     );
 
-    await installTabRule(payload.tabId, cookie);
-    await diag('page/activate', '已装 DNR 规则');
+    await installTabRule(payload.tabId, cookie, payload.kind);
+    await diag('page/activate', `已装 DNR 规则（${payload.kind}）`);
 
     return { activated: true, reason: 'ok' };
   } catch (e) {

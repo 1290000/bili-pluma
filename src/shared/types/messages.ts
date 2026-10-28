@@ -61,7 +61,15 @@ export type RequestMsg =
   /** content script 报到：这个标签页要代理 playurl */
   | {
       type: 'page/activate';
-      bvid: string;
+      /**
+       * 页面类型。`pgc` = 番剧 / 国创 / 电影（ADR 0019）。
+       *
+       * 两类页面取流的接口不同（`/x/player/wbi/playurl` vs `/pgc/player/web/playurl`），
+       * background 靠这个字段决定给标签页装哪条规则。
+       */
+      kind: 'video' | 'pgc';
+      /** 视频页 = bvid；PGC 页 = `ep:3854821` / `ss:28747`。只用于日志与状态键 */
+      pageKey: string;
       p: number;
       deviceCookies: Record<string, string>;
       /** 主账号 mid（从页面 cookie 读，普通分区）。null 表示未登录 */

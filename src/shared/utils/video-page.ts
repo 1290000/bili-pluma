@@ -25,10 +25,27 @@ export interface VideoPageInfo {
 }
 
 /**
+ * PGC 播放页信息（番剧 / 国创 / 电影 / 影视）。
+ *
+ * ⚠️ 这里**只做识别**，不判断"能不能播"。能不能播由页面 SSR 的
+ * `play_video_type` / `is_preview` 决定，主世界拿到 `createPlayer` 时才判（ADR 0019）。
+ */
+export interface PgcPageInfo {
+  kind: 'pgc';
+  /** `/bangumi/play/ep3854821` → `'3854821'` */
+  epId: string | null;
+  /** `/bangumi/play/ss28747` → `'28747'` */
+  seasonId: string | null;
+}
+
+/** 播放页的两种形态。`parsePlayPage` 的返回值 */
+export type PlayPageInfo = (VideoPageInfo & { kind: 'video' }) | PgcPageInfo;
+
+/**
  * 从 URL 解析视频页信息。非视频页返回 null。
  *
  * 只认 `/video/BVxxx`：
- *   - 番剧 `/bangumi/play/*` 不支持（ADR 0007）
+ *   - PGC（番剧/国创/电影）走 `parsePgcPage`（ADR 0019）
  *   - 直播 `/live/*` 不支持
  *   - legacy `/s/video/*` 不支持（B站已基本不用，且路径不同）
  */
@@ -50,6 +67,45 @@ export function parseVideoPage(url: string): VideoPageInfo | null {
   const p = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1;
 
   return { bvid, p };
+}
+
+/**
+ * 从 URL 解析 PGC 播放页。非 PGC 播放页返回 null。
+ *
+ * 只认 `/bangumi/play/ep…` 与 `/bangumi/play/ss…`：
+ *   - `/bangumi/media/md…` 是**详情页不是播放页**，返回 null
+ *   - `/guochuang/…`、`/cinema/…` 是索引页，不解析
+ *
+ * ⚠️ **不解析 cid**：cid 在页面 SSR 数据里（`result.arc.cid`），
+ * URL 里没有。主世界构造取流请求时从 `__playinfo__` 读。
+ */
+export function parsePgcPage(url: string): PgcPageInfo | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+
+  if (u.hostname !== 'www.bilibili.com' && u.hostname !== 'bilibili.com') return null;
+
+  const m = u.pathname.match(/^\/bangumi\/play\/(ep|ss)(\d+)/);
+  if (!m) return null;
+
+  return m[1] === 'ep'
+    ? { kind: 'pgc', epId: m[2] ?? null, seasonId: null }
+    : { kind: 'pgc', epId: null, seasonId: m[2] ?? null };
+}
+
+/**
+ * 解析任意播放页。视频页与 PGC 页的统一入口。
+ *
+ * @returns `null` 表示这不是一个受支持的播放页
+ */
+export function parsePlayPage(url: string): PlayPageInfo | null {
+  const v = parseVideoPage(url);
+  if (v) return { kind: 'video', ...v };
+  return parsePgcPage(url);
 }
 
 /**

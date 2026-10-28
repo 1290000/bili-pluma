@@ -66,17 +66,38 @@ describe('走主账号的路径（不代理）', () => {
   });
 });
 
-describe('番剧路径（实测无效，不该代理）', () => {
-  it('/pgc/player/web/v2/playurl 不代理（零请求，走 SSR）', () => {
+describe('PGC 路径（2026-10-27 实测后改为代理，ADR 0019）', () => {
+  it('/pgc/player/web/playurl 代理 —— 接口本身有效，只要 cid 就能调通', () => {
+    expect(routeFor(`${API}/pgc/player/web/playurl?cid=1`)).toBe('playback');
+  });
+
+  it('/pgc/player/web/v2/playurl 仍不代理 —— 实测是空壳（无 dash 无 durl）', () => {
     expect(routeFor(`${API}/pgc/player/web/v2/playurl?ep_id=1`)).toBe('primary');
   });
 
-  it('/pgc/player/web/playurl 不代理', () => {
-    expect(routeFor(`${API}/pgc/player/web/playurl?ep_id=1`)).toBe('primary');
-  });
-
-  it('/ogv/player/playview 不代理', () => {
-    expect(routeFor(`${API}/ogv/player/playview`)).toBe('primary');
+  it('/ogv/player/playview 代理 —— SPA 切集时页面会 GET 它（2026-10-28 实测）', () => {
+    /**
+     * ADR 0007 当时说这个接口是 POST + csrf 在 body 里、DNR 改不了。
+     *
+     * **2026-10-28 探针实测推翻了这个结论**：在播放器里点选集（SPA 内跳）时，
+     * 页面发 `GET /ogv/player/playview?ep_id=…&qn=80&fnval=4048`，返回 200，
+     * 响应里是 `{code, data:{video_info:{durls:[4 组 × 6 分钟]}}}`。
+     *
+     * ADR 0007 观察到的"无请求"是**页面初次加载**的场景（那时走 SSR 注入）。
+     * 两种场景都存在，所以这个路径必须代理。
+     */
+    /**
+     * 2026-10-28 在**用户真实标签页**实测确认：
+     *   - 它是 GET，带 WBI 签名（`w_rid`/`wts`）+ 设备指纹，返回 24 KB 正常数据
+     *   - **只换 Cookie、不动签名**，服务端就按播放账号权益给完整流
+     *   - 不需要拦响应、不需要换流（那套会导致灰屏，已废弃）
+     *
+     * ⚠️ 在 Agent Window 里同一接口返回 `{"code":-400}` —— 环境差异，不可用那个结论。
+     */
+    // ⚠️ **禁止开启**：开出这条会让播放器灰屏（2026-10-28 两次实测）。
+    // 服务端返回的流形态会从「4 组 × 6 分钟 durl」变成「完整集 dash」，
+    // 而播放器已按 preview 分支准备好 SourceBuffer，装不进去 → duration:0 / readyState:0。
+    expect(routeFor(`${API}/ogv/player/playview?ep_id=1`)).toBe('primary');
   });
 });
 

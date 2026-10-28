@@ -41,8 +41,13 @@ export interface ProxyRoute {
  * 两者不同步变化 —— 改 UI 会升发布版本但白名单没变；补一条路径会升修订号但可以不发版。
  *
  * 用途只有一个：**用户报 bug 时能说清"我这份清单是哪一版"**。
+ *
+ * 修订记录：
+ *   1 → 2026-10-26 普通视频两条
+ *   2 → 2026-10-27 打开 `/pgc/player/web/playurl`（ADR 0019，实测接口有效）
+ *   3 → 2026-10-28 打开 `/ogv/player/playview`（实测是 GET，SPA 切集时页面会调用）
  */
-export const ROUTES_REVISION = 1;
+export const ROUTES_REVISION = 3;
 
 /**
  * 白名单最后一次**人工核对 B站 前端**的日期。
@@ -56,7 +61,7 @@ export const ROUTES_REVISION = 1;
  * 正确的做法是**按证据报警**：只有真的出现取流失败时，才在诊断页提示"可能是接口变了"。
  * 日期本身回答的是"这份清单是哪天的"，不是"它过期了" —— 让人自己判断。
  */
-export const ROUTES_CHECKED_AT = '2026-10-26';
+export const ROUTES_CHECKED_AT = '2026-10-27';
 
 export const PROXY_ROUTES = [
   {
@@ -74,25 +79,25 @@ export const PROXY_ROUTES = [
     note: '本次未观测到，保留兜底。启用前需重新确认仍可用',
   },
   {
-    path: '/pgc/player/web/v2/playurl',
-    method: 'GET',
-    label: '番剧取流（当前）',
-    enabled: false,
-    note: '实测：番剧页零请求、走 SSR 注入，此路径无效（ADR 0007）',
-  },
-  {
     path: '/pgc/player/web/playurl',
     method: 'GET',
-    label: '番剧取流（旧版）',
+    label: '番剧 / 国创 / 电影取流（当前）',
+    enabled: true,
+    note: '2026-10-27 实测：**页面不调用它**（取流由 SSR 写进 HTML），但**接口本身有效** —— 只要 cid 就能调通，番剧返 dash、电影返 durl。由主世界主动调用（ADR 0019）',
+  },
+  {
+    path: '/pgc/player/web/v2/playurl',
+    method: 'GET',
+    label: '番剧取流（v2）',
     enabled: false,
-    note: '同上，未观测到（ADR 0007）',
+    note: '2026-10-27 实测：HTTP 200 + code 0 但 result 里既无 dash 也无 durl（空壳）。别顺手改 true',
   },
   {
     path: '/ogv/player/playview',
-    method: 'POST',
-    label: '番剧 OGV 播放器',
+    method: 'GET',
+    label: '番剧 OGV 播放器（SPA 切集时页面调用）',
     enabled: false,
-    note: '同上，未观测到。原以为需要 csrf + WBI 重签，实际不存在该请求（ADR 0007）',
+    note: '**保持 false，但理由已更正**（2026-10-28 真机重测）。它是 GET，SPA 切集时页面必经此路取流。⚠️ **不能给它开 DNR**：一开 Cookie 就换成播放账号，服务端返回的流形态从「durl 4 组 × 6 分钟」变成「完整集 dash」，而播放器已按 durl 分支准备好 → 灰屏（两次实测）。**正确做法是在页面侧拦它的响应、把 durl 换成完整集 durl**（形态一致，ADR 0023）—— 那条路不需要它进白名单，因为换流由主世界做，取完整流走的是已在白名单里的 `/pgc/player/web/playurl`',
   },
   {
     path: '/xlive/web-room/v2/index/getRoomPlayInfo',

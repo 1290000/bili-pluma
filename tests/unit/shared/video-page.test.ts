@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parsePgcPage,
+  parsePlayPage,
   parseVideoPage,
   readDeviceCookies,
   readPrimaryMidFromCookie,
@@ -35,7 +37,7 @@ describe('parseVideoPage', () => {
     expect(parseVideoPage('https://www.bilibili.com/s/video/BV1x')).toBeNull();
   });
 
-  it('番剧页不解析（v1 不支持，ADR 0006）', () => {
+  it('番剧页不由 parseVideoPage 解析（走 parsePgcPage）', () => {
     expect(parseVideoPage('https://www.bilibili.com/bangumi/play/ep3854821')).toBeNull();
   });
 
@@ -78,6 +80,68 @@ describe('parseVideoPage', () => {
   it('非法 URL 返回 null', () => {
     expect(parseVideoPage('not a url')).toBeNull();
     expect(parseVideoPage('')).toBeNull();
+  });
+});
+
+describe('parsePgcPage（番剧 / 国创 / 电影，ADR 0019）', () => {
+  it('ep 形式（单集）', () => {
+    expect(parsePgcPage('https://www.bilibili.com/bangumi/play/ep3854821')).toEqual({
+      kind: 'pgc',
+      epId: '3854821',
+      seasonId: null,
+    });
+  });
+
+  it('ss 形式（整季）', () => {
+    expect(parsePgcPage('https://www.bilibili.com/bangumi/play/ss28747')).toEqual({
+      kind: 'pgc',
+      epId: null,
+      seasonId: '28747',
+    });
+  });
+
+  it('带追踪参数也能解析（真实分享链接）', () => {
+    expect(
+      parsePgcPage('https://www.bilibili.com/bangumi/play/ss34412?from_spmid=666.4.0.1'),
+    ).toEqual({ kind: 'pgc', epId: null, seasonId: '34412' });
+  });
+
+  it('详情页 /bangumi/media/md… 不是播放页，返回 null', () => {
+    expect(parsePgcPage('https://www.bilibili.com/bangumi/media/md28223043')).toBeNull();
+  });
+
+  it('普通视频页不由 parsePgcPage 解析', () => {
+    expect(parsePgcPage('https://www.bilibili.com/video/BV1x')).toBeNull();
+  });
+
+  it('仿冒域名不解析', () => {
+    expect(parsePgcPage('https://www.bilibili.com.evil.com/bangumi/play/ss1')).toBeNull();
+  });
+
+  it('非法 URL 返回 null', () => {
+    expect(parsePgcPage('not a url')).toBeNull();
+  });
+});
+
+describe('parsePlayPage（统一入口）', () => {
+  it('视频页带 kind', () => {
+    expect(parsePlayPage('https://www.bilibili.com/video/BV1x?p=3')).toEqual({
+      kind: 'video',
+      bvid: 'BV1x',
+      p: 3,
+    });
+  });
+
+  it('PGC 页带 kind', () => {
+    expect(parsePlayPage('https://www.bilibili.com/bangumi/play/ep1')).toEqual({
+      kind: 'pgc',
+      epId: '1',
+      seasonId: null,
+    });
+  });
+
+  it('都不是则 null', () => {
+    expect(parsePlayPage('https://www.bilibili.com/')).toBeNull();
   });
 });
 
