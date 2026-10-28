@@ -588,3 +588,190 @@ describe('SPA 切集：cid 变了要重新注入（2026-10-28 真机踩到）', 
     expect(vi(sb).quality).toBe(80);
   });
 });
+
+/**
+ * SPA 切集 + 限免集：**画质升级也必须换流**（2026-10-29 真机）。
+ *
+ * ## 用户报的现象
+ *
+ * > 「先进入一个番剧或者国创的播放界面，再通过右侧跳转到其他集数，
+ * >  这时候再切换画质就会失败」
+ *
+ * 现场：切集后画面 1080P，点 4K 弹「切换失败」，菜单停在「1080P 高清」。
+ *
+ * ## 根因
+ *
+ * `pgcSwapPlayviewBody()` 的第一道闸是：
+ * ```js
+ * if (!pgcPlayviewIsTruncated(vi)) return null;   // 流够长 → 不换
+ * ```
+ * 限免集本来就是完整流 → 判"不截断" → **直接 return，4K 永远拿不到**。
+ * 而它手里的 `playview` 原始 dash 只有 `80@1080 64@720 32@480 16@360`。
+ *
+ * ## 修法
+ *
+ * 「需要换」= **流被截断 或 画质还能提升**。两条独立判据：
+ * - 只看画质 → 会员老番（720P、给 361 秒）会掉回试看
+ * - 只看时长 → 限免集拿不到 4K（就是这个 bug）
+ */
+/**
+ * jsdom 没有全局 `Response`，而主世界换完流要用 `new Response(...)` 重建响应。
+ * 补一个最小实现（够主世界用：`status` / `statusText` / `text()` / `json()`）。
+ */
+function installResponse(win: JSDOM['window']): void {
+  if (typeof (win as unknown as Record<string, unknown>).Response === 'function') return;
+  class MiniResponse {
+    status: number;
+    statusText: string;
+    private _body: string;
+    constructor(body: string, init?: { status?: number; statusText?: string }) {
+      this._body = body;
+      this.status = init?.status ?? 200;
+      this.statusText = init?.statusText ?? 'OK';
+    }
+    text(): Promise<string> {
+      return Promise.resolve(this._body);
+    }
+    json(): Promise<unknown> {
+      return Promise.resolve(JSON.parse(this._body));
+    }
+  }
+  (win as unknown as Record<string, unknown>).Response = MiniResponse;
+}
+
+/**
+ * SPA 切集 + 限免集：**流完整但画质不够时也要换**（2026-10-29 真机）。
+ *
+ * 用户报：「先进入一个番剧或国创的播放界面，再通过右侧跳转到其他集数，
+ * 这时候再切换画质就会失败」。现场：画面 1080P、弹切换失败、菜单停在 1080P 高清。
+ *
+ * 根因在 `pgcSwapPlayviewBody()` 的第一道闸：
+ * ```js
+ * if (!pgcPlayviewIsTruncated(vi)) return null;   // 流够长 → 不换
+ * ```
+ * 限免集本来就是完整流 → 判「不截断」→ **直接 return，4K 永远拿不到**。
+ *
+ * 修法：「需要换」= **流被截断 或 画质还能提升**。两条独立判据：
+ * 只看画质会让会员老番掉回试看；只看时长就是现在这个 bug。
+ */
+describe('SPA 切集：流完整但画质不够时也要换（2026-10-29）', () => {
+  /** playview 的原始响应：完整流，但 dash 只有 1080 */
+  function playviewBody(cid: number) {
+    return {
+      code: 0,
+      data: {
+        arc: { cid },
+        video_info: {
+          quality: 80,
+          timelength: 1_000_000,
+          accept_quality: [125, 120, 112, 80, 64, 32, 16],
+          dash: {
+            duration: 1000,
+            video: [
+              { id: 80, height: 1080, base_url: 'a', backup_url: [], bandwidth: 1 },
+              { id: 64, height: 720, base_url: 'b', backup_url: [], bandwidth: 1 },
+            ],
+            audio: [],
+          },
+        },
+      },
+    };
+  }
+
+  /** 取流接口的响应：完整流 + 4K */
+  function fullResult() {
+    return {
+      quality: 120,
+      timelength: 1_000_000,
+      format: 'hdflv2',
+      type: 'DASH',
+      accept_quality: [125, 120, 112, 80, 64, 32, 16],
+      dash: {
+        duration: 1000,
+        video: [
+          { id: 125, height: 2160, base_url: 'x', backup_url: [], bandwidth: 1 },
+          { id: 120, height: 2160, base_url: 'y', backup_url: [], bandwidth: 1 },
+          { id: 80, height: 1080, base_url: 'a', backup_url: [], bandwidth: 1 },
+        ],
+        audio: [],
+      },
+    };
+  }
+
+  /** 只给 1080，与 playview 原样一样 */
+  function sameResult() {
+    return {
+      ...fullResult(),
+      quality: 80,
+      dash: {
+        duration: 1000,
+        video: [{ id: 80, height: 1080, base_url: 'a', backup_url: [], bandwidth: 1 }],
+        audio: [],
+      },
+    };
+  }
+
+  /** 建页面并装好按 URL 分流的 fetch（必须在 eval 之前） */
+  function boot(playurlResult: () => unknown) {
+    const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
+      runScripts: 'outside-only',
+      url: PGC_URL,
+      pretendToBeVisual: true,
+    });
+    const win = dom.window;
+    installResponse(win);
+
+    const hits: string[] = [];
+    (win as unknown as Record<string, unknown>).fetch = (url: string) => {
+      hits.push(url);
+      const payload = url.includes('/ogv/player/playview')
+        ? playviewBody(733318)
+        : { code: 0, result: playurlResult() };
+      const text = JSON.stringify(payload);
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(text),
+        json: () => Promise.resolve(JSON.parse(text) as unknown),
+      });
+    };
+
+    win.eval(SOURCE);
+    win.postMessage({ __ns: '__PLUMA__', type: 'cfg', token: 'tok', enabled: true }, '*');
+    return { win, hits };
+  }
+
+  async function callPlayview(win: JSDOM['window']) {
+    const impl = (win as unknown as Record<string, unknown>).fetch as (
+      u: string,
+      i?: unknown,
+    ) => Promise<{ json: () => Promise<unknown> }>;
+    const resp = await impl('https://api.bilibili.com/ogv/player/playview?ep_id=733318', {
+      credentials: 'include',
+    });
+    return (await resp.json()) as {
+      data?: { video_info?: { dash?: { video?: Array<{ height?: number }> } } };
+    };
+  }
+
+  it('不截断但能取到更高画质 → dash 被换成 4K（限免集的真实场景）', async () => {
+    const { win, hits } = boot(fullResult);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const body = await callPlayview(win);
+    const maxH = Math.max(...(body.data?.video_info?.dash?.video ?? []).map((v) => v.height ?? 0));
+
+    expect(maxH).toBe(2160);
+    expect(hits.some((u) => u.includes('/pgc/player/web/playurl'))).toBe(true);
+  });
+
+  it('取回来画质不更高 → 不动（避免无意义的响应改写 + 播放器重建）', async () => {
+    const { win } = boot(sameResult);
+    await new Promise((r) => setTimeout(r, 20));
+
+    const body = await callPlayview(win);
+    const maxH = Math.max(...(body.data?.video_info?.dash?.video ?? []).map((v) => v.height ?? 0));
+
+    expect(maxH).toBe(1080);
+  });
+});

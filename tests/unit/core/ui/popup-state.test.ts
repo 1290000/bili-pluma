@@ -142,10 +142,26 @@ describe('describePopup —— 判定顺序', () => {
     expect(v.state).toBe('stopped');
   });
 
-  it('开关开着但 0 条规则 → 异常（不一致）', () => {
+  /**
+   * ⚠️ **这条在 2026-10-29 被用户否决，语义反转了。**
+   *
+   * 原断言：`ruleCount: 0` → `inconsistent`（异常，bad 色）。
+   *
+   * 用户真机反馈：
+   * > 「番剧页从别的页面切回来 popup 里面就会显示开关开着但规则没装上，
+   * > 请关闭再开启一次，可问题是播放已经成功的被接管了，不用再重新开关一次」
+   *
+   * 现在 `ruleCount: 0` **不报警**，落到「已接管」。理由见 `popup-state.ts`
+   * 那段长注释：切回标签页瞬间规则异步重建、以及 `countPathRules()`
+   * 只数全局规则而番剧页生效的是标签页规则，两种情况下 0 都不代表故障。
+   */
+  it('开关开着但 0 条规则 → 不报警，仍是「已接管」（2026-10-29 用户否决了旧行为）', () => {
     const v = describePopup(snap({ proxy: { enabled: true, hasCredential: true, ruleCount: 0 } }));
-    expect(v.state).toBe('inconsistent');
-    expect(v.tone).toBe('bad');
+    expect(v.state).not.toBe('inconsistent');
+    expect(v.state).toBe('active');
+    expect(v.tone).toBe('good');
+    // 并且不该有任何解释文字
+    expect(v.line).toBeUndefined();
   });
 
   it('成功率低于阈值 → 已降级，用 warn 色', () => {
@@ -353,9 +369,9 @@ describe('ruleCount = -1 表示"读不到"而不是"没有规则"', () => {
     expect(v.tone).not.toBe('bad');
   });
 
-  it('ruleCount=0 + 开关开 → 才是真的不一致', () => {
+  it('ruleCount=0 + 开关开 → 也不报不一致（2026-10-29 改：见上方同义用例）', () => {
     const v = describePopup(snap({ proxy: { enabled: true, hasCredential: true, ruleCount: 0 } }));
-    expect(v.state).toBe('inconsistent');
+    expect(v.state).toBe('active');
   });
 });
 
@@ -406,5 +422,68 @@ describe('describeExpiry：超过一年要说"年"', () => {
 
   it('365 天以内仍是"个月"（不越过 1 年就别说年）', () => {
     expect(describeExpiry(NOW + 200 * 86_400_000, NOW)).toBe('6 个月后到期');
+  });
+});
+
+/**
+ * 「被要求删掉的文案」守卫 —— 2026-10-29 用户逐条点名。
+ *
+ * ## 为什么要专门写这种"不存在"的测试
+ *
+ * 这几句都是一句 `line` 字符串，删掉之后**没有任何编译错误、也没有别的测试会发现**。
+ * 下一个人只要觉得"popup 太空了"就会顺手加回去 —— 而用户已经明确说过三次不要。
+ *
+ * 用断言把它们钉住，比在任何文档里写"不要加"都可靠。
+ *
+ * 用户原话（2026-10-29）：
+ * > 「番剧页的取流已由播放账号接管、当前使用主账号画质、
+ * >  开关开着但规则没装上，请关闭再开启一次，这些文字都可以删掉。
+ * >  非视频页的当前页不是播放页、打开视频或番剧后这里会显示该页已解锁的画质，
+ * >  这些文字也都可以删掉。」
+ */
+describe('被删掉的文案不许加回来', () => {
+  const forbidden = [
+    '取流已由播放账号接管',
+    '当前使用主账号画质',
+    '规则没装上',
+    '当前页不是播放页',
+    '打开任意视频页',
+    '打开视频或番剧后',
+  ];
+
+  it('已接管状态没有解释文字', () => {
+    const v = describePopup(snap());
+    expect(v.state).toBe('active');
+    expect(v.line).toBeUndefined();
+  });
+
+  it('已停用状态没有解释文字', () => {
+    const v = describePopup(snap({ proxy: { enabled: false, hasCredential: true, ruleCount: 2 } }));
+    expect(v.state).toBe('stopped');
+    expect(v.line).toBeUndefined();
+  });
+
+  it('非视频页没有解释文字', () => {
+    const v = describePopup(snap({ page: { kind: 'other' } }));
+    expect(v.state).toBe('not-video');
+    expect(v.line).toBeUndefined();
+  });
+
+  it('任何状态下都不会出现这些句子', () => {
+    const cases = [
+      snap(),
+      snap({ page: { kind: 'other' } }),
+      snap({ proxy: { enabled: false, hasCredential: true, ruleCount: 2 } }),
+      snap({ proxy: { enabled: true, hasCredential: true, ruleCount: 0 } }),
+      snap({ buckets: buckets(1, 10) }),
+      snap({ account: null }),
+      snap({ configured: false }),
+    ];
+    for (const s of cases) {
+      const v = describePopup(s);
+      for (const bad of forbidden) {
+        expect(v.line ?? '').not.toContain(bad);
+      }
+    }
   });
 });

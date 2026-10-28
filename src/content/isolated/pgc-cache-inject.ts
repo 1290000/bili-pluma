@@ -275,3 +275,67 @@ export function writePgcSessionCache(
     /* 配额满 / 隐私模式：写不进去就算了，注入会退化成"没有缓存" */
   }
 }
+
+/**
+ * 从 `video_info` 里取"实际下发的最高视频高度"。
+ *
+ * 与 `isStreamTruncated` 是**两个不同的问题**：
+ *
+ * | 函数 | 回答 |
+ * | --- | --- |
+ * | `isStreamTruncated` | 这条流**够不够长**（能不能看完整集） |
+ * | `maxVideoHeight` | 这条流**画质到没到顶**（4K/HDR 拿到了没） |
+ *
+ * ⚠️ **两者不能互相替代。** 真机实测（2026-10-29）：
+ *
+ * ```
+ * ep733317（限免集）
+ *   dash: 80@1080 64@720 32@480 16@360        ← 只给 1080
+ *   timelength 1075582 vs dash.duration 1076s  ← 时长相符，不算截断
+ *   但 accept_quality: [125,122,120,112,80,...] ← 内容有 4K/HDR/1080P+
+ *   播放账号走 DNR 取流: 最高 2160，含 125/120/112  ← 本来能拿到
+ * ```
+ *
+ * 旧逻辑只看 `isStreamTruncated` → 判"无需注入" → **播放账号根本没去取 4K**。
+ *
+ * @returns 最高高度；没有可用的视频轨时返回 `0`
+ */
+export function maxVideoHeight(videoInfo: unknown): number {
+  if (!videoInfo || typeof videoInfo !== 'object') return 0;
+  const vi = videoInfo as Record<string, unknown>;
+  const dash = vi.dash as Record<string, unknown> | undefined;
+  if (!dash) return 0;
+  const tracks = dash.video;
+  if (!Array.isArray(tracks)) return 0;
+
+  let max = 0;
+  for (const t of tracks) {
+    if (!t || typeof t !== 'object') continue;
+    const h = (t as Record<string, unknown>).height;
+    if (typeof h === 'number' && h > max) max = h;
+  }
+  return max;
+}
+
+/**
+ * 取到的流**画质是否严格高于**页面上现有那条。
+ *
+ * ## 为什么必须"严格高于"而不是"不低于"
+ *
+ * 相等时替换没有任何收益，却要付一次 `reload()` —— 用户会看到页面闪一下。
+ * 宁可不动。
+ *
+ * ## 为什么这里不参考 `accept_quality`
+ *
+ * `accept_quality` 只表达"内容提供哪些档"，不表达"这个身份实际拿到了哪些轨"
+ * （未登录时它连 8K 都会列出来）。用它预判会引入"漏取"的风险 ——
+ * 而漏取正是当前这个 bug 的形态。**取一次、比结果，事实说话。**
+ *
+ * @param currentH 页面上现有的最高高度
+ * @param fetched  播放账号取回来的 `video_info`
+ * @returns `true` 表示"该用取回来的这份替换"
+ */
+export function isBetterStream(currentH: number, fetched: unknown): boolean {
+  const fetchedH = maxVideoHeight(fetched);
+  return fetchedH > currentH && fetchedH > 0;
+}

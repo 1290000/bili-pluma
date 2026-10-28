@@ -19,13 +19,14 @@
  */
 
 import { barStates, summarize } from '@core/playinfo/stats';
-import { describeUnlock } from '@core/playinfo/summary-view';
+import { describeUnlock, isVideoPage } from '@core/playinfo/summary-view';
 import {
   describePopup,
   describeExpiry,
   type PopupAccount,
   type PopupSnapshot,
 } from '@core/ui/popup-state';
+import { readPrimaryProfile } from '@platform/storage/primary-profile-store';
 import type { PageTracksView } from '@shared/types/playinfo';
 import { parsePlayPage } from '@shared/utils/video-page';
 import { render } from 'preact';
@@ -60,6 +61,26 @@ const VIP_TAG: Record<'none' | 'monthly' | 'annual', string> = {
   annual: '年度大会员',
 };
 
+/**
+ * 主账号卡片的原料。
+ *
+ * ## 两个来源，优先级不同
+ *
+ * | 当前页 | 来源 | 是否实时 |
+ * | --- | --- | --- |
+ * | 播放页（`/video` · `/bangumi/play`） | content 直连应答 | 实时 |
+ * | 其他页（首页 / 空间 / 收藏夹） | `storage.local` 里的显示档案（ADR 0025） | 上次在播放页看到的 |
+ *
+ * 非播放页没有 content script，实时拿不到——这是决策 4（扩展不读主账号凭据）的
+ * 直接后果，不是缺功能。所以退一步读缓存，**并且不标注时间**（用户明确不要
+ * "3 天前看到"这种句子：它既不占价值，又在提醒用户"这信息可能不准"）。
+ */
+interface PrimaryCard {
+  uname: string | null;
+  level: number | null;
+  loggedIn: 'yes' | 'no' | 'unknown';
+}
+
 /** 打开设置页；`hash` 用来深链到某个分区（`#/quality` 等，见 options/main.tsx 的路由） */
 function openOptions(hash = ''): void {
   void chrome.tabs.create({ url: chrome.runtime.getURL(`options.html${hash}`) });
@@ -86,6 +107,37 @@ async function readPageView(): Promise<PageView> {
   }
 }
 
+/**
+ * 读主账号卡片的原料。
+ *
+ * **播放页优先用实时数据**：那份数据里 `loggedIn` 是三态（`yes`/`no`/`unknown`），
+ * 能区分"没登录"和"还没读到"。缓存没有这个信息，只有"存过"和"没存过"。
+ *
+ * ⚠️ 缓存**不能**在播放页兜底。播放页上读缓存会把"游客"显示成"某个昵称"——
+ * 而那份昵称可能是上一个账号的。宁可显示"未登录"。
+ */
+async function readPrimaryCard(page: PageView): Promise<PrimaryCard> {
+  if (page.kind === 'play') {
+    const info = page.view?.primary;
+    return {
+      uname: info?.user?.uname || null,
+      level: info?.user?.level ?? null,
+      loggedIn: info?.loggedIn ?? 'unknown',
+    };
+  }
+
+  /**
+   * 非播放页：读缓存。
+   *
+   * `loggedIn` 记成 `'yes'` —— 能存下这份档案，就说明**存的那一刻**读到了
+   * `DedeUserID`（`savePrimaryProfile()` 的签名强制要求）。这是它对"当前是否登录"
+   * 的全部保证：**过去登录过**。所以文案不能说"已登录"，只能说昵称。
+   */
+  const cached = await readPrimaryProfile();
+  if (!cached) return { uname: null, level: null, loggedIn: 'unknown' };
+  return { uname: cached.uname, level: cached.level, loggedIn: 'yes' };
+}
+
 function App() {
   const [load, setLoad] = useState<LoadState>({ kind: 'loading' });
   const [busy, setBusy] = useState(false);
@@ -99,6 +151,12 @@ function App() {
   const [confirmRemove, setConfirmRemove] = useState(false);
   /** 当前页的取流数据（主账号基线 + 播放账号实际拿到的） */
   const [page, setPage] = useState<PageView>({ kind: 'other' });
+  /** 主账号卡片原料：播放页读实时，其他页读缓存（ADR 0025） */
+  const [primary, setPrimary] = useState<PrimaryCard>({
+    uname: null,
+    level: null,
+    loggedIn: 'unknown',
+  });
   /** 到期日的相对描述依赖"现在"，渲染期取一次即可 */
   const [now] = useState(() => Date.now());
 
@@ -124,6 +182,8 @@ function App() {
       ]);
 
       setPage(pageView);
+      // 依赖 pageView，所以不能放进上面的 Promise.all（那会自己引用自己）
+      setPrimary(await readPrimaryCard(pageView));
 
       if (proxyRes?.type !== 'proxy/status:ok') {
         setLoad({ kind: 'error', detail: '状态读取失败' });
@@ -292,10 +352,13 @@ function App() {
   const stats = snap ? summarize(snap.buckets) : { total: 0, ok: 0, rate: null };
   const hasTrouble = bars.some((s) => s === 'partial' || s === 'fail');
 
-  // §2.4 主账号卡片的原料：只在视频页拿得到（昵称/等级来自页面，扩展不读凭据）
-  const primaryInfo = page.kind === 'play' ? (page.view?.primary ?? null) : null;
-  const primaryUser = primaryInfo?.user ?? null;
-  const primaryLoggedIn = primaryInfo?.loggedIn ?? 'unknown';
+  /**
+   * §2.4 主账号卡片的原料。
+   *
+   * 播放页来自 content 实时应答；其他页来自 `storage.local` 的显示档案（ADR 0025）。
+   * 两条来源在 `readPrimaryCard()` 里已经选好，这里只取。
+   */
+  const { uname: primaryUname, level: primaryLevel, loggedIn: primaryLoggedIn } = primary;
 
   const pillCls = load.kind === 'loading' ? 'pill-idle' : `pill-${view?.tone ?? 'danger'}`;
   const pillText = load.kind === 'loading' ? '读取中' : (view?.pill ?? '异常');
@@ -318,7 +381,10 @@ function App() {
         {load.kind === 'ok' && snap && view && (
           <div class="content">
             {/* 「已解锁」已经说明结果时不再重复一句话，避免 popup 变啰嗦 */}
-            {!unlock?.improved && <p class={`line ${view.tone}`}>{view.line}</p>}
+            {/* 「已解锁」已经说明结果时不再重复一句话，避免 popup 变啰嗦。
+                `view.line` 现在是可选的 —— 已接管/已停用/未生效这几种
+                都不再写解释（胶囊已经回答了"生效了吗"，见 popup-state.ts）。 */}
+            {!unlock?.improved && view.line && <p class={`line ${view.tone}`}>{view.line}</p>}
 
             {/* ── §2.3 当前页解锁画质（核心价值区）──
                 规范原文："整个 popup 唯一不能省的部分"。
@@ -327,7 +393,13 @@ function App() {
             {page.kind === 'play' ? (
               unlock && page.view ? (
                 <div class="unlock">
-                  <p class="unlock-bv">当前页面 · {page.view.bvid}</p>
+                  {/* pageKey 在 PGC 页是 `ep:3854821`，前面加「番剧页 · 」比
+                      「当前页面 · ep:3854821」读得通。判据与 summary-view 同一个。 */}
+                  <p class="unlock-bv">
+                    {isVideoPage(page.view.pageKey)
+                      ? `当前页面 · ${page.view.pageKey}`
+                      : `番剧页 · ${page.view.pageKey}`}
+                  </p>
                   <div class="unlock-card">
                     <div class="unlock-head">
                       <span class={`unlock-title ${unlock.improved ? 'good' : 'muted'}`}>
@@ -349,9 +421,17 @@ function App() {
               ) : (
                 <p class="unlock-empty">正在读取本页取流数据…</p>
               )
-            ) : (
-              <p class="unlock-empty">打开任意视频页查看效果</p>
-            )}
+            ) : /**
+             * ## 非播放页：这一段整块不渲染（2026-10-29 用户要求）
+             *
+             * 曾经这里是「打开任意视频页查看效果」，后来改成
+             * 「打开视频或番剧后，这里会显示该页已解锁的画质」——
+             * 用户两次都要求删掉，理由一致：**他已经知道自己在首页**。
+             *
+             * 删掉之后这一段是 `null`，popup 在非播放页由
+             * 胶囊 + 两张账号卡 + 开关构成，不再有一块空占位。
+             */
+            null}
 
             {/* ── 成功率条形图（§3 状态 4）──
                 颜色是唯一编码：绿=全成功、琥珀=有失败、红=全失败、灰=这段时间没请求。
@@ -378,13 +458,12 @@ function App() {
                 <span class="p-avatar">主</span>
                 <span class="p-main">
                   <span class="p-name">
-                    {primaryUser?.uname ||
-                      (primaryLoggedIn === 'no' ? '未登录' : '打开视频页后可见')}
+                    {primaryUname || (primaryLoggedIn === 'no' ? '未登录' : '打开视频页后可见')}
                   </span>
                   <span class="p-sub">收藏 · 点赞 · 评论 · 历史</span>
                 </span>
                 {/* 等级拿不到就写「只读」—— 不编一个 LV 数字 */}
-                <span class="p-tag">{primaryUser?.level ? `LV${primaryUser.level}` : '只读'}</span>
+                <span class="p-tag">{primaryLevel ? `LV${String(primaryLevel)}` : '只读'}</span>
               </div>
 
               {/* ⚠️ 只要**凭据在**就渲染这一行，哪怕读不出资料。

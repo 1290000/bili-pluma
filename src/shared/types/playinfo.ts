@@ -123,6 +123,34 @@ export interface Capability {
   /** 视频轨条数（诊断用，能反映"这个身份拿到几条变体"） */
   videoCount: number;
   audioCount: number;
+  /**
+   * **最高那一档**在实际轨道里出现过的所有 `quality id`（去重、降序）。
+   *
+   * ## 为什么必须有这个字段（2026-10-29 真机发现）
+   *
+   * `maxHeight` 只有像素高度，而**同一高度下 B 站有多个不同档位**：
+   *
+   * | qid | 名称 | `height` |
+   * | --- | --- | --- |
+   * | 125 | HDR 真彩 | 1080 |
+   * | 112 | 1080P 高码率 | 1080 |
+   * | 80 | 1080P 高清 | 1080 |
+   *
+   * 用 `heightLabel(1080)` 三者全折叠成「1080P」——真机实测（ss34412）里，
+   * 播放账号明明拿到了 112 和 125，popup 只显示一个 `1080P`，
+   * 用户当场指出「我测的这个番剧有 1080P 高码率还有 HDR 真彩」。
+   *
+   * ## 判据来源
+   *
+   * 直接从 `dash.video[].id` 取 —— **这是服务端在真实轨道上一个一个返回的 id**，
+   * 不是 `accept_quality` 那种"视频支持哪些档位"的清单
+   * （后者未登录时会返回含 8K 的假数组，见 Q9）。
+   * 所以用它出徽章不违反「判权限边界只认 dash」这条纪律。
+   *
+   * ⚠️ 空数组表示**取不到 id**（老数据 / 解析失败），此时 UI 必须退回
+   * `heightLabel(maxHeight)`，**不许猜档位**。
+   */
+  topQualityIds: number[];
 }
 
 /** 两个身份的差异。正数 = 播放账号更强 */
@@ -172,7 +200,20 @@ export type PrimaryBaselineReason =
 
 /** 当前页面两侧的取流数据（content 直连应答，不经 SW） */
 export interface PageTracksView {
-  bvid: string;
+  /**
+   * 当前页的键。
+   *
+   * | 页面 | 值 |
+   * | --- | --- |
+   * | 普通视频 `/video/BV…` | `BV1xx411c7mD` |
+   * | 番剧 / 国创 / 电影 `/bangumi/play/ep…` | `ep:3854821` |
+   * | 同上，`ss…` 形式 | `ss:28747` |
+   *
+   * ⚠️ 这里**曾经叫 `bvid`**，而 PGC 页没有 bvid，于是 content 干脆不登记 PGC 页，
+   * 结果 `view()` 在番剧页恒为 `null`（popup 的 §2.3 与 A 卡片一起失效）。
+   * 改名是为了让「这个字段装得下 PGC」这件事在类型层就成立，而不是靠命名暗示。
+   */
+  pageKey: string;
   /** 第几个分 P */
   p: number;
   updatedAt: number;

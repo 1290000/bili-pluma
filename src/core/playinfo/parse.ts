@@ -121,16 +121,43 @@ function parseDash(v: unknown): DashData | null {
 }
 
 /**
- * 从两种形状里取出 `data`。
+ * 从三种已知形状里取出"video_info 那一层"。
  *
- * - **接口响应**：`{ code, message, ttl, data: {...} }`
- * - **SSR 的 `__playinfo__`**：直接就是 `data` 本身（ADR 0007 记录的 `playurlSSRData.data`）
+ * | 来源 | 形状 | 取哪层 |
+ * | --- | --- | --- |
+ * | 普通视频 `/x/player/wbi/playurl` | `{code, data: {...}}` | `data` |
+ * | PGC `/pgc/player/web/playurl` | `{code, result: {...}}` | **`result` 本身就是 video_info** |
+ * | SSR 的 `__playinfo__` | 直接就是 data | 它自己 |
  *
- * 不猜"是哪种调用方"，只看形状：有 `data` 对象就用它，否则如果本身长得像 data 就用它自己。
- * 这样同一份解析逻辑能同时服务"体检表"和"主账号基线"（ADR 0014），不用维护两套。
+ * ## `result` 分支是 2026-10-29 补的，原因是真机踩到
+ *
+ * 原来只认 `{data}` 和"自己长得像 data"两种。PGC 的响应是 `{code, result}`，
+ * 而 `result` 上**没有** `data` 这层 —— 于是 `pickData` 返回 `null`，
+ * `parsePlayurl` 返回 `null`，`capabilityOf` 返回 `null`。
+ *
+ * 三个 null 一路传下去：**popup 的徽章永远是空的，而且不报错**。
+ * 番剧页看起来"插件没生效"，实际是解析器不认识那个形状。
+ *
+ * 判据与 `pgc-cache-inject.ts` 的 `readVideoInfo()` 保持一致：
+ * `result` 上有 `dash` / `durl` / `timelength` 之一，就认为它是 video_info 本身。
  */
 function pickData(raw: Record<string, unknown>): Record<string, unknown> | null {
   if (isRecord(raw.data)) return raw.data;
+
+  /**
+   * PGC：`result` 即 video_info。
+   *
+   * ⚠️ 判据**不能只写 `isRecord(raw.result)`** —— 有些普通视频接口也会返回
+   * `result`，但里面是嵌套的 `{video_info: ...}`。只认"长得像 video_info"的形状，
+   * 误认识的代价是把一份空壳当成能力，得出"这个身份什么都拿不到"的假结论。
+   */
+  if (isRecord(raw.result)) {
+    const r = raw.result;
+    const looksLikeVideoInfo = 'dash' in r || 'durl' in r || 'timelength' in r;
+    if (looksLikeVideoInfo) return r;
+    // `{result: {video_info}}` 这种嵌套形状也接一下（SSR 里出现过）
+    if (isRecord(r.video_info)) return r.video_info;
+  }
 
   const looksLikeData =
     'dash' in raw || 'durl' in raw || 'accept_quality' in raw || 'acceptQuality' in raw;

@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { describeUnlock, unlockedBadges } from '@core/playinfo/summary-view';
+import {
+  MAX_BADGES,
+  PGC_HIDDEN_BADGES,
+  describeUnlock,
+  unlockedBadges,
+} from '@core/playinfo/summary-view';
 import type { Capability, PageTracksView } from '@shared/types/playinfo';
+import { QUALITY_NAMES } from '@shared/utils/quality';
 
 /**
  * 守的是 §2.3 的文案不许越界。
@@ -13,9 +19,23 @@ import type { Capability, PageTracksView } from '@shared/types/playinfo';
  * 主账号 1080p/30fps，播放账号 2160p/60fps/Hi-Res，提升 1080p · +30fps · +Hi-Res。
  */
 
+/**
+ * 构造能力。
+ *
+ * ⚠️ **`topQualityIds` 必须跟着 `maxHeight` 一起变**，否则测试会自相矛盾：
+ * 曾经写成固定 `[120]`，于是 `cap({ maxHeight: 4320 })` 得出「4K」而不是「8K」、
+ * `cap({ maxHeight: 480 })` 得出「4K」而不是「480P」—— 两条断言同时变红。
+ *
+ * 现在的规则：调用方没显式给 `topQualityIds` 时，按 `maxHeight` 推一个**合理的 qid**，
+ * 模拟真实数据（真实响应里 id 与 height 永远一致）。
+ */
 function cap(over: Partial<Capability> = {}): Capability {
+  const maxHeight = over.maxHeight ?? 2160;
+  const fallbackIds =
+    maxHeight >= 4320 ? [127] : maxHeight >= 2160 ? [120] : maxHeight >= 1080 ? [80] : [32];
+
   return {
-    maxHeight: 2160,
+    maxHeight,
     maxFrameRate: 60,
     maxFrameRateAtTopHeight: 60,
     hasHiRes: true,
@@ -25,12 +45,15 @@ function cap(over: Partial<Capability> = {}): Capability {
     videoCount: 19,
     audioCount: 3,
     ...over,
+    // ⚠️ 放在 `...over` **之后**：`over.maxHeight` 变了而没给 ids 时，
+    // 必须用按新高度算出的 fallback，否则 ids 与 height 互相矛盾
+    topQualityIds: over.topQualityIds ?? fallbackIds,
   };
 }
 
 function view(over: Partial<PageTracksView> = {}): PageTracksView {
   return {
-    bvid: 'BV1jt421t7XH',
+    pageKey: 'BV1jt421t7XH',
     p: 1,
     updatedAt: 0,
     primary: {
@@ -364,5 +387,377 @@ describe('describeUnlock：游客页没有 __playinfo__（2026-10-26 InPrivate �
       }),
     );
     expect(s?.badges).toContain('4K');
+  });
+});
+
+/**
+ * PGC 页（番剧 / 国创 / 电影）—— ADR 0024。
+ *
+ * ## 这条线为什么必须单独钉住
+ *
+ * PGC 页没有主账号基线，`diff` 恒为 `null`。修好 `pageKey` 之前，
+ * 番剧页根本产不出 view（popup 停在「正在读取本页取流数据…」）；
+ * 修好之后如果不拦，就会落到「无法对比」—— 那句读起来像"还在加载"，
+ * 而真相是**设计上就不做对比**。
+ *
+ * 更不能说「已解锁」：那是能力声明，没有对比就没有证据。
+ */
+describe('describeUnlock：PGC 页不做对比（ADR 0024）', () => {
+  /** PGC 页的典型形状：有播放账号侧数据，主账号基线不可用，diff 为 null */
+  const pgc = (over: Partial<PageTracksView> = {}): PageTracksView => ({
+    pageKey: 'ep:3854821',
+    p: 1,
+    updatedAt: 0,
+    primary: {
+      usable: false,
+      reason: 'client-written',
+      capability: null,
+      user: { uname: '主账号', face: null, level: 6 },
+      mid: null,
+      loggedIn: 'yes',
+    },
+    playback: { capability: cap({ maxHeight: 2160, hasHiRes: true }) },
+    diff: null,
+    ...over,
+  });
+
+  it('标题是「已取得 4K」（事实陈述），不是「已解锁」', () => {
+    const r = describeUnlock(pgc());
+    expect(r?.title).toBe('已取得 4K');
+    expect(r?.title).not.toBe('已解锁');
+    expect(r?.improved).toBe(false);
+  });
+
+  it('锚点如实说不做对比，不写「无法对比」也不写「未知」', () => {
+    const r = describeUnlock(pgc());
+    expect(r?.anchor).toBe('播放账号提供');
+    expect(r?.anchor).not.toContain('无法对比');
+    expect(r?.anchor).not.toContain('未知');
+  });
+
+  it('徽章照常给 —— 不隐瞒播放账号实际拿到了什么', () => {
+    const r = describeUnlock(pgc());
+    expect(r?.badges).toContain('4K');
+    expect(r?.badges).toContain('Hi-Res');
+  });
+
+  it('PGC 侧还没数据时仍是「等待取流…」且不说已取得', () => {
+    const r = describeUnlock(pgc({ playback: null }));
+    expect(r?.title).toBe('等待取流…');
+    expect(r?.badges).toEqual([]);
+  });
+
+  it('主账号是游客也不影响 PGC 的措辞（本来就不对比）', () => {
+    const r = describeUnlock(
+      pgc({
+        primary: {
+          usable: false,
+          reason: 'absent',
+          capability: null,
+          user: null,
+          mid: null,
+          loggedIn: 'no',
+        },
+      }),
+    );
+    expect(r?.title).toBe('已取得 4K');
+    expect(r?.anchor).toBe('播放账号提供');
+  });
+
+  it('普通视频页不受影响 —— 仍然能说「已解锁」', () => {
+    const r = describeUnlock(view());
+    expect(r?.title).toBe('已解锁');
+    expect(r?.improved).toBe(true);
+  });
+});
+
+/**
+ * 同高度多档 —— **2026-10-29 用户真机指出的 bug**。
+ *
+ * 用户原话：「我测试的这个番剧有 1080p 高码率还有 HDR 真彩」，
+ * 而 popup 只显示了一个 `1080P`。
+ *
+ * 实测数据（ss34412，`dash.video[].id` 与 `support_formats` 双向核对）：
+ * ```
+ * 125  HDR 真彩        height 1080  bw 1437687
+ * 112  1080P 高码率     height 1080  bw 3461623  ← 三条轨
+ *  80  1080P 高清       height 1080  bw  987711
+ *  64  720P 准高清      height  720
+ * ```
+ * 125 / 112 / 80 **高度完全相同**，`heightLabel` 必然把它们折叠成一个。
+ */
+describe('unlockedBadges：同高度多档（用 quality id 区分）', () => {
+  it('ss34412 的真实档位：三个 1080 档分别标出，不是一个笼统的 1080P', () => {
+    const badges = unlockedBadges(
+      cap({
+        maxHeight: 1080,
+        maxFrameRateAtTopHeight: 23,
+        hasHiRes: false,
+        topQualityIds: [125, 112, 80, 64, 32, 16],
+      }),
+    );
+    expect(badges).toContain('HDR');
+    expect(badges).toContain('1080P+');
+    expect(badges).toContain('1080P');
+    // 只有高度信息时才会出现的那种"折叠"，这里不许再出现：
+    // 即不能只有一个 1080P 而没有 1080P+ / HDR
+    expect(badges.filter((b) => b.startsWith('1080P')).length).toBe(2);
+  });
+
+  it('按 id 降序（与 B 站画质菜单顺序一致）', () => {
+    const badges = unlockedBadges(cap({ maxHeight: 1080, topQualityIds: [80, 125, 112] }));
+    expect(badges.slice(0, 3)).toEqual(['HDR', '1080P+', '1080P']);
+  });
+
+  it('没有 id（老数据/解析失败）时退回高度标签，不猜档位', () => {
+    expect(unlockedBadges(cap({ maxHeight: 1080, topQualityIds: [] }))[0]).toBe('1080P');
+  });
+
+  it('id 全是表里没有的 → 退回高度标签，不编名字', () => {
+    expect(unlockedBadges(cap({ maxHeight: 1080, topQualityIds: [99999] }))[0]).toBe('1080P');
+  });
+
+  it('4K 场景不受影响：120 → 4K', () => {
+    expect(unlockedBadges(cap({ maxHeight: 2160, topQualityIds: [120] }))[0]).toBe('4K');
+  });
+});
+
+/**
+ * 视频页 vs 番剧页的档位差异 —— **2026-10-29 真机实测对照**。
+ *
+ * ## 为什么要把这两组数据钉进测试
+ *
+ * 用户看到番剧页显示「1080P」而视频页显示「4K 60fps」，问是不是该把 60fps 换成 1080P+。
+ * 实测两个视频的真实档位完全不同，**不能互换**：
+ *
+ * | 内容 | 真实 id 清单 | 说明 |
+ * | --- | --- | --- |
+ * | `BV1jt421t7XH` | `126 120 116 80 64 32 16` | **没有 112**；116 是 1080P60 |
+ * | 番剧 `ep341208` | `125 112 80 64 32 16` | **没有 116**；有 125/112 |
+ *
+ * 结论：`60fps` 是**帧率**徽章（来自 `116` 那条轨的 `frame_rate`），
+ * `1080P+` 是**画质档**徽章（来自 `112`）。两者不同维度、不同来源，
+ * 在只有 `116` 的视频上换成 `1080P+` 会**凭空多报一个有实际意义的档位**。
+ */
+describe('真实档位对照：视频页与番剧页不是同一套档位', () => {
+  it('BV1jt421t7XH：4K + 60fps，没有 1080P+', () => {
+    /**
+     * ⚠️ `topQualityIds` 只装**最高那一档**（2160）的 id —— 这是 `capabilityOf()`
+     * 的真实语义。所以这里是 `[126, 120]`（杜比视界 + 4K 都标在 2160 上），
+     * 不是整个 id 清单。传全集会让测试模拟出一个线上不存在的能力。
+     */
+    const badges = unlockedBadges(
+      cap({
+        maxHeight: 2160,
+        maxFrameRateAtTopHeight: 60,
+        hasHiRes: true,
+        topQualityIds: [126, 120],
+      }),
+    );
+    expect(badges).toContain('杜比视界');
+    expect(badges).toContain('4K');
+    expect(badges).not.toContain('1080P+');
+    // 60fps 来自 116 那条轨的帧率，与画质档是两个维度 —— 不互相顶替
+    expect(badges).toContain('60fps');
+  });
+
+  it('ep341208（番剧）：HDR + 1080P+ + 1080P，没有 4K', () => {
+    // 这一集最高也是 1080，所以 125/112/80 三个都落在"最高那一档"里
+    const badges = unlockedBadges(
+      cap({
+        maxHeight: 1080,
+        maxFrameRateAtTopHeight: 24,
+        hasHiRes: false,
+        topQualityIds: [125, 112, 80],
+      }),
+    );
+    expect(badges).toContain('HDR');
+    expect(badges).toContain('1080P+');
+    expect(badges).toContain('1080P');
+    expect(badges).not.toContain('4K');
+  });
+
+  /**
+   * 试看**不受分辨率限制** —— 真机实测（ep4292442，预告，49 秒）：
+   * 档位 `112 80 64 32 16`、`accept_quality [112,80,64,32,16]`。
+   * B 站的试看限制是**时长截断**，不是降画质。
+   */
+  it('试看内容也能有 1080P+（限制的是时长不是分辨率）', () => {
+    const badges = unlockedBadges(
+      cap({ maxHeight: 1080, maxFrameRateAtTopHeight: 30, topQualityIds: [112, 80, 64, 32, 16] }),
+    );
+    expect(badges[0]).toBe('1080P+');
+  });
+});
+
+describe('徽章上限在真实数据下不会被撑爆', () => {
+  it('两个实测样本的徽章数都 ≤ MAX_BADGES（不会被截断丢掉信息）', () => {
+    const videoPage = unlockedBadges(
+      cap({
+        maxHeight: 2160,
+        maxFrameRateAtTopHeight: 60,
+        hasHiRes: true,
+        topQualityIds: [126, 120],
+      }),
+    );
+    const pgcPage = unlockedBadges(
+      cap({
+        maxHeight: 1080,
+        maxFrameRateAtTopHeight: 24,
+        hasHiRes: true,
+        hasDolbyAudio: true,
+        topQualityIds: [125, 112, 80],
+      }),
+    );
+    expect(videoPage.length).toBeLessThanOrEqual(MAX_BADGES);
+    expect(pgcPage.length).toBeLessThanOrEqual(MAX_BADGES);
+    // 关键：截断不许发生在最前面几个（画质档必须保留）
+    expect(videoPage[0]).toBe('杜比视界');
+    expect(pgcPage[0]).toBe('HDR');
+  });
+});
+
+/**
+ * PGC 页徽章过滤 —— **2026-10-29 用户要求**。
+ *
+ * 用户原话：「试看能看 1080p 的，所以应该把番剧页的 popup 里的 1080p 去掉」。
+ *
+ * 判据不是"1080P 是低画质"，而是**试看本来就能看 1080P**
+ * （B 站的试看限制是时长，不是分辨率）。所以在番剧页标 1080P
+ * 等于告诉用户"你能看 1080P"—— 他没有插件也能做到，是废话。
+ */
+describe('describeUnlock：PGC 页不显示试看就能看的档位', () => {
+  const pgc = (ids: number[], maxHeight = 1080): PageTracksView => ({
+    pageKey: 'ep:341208',
+    p: 1,
+    updatedAt: 0,
+    primary: {
+      usable: false,
+      reason: 'client-written',
+      capability: null,
+      user: { uname: '主账号', face: null, level: 6 },
+      mid: null,
+      loggedIn: 'yes',
+    },
+    playback: {
+      capability: cap({
+        maxHeight,
+        maxFrameRateAtTopHeight: 24,
+        hasHiRes: false,
+        topQualityIds: ids,
+      }),
+    },
+    diff: null,
+  });
+
+  it('125/112/80 → 只显示 HDR 和 1080P+，1080P 被去掉', () => {
+    const r = describeUnlock(pgc([125, 112, 80]));
+    expect(r?.badges).toEqual(['HDR', '1080P+']);
+    expect(r?.badges).not.toContain('1080P');
+  });
+
+  it('标题也跳过被过滤的档：不是「已取得 1080P」而是「已取得 HDR」', () => {
+    expect(describeUnlock(pgc([125, 112, 80]))?.title).toBe('已取得 HDR');
+  });
+
+  it('播放账号只拿到 80 → 徽章为空，标题不编具体档位', () => {
+    const r = describeUnlock(pgc([80]));
+    expect(r?.badges).toEqual([]);
+    // 不许写「已取得 1080P」（那正是被要求去掉的东西）
+    expect(r?.title).toBe('已取得播放账号的画质');
+    expect(r?.title).not.toContain('1080P');
+  });
+
+  it('4K 场景不受影响（120 不该被过滤）', () => {
+    const r = describeUnlock(pgc([120], 2160));
+    expect(r?.badges).toContain('4K');
+    expect(r?.title).toBe('已取得 4K');
+  });
+
+  it('普通视频页**不**做这个过滤（那里 1080P 是有意义的对比锚点）', () => {
+    const r = describeUnlock(
+      view({
+        primary: {
+          usable: true,
+          reason: 'ssr',
+          capability: cap({ maxHeight: 480, maxFrameRateAtTopHeight: 30, topQualityIds: [32] }),
+          user: { uname: 'p', face: null, level: 1 },
+          mid: null,
+          loggedIn: 'yes',
+        },
+        playback: { capability: cap({ maxHeight: 1080, topQualityIds: [80] }) },
+        diff: {
+          heightGain: 600,
+          frameRateGain: 0,
+          hiResGained: false,
+          dolbyAudioGained: false,
+          dolbyVisionGained: false,
+          improved: true,
+        },
+      }),
+    );
+    expect(r?.badges).toContain('1080P');
+  });
+
+  it('PGC_HIDDEN_BADGES 的每一项都必须能在 QUALITY_NAMES 里找到（防改名漂移）', () => {
+    const known = new Set(Object.values(QUALITY_NAMES));
+    for (const b of PGC_HIDDEN_BADGES) {
+      expect(known.has(b)).toBe(true);
+    }
+  });
+});
+
+/**
+ * 改 `topQualityIds` 为"每档取最高"之后的**副作用守卫**。
+ *
+ * 现在 `topQualityIds` 会包含 720/480/360 的 id（以前只有最高档）。
+ * 而**视频页不做 PGC 过滤** —— 会不会因此多出一堆低档徽章、把
+ * `MAX_BADGES`(6) 撑爆、把真正有意义的 `60fps` 挤掉？
+ */
+describe('topQualityIds 扩容后的徽章数量', () => {
+  it('视频页：4K 视频的徽章不会因为收了 720/480/360 而爆掉', () => {
+    const badges = unlockedBadges(
+      cap({
+        maxHeight: 2160,
+        maxFrameRateAtTopHeight: 60,
+        hasHiRes: true,
+        // ep733317 的真实全集（v3 语义：全部收）
+        topQualityIds: [125, 120, 112, 80, 64, 32, 16],
+      }),
+    );
+    expect(badges.length).toBeLessThanOrEqual(MAX_BADGES);
+    // 最前面的必须是最有意义的档，不能被低档挤掉
+    // 720 及以下不做徽章（BADGE_QUALITY_NAMES 之外），所以第三位是 60fps
+    expect(badges.slice(0, 3)).toEqual(['HDR', '4K', '1080P+']);
+    // 60fps 与 Hi-Res 必须还在
+    expect(badges).toContain('60fps');
+    expect(badges).toContain('Hi-Res');
+  });
+
+  it('PGC 页：过滤低档后只剩 HDR / 1080P+（4K 视频的限免集）', () => {
+    const r = describeUnlock({
+      pageKey: 'ep:733317',
+      p: 1,
+      updatedAt: 0,
+      primary: {
+        usable: false,
+        reason: 'client-written',
+        capability: null,
+        user: null,
+        mid: null,
+        loggedIn: 'yes',
+      },
+      playback: {
+        capability: cap({
+          maxHeight: 2160,
+          maxFrameRateAtTopHeight: 24,
+          hasHiRes: false,
+          topQualityIds: [125, 120, 112, 80, 64, 32, 16],
+        }),
+      },
+      diff: null,
+    });
+    // 按 id 降序：125(HDR) → 120(4K) → 112(1080P+)，80(1080P) 被过滤
+    expect(r?.badges).toEqual(['HDR', '4K', '1080P+']);
   });
 });

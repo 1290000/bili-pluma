@@ -181,3 +181,48 @@ describe('容错：字段缺失不补假值', () => {
     expect(info?.dash?.video[0]?.backupUrl).toEqual(['https://a']);
   });
 });
+
+/**
+ * PGC（番剧 / 国创 / 电影）的响应形状 —— **2026-10-29 补，因为真机解析不出**。
+ *
+ * `/pgc/player/web/playurl` 返回 `{code, result}`，而 `result` **本身就是 video_info**
+ * （没有 `data` 这一层）。原来的 `pickData` 只认 `{data}` 和"自己长得像 data"，
+ * 于是返回 `null` → `capabilityOf` 也 `null` → **popup 徽章永远是空的，且不报错**。
+ *
+ * 这三条用例是那次修复的守卫。把 `pickData` 改回旧实现，"result 形状"这条必红。
+ */
+describe('parsePlayurl：PGC 响应形状（{code, result}）', () => {
+  it('result 本身就是 video_info 时能解析出 dash', () => {
+    const info = parsePlayurl({
+      code: 0,
+      message: '0',
+      result: {
+        timelength: 1_440_083,
+        dash: {
+          duration: 1441,
+          video: [{ id: 120, base_url: 'https://a', height: 2160, frame_rate: '60.000' }],
+          audio: [],
+        },
+      },
+    });
+
+    expect(info).not.toBeNull();
+    expect(info?.dash?.video[0]?.height).toBe(2160);
+    // 帧率是字符串，必须被解析成数字（能力判断靠它出 60fps 徽章）
+    expect(info?.dash?.video[0]?.frameRate).toBe(60);
+  });
+
+  it('result 里嵌 video_info 的形态也能解析', () => {
+    const info = parsePlayurl({
+      code: 0,
+      result: { video_info: { dash: { video: [{ id: 80, height: 1080 }] } } },
+    });
+    expect(info?.dash?.video[0]?.height).toBe(1080);
+  });
+
+  it('result 是空壳（没有 dash/durl/timelength）时仍然返回 null —— 不许把空壳当能力', () => {
+    // /pgc/player/web/v2/playurl 实测就是这种：HTTP 200 + code 0，但 result 里什么都没有
+    const info = parsePlayurl({ code: 0, result: { something: 1 } });
+    expect(info).toBeNull();
+  });
+});

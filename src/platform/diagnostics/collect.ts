@@ -69,7 +69,7 @@ async function pageTracksRows(): Promise<DiagRow[]> {
   const playback = v.playback?.capability ?? null;
 
   rows.push({
-    label: `主账号基线 · ${v.bvid} P${String(v.p)}`,
+    label: `主账号基线 · ${v.pageKey} P${String(v.p)}`,
     value:
       REASON_TEXT[primary.reason] +
       (primary.capability ? ` · 最高 ${String(primary.capability.maxHeight)}p` : ''),

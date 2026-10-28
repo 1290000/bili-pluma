@@ -414,6 +414,22 @@
     ssCid: '',
     ssHit: false,
     ssErr: '',
+    /**
+     * SPA 切集换流的观测点（2026-10-29 加，排查「切集后画质掉到 1080P」）。
+     *
+     * - `swapCount`：`pgcSwapPlayviewBody` 被调用了几次
+     * - `swapLastCid` / `swapLastQ` / `swapLastMaxH`：最后一次换流的 cid、
+     *   请求 qn、换进去的 dash 最高高度
+     * - `swapSkip`：最后一次**没换**的原因（空 = 换了）
+     *
+     * 这三个值一起看就能回答「切集时到底有没有把 4K dash 交出去」——
+     * 之前只能靠诊断日志的环形缓冲猜，滚掉了就看不见。
+     */
+    swapCount: 0,
+    swapLastCid: '',
+    swapLastQ: -1,
+    swapLastMaxH: 0,
+    swapSkip: '',
   };
 
   if (IS_PGC) {
@@ -2020,6 +2036,50 @@
    * @param vi `data.video_info`
    * @returns `true` 表示流短于整集，需要换
    */
+  /**
+   * `video_info` 里 dash 轨道的**最高 quality id**。
+   *
+   * ## 为什么用 id 而不是 height
+   *
+   * `height` 在同一档上会重复（`125`/`120` 都是 2160、`112`/`80` 都是 1080），
+   * 判"还能不能更高"时用 height 会把 HDR 和 4K 看成一样。
+   * id 是 B 站的档位序号，**越大越高**，单调可比。
+   *
+   * @returns 最高 id；没有 dash 或没有视频轨时返回 `0`
+   */
+  function pgcMaxQualityId(vi) {
+    if (!vi || typeof vi !== 'object') return 0;
+    var dash = vi.dash;
+    if (!dash || typeof dash !== 'object') return 0;
+    var tracks = dash.video;
+    if (!Array.isArray(tracks)) return 0;
+    var max = 0;
+    for (var i = 0; i < tracks.length; i += 1) {
+      var id = tracks[i] && typeof tracks[i].id === 'number' ? tracks[i].id : 0;
+      if (id > max) max = id;
+    }
+    return max;
+  }
+
+  /**
+   * 最高视频高度（画质比较用，与 `pgcMaxQualityId` 互补）。
+   *
+   * @returns 最高 height；没有轨时 `0`
+   */
+  function pgcMaxHeight(vi) {
+    if (!vi || typeof vi !== 'object') return 0;
+    var dash = vi.dash;
+    if (!dash || typeof dash !== 'object') return 0;
+    var tracks = dash.video;
+    if (!Array.isArray(tracks)) return 0;
+    var max = 0;
+    for (var i = 0; i < tracks.length; i += 1) {
+      var h = tracks[i] && typeof tracks[i].height === 'number' ? tracks[i].height : 0;
+      if (h > max) max = h;
+    }
+    return max;
+  }
+
   function pgcPlayviewIsTruncated(vi) {
     if (!vi || typeof vi !== 'object') return false;
     var timelength = typeof vi.timelength === 'number' ? vi.timelength : 0;
@@ -2098,8 +2158,60 @@
     var vi = data.video_info;
     if (!vi || typeof vi !== 'object') return Promise.resolve(null);
 
-    // 本来就完整 → 一个字节都不碰
-    if (!pgcPlayviewIsTruncated(vi)) return Promise.resolve(null);
+    pgcTrace.swapCount += 1;
+
+    /**
+     * ## ⚠️ 「本来就完整 → 不碰」这条判据**只判了时长，没判画质**（2026-10-29 修）
+     *
+     * 原实现：`if (!pgcPlayviewIsTruncated(vi)) return null;`
+     *
+     * 意思是"这条流够长，不用换"。真机实测（国创 ep733318/733321，限免集）证明它漏了另一半：
+     *
+     * ```
+     * playview 原始响应: dash 只有 80@1080 64@720 32@480 16@360  → 画面 1080
+     * 但播放账号能取到:   [125@2160, 120@2160, 112@1080, …]      → 本来能 4K
+     * 限免集是完整流 → isTruncated = false → 直接 return → **4K 永远拿不到**
+     * ```
+     *
+     * 用户在 SPA 切集后点 4K：播放器手里没有 2160 轨 → 「切换失败」+ 画面停在 1080。
+     *
+     * 修法与整页加载一致（`entrypoints/content.ts` 的 `tryUpgradeForQuality`）：
+     * **「需要换」= 流被截断 或 画质还能提升**。两条独立判据，互不替代 ——
+     * 只看画质会让会员老番掉回试看，只看时长则让限免集拿不到 4K。
+     *
+     * 这里先只放宽"进入函数"的条件，画质比较在取流之后做（省一次网络往返：
+     * 本来就要取，取回来再比）。
+     */
+    var truncated = pgcPlayviewIsTruncated(vi);
+    if (!truncated) {
+      /**
+       * 不截断 → 只在「可能画质更高」时才继续。
+       *
+       * 判据：当前 dash 最高高度 **低于** `accept_quality` 里的最高档对应高度。
+       * 但 `accept_quality` 只有 id 没有高度，所以这里用**经验映射**判断"还有更高档"：
+       * 只要 `accept_quality` 里出现比当前 dash 最高 id 更大的 id，就值得取一次。
+       *
+       * ⚠️ 这个判据**只用于"要不要试一次"**，不用于"能不能拿到"——
+       * 后者由取回来的 dash 事实决定（下面 `isBetterSwap` 严格比较）。
+       * 所以即使判错了，最坏也只是多一次请求，不会漏取。
+       */
+      var curMaxId = pgcMaxQualityId(vi);
+      var acceptMaxId = 0;
+      var aq = Array.isArray(vi.accept_quality) ? vi.accept_quality : [];
+      for (var ai = 0; ai < aq.length; ai += 1) {
+        var qq = Number(aq[ai]);
+        if (Number.isFinite(qq) && qq > acceptMaxId) acceptMaxId = qq;
+      }
+      if (curMaxId <= 0 || acceptMaxId <= curMaxId) {
+        pgcTrace.swapSkip = 'not-truncated-and-no-higher-qid(cur=' + curMaxId + ',accept=' + acceptMaxId + ')';
+        return Promise.resolve(null);
+      }
+      pgcTrace.swapSkip = '';
+      pgcPost(
+        'playview',
+        '流完整但画质可能更高（cur=' + curMaxId + ' accept=' + acceptMaxId + '），尝试补取',
+      );
+    }
 
     // cid 就在响应自己里（实测 `data.arc.cid` 一定存在）
     var cid = data.arc && data.arc.cid ? String(data.arc.cid) : '';
@@ -2165,6 +2277,29 @@
           }
 
           /**
+           * ## 画质必须**严格更高**才换（2026-10-29 加）
+           *
+           * 放宽"进入函数"的条件之后，会有一批集数取回来发现画质一样 ——
+           * 那种情况换上去只是白改一遍响应，播放器还要重建一次管道（用户看到闪一下）。
+           *
+           * ⚠️ **只在"流原本是完整的"这条新路径上比**（`truncated === false`）。
+           * 截断的集数必须无条件换 —— 那是"能不能看完整集"的问题，
+           * 与画质无关。这条区分是防止把会员老番的完整流挡掉。
+           */
+          if (!truncated) {
+            var curH = pgcMaxHeight(vi);
+            var newH = pgcMaxHeight(full);
+            if (!(newH > curH)) {
+              pgcTrace.swapSkip = 'not-better(cur=' + curH + ',new=' + newH + ')';
+              pgcPost(
+                'playview',
+                'cid=' + cid + ' 取到的画质不更高(' + curH + '→' + newH + ')，不换',
+              );
+              return null;
+            }
+          }
+
+          /**
            * 换 dash：把 dash / type / format 一起对齐到 4048 响应的形态。
            *
            * ⚠️ 必须 `delete vi.durl` / `delete vi.durls` —— 有 durl 时播放器
@@ -2194,10 +2329,52 @@
             data.play_check.play_detail = PGC_PREVIEW_FLAGS['play_check.play_detail'];
           }
 
+          /**
+           * 埋点：换流成功时把「换进去什么」记在 `window.__PLUMA_PGC__` 上。
+           *
+           * 为什么需要它：诊断日志是 30 条环形缓冲，切集换流那几条经常被后面的
+           * 角标日志挤掉，排查时只能看个大概。这几个值能直接在页面里读，
+           * 回答「切集后到底有没有把 4K dash 交出去」。
+           */
+          pgcTrace.swapLastCid = cid;
+          pgcTrace.swapLastQ = typeof full.quality === 'number' ? full.quality : -1;
+          pgcTrace.swapLastMaxH = pgcMaxHeight(full);
+          pgcTrace.swapSkip = '';
+
           pgcPost(
             'playview',
-            '已换流 dash cid=' + cid + ' q=' + full.quality + ' 高度=[' + heights.join(',') + ']',
+            '已换流 dash cid=' + cid + ' q=' + full.quality + ' 高度=[' + heights.join(',') + ']' +
+              (truncated ? '（截断→完整）' : '（画质升级）'),
           );
+
+          /**
+           * ## 把这次切集拿到的流告诉 ISOLATED（2026-10-29 加，ADR 0024 的配套）
+           *
+           * ## 为什么必须有这一条
+           *
+           * 主世界与 ISOLATED 是两个 world，`pageState` 只在 ISOLATED 里。
+           * SPA 切集时：
+           *   - `__playinfo__` **完全不重新赋值**（ADR 0023 实测），所以 `ssr-playinfo` 不会再来
+           *   - `playurl-raw` 更不会来（PGC 的请求不走 `/x/player/…`）
+           *
+           * 于是不补这一条的话，`pageState` 会**永远停在首次加载那一集** ——
+           * popup 的徽章在切集后不更新，显示的是上一集的画质，而且不报错。
+           *
+           * 带上 `cid` 是因为 ISOLATED 侧要据此把 `pageKey` 换到新集
+           * （`ep:` 前缀靠 ep_id，但响应里只有 cid —— 映射在 ISOLATED 侧用
+           * `pluma:pgc-ep:` 那份 sessionStorage 做，那里已经存了）。
+           *
+           * 只发 `full`（即 `j.result`），不带整份 `body`：`body.data` 里还有
+           * `arc` / `plugins` / 弹幕配置等，几十倍大且用不上。
+           */
+          safePost({
+            __ns: NS,
+            type: 'pgc-playview-stream',
+            token: token,
+            cid: cid,
+            result: full,
+          });
+
           return JSON.stringify(body);
         }
 

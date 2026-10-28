@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  isBetterStream,
   isPreviewSsr,
   isStreamTruncated,
+  maxVideoHeight,
   readCidFromSsr,
 } from '../../../src/content/isolated/pgc-cache-inject';
 
@@ -234,5 +236,75 @@ describe('isStreamTruncated：playview 的响应形状', () => {
     expect(isStreamTruncated({ code: 0, data: {} })).toBe(false);
     expect(isStreamTruncated({ code: 0 })).toBe(false);
     expect(isStreamTruncated(null)).toBe(false);
+  });
+});
+
+/**
+ * 画质比较 —— **2026-10-29 修的第二个 bug 的核心判据**。
+ *
+ * ## 为什么要和 `isStreamTruncated` 分开测
+ *
+ * 两者回答不同的问题，**不能互相替代**：
+ * - `isStreamTruncated`：这条流够不够长（能不能看完整集）
+ * - `isBetterStream`：取到的流画质是不是更高
+ *
+ * 真机实测（ep733317，限免集）：
+ * ```
+ * dash:           80@1080 64@720 32@480 16@360   ← 只下发到 1080
+ * timelength      1075582ms vs 1076s             ← 相符，不算截断
+ * accept_quality  [125,122,120,112,80,...]       ← 内容有 HDR/4K/1080P+
+ * 播放账号取流     最高 2160                      ← 本来能拿到
+ * ```
+ * 旧逻辑只看截断 → 判「无需注入」→ 播放账号没去取 → 用户选了 4K 没反应。
+ */
+describe('maxVideoHeight', () => {
+  it('取 dash.video 里的最高高度', () => {
+    expect(
+      maxVideoHeight({ dash: { video: [{ height: 1080 }, { height: 720 }, { height: 2160 }] } }),
+    ).toBe(2160);
+  });
+
+  it('没有 dash / 没有 video / 空数组 → 0（不猜）', () => {
+    expect(maxVideoHeight(null)).toBe(0);
+    expect(maxVideoHeight({})).toBe(0);
+    expect(maxVideoHeight({ dash: {} })).toBe(0);
+    expect(maxVideoHeight({ dash: { video: [] } })).toBe(0);
+  });
+
+  it('height 缺失或非数字的轨被忽略', () => {
+    expect(maxVideoHeight({ dash: { video: [{ height: 720 }, {}, { height: '1080' }] } })).toBe(
+      720,
+    );
+  });
+});
+
+describe('isBetterStream', () => {
+  const vi = (h: number) => ({ dash: { video: [{ height: h }] } });
+
+  it('严格更高才替换 —— 限免集 1080 → 4K 走这条', () => {
+    expect(isBetterStream(1080, vi(2160))).toBe(true);
+  });
+
+  it('相等不替换（避免无意义的 reload 闪屏）', () => {
+    expect(isBetterStream(2160, vi(2160))).toBe(false);
+    expect(isBetterStream(1080, vi(1080))).toBe(false);
+  });
+
+  it('更低不替换（**不许把画质拉低**）', () => {
+    expect(isBetterStream(2160, vi(1080))).toBe(false);
+  });
+
+  it('取回来没有可用轨 → 不替换', () => {
+    expect(isBetterStream(1080, null)).toBe(false);
+    expect(isBetterStream(1080, {})).toBe(false);
+  });
+
+  /**
+   * 这条守的是「会员老番不许掉回试看」的**边界**：
+   * 老番的 SSR 流本身就短，走的是 `isStreamTruncated` 那条路，
+   * 根本不会调到这里。但如果哪天真调到了，也不许因为"画质不更高"就去动它。
+   */
+  it('当前 720、取回也只有 720 → 不动（老番场景）', () => {
+    expect(isBetterStream(720, vi(720))).toBe(false);
   });
 });

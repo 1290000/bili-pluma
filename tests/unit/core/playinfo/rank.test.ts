@@ -154,3 +154,86 @@ describe('diffCapability：真实对比', () => {
     expect(diff?.improved).toBe(true);
   });
 });
+
+/**
+ * `topQualityIds` 要**每个高度档取最高 id**，不是只取最高那一档。
+ *
+ * ## 这条的来历（2026-10-29 真机）
+ *
+ * ep733317（限免集）注入成功后 dash 实际含：
+ * ```
+ * 125@2160  120@2160  112@1080  80@1080  64@720  32@480  16@360
+ * ```
+ * 第一版实现只收 `height === maxHeight(2160)` 的轨 → 只有 `125/120`，
+ * 徽章变成 `HDR 4K`。而 **112（1080P 高码率）是用户能独立选的档**，
+ * 它不该因为"不是最高档"就消失 —— 用户当场就问「怎么不显示 1080P+」。
+ */
+describe('capabilityOf：topQualityIds 收全部真实 id', () => {
+  function playinfo(video: Array<{ id: number; height: number }>) {
+    return {
+      quality: 0,
+      acceptQuality: [],
+      acceptDescription: [],
+      dash: {
+        duration: 100,
+        video: video.map((v) => ({
+          ...v,
+          baseUrl: '',
+          backupUrl: [],
+          bandwidth: 1,
+          codecid: 7,
+          width: 0,
+          frameRate: 30,
+          frameRateRaw: '30.000',
+          mimeType: '',
+        })),
+        audio: [],
+        flacAudio: null,
+        dolbyAudio: [],
+        dolbyVision: false,
+      },
+      durl: null,
+    };
+  }
+
+  it('4K 视频里 1080P+ 依然要收进来（ep733317 的真实形状）', () => {
+    const cap = capabilityOf(
+      playinfo([
+        { id: 125, height: 2160 },
+        { id: 120, height: 2160 },
+        { id: 112, height: 1080 },
+        { id: 80, height: 1080 },
+        { id: 64, height: 720 },
+        { id: 32, height: 480 },
+        { id: 16, height: 360 },
+      ]),
+    );
+    // v3：全部收、降序。UI 层再决定哪些值得做成徽章
+    expect(cap?.topQualityIds).toEqual([125, 120, 112, 80, 64, 32, 16]);
+    // 125(HDR) 与 120(4K) 同在 2160 档，v2 的每档取最高会把 120 丢掉
+    expect(cap?.topQualityIds).toContain(120);
+  });
+
+  it('只有 1080 的集（ss34412 形状）→ 2160 档不存在，1080 档取 125', () => {
+    const cap = capabilityOf(
+      playinfo([
+        { id: 125, height: 1080 },
+        { id: 112, height: 1080 },
+        { id: 80, height: 1080 },
+        { id: 64, height: 720 },
+      ]),
+    );
+    expect(cap?.topQualityIds).toEqual([125, 112, 80, 64]);
+  });
+
+  it('每条高度只有一条轨时按降序原样给出', () => {
+    const cap = capabilityOf(
+      playinfo([
+        { id: 120, height: 2160 },
+        { id: 80, height: 1080 },
+        { id: 64, height: 720 },
+      ]),
+    );
+    expect(cap?.topQualityIds).toEqual([120, 80, 64]);
+  });
+});

@@ -53,6 +53,36 @@ export function capabilityOf(info: PlayInfo | null): Capability | null {
     if (t.frameRate > maxFrameRateAtTopHeight) maxFrameRateAtTopHeight = t.frameRate;
   }
 
+  /**
+   * **dash 里出现过的、有意义的所有 `quality id`**（降序去重）。
+   *
+   * ## 演进史（两次都栽在"想用高度去收敛"上）
+   *
+   * | 版本 | 做法 | 真机暴露的问题 |
+   * | --- | --- | --- |
+   * | v1 | 只收 `height === maxHeight` 的轨 | 4K 视频里 `112`(1080P+) 明明能选，却没标（用户当场问「怎么不显示 1080P+」） |
+   * | v2 | 每个高度取最高 id | 2160 档里 `125`(HDR) 和 `120`(4K) **同高**，取最大把 `120` 丢了 → **4K 徽章消失** |
+   * | v3 | **全部收，按 id 降序**，由 UI 层决定显示哪些 | —— |
+   *
+   * **教训：`height` 不能用来做"档位优先级"的判断。** 同一高度下有多个互不包含的档
+   * （HDR / 4K / 1080P+ 都是独立的、用户能分别选的东西），任何"每个高度只留一个"
+   * 的收敛都会丢掉真实存在的选项。
+   *
+   * ## 那低档（720/480/360）怎么办
+   *
+   * 它们也收进来，但**由 UI 层的 `MAX_BADGES` 和 PGC 的 `PGC_HIDDEN_BADGES` 处理**。
+   * 收全的原因：`capability` 是**数据层**，它该如实描述"拿到了什么"；
+   * "哪些值得显示"是展示决策，属于 `summary-view.ts`。
+   * 把展示偏好塞进数据层，就会出现 v1/v2 那种"数据为了 UI 好看而被裁剪"的错误。
+   *
+   * 排序按 id 降序 = B 站画质菜单的顺序。
+   */
+  const idSet = new Set<number>();
+  for (const t of withHeight) {
+    if (t.id > 0) idSet.add(t.id);
+  }
+  const topQualityIds = [...idSet].sort((a, b) => b - a);
+
   return {
     maxHeight,
     maxFrameRate,
@@ -63,6 +93,7 @@ export function capabilityOf(info: PlayInfo | null): Capability | null {
     topTrack,
     videoCount: dash.video.length,
     audioCount: dash.audio.length,
+    topQualityIds,
   };
 }
 

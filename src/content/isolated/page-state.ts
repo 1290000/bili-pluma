@@ -42,7 +42,24 @@ export interface SsrPayload {
 }
 
 export class PageState {
-  private bvid = '';
+  /**
+   * 当前页的键：普通视频是 bvid，PGC（番剧/国创/电影）是 `ep:{epId}` / `ss:{seasonId}`。
+   *
+   * ## 为什么不再是 `bvid`（2026-10-29 修）
+   *
+   * 原来是 `private bvid`，只有 `/video/BV…` 会调 `setPage()`，PGC 页从未登记。
+   * 而 `view()` 第一行就是 `if (!this.bvid) return null` —— 于是**番剧页上
+   * `view()` 恒为 `null`**，连带三件事一起失效：
+   *   - popup 的 §2.3 永远显示「正在读取本页取流数据…」
+   *   - §2.4 的 A 卡片拿不到 `primary.user`，只能写「打开视频页后可见」
+   *   - options 账号页的主账号卡片同样拿不到昵称
+   *
+   * 当时的理由是「PGC 的 SSR 基线会被主世界改写成播放账号的流，不可信」。
+   * 但那个理由只对**能力基线**成立，对主账号的**显示信息**（uname / level /
+   * loggedIn）根本不成立 —— 那些字段与取流身份无关。用一个「基线不可信」
+   * 去否决整份数据，是把两件事捆在一起了。
+   */
+  private pageKey = '';
   private p = 0;
 
   private primaryCap: Capability | null = null;
@@ -70,12 +87,15 @@ export class PageState {
   /**
    * 报到时设定当前页。
    *
-   * ⚠️ **bvid 或分 P 变了就清空两侧数据。** 不清的话，切 P 之后
-   * 上一 P 的轨道会被当成本 P 的能力 —— 两个视频码率不同时结论直接错。
+   * @param key 普通视频传 bvid（`BV1xx411c7mD`）；PGC 传 `ep:{epId}` / `ss:{seasonId}`
+   * @param p   第几个分 P。PGC 页没有分 P，传 1
+   *
+   * ⚠️ **pageKey 或分 P 变了就清空两侧数据。** 不清的话，切 P / 切集之后
+   * 上一集的能力会被当成本集的能力 —— 两个视频码率不同时结论直接错。
    */
-  setPage(bvid: string, p: number): void {
-    if (bvid === this.bvid && p === this.p) return;
-    this.bvid = bvid;
+  setPageKey(key: string, p: number): void {
+    if (key === this.pageKey && p === this.p) return;
+    this.pageKey = key;
     this.p = p;
     this.primaryCap = null;
     this.primaryReason = 'absent';
@@ -154,10 +174,10 @@ export class PageState {
    * @returns `null` 表示"当前不是视频页 / 还没报到" —— UI 该说"打开任意视频页查看效果"
    */
   view(): PageTracksView | null {
-    if (!this.bvid) return null;
+    if (!this.pageKey) return null;
 
     return {
-      bvid: this.bvid,
+      pageKey: this.pageKey,
       p: this.p,
       updatedAt: this.updatedAt,
       primary: {

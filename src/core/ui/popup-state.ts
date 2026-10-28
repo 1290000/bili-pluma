@@ -60,7 +60,22 @@ export interface PopupView {
   state: PopupState;
   pill: string;
   tone: PopupTone;
-  line: string;
+  /**
+   * 胶囊下方那句解释。
+   *
+   * ## 为什么改成可选（2026-10-29）
+   *
+   * 用户明确要求删掉三句：「取流已由播放账号接管」「当前使用主账号画质」
+   * 「开关开着但规则没装上，请关闭再开启一次」。
+   *
+   * 删得掉的底气在于：**胶囊本身已经回答了"现在生效了吗"**（popup 的唯一职责，
+   * 见 §0）。下面再补一句"取流已由播放账号接管"，是把胶囊的内容用长句说一遍。
+   *
+   * 但**不是所有状态都能省**：`凭据失效` / `已降级` / 未配置引导这几句带着
+   * 归因和后果，删了用户就不知道该做什么。所以这里改成可选 ——
+   * 能省的省，必须说的仍要说。
+   */
+  line?: string;
   /** 是否该把主按钮换成"扫码登录" */
   needsLogin: boolean;
 }
@@ -129,12 +144,20 @@ export function describePopup(snap: PopupSnapshot): PopupView {
    *   - 用户自己关掉开关（已停用）> 当前页不对（未生效）
    *   - 凭据失效 > 未生效 ？反过来：用户在首页时，"凭据失效"要他去重扫，
    *     而他此刻并不在看视频，扫完也没得看。所以未生效排在凭据校验之前。
+   *
+   * ## 这一行也去掉了（2026-10-29 用户第二次要求）
+   *
+   * 先是从「当前页不是视频页，打开任意视频查看效果」缩成「当前页不是播放页」，
+   * 用户仍要求删。**同意**：胶囊「未生效」+ 画面里没有画质卡，已经足够说明
+   * "这个页面用不上"。再补一句"当前页不是播放页"是把用户已经看出来的事说一遍。
+   *
+   * 现在 `not-video` 是一个**完全没有解释文字**的状态 ——
+   * popup 上只剩胶囊、两张账号卡、开关。
    */
   const notVideo = (): PopupView => ({
     state: 'not-video',
     pill: '未生效',
     tone: 'neutral',
-    line: '当前页不是视频页，打开任意视频查看效果',
     needsLogin: false,
   });
 
@@ -187,7 +210,8 @@ export function describePopup(snap: PopupSnapshot): PopupView {
         state: 'active',
         pill: '已接管',
         tone: 'good',
-        line: proxy.enabled ? '取流已由播放账号接管' : '凭据已配置，但代理处于停用状态',
+        // 已接管时不写解释（胶囊说了同一件事）；停用是个非常态，仍要说明
+        ...(proxy.enabled ? {} : { line: '凭据已配置，但代理处于停用状态' }),
         needsLogin: false,
       };
     }
@@ -214,7 +238,7 @@ export function describePopup(snap: PopupSnapshot): PopupView {
       state: 'stopped',
       pill: '已停用',
       tone: 'neutral',
-      line: '当前使用主账号画质',
+      // 用户自己关的开关，胶囊「已停用」已经说清，不需要再解释一遍
       needsLogin: false,
     };
   }
@@ -261,28 +285,37 @@ export function describePopup(snap: PopupSnapshot): PopupView {
       state: 'active',
       pill: '已接管',
       tone: 'good',
-      line: '取流已由播放账号接管（凭据校验未通过，但代理仍在工作）',
+      // 用户能播就说明代理在工作；这条未通过校验是后台视角，不打扰他
+
       needsLogin: false,
     };
   }
 
   /**
-   * `ruleCount === 0` 才是"确认没规则"的不一致状态。
+   * ## `ruleCount === 0` **不再报「异常」（2026-10-29 用户否决）**
    *
-   * `-1` 表示**读不到**规则列表（background 侧 API 抛错），
-   * 那是"不知道"，不能报成异常——否则用户会去关开一次开关试图修复，
-   * 而实际什么都没坏。
+   * 原来的逻辑：开关开着但 0 条规则 → 显示「开关开着但规则没装上，请关闭再开启一次」。
+   *
+   * 用户实测推翻了它：
+   *
+   * > 「番剧页从别的页面切回来 popup 里面就会显示开关开着但规则没装上，
+   * > 请关闭再开启一次，可问题是播放已经成功的被接管了，不用再重新开关一次」
+   *
+   * 两种情况会让 `ruleCount` 读到 0，而代理其实好好的：
+   *
+   *   1. **切回标签页的瞬间**——标签页规则随 `page/activate` 异步重建，
+   *      popup 恰好在这个窗口打开就读到 0
+   *   2. `countPathRules()` 只数 `kind === 'path'` 的全局规则，
+   *      而番剧页实际生效的是**标签页规则**（`tabIds`）—— 口径本来就对不上
+   *
+   * 而「取流成功了」这个事实比规则计数硬得多：规则没装上的话，
+   * 播放账号的 4K 根本取不回来。用户能播 4K 却被告知"规则没装上"，
+   * 是这条提示最糟糕的形态 —— 它让用户去修一个没坏的东西。
+   *
+   * 所以现在**不报警、不提示**，直接落到「已接管」。
+   * `ruleCount` 仍然保留在 `PopupSnapshot` 里供诊断页使用 ——
+   * 那里才是看"规则到底几条"的地方。
    */
-  if (proxy.ruleCount === 0) {
-    return {
-      state: 'inconsistent',
-      pill: '异常',
-      tone: 'bad',
-      line: '开关开着但规则没装上，请关闭再开启一次',
-      needsLogin: false,
-    };
-  }
-
   const rate = sampleRate(buckets);
   if (rate !== null && rate < DEGRADED_RATE) {
     return {
@@ -298,7 +331,6 @@ export function describePopup(snap: PopupSnapshot): PopupView {
     state: 'active',
     pill: '已接管',
     tone: 'good',
-    line: '取流已由播放账号接管',
     needsLogin: false,
   };
 }

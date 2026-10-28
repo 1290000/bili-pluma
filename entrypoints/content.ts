@@ -35,9 +35,11 @@ import {
 } from '@/src/content/isolated/badge-input';
 import { PageState } from '@/src/content/isolated/page-state';
 import {
+  isBetterStream,
   isPreviewSsr,
   isStreamTruncated,
   loadCachedVideoInfo,
+  maxVideoHeight,
   readCidFromSsr,
   writePgcSessionCache,
 } from '@/src/content/isolated/pgc-cache-inject';
@@ -422,6 +424,37 @@ function listenMainWorld(): void {
       return;
     }
 
+    /**
+     * PGC 的 SPA 切集：主世界换完流后把新一集的能力送回来（ADR 0023 + 0024 的配套）。
+     *
+     * ## 为什么这条消息必须存在
+     *
+     * 切集时 `__playinfo__` **完全不重新赋值**，所以 `ssr-playinfo` 不会再来；
+     * PGC 的请求也不走 `/x/player/…`，所以 `playurl-raw` 也不会来。
+     * 没有这条消息，`pageState` 会永远停在这张标签页**首次加载**的那一集。
+     *
+     * ## 为什么先换 `pageKey`
+     *
+     * `applyPlayback()` 把能力记在"当前这一页"名下。切集后如果不先换 pageKey，
+     * 新集的 4K 会被记到上一集头上 —— 之后切回去会显示一个错的画质，
+     * 而且**不报错、不崩溃**，属于最难查的那类。
+     *
+     * 响应里只有 `cid`，而 `pageKey` 用的是 `ep:` / `ss:`。映射靠
+     * `sessionStorage` 的 `pluma:pgc-ep:{ep_id} → cid`（由 `writePgcSessionCache` 写）。
+     * 拿不到映射就退回用 `ep:{cid}`：数字对不上但不致命 ——
+     * 下一次整页加载会用正确的 key 覆盖。
+     */
+    if (d.type === 'pgc-playview-stream') {
+      const s = d as { cid?: string; result?: unknown };
+      const cid = typeof s.cid === 'string' ? s.cid : '';
+      if (cid && s.result) {
+        pageState.setPageKey(pgcPageKeyForCid(cid), 1);
+        pageState.applyPlayback({ code: 0, result: s.result });
+        reportQuality({ height: 0, note: `[PGC] 切集换流已记录 cid=${cid}` });
+      }
+      return;
+    }
+
     // 会员状态响应已被改写 —— 切换画质不再弹「开通大会员」的前提
     if (d.type === 'patch') {
       const p = d as { path?: string };
@@ -553,6 +586,117 @@ function listenMainWorld(): void {
 }
 
 /**
+ * SPA 切集后，由 `cid` 推出这一集的 `pageKey`。
+ *
+ * ## 为什么优先用 URL 而不是反查映射
+ *
+ * `sessionStorage` 里只有 `pluma:pgc-ep:{ep_id} → cid`（正向），反查要遍历所有键。
+ * 而 **SPA 切集时 `location.pathname` 会立刻更新**（ADR 0023 实测：点「第 8 集」后
+ * URL 变了、`arc.cid` 还是第 7 集的）。所以 URL 是最直接的来源。
+ *
+ * 只有 URL 解析不出 ep/ss 时，才退回用 `cid` 当 key ——
+ * 数字虽然对不上 `ep:` 前缀，但至少能保证"切到新集后旧能力被清空"，
+ * 下一次整页加载会用真正的 key 覆盖。
+ */
+function pgcPageKeyForCid(cid: string): string {
+  const info = parsePlayPage(location.href);
+  if (info?.kind === 'pgc') {
+    if (info.epId) return `ep:${info.epId}`;
+    if (info.seasonId) return `ss:${info.seasonId}`;
+  }
+  return `ep:${cid}`;
+}
+
+/**
+ * 时长已经够，但画质可能没到顶 —— 再试一次取流，更好才替换。
+ *
+ * ## 它只处理"时长够了"的集数
+ *
+ * 调用点在 `orchestratePgc` 里 `isStreamTruncated(...) === false` 之后。
+ * 会员老番（只给 361 秒试看）走的是**另一条路径**，永远到不了这里 ——
+ * 所以这个函数**不可能**让老番掉回试看。
+ *
+ * ## 为什么"不更好"时不写缓存
+ *
+ * `PGC_CACHE_MAX` 只有 8 条 LRU。如果每集都取、都写，一堆"取回来一样"的
+ * 条目会把真正有价值的 4K 缓存挤出去，于是下次进同一集又要再取 —— 恶性循环。
+ *
+ * **没升级成功就不写缓存**，这是这条新路径能常驻的前提。
+ *
+ * ## 为什么失败要静默
+ *
+ * 这条路径是"锦上添花"：失败了用户仍能看完整集，只是画质停在 SSR 给的那档。
+ * 弹错误提示反而让人以为坏了。
+ *
+ * @param cid     章节 id
+ * @param ssrInfo SSR 里的 `video_info`（已含当前下发的流）
+ * @returns `true` 表示已发起刷新（调用方该立刻 return）；`false` 表示不动
+ */
+async function tryUpgradeForQuality(cid: string, ssrInfo: unknown): Promise<boolean> {
+  const currentH = maxVideoHeight(ssrInfo);
+
+  /**
+   * SSR 里连一条带高度的视频轨都没有 → 判不了"当前拿到什么"，
+   * 也就无从比较。这种集数（纯 durl / 结构异常）保持原样，不冒险。
+   */
+  if (currentH <= 0) return false;
+
+  /**
+   * 重刷护栏：本会话已为这一集刷过一次就不再取。
+   *
+   * 与 `prepareFullStream` 共用同一个 guard key —— 一个集数在本会话里
+   * 最多因"填充"刷一次，不管是时长原因还是画质原因。否则两条路径各自
+   * 刷一次，用户会看到两次闪屏。
+   */
+  const guardKey = GUARD_KEY_PREFIX + cid;
+  let alreadyTried = false;
+  try {
+    alreadyTried = isAlreadyTried(parseGuard(sessionStorage.getItem(guardKey)), Date.now());
+  } catch {
+    /* 读不到就当没试过 */
+  }
+  if (alreadyTried) return false;
+
+  const outcome = await fetchPgcPlayurl(cid, buildPlayurlUrl(cid));
+  if (outcome.kind !== 'ok') {
+    reportQuality({
+      height: 0,
+      note: `[PGC] 画质补取失败（${outcome.kind === 'denied' ? `code=${outcome.code}` : outcome.detail}），保持现有画质`,
+    });
+    return false;
+  }
+
+  if (!isBetterStream(currentH, outcome.result)) {
+    reportQuality({
+      height: 0,
+      note: `[PGC] 补取到的画质不高于现有 ${String(currentH)}p —— 不替换`,
+    });
+    return false;
+  }
+
+  const fetchedH = maxVideoHeight(outcome.result);
+  const merged = mergeVideoInfo(ssrInfo, outcome.result);
+  if (!merged) {
+    reportQuality({ height: 0, note: '[PGC] 补取有更高画质但合并不出可用字段，保持现有' });
+    return false;
+  }
+
+  /**
+   * 走到这里才写缓存 —— **只有真正要用的那份才进 LRU**。
+   */
+  await writePgcCache(cid, merged);
+  const epFromUrl = parsePlayPage(location.href);
+  writePgcSessionCache(cid, merged, epFromUrl?.kind === 'pgc' ? epFromUrl.epId : null);
+
+  reportQuality({
+    height: 0,
+    note: `[PGC] 补取到更高画质 ${String(currentH)}p → ${String(fetchedH)}p，刷新生效`,
+  });
+  reloadWithGuard(cid, `画质可从 ${String(currentH)}p 提升到 ${String(fetchedH)}p`);
+  return true;
+}
+
+/**
  * PGC 完整流编排：**一条 cid 走一遍**（**只服务整页加载**，见 ADR 0023）。
  *
  * ## ⚠️ SPA 切集不走这里
@@ -580,12 +724,59 @@ async function orchestratePgc(cid: string, ssrData?: unknown): Promise<void> {
   const epId = playInfo?.kind === 'pgc' ? playInfo.epId : null;
 
   /**
-   * ## 只需要看的集数不必取流
+   * ## 只需浏览的集数不必取流，但**仍要记录它拿到的画质**
    *
    * 免费集 / 主账号本来就有权益的集数，SSR 流长度与 `timelength` 相符 ——
    * 注入完整流没有收益，反而可能把高清换成缓存里的旧 qn。
+   *
+   * ## ⚠️ 这里必须 `applyPlayback`（2026-10-29 真机发现）
+   *
+   * 原来此处直接 `return`，什么也不记。而 popup §2.3 的徽章只读
+   * `pageState.playback`，它此前只在 `prepareFullStream` 里被填充 ——
+   * 于是**免费集的 popup 永远显示「等待取流…」**，用户看到的和"插件没生效"一模一样。
+   *
+   * 真机现场（ep3854815）：`play_video_type=whole`、`timelength=1168405`、
+   * `dash.duration=1169`、实际播放 3840×2160 —— 画质完全正常，
+   * 但 popup 里一个徽章都不会有。**这是同一个用户反馈的另一种成因。**
+   *
+   * 这份 SSR 数据本身就是**页面在播放账号身份下拿到的响应**（DNR 已换 Cookie），
+   * 所以它可以如实代表"播放账号这次拿到了什么"。
    */
   if (ssrData !== undefined && !isStreamTruncated(ssrData)) {
+    const ssrInfo = readSsrVideoInfo(ssrData);
+    if (ssrInfo) pageState.applyPlayback({ code: 0, result: ssrInfo });
+
+    /**
+     * ## ⚠️ 「流够长」不等于「画质到顶」（2026-10-29 真机修的第二个 bug）
+     *
+     * 上面那条 `isStreamTruncated` 只回答**时长**问题。而真机实测证明了
+     * 另一个独立的问题：**限免 / 免费集的流是完整的，但画质没到顶。**
+     *
+     * ```
+     * ep733317（限免集）
+     *   dash:          80@1080 64@720 32@480 16@360   ← 服务端只下发到 1080
+     *   timelength     1075582ms vs dash.duration 1076s ← 相符，不算截断
+     *   accept_quality [125,122,120,112,80,...]         ← 内容有 HDR/4K/1080P+
+     *   播放账号取流    最高 2160，含 125/120/112        ← 本来能拿到
+     * ```
+     *
+     * 于是用户看到的是「画质菜单里能选 4K/HDR，选了没反应」——
+     * 因为**播放账号压根没去取**。
+     *
+     * ## 为什么在这里再取一次流，而不是用 `accept_quality` 预判
+     *
+     * `accept_quality` 只说明"内容提供哪些档"，不说明"实际能取到哪些"。
+     * 拿它预判会引入「漏取」风险 —— 而漏取正是当前这个 bug 的形态。
+     * **取一次、比结果，事实说话**：`isBetterStream()` 只在严格更高时才返回 `true`。
+     *
+     * ## 为什么这不会拖累会员老番
+     *
+     * 会员老番（只有 720P）走的是**上面那条截断路径**，根本到不了这里 ——
+     * 这里只处理"时长已经够了"的集数。所以「老番掉回试看」不可能发生：
+     * `isStreamTruncated` 那条路一个字节都没改。
+     */
+    if (ssrInfo && (await tryUpgradeForQuality(cid, ssrInfo))) return;
+
     reportQuality({
       height: 0,
       note: '[PGC] 流长度与 timelength 相符 —— 无需注入',
@@ -754,6 +945,26 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
     return;
   }
 
+  /**
+   * ## 把这次取流的结果交给 `pageState`（2026-10-29 加）
+   *
+   * ## 为什么 PGC 侧原来根本没有"播放账号拿到了什么"
+   *
+   * 普通视频的播放账号数据来自 `playurl-raw` 上报，而那个上报的闸门是
+   * `isPlayurlPath()` —— 只认 `/x/player/wbi/playurl` 与 `/x/player/playurl`。
+   * PGC 的 `/pgc/player/web/playurl` **不在 DNR 白名单里**（页面根本不调它），
+   * 请求是本文件自己的 `fetchPgcPlayurl()` 发出的，响应只拿去合并、写缓存，
+   * **从未回流到 `pageState`**。
+   *
+   * 于是即使 popup 的 §2.3 能显示（`pageKey` 修好之后），
+   * `playback` 恒为 `null` → 徽章永远为空。
+   *
+   * ⚠️ 这里传的是**完整的接口响应**（`{code, result}`），不是 `outcome.result`。
+   * 解析器 `parsePlayurl` 现在认识 `{code, result}` 形状（`pickData` 的 result 分支），
+   * 传完整响应能让"接口形状"这一层判断只留在一个地方。
+   */
+  pageState.applyPlayback({ code: 0, result: outcome.result });
+
   await writePgcCache(cid, merged);
 
   /**
@@ -810,19 +1021,29 @@ function report(): void {
   const info = parsePlayPage(location.href);
   if (!info) return;
 
-  /**
-   * 普通视频：登记页面，供 popup §2.3 的画质对比用。
-   *
-   * ⚠️ **PGC 页不登记**。§2.3 的对比依赖"`document_start` 那刻的 `__playinfo__`
-   * 是主账号基线"（ADR 0014），而 PGC 页的 SSR 数据会被主世界改写成播放账号的流
-   * （ADR 0019），那份基线不再可信。PGC 页的状态展示留给角标（走实际播放高度，不猜）。
-   */
-  if (info.kind === 'video') pageState.setPage(info.bvid, info.p);
-
   /** 状态键：视频页用 bvid，PGC 页用 `ep:` / `ss:` */
   const pageKey =
     info.kind === 'video' ? info.bvid : info.epId ? `ep:${info.epId}` : `ss:${info.seasonId ?? ''}`;
   const p = info.kind === 'video' ? info.p : 1;
+
+  /**
+   * 登记当前页，供 popup §2.3 与 §2.4 的 A 卡片用。
+   *
+   * ## ⚠️ 这里**必须两类页面都登记**（2026-10-29 修）
+   *
+   * 原来写的是 `if (info.kind === 'video')`，理由是"§2.3 的对比依赖 SSR 基线，
+   * 而 PGC 的 SSR 会被主世界改写成播放账号的流，基线不可信"。
+   *
+   * 那个理由只对**能力基线**成立。把整份登记一起跳过，代价是 PGC 页上
+   * `PageState.view()` 恒为 `null` —— 于是**主账号的昵称/等级也一起没了**
+   * （它跟取流身份毫无关系），popup 的 §2.3 永远停在「正在读取本页取流数据…」，
+   * A 卡片永远写「打开视频页后可见」。一个"基线不可信"的局部判断，
+   * 否决掉了整份数据。
+   *
+   * 现在改为：**两类页面都登记**，能不能出对比由 `capability` 是否为 null 决定
+   * （PGC 侧解析出的 dash 见 `applyPlayback`）。主账号的显示信息与基线可用性解耦。
+   */
+  pageState.setPageKey(pageKey, p);
 
   /**
    * 主账号是否登录 —— 从页面 cookie 的 `DedeUserID` 判断（不读任何凭据）。
