@@ -1,5 +1,5 @@
 /**
- * 「哪些已打开的视频页还挂着旧画质」—— 总开关切换后必须告诉用户这件事。
+ * 「哪些已打开的播放页还挂着旧画质」—— 总开关切换后必须告诉用户这件事。
  *
  * ## 为什么这是个真问题
  *
@@ -19,41 +19,45 @@
  *
  * 这里用 **DNR 规则里的 tabIds** 作为判据：只有真的装了代理规则、
  * 且标签页还活着的，才算"已锁定旧画质"。
+ *
+ * ## 为什么用 `describeRules()` 而不是自己查 sessionRules
+ *
+ * AGENTS.md §5.4：**所有 DNR 代码只在 `platform/http/dnr.ts`**。
+ * 这里曾自己声明 `TAB_RULE_BASE` / `TAB_RULE_SPAN` 并直接过滤规则 ID，
+ * 于是区段常量有了两份 —— 改一处忘另一处就是"规则找不全"的静默 bug。
  */
 
+import { describeRules } from '@platform/http/dnr';
 import type { ResponseMsg } from '@shared/types/messages';
-
-const TAB_RULE_BASE = 20000;
-const TAB_RULE_SPAN = 10000;
-
-/** B站视频详情页 URL。与 `shared/utils/video-page.ts` 的匹配范围保持一致 */
-function isVideoUrl(url: string | undefined): boolean {
-  if (!url) return false;
-  return /^https?:\/\/(www\.)?bilibili\.com\/video\//.test(url);
-}
+import { parsePlayPage } from '@shared/utils/video-page';
 
 /**
- * 找出**当前装了代理规则、且仍是视频页**的标签页。
+ * 找出**当前装了代理规则、且仍是受支持播放页**的标签页。
  *
- * 过滤掉非视频页很重要：用户可能已经从视频页导航到首页，
+ * 过滤掉非播放页很重要：用户可能已经从视频页导航到首页，
  * 但标签页关闭事件还没到，规则还在。那种页面不需要刷新。
+ *
+ * ⚠️ 判据用 `parsePlayPage()`（同时认 `/video/BV…` 与 `/bangumi/play/ep…`）。
+ * 曾写死 `/video/` 正则并注明"与 `shared/utils/video-page.ts` 的匹配范围保持一致" ——
+ * PGC 支持落地后那个前提就不成立了：番剧页关掉开关后**不会收到任何提示**，
+ * 用户会以为开关坏了（2026-10-28 审查发现）。
  */
 export async function findAffectedTabs(): Promise<number[]> {
   const [rules, tabs] = await Promise.all([
-    chrome.declarativeNetRequest.getSessionRules().catch(() => []),
+    describeRules().catch(() => []),
     chrome.tabs.query({}).catch(() => []),
   ]);
 
-  const ruledTabIds = new Set(
-    rules
-      .filter((r) => r.id >= TAB_RULE_BASE && r.id < TAB_RULE_BASE + TAB_RULE_SPAN)
-      .flatMap((r) => r.condition.tabIds ?? []),
-  );
+  const ruledTabIds = new Set<number>();
+  for (const rule of rules) {
+    if (rule.kind !== 'tab') continue;
+    for (const id of rule.tabIds) ruledTabIds.add(id);
+  }
 
   if (ruledTabIds.size === 0) return [];
 
   return tabs
-    .filter((t) => typeof t.id === 'number' && ruledTabIds.has(t.id) && isVideoUrl(t.url))
+    .filter((t) => typeof t.id === 'number' && ruledTabIds.has(t.id) && parsePlayPage(t.url ?? ''))
     .map((t) => t.id as number);
 }
 

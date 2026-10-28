@@ -38,7 +38,7 @@ function snap(over: Partial<PopupSnapshot> = {}): PopupSnapshot {
     configured: true,
     account: healthyAccount,
     buckets: [],
-    page: { kind: 'video' },
+    page: { kind: 'play' },
     ...over,
   };
 }
@@ -393,7 +393,7 @@ describe('状态 5：当前页不是视频页（2026-10-26 新增）', () => {
   });
 
   it('在视频页时不受影响（回归）', () => {
-    expect(describePopup(snap({ page: { kind: 'video' } })).state).toBe('active');
+    expect(describePopup(snap({ page: { kind: 'play' } })).state).toBe('active');
   });
 });
 

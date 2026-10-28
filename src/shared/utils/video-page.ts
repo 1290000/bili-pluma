@@ -19,6 +19,23 @@ export const DEVICE_COOKIE_NAMES = [
   'bili_ticket_expires',
 ] as const;
 
+/**
+ * 受支持的播放页 URL 模式 —— **给 `chrome.tabs.query` 用**。
+ *
+ * 与 `parsePlayPage()` 必须覆盖同一批页面，否则会出现"判据说能播、查标签页查不到"
+ * 的割裂：`platform/page/page-state-client.ts` 曾只写 `*://*.bilibili.com/video/*`，
+ * 于是**开着番剧页时**，options 的主账号卡片与诊断页的「当前页取流数据」
+ * 都显示"打开任意视频页后可见"（2026-10-28 审查发现，由 `check-page-gate` 抓出）。
+ *
+ * ⚠️ content script 的 `matches` **不用这个常量**：WXT 生成 manifest 时对入口文件做
+ * 静态分析，取不到跨文件常量的值，manifest 里会变成空数组（等于不注入）。
+ * 那两处必须写字面量，由 `scripts/check-page-gate.mjs` 断言"两个模式都在"。
+ */
+export const PLAY_PAGE_URL_PATTERNS = [
+  '*://*.bilibili.com/video/*',
+  '*://*.bilibili.com/bangumi/play/*',
+] as const;
+
 export interface VideoPageInfo {
   bvid: string;
   p: number;

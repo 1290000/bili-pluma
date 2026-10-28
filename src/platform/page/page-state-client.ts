@@ -14,9 +14,16 @@
  */
 
 import type { PageTracksView } from '@shared/types/playinfo';
+import { PLAY_PAGE_URL_PATTERNS } from '@shared/utils/video-page';
 
-/** 只有这些 URL 上的 content script 会应答 */
-const VIDEO_TAB_QUERY = { url: ['*://*.bilibili.com/video/*'] };
+/**
+ * 只有这些 URL 上的 content script 会应答。
+ *
+ * ⚠️ 用共享常量，**不要在这里写字面量**：这里曾写死 `*://*.bilibili.com/video/*`，
+ * 于是开着番剧页时 `pickVideoTab()` 返回 null，options 的主账号卡片与诊断页的
+ * 「当前页取流数据」都显示"打开任意视频页后可见"（2026-10-28 修）。
+ */
+const VIDEO_TAB_QUERY = { url: [...PLAY_PAGE_URL_PATTERNS] };
 
 export type PageStateResult =
   /** 拿到了当前页数据 */

@@ -31,12 +31,17 @@ export interface PopupSnapshot {
   /** 12 个时间窗的原始统计。用于算样本数与成功率 */
   buckets: StatBucket[];
   /**
-   * 当前标签页是不是 B站视频页。
+   * 当前标签页是不是**受支持的播放页**（普通视频 / 番剧 / 国创 / 电影）。
    *
    * popup 自己没有页面上下文，判断不了 —— 由 `entrypoints/popup/main.tsx`
-   * 查活动标签页后填入。规范里的「状态 5：非视频页」就靠它。
+   * 查活动标签页后填入。规范里的「状态 5：非播放页」就靠它。
+   *
+   * ⚠️ 值叫 `play` 而不是 `video`：判据是 `parsePlayPage()`（`shared/utils/video-page.ts`），
+   * 它同时认 `/video/BV…` 与 `/bangumi/play/ep…`。曾经叫 `video` 且判据写死 `/video/`，
+   * 结果**番剧页 popup 一律显示「未生效」**，而那时 PGC 代理正在正常工作
+   * （2026-10-28 审查发现）。
    */
-  page: { kind: 'video' } | { kind: 'other' };
+  page: { kind: 'play' } | { kind: 'other' };
 }
 
 export type PopupTone = 'neutral' | 'good' | 'warn' | 'bad';
@@ -176,8 +181,8 @@ export function describePopup(snap: PopupSnapshot): PopupView {
      * 不是"需要重新扫码"。
      */
     if (proxy.hasCredential) {
-      // 有凭据但不在视频页 → 说「未生效」比说「已接管」诚实
-      if (page.kind !== 'video') return notVideo();
+      // 有凭据但不在播放页 → 说「未生效」比说「已接管」诚实
+      if (page.kind !== 'play') return notVideo();
       return {
         state: 'active',
         pill: '已接管',
@@ -221,7 +226,7 @@ export function describePopup(snap: PopupSnapshot): PopupView {
    * 排在它后面的是"当前页不对"——同样能解释，但与用户操作无关；
    * 再往后才是后台校验（凭据失效 / 异常 / 降级）。
    */
-  if (page.kind !== 'video') return notVideo();
+  if (page.kind !== 'play') return notVideo();
 
   if (!account.healthy) {
     /**

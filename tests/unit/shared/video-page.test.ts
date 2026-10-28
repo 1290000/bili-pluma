@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  PLAY_PAGE_URL_PATTERNS,
   parsePgcPage,
   parsePlayPage,
   parseVideoPage,
@@ -202,5 +203,41 @@ describe('readPrimaryMidFromCookie', () => {
 
   it('大 mid 也不丢精度（返回字符串）', () => {
     expect(readPrimaryMidFromCookie('DedeUserID=1000002')).toBe('1000002');
+  });
+});
+
+/**
+ * `PLAY_PAGE_URL_PATTERNS` 是 `chrome.tabs.query` 用的模式表。
+ *
+ * 它和 `parsePlayPage()` 必须覆盖同一批页面 —— 少一条就会出现"判据说能播、
+ * 查标签页查不到"，表现为 options 的主账号卡片与诊断页的「当前页取流数据」
+ * 在番剧页上显示"打开任意视频页后可见"（2026-10-28 真实 bug）。
+ *
+ * 这里只锁"两个家族都在"；`scripts/check-page-gate.mjs` 锁的是"用它的地方没绕开它"。
+ */
+describe('PLAY_PAGE_URL_PATTERNS', () => {
+  it('同时覆盖普通视频与 PGC 两种播放页', () => {
+    expect([...PLAY_PAGE_URL_PATTERNS]).toEqual([
+      '*://*.bilibili.com/video/*',
+      '*://*.bilibili.com/bangumi/play/*',
+    ]);
+  });
+
+  it('每个模式都有能被 parsePlayPage 解析的真实样本（不留死模式）', () => {
+    /**
+     * 为什么不能从 pattern 机械拼 URL：`/video/*` 拼出来是 `/video/x1`，
+     * 而解析器要的是 BV 号 —— 拼出来的 URL 必然解析失败，测的是拼接而不是判据。
+     * 所以每种模式配一个真实形态的样本。
+     */
+    const samples: Record<string, string> = {
+      '*://*.bilibili.com/video/*': 'https://www.bilibili.com/video/BV1jt421t7XH?p=2',
+      '*://*.bilibili.com/bangumi/play/*': 'https://www.bilibili.com/bangumi/play/ep3854820',
+    };
+
+    for (const pattern of PLAY_PAGE_URL_PATTERNS) {
+      const url = samples[pattern];
+      expect(url, `${pattern} 没有配样本 —— 新增模式时补一个真实 URL`).toBeTruthy();
+      expect(parsePlayPage(url as string), `${pattern} → ${url} 应能解析`).not.toBeNull();
+    }
   });
 });

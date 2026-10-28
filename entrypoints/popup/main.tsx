@@ -14,8 +14,8 @@
  * 这里只负责取数据、渲染、处理点击。这样"该显示哪种状态"能被测，
  * 而不是靠肉眼看 TSX。
  *
- * 规范里还有「未生效（当前页不是视频页）」，那需要 popup 知道当前活动标签页，
- * 属于 P3 的范围，这里不做。
+ * 规范里还有「未生效（当前页不是播放页）」，那需要 popup 知道当前活动标签页 ——
+ * 由下面的 `readPageView()` 承担。
  */
 
 import { barStates, summarize } from '@core/playinfo/stats';
@@ -27,6 +27,7 @@ import {
   type PopupSnapshot,
 } from '@core/ui/popup-state';
 import type { PageTracksView } from '@shared/types/playinfo';
+import { parsePlayPage } from '@shared/utils/video-page';
 import { render } from 'preact';
 import { useCallback, useEffect, useState } from 'preact/hooks';
 
@@ -39,15 +40,18 @@ type LoadState =
 type LoginHint = null | 'incognito-disabled' | 'opened' | 'failed';
 
 /**
- * 当前标签页是不是视频页，以及 content 报来的取流数据。
+ * 当前标签页是不是受支持的播放页，以及 content 报来的取流数据。
  *
  * popup 自己没有页面上下文，只能查活动标签页 —— **popup 不会变成标签页**，
  * 所以这里的 `active: true` 拿到的确实是用户正在看的那个页面
  * （诊断页不同：它是 `open_in_tab`，会把自己变成活动标签页，见那个文件的注释）。
+ *
+ * ⚠️ 判据是 `parsePlayPage()`，**不是** `/video/` 正则。曾经用
+ * `/^https?:\/\/(www\.)?bilibili\.com\/video\//` 当闸门，番剧页（`/bangumi/play/ep…`）
+ * 直接被判成 `other` → popup 显示「未生效」，且 `page/summary:get` 根本不会发出，
+ * §2.3「当前页解锁画质」在番剧/电影页永远不显示（2026-10-28 审查发现）。
  */
-type PageView = { kind: 'video'; view: PageTracksView | null } | { kind: 'other' };
-
-const VIDEO_URL_RE = /^https?:\/\/(www\.)?bilibili\.com\/video\//;
+type PageView = { kind: 'play'; view: PageTracksView | null } | { kind: 'other' };
 
 /** 会员类型的短标签（副标题里已经有到期日，这里只放类型，避免重复） */
 const VIP_TAG: Record<'none' | 'monthly' | 'annual', string> = {
@@ -64,18 +68,18 @@ function openOptions(hash = ''): void {
 async function readPageView(): Promise<PageView> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (typeof tab?.id !== 'number' || !VIDEO_URL_RE.test(tab.url ?? '')) return { kind: 'other' };
+    if (typeof tab?.id !== 'number' || !parsePlayPage(tab.url ?? '')) return { kind: 'other' };
 
     try {
       const reply = (await chrome.tabs.sendMessage(tab.id, { type: 'page/summary:get' })) as
         { type?: string; view?: PageTracksView } | undefined;
       if (reply?.type === 'page/summary:ok' && reply.view)
-        return { kind: 'video', view: reply.view };
+        return { kind: 'play', view: reply.view };
       // content 在但还没报到（刚注入 / 页面还没解析出 bvid）
-      return { kind: 'video', view: null };
+      return { kind: 'play', view: null };
     } catch {
       // 没有 content script：页面在扩展安装/更新之前就打开了
-      return { kind: 'video', view: null };
+      return { kind: 'play', view: null };
     }
   } catch {
     return { kind: 'other' };
@@ -154,7 +158,7 @@ function App() {
           configured: (acctOk && acctRes.configured) || proxyRes.hasCredential,
           account,
           buckets: statsRes?.type === 'stats/recent:ok' ? statsRes.buckets : [],
-          page: pageView.kind === 'video' ? { kind: 'video' } : { kind: 'other' },
+          page: pageView.kind === 'play' ? { kind: 'play' } : { kind: 'other' },
         },
       });
     } catch (e) {
@@ -275,7 +279,7 @@ function App() {
   const snap = load.kind === 'ok' ? load.snap : null;
   const view = snap ? describePopup(snap) : null;
   /** §2.3 的视图模型（纯函数在 core，可单测） */
-  const unlock = describeUnlock(page.kind === 'video' ? page.view : null);
+  const unlock = describeUnlock(page.kind === 'play' ? page.view : null);
 
   /**
    * 成功率条形图的数据。
@@ -289,7 +293,7 @@ function App() {
   const hasTrouble = bars.some((s) => s === 'partial' || s === 'fail');
 
   // §2.4 主账号卡片的原料：只在视频页拿得到（昵称/等级来自页面，扩展不读凭据）
-  const primaryInfo = page.kind === 'video' ? (page.view?.primary ?? null) : null;
+  const primaryInfo = page.kind === 'play' ? (page.view?.primary ?? null) : null;
   const primaryUser = primaryInfo?.user ?? null;
   const primaryLoggedIn = primaryInfo?.loggedIn ?? 'unknown';
 
@@ -317,7 +321,7 @@ function App() {
                 规范原文："整个 popup 唯一不能省的部分"。
                 必须有对比锚点 —— 没有"主账号仅可用 1080P"这行，
                 用户感受不到这个插件做了什么。 */}
-            {page.kind === 'video' ? (
+            {page.kind === 'play' ? (
               unlock && page.view ? (
                 <div class="unlock">
                   <p class="unlock-bv">当前页面 · {page.view.bvid}</p>
