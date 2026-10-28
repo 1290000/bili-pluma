@@ -80,6 +80,7 @@ poc/verify/.keep
 # `bg.html` 也漏了 —— 补一个漏一个。判据应该是"这个目录下的抓包数据
 # 一律不入库"，而不是"我这次记得的那几个文件"。
 poc/verify/*.json
+poc/probe/result-*.json
 
 # 例外：这些是**结论**不是原始数据，必须入库
 !poc/verify/result-q2-summary.json
