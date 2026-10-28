@@ -1,7 +1,22 @@
 # ADR 0019. 支持番剧 / 国创 / 电影：hook 播放器的异步取流回调
 
 日期：2026-10-27
-状态：已采纳
+状态：**部分取代**（2026-10-28）
+
+> ## ⚠️ 先读这段：本 ADR 的标题与主路线已被推翻
+>
+> | 本文写的 | 实测结论（2026-10-28） | 现状 |
+> | --- | --- | --- |
+> | hook `requestConfig.reqHttpPlayUrlInfo` 回调喂流 | **回调从未被调用**（`cbCalled: 0`） | ❌ 已废弃 |
+> | — | 改为在 `__playinfo__` 的 setter 里**同步**注入 | ✅ P2 缓存链路，见 `PGC-STATUS.md` |
+> | （本文未涉及 SPA 切集） | 切集时 `__playinfo__` **完全不赋值**，setter 不触发 | ✅ 走响应层拦 `playview`，见 [ADR 0023](./0023-intercept-playview-durl-swap.md) |
+>
+> **仍然有效的部分**：R1 / R2（接口有效、只要 `cid` 就能调通）、
+> “durl 是无权益形态而非番剧形态”的纠正、以及“PGC 页必须主动取流”这个前提。
+>
+> **不要再照着本文去改切集逻辑** —— 那会重走一遍已排除的路。
+> 现状与待办见 `.workbuddy-ai/analysis/PGC-STATUS.md`。
+
 取代：[ADR 0007](./0007-v1-video-only-bangumi-deferred.md) 的「v1 不支持番剧」部分
 不推翻：[ADR 0004](./0004-request-level-identity-proxy.md)（请求级身份代理）、
 [ADR 0013](./0013-patch-player-info-response.md)（响应体改写边界）

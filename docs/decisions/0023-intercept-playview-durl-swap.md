@@ -4,7 +4,8 @@
 - **2026-10-28 22:10 修正**：换流形态从 **durl 改为 dash**
   （原「按 durl 形态换流」会把画质锁死在 720P，见文末「修正」节）
 - 取代：ADR 0019 的「异步 playurl 注入」在 **SPA 切集**场景下的适用性
-- 相关：ADR 0021（改试看标记）、ADR 0022（藏试看提示条）、ADR 0020（P2 缓存注入）
+- 相关：ADR 0021（改试看标记）、ADR 0022（藏试看提示条）、
+  [ADR 0020](./0020-pgc-sync-injection-and-reload.md)（P2 缓存 + 同步注入）
 
 ---
 
@@ -24,12 +25,13 @@
 ```
 切到 ep341210 后：
   location.pathname = /bangumi/play/ep341210      ← URL 变了
-  __playinfo__.result.arc.cid = 248742156         ← 还是上一集的
+  __playinfo__.result.arc.cid = <上一集的 cid>     ← 还是上一集的
   pluma:pgc-* 键                                   ← 一个都没产生
   video.duration = 360.151                        ← 试看
 ```
 
-结论：**ADR 0020（P2 缓存 + `__playinfo__` setter 注入）对 SPA 切集完全无效** —— 不是判定写错，是 setter 根本没被调用。
+结论：[ADR 0020](./0020-pgc-sync-injection-and-reload.md)（P2 缓存 + `__playinfo__` setter 注入）
+对 SPA 切集完全无效 —— 不是判定写错，是 setter 根本没被调用。
 
 ---
 
@@ -140,7 +142,8 @@ result.format      = "mp4"
 | `entrypoints/content.ts` | **SPA 切集路径不再依赖 `pgcHandledCid` / `pgcCacheTried`**；`orchestratePgc` 只在整页加载时跑 |
 | `routes.ts` | `playview` 的 `note` 更正（仍 `enabled: false`），`ROUTES_REVISION` 不变（路径与开关都没动） |
 
-ADR 0020 的 P2 缓存链路**保留**：整页加载仍然靠它在 `__playinfo__` setter 里同步注入（实测 `patchedAt: 518 < createPlayer`，有效）。
+ADR 0020 的 P2 缓存链路**保留**：整页加载仍然靠它在 `__playinfo__` setter 里同步注入
+（实测 `patchedAt` 只比 `ssAt` 晚 2ms，有效）。
 
 ---
 
