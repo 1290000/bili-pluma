@@ -238,9 +238,10 @@ v1 只有两条路径 `enabled: true`：
 |---|---|---|
 | `/x/player/wbi/playurl` | GET | 普通视频 / 多 P / 互动视频都走这条（Q8 实测） |
 | `/x/player/playurl` | GET | 旧版兜底，本次未观测到，保留 |
+| `/pgc/player/web/playurl` | GET | 番剧 / 国创 / 电影。页面**不调用**它，由主世界主动调（[ADR 0019](./decisions/0019-pgc-async-playurl-injection.md)） |
 
-番剧（3 条）与直播（2 条）**全部 `enabled: false`**：番剧走 SSR 无请求（Q4），
-直播是 v1 不做（[ADR 0007](./decisions/0007-v1-video-only-bangumi-deferred.md)）。**别顺手改 true。**
+`/pgc/player/web/v2/playurl` 与直播 2 条**仍 `enabled: false`**：
+v2 实测是空壳（200 + code 0 但既无 dash 也无 durl）；直播是 v1 不做。**别顺手改 true。**
 
 ### 4.1b 响应体改写：决策 5 的两个例外
 
@@ -257,6 +258,22 @@ v1 只有两条路径 `enabled: true`：
 
 > 曾经这里写"Dual Account Helper 的 7 个伪装路径 v1 全部不做"——那是在 ADR 0013 之前。
 > 现在的边界是**只做上表这些**，其余（如 `/pgc/view/web/season`）仍不做。
+
+### 4.1c PGC 页：不靠 DNR，靠替换播放器的取流回调
+
+这是 ADR 0019 引入的**第二条链路**，与 §4.1 的 DNR 是并列关系，不是替代：
+
+| | 普通视频 `/video/*` | PGC `/bangumi/play/*` |
+| --- | --- | --- |
+| 取流由谁发起 | 页面自己（XHR） | 页面**不发**，SSR 写死在 HTML |
+| DNR 怎么用 | 改页面的 playurl 请求头 | 改**主世界自己发起**的 PGC 请求 |
+| 主世界做什么 | **藏** `__playinfo__`，逼播放器走 API | **保留** `__playinfo__`，替换 `createPlayer` 的取流回调 |
+| 何时接管 | 总是 | 只在 `play_video_type === 'preview'`（免费集不接管，否则进度会记到播放账号） |
+
+三条硬约束（每条都是实测踩出来的，见 ADR 0019）：
+1. PGC 页**绝不能**藏 `__playinfo__`（藏了就是黑屏）
+2. 接口响应必须**合并到 SSR 骨架**（直接替换 → `readyState=0`、黑屏且不报错）
+3. 失败必须降级回原 SSR 数据，并落诊断日志（否则用户只看到"又变回试看"）
 
 ### 4.2 为什么是 DNR 换 Cookie
 
@@ -313,7 +330,7 @@ v1 只有两条路径 `enabled: true`：
 
 > ⚠️ **不要依赖第三方文档核对位表**：`bilibili-API-collect` 已于 2026-01-28 因律师函永久关停、仓库 archived 且内容清空。实现时**必须从官方前端抓包拿真实 `fnval` 值**，再用二分法探测各位的效果。详见待确认清单 Q9。
 
-### 4.4 番剧 OGV —— ❌ **整节已作废（Q4 实测推翻）**
+### 4.4 番剧 OGV —— ❌ 原方案作废，改走 §4.1c 的异步取流注入
 
 原判断：番剧新播放器走 `/ogv/player/playview`，是 **POST + 表单 + csrf + wbi 签名**三重要求，
 需要按 B 的身份重算 `w_rid` 与 `csrf`。
@@ -322,8 +339,12 @@ v1 只有两条路径 `enabled: true`：
 播放器的 `reqHttpPlayUrlInfo` 直接返回 SSR 数据（证据见
 [`poc/verify/RESULT.md`](../poc/verify/RESULT.md) §三）。没有可拦截的请求，重签也就无从下手。
 
-v1 不支持番剧（[ADR 0007](./decisions/0007-v1-video-only-bangumi-deferred.md)）。
 原 WBI 重签方案**不要照着实现**；`core/wbi/signer.ts` 只服务于普通视频的 playurl。
+
+**但这不代表 PGC 无法支持。** 2026-10-27 实测发现播放器的异步取流回调可以被替换
+（删掉 `prefetch.playUrl` 后它会回退去调 `reqHttpPlayUrlInfo`），于是走
+[ADR 0019](./decisions/0019-pgc-async-playurl-injection.md) 的链路，见 §4.1c。
+[ADR 0007](./decisions/0007-v1-video-only-bangumi-deferred.md) 的"不支持番剧"部分已被取代。
 
 ---
 

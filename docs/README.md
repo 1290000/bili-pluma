@@ -39,7 +39,7 @@
 | [0004](./decisions/0004-request-level-identity-proxy.md) | 请求级身份代理，不切 Cookie |
 | [0005](./decisions/0005-adopt-wxt-conventions.md) | 接入 WXT 约定，放弃自定 `src/content/` 结构 |
 | [0006](./decisions/0006-no-per-request-nonce.md) | **不用 per-request nonce**，改为按路径的常驻 DNR 规则 |
-| [0007](./decisions/0007-v1-video-only-bangumi-deferred.md) | v1 只支持普通视频，番剧留作 v1.5 实验性功能 |
+| [0007](./decisions/0007-v1-video-only-bangumi-deferred.md) | v1 只支持普通视频，番剧留作 v1.5 实验性功能（**已被 0019 部分取代**） |
 | [0008](./decisions/0008-cookies-permission-for-playback-credential.md) | **推翻 Q5「不申请 cookies」**：登录必须读 httpOnly 的 SESSDATA |
 | [0009](./decisions/0009-drop-passphrase-mode.md) | 移除口令模式与自动锁定：防不住本机程序的机制一律不加 |
 | [0010](./decisions/0010-page-proxy-via-tab-ids.md) | 页面代理用 tabIds 限定 + 常驻规则（不 hook fetch） |
@@ -51,6 +51,7 @@
 | [0016](./decisions/0016-drop-quality-report-page.md) | **砍掉画质体检表与音质自检独立页**：options 五分区降为三 |
 | [0017](./decisions/0017-restore-primary-progress-in-playurl.md) | **把主账号观看进度写回 playurl 响应**：修"看到一半重新打开从 0 开始" |
 | [0018](./decisions/0018-ship-built-artifacts.md) | **放宽「只发源码」**：可发 zip，但必须同时提供带源码版本 |
+| [0019](./decisions/0019-pgc-async-playurl-injection.md) | **支持番剧 / 国创 / 电影**：hook 播放器的异步取流回调，只在试看集接管 |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 

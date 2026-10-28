@@ -50,3 +50,24 @@ reqHttpPlayUrlInfo: () => Promise.resolve(playurlSSRData)      // 永不发请�
 
 - 实测数据：[`poc/verify/RESULT.md`](../../poc/verify/RESULT.md)
 - 注入点 PoC：`poc/verify/poc-hook-playinfo.cjs`
+
+---
+
+## 2026-10-27 补充：本 ADR 的"不支持番剧"已被 ADR 0019 取代
+
+**本文的实测事实仍然成立**（页面确实零请求、`playurlSSRData` 确实写死在 HTML），
+但由它推出的"代理架构碰不到 → v1 不做"这个结论**过强了**：
+
+1. **`/pgc/player/web/playurl` 接口本身有效** —— 页面不调用它 ≠ 接口不存在。
+   实测：无 cookie 直连 HTTP 200 / `code:0`，只要 `cid` 就能调通，番剧返 `dash`、电影返 `durl`。
+2. **播放器的异步取流回调可以被替换** —— 删掉 `config.prefetch.playUrl` 后，
+   播放器会回退调用 `requestConfig.reqHttpPlayUrlInfo`，且视频照常播放。
+   这条路比本文设想的"预取 SSR + localStorage 同步注入 + 二次加载"轻一个数量级。
+3. **"番剧只有 durl 没有 dash"是误读** —— 那是**无权益**时的形态。
+   番剧免费集返回 `whole` + dash；电影试看返回 `preview` + 4×6min durl。
+
+因此本文的"## 决策"与"## 后果"中关于「v1 不支持番剧」的部分**不再有效**，
+以 [ADR 0019](./0019-pgc-async-playurl-injection.md) 为准。本文保留，作为"当时为什么这么判断"的记录。
+
+另外：本文与 Q4 的实测样本 `ep3854821` 是《凡人修仙传》，**属于国创分区**。
+所以准确表述是"实测覆盖国创"，番剧（日本）与电影当时是同模板外推。
