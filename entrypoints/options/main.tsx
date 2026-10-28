@@ -63,6 +63,7 @@ function App() {
     <div class="page">
       <header class="head">
         <div class="brand">
+          <img class="brand-logo" src={chrome.runtime.getURL('icon/128.png')} alt="" />
           Pluma <span class="brand-sub">B站双账号画质助手</span>
         </div>
       </header>

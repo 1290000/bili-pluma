@@ -45,9 +45,30 @@ body {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
   font-size: var(--pluma-font-title);
   font-weight: 600;
   letter-spacing: 0.2px;
+}
+
+/**
+ * 品牌图标。18px = 标题字号（15px）的 1.2 倍。
+ *
+ * 用 `chrome.runtime.getURL('icon/128.png')` 而不是 `import logo from ...`：
+ * 后者会让 Vite 另生成一份带 hash 的资源，同一张图打两遍。
+ * 取 128 而不是 32，是因为 18px 显示在 3x 屏要 54px，只有 128 覆盖得住。
+ *
+ * `flex: none` 不能省 —— 状态胶囊文案变长时，图标会被压扁。
+ * 图标自带浅色底板，暗色主题下是个亮白小方块，18px 下可接受（见 tokens.css 的暗色块）。
+ */
+.brand-logo {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  flex: none;
+  display: block;
 }
 
 /* 状态胶囊：文案必须短（2–3 字），用户不会读长句 */

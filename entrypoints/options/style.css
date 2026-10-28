@@ -39,13 +39,26 @@ body {
 }
 
 .brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 20px;
   font-weight: 600;
   letter-spacing: 0.2px;
 }
 
+/* 与 popup 的 .brand-logo 同源（同一份 icon/128.png），只是字号更大：
+   24px = 标题 20px 的 1.2 倍。改尺寸时两边一起改。 */
+.brand-logo {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  flex: none;
+  display: block;
+}
+
+/* 间距由 .brand 的 gap 提供，这里不再写 margin-left —— 否则会变成 gap + margin */
 .brand-sub {
-  margin-left: 8px;
   font-size: var(--pluma-font-caption);
   font-weight: 400;
   color: var(--pluma-text-muted);

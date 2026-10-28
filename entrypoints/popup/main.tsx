@@ -303,7 +303,10 @@ function App() {
   return (
     <div class="popup">
       <header class="bar">
-        <span class="brand">Pluma</span>
+        <span class="brand">
+          <img class="brand-logo" src={chrome.runtime.getURL('icon/128.png')} alt="" />
+          Pluma
+        </span>
         <span class={`pill ${pillCls}`}>{pillText}</span>
       </header>
 
