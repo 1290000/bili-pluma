@@ -34,7 +34,9 @@ function buildPayload(rows: DiagRow[], logs: DiagEntry[]): string {
   return JSON.stringify(
     {
       exportedAt: new Date('2026-10-26T12:00:00Z').toISOString(),
-      version: '1.0.0',
+      // 真实实现读 `chrome.runtime.getManifest().version`；这里故意用不可混淆的假值，
+      // 免得有人把测试里的数字当成"当前版本"（曾写死 '1.0.0'，与实际 0.9.0 不一致）
+      version: '0.0.0-test',
       facts: rows,
       logs,
     },

@@ -2,7 +2,7 @@
 
 日期：2026-10-26
 状态：已采纳（P3 开工前置决策）
-影响：[02-ui-spec.md](../02-ui-spec.md) §2.3 / §4.2、`core/playinfo/*`（P3 待建）、`public/main-world.js`
+影响：[02-ui-spec.md](../02-ui-spec.md) §2.3 / §4.2、`core/playinfo/*`（P3 待建）、`src/content/main-world.js`
 
 ## 背景
 

@@ -79,4 +79,4 @@ loadCredential()              // 发现 cachedKey 为 null → 从 storage 读�
 
 - 原决策：[Q6](../03-open-questions.md)
 - 实装：`src/core/vault/`
-- 验证：`poc/verify/result-vault-e2e.json`
+- 验证：`poc/verify/e2e-vault.cjs` 的输出（原始 JSON 未入库，见 `.gitignore`）

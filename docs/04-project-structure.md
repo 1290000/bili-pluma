@@ -133,30 +133,33 @@ bili-pluma/
 ├── entrypoints/            # 【WXT 约定】入口，文件名即 manifest 清单项
 │   ├── background.ts       # → Service Worker
 │   ├── content.ts          # → ISOLATED world content script
+│   ├── main-hook.content.ts# → MAIN world content script（document_start 注入）
 │   ├── popup/              # → action.default_popup
 │   ├── options/            # → options_ui（P3）
 │   └── login-window/       # 独立扫码窗口（chrome.windows.create 打开）
-│
-├── public/                 # WXT 静态资源，原样拷贝（不编译）
-│   └── main-world.js       # ★ 注入 MAIN world 的脚本，唯一源文件
 │
 ├── src/                    # 业务代码，WXT 不管
 │   ├── shared/             # 最底层：零依赖、纯函数、纯类型
 │   │   ├── types/          # 跨环境消息的判别联合
 │   │   ├── constants/      # ★ routes.ts = 路径白名单唯一真相源
-│   │   └── utils/          # cookie / url / result 等纯函数
+│   │   └── utils/          # cookie / url / video-page 等纯函数
 │   ├── core/               # 领域层：不知道"浏览器"存在
 │   │   ├── identity/       # ★ router.ts = URL → 用哪个身份
 │   │   ├── auth/           # 扫码、凭据校验、健康度
 │   │   ├── vault/          # 凭据加密存储
-│   │   ├── playinfo/       # 取流解析与选轨（parse / rank / stats / summary-view）
+│   │   ├── playinfo/       # 取流解析与选轨（parse / rank / stats / summary-view / pgc-merge）
+│   │   ├── ui/             # popup 状态判定（纯函数，可单测）
 │   │   └── wbi/            # WBI 签名
 │   ├── platform/           # 适配层：唯一允许碰 chrome.* 的地方
 │   │   ├── http/           # ★ dnr.ts = 风险最高（装/删/自愈/诊断四组函数）
-│   │   ├── storage/
+│   │   ├── storage/        # credential / health / stats / diag / pgc-cache / ui-prefs
+│   │   ├── page/           # 页面侧数据通道
+│   │   ├── diagnostics/    # 诊断取数
 │   │   └── qr/
 │   ├── background/         # SW 内部实现（handlers/ 按消息域拆分）
-│   ├── content/isolated/   # 页面侧：★ badge.ts 页内角标（Shadow DOM）
+│   ├── content/            # 页面侧实现
+│   │   ├── main-world.js   # ★ 注入 MAIN world 的脚本，唯一源文件（近 3000 行纯 JS）
+│   │   └── isolated/       # badge（Shadow DOM）/ page-state / pgc-*
 │   └── design/             # ★ tokens.css = 视觉唯一真相源
 │
 ├── tests/                  # Vitest，跑在 Node，不碰浏览器
@@ -164,6 +167,10 @@ bili-pluma/
 ├── docs/                   # 全部设计文档（索引见 docs/README.md）
 └── poc/                    # 一次性验证 + 常驻回归测试，不接入 WXT、零构建
 ```
+
+> ⚠️ **没有 `public/`**。主世界脚本曾经放在那里（`public/main-world.js` + `web_accessible_resources`），
+> 2026-10-28 改为 `src/content/main-world.js` 由 `main-hook.content.ts` 直接 `import`：
+> 它不再需要对外可访问，manifest 里那段 WAR 声明是死配置，已删。
 
 ---
 
@@ -525,7 +532,7 @@ node scripts/verify.mjs   # boundaries 是其中一项
 | **骨架** | WXT 初始化 → `shared/` `core/identity/` `core/vault/` `platform/` `entrypoints/background.ts` `src/background/` | ✅ 2026-10-25 |
 | **P2-a 数据源** | `core/auth/health.ts` `core/auth/account-info.ts` `core/playinfo/stats.ts` `background/handlers/account.handler.ts` `stats.handler.ts` | ✅ 2026-10-25 |
 | **P2-b 总开关** | popup 接上 `proxy/set`；`tabs.handler.ts` 统计受影响标签页 | ✅ 2026-10-25 |
-| **P2-c 界面** | `entrypoints/popup/`（7 种状态）+ 登录窗口 + 登录入口迁移 | ✅ 已完成（P2 阶段做了框架；§2.3/§2.4/§2.6 在 P3 补齐） |
+| **P2-c 界面** | `entrypoints/popup/` + 登录窗口 + 登录入口迁移 | ✅ 已完成（P2 阶段做了框架；§2.3/§2.4/§2.6 在 P3 补齐） |
 | **P2-d 页面侧** | 页内角标（Shadow DOM） | ✅ 2026-10-26 |
 | **P3 完善** | `entrypoints/options/` **三**分区内容（账号/诊断/显示） | ✅ **已完成（2026-10-27，六条验收全过）**：popup §2.3/§2.4/§2.6/状态 5、options 三分区、条形图、路径版本号全部落地。体检表与音质自检独立页已砍（[ADR 0016](./decisions/0016-drop-quality-report-page.md)） |
 | **预留** | `platform/browsers/firefox.ts` | ⬜ v1.5 |
@@ -594,19 +601,35 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 
 **关键认知**：`dnr.ts` 是风险最高的文件，却恰好**无法用 Vitest 测**。所以 P0 那个测试页不是"一次性验证"，而是**这个文件唯一的测试手段**，必须留在仓库里长期跑。
 
-### 主世界脚本怎么测（2026-10-25 定）
+### 主世界脚本怎么测（2026-10-28 定稿）
 
-`public/main-world.js` 是 `web_accessible_resources` 里的**静态文件**，WXT 只拷贝不编译。
-把它迁成 TS 会引入第二个构建步骤、并让它从"唯一源文件"变成"构建产物"，得不偿失。
+`src/content/main-world.js` 是近 3000 行纯 JS，由 `entrypoints/main-hook.content.ts` 直接 `import`。
 
-采用**零新增依赖、零构建改动**的做法：
+**先说清楚它没有的保护**（这一段曾经写反过，2026-10-28 更正）：
 
-1. 文件顶部加 `// @ts-check` + JSDoc，`tsconfig` 的 `checkJs` 只对它生效
-2. 测试用文件级 `// @vitest-environment jsdom` 直接 `import` 真实文件，断言 `window.__playinfo__`
-   的 getter/setter 与 `patchVipScoped` 的递归边界
+| 手段 | 对它生效吗 | 说明 |
+| --- | --- | --- |
+| `tsc` | ❌ **不生效** | `tsconfig` 的 `include` 不含它，也没有 `checkJs`。曾计划"文件顶部加 `// @ts-check` + JSDoc"，**从未实现** |
+| `eslint` | ❌ **不生效** | `eslint.config.mjs` 的 `ignores` 明确排除了它 |
+| `prettier` | ❌ **不生效** | `.prettierignore` 明确排除了它 |
+| 行为测试 | ✅ **唯一手段** | `tests/unit/content/main-world-{real,pgc}.test.ts` |
 
-**这样测的是真源码，不是复刻。** 此前 `tests/unit/content/main-world-logic.test.ts` 用"复刻函数"测，
+**为什么不做静态检查**：它大量 hook 页面原生对象（`fetch` / `XHR` / `MediaSource` / `addSourceBuffer`），
+大量 `var` 与被 hook 的原函数签名，按项目 lint 规则改一遍只会增加行为风险、换不来正确性。
+搬成 TS 还会引入第二个构建产物、让"唯一源文件"变成"构建产物"。**这是明确决策，不是遗漏。**
+
+**唯一的手段是行为测试，做法是"读真源码、在 jsdom 里 eval"**：
+
+```ts
+const SOURCE = readFileSync(resolve(process.cwd(), 'src/content/main-world.js'), 'utf8');
+window.eval(SOURCE);   // 每个用例新建 jsdom，状态才真隔离
+```
+
+**这样测的是真源码，不是复刻。** 此前 `main-world-logic.test.ts` 用"复刻函数"测，
 一旦主世界改了而测试没跟着改，两边就悄悄漂移——这个隐患随本方案消失。
+
+**代价要认**：测试只覆盖被断言的路径。改主世界脚本里**没被断言**的分支（尤其是 PGC 时序），
+`verify` 不会告诉你坏了 —— 那类改动必须按 AGENTS.md §4.3 要一次真机日志。
 
 `tests/` 建议在**骨架阶段就开始**，至少给 `core/identity/router.ts` 和 `core/wbi/signer.ts` 写单测。这两个是纯逻辑、易出错、改一次就得重新验的东西——手测成本远高于写测试。
 
@@ -640,20 +663,21 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 
 ---
 
-## 9. 实现现状（2026-10-27，v0.9.0 发布时）
+## 9. 实现现状（2026-10-28）
 
 §1 那棵树是设计稿。实际实现与它的**差异**如下，避免把设计当成事实：
 
 | 设计稿 | 实际实现 | 原因 |
 | --- | --- | --- |
-| `entrypoints/bili.content.ts` + `bili-main.content.ts`（两个入口） | **单个** `entrypoints/content.ts` + `public/main-world.js` | WXT 的 `world` 选项只支持 `'ISOLATED'`，MAIN world 必须用资源文件注入（[ADR 0010](./decisions/0010-page-proxy-via-tab-ids.md)） |
-| `src/content/main-world/` `src/content/isolated/` | 无（已并入上述两处） | 同上 |
+| `entrypoints/bili.content.ts` + `bili-main.content.ts`（两个入口） | `entrypoints/content.ts`（ISOLATED）+ `entrypoints/main-hook.content.ts`（MAIN，`document_start`）+ `src/content/main-world.js` | 原设计假设"MAIN world 只能用资源文件注入"——**实测 `world: 'MAIN'` 可用**，而且必须用它：`<script src>` 是异步加载，赶不上 PGC 页的内联脚本（2026-10-27 真机踩到） |
+| `src/content/main-world/` `src/content/isolated/` | `src/content/main-world.js`（单文件）+ `src/content/isolated/*` | 同上 |
 | `src/background/index.ts` | `entrypoints/background.ts` | WXT 约定 |
 | `src/platform/runtime/messaging.ts` | 无独立封装，页面直接 `sendMessage` | 只有 3 个 UI 页面，封装收益低于成本 |
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
+| `public/main-world.js` + `web_accessible_resources` | **已删**：脚本移到 `src/content/main-world.js` 并被 `import` | WAR 是死配置（无人按 URL 加载它），留着只是让全站页面能 fetch 到它 |
 | `entrypoints/popup/` | ✅ **完整实现**（P3 补齐 §2.3 解锁画质对比 / §2.4 双账号卡片 / §2.6 底部两按钮） | 此前依赖 options 页与 `core/playinfo` 解析 |
-| `entrypoints/options/` | ✅ **三分区全部完成（2026-10-27）**：hash 路由导航、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）、诊断页（自检信息 + 音质折叠块 + 日志 + 导出 + 白名单版本） | 体检/音质两页已砍（ADR 0016）；独立自检页已并入诊断分区 |
-| `scripts/`（6 个 `check-*` + `verify.mjs` 入口 + `package.mjs`） | ✅ **已实现**（`node scripts/verify.mjs`，10 项） | 边界 / 消息路由 / 设计令牌 / 文档 / 敏感信息 / 改写范围；**检查命令的唯一权威位置是 `scripts/`**。`package.mjs` 是打包，不在 verify 链里 |
+| `entrypoints/options/` | ✅ **三分区全部完成**：hash 路由导航、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）、诊断页（自检信息 + 音质折叠块 + 日志 + 导出 + 白名单版本） | 体检/音质两页已砍（ADR 0016）；独立自检页已并入诊断分区 |
+| `scripts/`（8 个 `check-*` + `verify.mjs` 入口 + `package.mjs`） | ✅ **已实现**（`node scripts/verify.mjs`） | 边界 / 消息路由 / 设计令牌 / 文档 / 敏感信息 / 改写范围 / 播放页判据 / 工作流日志；**检查命令的唯一权威位置是 `scripts/`**，项数以 `--help` 为准（别在文档里写数字，已漂移过三次）。`package.mjs` 是打包，不在 verify 链里 |
 | ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`；跑 `node scripts/verify.mjs`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
 | Prettier 配置 | ✅ **已实现**（`.prettierrc`；跑 `node scripts/verify.mjs`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |
 | `.eslintrc.cjs` | `eslint.config.mjs` | ESLint 9 默认 flat config |
@@ -664,13 +688,17 @@ P2 收尾时逐条对照 [02-ui-spec.md](./02-ui-spec.md) 核验，发现以下�
 src/shared/{types,constants,utils}     ✅ 全部落地，零依赖
 src/design/tokens.css                  ✅
 src/core/{auth,vault,wbi,identity}     ✅
-src/core/playinfo/{stats,parse,rank,summary-view}.ts     ✅
+src/core/playinfo/{stats,parse,rank,summary-view,pgc-merge}.ts   ✅（pgc-merge 为 ADR 0023 新增）
+src/core/ui/popup-state.ts             ✅ popup 状态判定（纯函数，43 个单测）
 src/platform/{http,storage,qr}         ✅
+src/platform/page/                     ✅ 页面侧数据通道
+src/platform/diagnostics/collect.ts    ✅ 诊断取数
 src/background/{login-window,login-handshake,handlers/}  ✅
-src/content/isolated/{badge,badge-content,page-state}.ts  ✅（badge 为 P2-d；page-state 为 P3 Step 2）
-entrypoints/{background,content,popup,options,login-window,need-incognito}  ✅
+src/content/main-world.js              ✅ 近 3000 行纯 JS，不进 tsc / eslint / prettier（§6）
+src/content/isolated/                  ✅ badge / badge-content / page-state
+                                       + pgc-{cache-inject,fetch,reload-plan,resume}.ts（ADR 0020/0023）
+entrypoints/{background,content,main-hook,popup,options,login-window,need-incognito}  ✅
 # ⚠️ 没有 entrypoints/diagnostics —— 诊断是 options 的一个分区（sections/diagnostics.tsx）
-public/main-world.js                   ✅
 ```
 
 **判断"某文件是否存在"请用 `git ls-files`，不要看 §1。**

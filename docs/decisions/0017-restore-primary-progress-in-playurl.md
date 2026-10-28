@@ -48,7 +48,7 @@ m && duration > 30 && y >= 5 && y < duration - 5 && seek(y)
 禁止改写的字段：  其它一切，尤其 dash / support_formats / quality —— 那些是播放账号真实取到的流
 ```
 
-授权集落在 `public/main-world.js` 的 `PROGRESS_PATCH_PATHS`，由 `scripts/check-patch-scope.mjs` 校验。
+授权集落在 `src/content/main-world.js` 的 `PROGRESS_PATCH_PATHS`，由 `scripts/check-patch-scope.mjs` 校验。
 
 ### 为什么这不算"伪造"
 
@@ -99,4 +99,4 @@ m && duration > 30 && y >= 5 && y < duration - 5 && seek(y)
 - [ADR 0004](./0004-request-level-identity-proxy.md)：请求级身份代理（本 ADR 的成因）
 - [ADR 0013](./0013-patch-player-info-response.md)：第一类响应体改写例外（会员字段）
 - [ADR 0014](./0014-quality-compare-from-page-data.md)：主账号基线取自 SSR —— 与本 ADR 无关，别混
-- `public/main-world.js`：`PROGRESS_PATCH_PATHS` / `prefetchProgress` / `patchPlayurlXhrProgress`
+- `src/content/main-world.js`：`PROGRESS_PATCH_PATHS` / `prefetchProgress` / `patchPlayurlXhrProgress`

@@ -84,7 +84,7 @@ bash poc/probe/run-all.sh            # 启动带端口的 Edge → 等就绪 →
 | 2 | **请求级代理，不切 cookie** | 提议"切一下 cookie 更简单" |
 | 3 | **`declarativeNetRequest` 换 Cookie 头，不用 `chrome.debugger`** | 提议"用 debugger 能改响应体" |
 | 4 | **主账号不归扩展管理**，就是浏览器当前登录态 | 提议"加个主账号管理页" |
-| 5 | **不做伪装的会员标识**，连开关都不放（**例外**：可改写 `/x/player/wbi/v2`、`/x/player/v2`、`/x/web-interface/nav` 响应体的 vip 字段，仅限 [ADR 0013](./docs/decisions/0013-patch-player-info-response.md)；加路径必须同时改 ADR，`check-patch-scope` 会红） | 提议"让画质菜单看起来正常点"；或往 `PATCH_PATHS` 加新接口 |
+| 5 | **不做伪装的会员标识**，连开关都不放（**唯一例外**见 §5.5 与 [ADR 0013](./docs/decisions/0013-patch-player-info-response.md) / [ADR 0017](./docs/decisions/0017-restore-primary-progress-in-playurl.md)：只允许改写特定响应体的指定字段，路径与字段边界写在那两节，不在本表复述） | 提议"让画质菜单看起来正常点"；或往 `PATCH_PATHS` 加新接口 |
 | 6 | **不做远程配置**，只本地版本号 + 升级提示 | 提议"加个远程白名单热更新" |
 | 7 | **GPL-3.0-only + 第 7 条附加条款** | 提议"换成 MIT 更容易被采用" |
 | 8 | **不上架商店**；分发方式见 [ADR 0018](./docs/decisions/0018-ship-built-artifacts.md)（可发 zip，但必须同时提供带源码的版本） | 提议"上架商店能扩大用户量"；或只发 zip 不发源码版 |
@@ -122,8 +122,9 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 | 信号（`git diff --name-only` 命中） | 动作 |
 | --- | --- |
 | `src/platform/http/dnr.ts` | **重跑两个脚本**：`node poc/verify/run-q2-auto.cjs`（并发安全，约 3 分钟）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则清零，约 15 秒）。**两个都不需要登录态**；单测测不到 DNR，见 §5.4 |
-| `public/main-world.js` | `node --check` 它；涉及轨道判定/角标时必须向用户要一次真机日志 |
+| `src/content/main-world.js` | `node --check` 它；涉及轨道判定/角标时必须向用户要一次真机日志 |
 | `src/shared/types/messages.ts` | 新增类型时单跑 `node scripts/check-messages.mjs` 看白名单（verify 内已含） |
+| `entrypoints/popup/main.tsx`、`src/background/handlers/tabs.handler.ts`、`src/platform/page/page-state-client.ts` | 这三个文件都在回答"这是不是播放页"。**判据只许走 `parsePlayPage()`**，路径字面量只许留在 `video-page.ts` / `routes.ts` / 两个 content 入口的 `matches`；`page-gate` 会红（2026-10-29 加，因番剧页曾被三处正则漏掉） |
 | `.github/workflows/**` | `verify` 只抓 `set -x` / `printenv` 这类必泄露写法。**`echo "$RESP"` / `cat x.json` / `curl \| jq` 它抓不到** —— 必须**人工过一遍每个打印点**，判据只有一句：「这个响应里有没有属于别人的字段？」（`getUpdates` 有，`getMe` 没有） |
 | `docs/**`、`*.md` | `node scripts/verify.mjs --fast` |
 | `package.json` / `eslint.config.mjs` / `scripts/**` | 跑**完整** `node scripts/verify.mjs`（不是 `--fast`） |
@@ -160,13 +161,24 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
   各有用途。⚠️ 曾写「只对外暴露 `withCookieFor()`」——**那函数从不存在**，是 ADR 0006 之前的残留。
 - **按白名单路径各建一条常驻 session 规则，不带 nonce**；不要每请求 add/remove，也不要规则 ID 池（[ADR 0006](./docs/decisions/0006-no-per-request-nonce.md)）。
 - 必须实现总开关 + SW 启动自愈重建，否则凭据失效时所有 playurl 一起变未登录。
-- `/ogv/player/playview` 是 POST、csrf 在 body 里，DNR 改不了 → 走 JS 拦截重建。
+- `/ogv/player/playview` 是 **GET**，但**绝不能进 DNR 白名单**：换了 Cookie 之后服务端
+  返回的流形态从「durl 4 组 × 6 分钟」变成「完整集 dash」，而播放器已按 durl 分支准备好 →
+  **灰屏**（两次实测）。正确做法是主世界拦它的响应换流（[ADR 0023](./docs/decisions/0023-intercept-playview-durl-swap.md)）。
+  ⚠️ 本行曾写「它是 POST、csrf 在 body 里，DNR 改不了」——**方法就写错了**，而且那个理由
+  会把人引向"改成 JS 重建请求"的错路。2026-10-28 审查更正。
 
 ### 5.5 响应体改写范围（决策 5 的例外边界）
 
-`public/main-world.js` 有两类响应体改写，**各带一个 ADR + 路径常量，不许合并**；**加路径或主机 = 扩大越权，先改 ADR 再改代码**（`check-patch-scope.mjs` 强制一致）：
-- `PATCH_PATHS` → 会员字段伪装（[ADR 0013](./docs/decisions/0013-patch-player-info-response.md)）；字段限 `status`/`type`/`due_date`，**禁改 `mid`/`rights`**
-- `PROGRESS_PATCH_PATHS` → 只改 `last_play_time`/`last_play_cid`，把被换成"播放账号的 0"的进度还原成主账号自己的（[ADR 0017](./docs/decisions/0017-restore-primary-progress-in-playurl.md)）
+`src/content/main-world.js` 有**四类**响应体改写，**各带一个 ADR + 一个常量，不许合并**；**加路径或主机 = 扩大越权，先改 ADR 再改代码**（`check-patch-scope.mjs` 强制一致，它会把四类授权逐个对账）：
+
+| 常量 | 改什么 | 授权 |
+| --- | --- | --- |
+| `PATCH_PATHS` | 会员字段伪装；字段限 `status`/`type`/`due_date`，**禁改 `mid`/`rights`** | [ADR 0013](./docs/decisions/0013-patch-player-info-response.md) |
+| `PROGRESS_PATCH_PATHS` | 只改 `last_play_time`/`last_play_cid`，把被换成"播放账号的 0"的进度还原成主账号自己的 | [ADR 0017](./docs/decisions/0017-restore-primary-progress-in-playurl.md) |
+| `PGC_PREVIEW_FLAGS` | PGC 试看标记（3 个字段），不改它播放器会在 361 秒处主动停 | [ADR 0021](./docs/decisions/0021-patch-pgc-preview-flags.md) |
+| `PGC_TOAST_SELECTOR` | 只隐藏含 `PromptBar` 的提示条，不误伤跳过片头/续播 | [ADR 0022](./docs/decisions/0022-hide-pgc-preview-toast.md) |
+
+⚠️ 本节曾写"两类"——ADR 0021/0022 落地后没同步，等于**漏登记了两类改写授权**。加改写时先看 `check-patch-scope.mjs` 里认了哪些常量。
 
 ---
 

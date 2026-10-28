@@ -13,15 +13,42 @@
 
 ---
 
-## 按顺序读
+## 先读这三份（约 30 分钟，读完就能开工）
+
+> **不要从 01 开始按顺序读。** 四份主文档 + 23 个 ADR + 8 篇 guides 合计七千多行，
+> 通读一遍的成本远高于"先动手、按需查"。真实路径是：
+
+| 顺序 | 文档 | 行数 | 读完你会知道 |
+| --- | --- | --- | --- |
+| 1 | [根 README](../README.md) | ~94 | 这是什么、能力边界在哪、怎么装 |
+| 2 | [AGENTS.md](../AGENTS.md) | ~250 | **什么不能做**：12 条不可翻案决策 + 依赖禁令 + 改完跑什么 |
+| 3 | 本文件 | ~150 | 剩下那些文档分别在回答什么问题 |
+
+**这三份读完就够开工了。** 其余按需查，不要通读：
+
+| 你现在的疑问 | 去看 |
+| --- | --- |
+| 某个设计为什么是这样 | [decisions/](./decisions/)（先看下面那张表定位） |
+| 这段代码该放哪一层 | [04](./04-project-structure.md) §2 |
+| 这个界面该长什么样 | [02](./02-ui-spec.md) |
+| 还有什么事没定 | [03](./03-open-questions.md) §0 总览表 |
+| 取流链路是怎么走通的 | [01](./01-architecture.md) §4 |
+| 这个 bug 怎么查 | [guides/methodology.md](./guides/methodology.md) |
+| 某个命令怎么跑 | `node scripts/verify.mjs --help`（命令的唯一权威位置） |
+
+---
+
+## 四份主文档各回答什么
 
 | # | 文档 | 回答什么问题 |
 | --- | --- | --- |
-| 0 | [AGENTS.md](../AGENTS.md) | **什么不能做**。12 条不可翻案决策、依赖禁令、改文档规则 |
 | 1 | [01-architecture.md](./01-architecture.md) | **为什么这么设计**。取流链路、代码复用风险、关键难点 |
-| 2 | [02-ui-spec.md](./02-ui-spec.md) | **界面长什么样**。popup 七种状态、options 三个分区、页内角标、视觉令牌 |
+| 2 | [02-ui-spec.md](./02-ui-spec.md) | **界面长什么样**。popup 各状态、options 三个分区、页内角标、视觉令牌 |
 | 3 | [03-open-questions.md](./03-open-questions.md) | **还差什么**。16 条待确认问题，含状态标记，末尾有决策变更日志 |
 | 4 | [04-project-structure.md](./04-project-structure.md) | **代码放哪**。技术选型、目录结构（WXT 约定）、分层职责、依赖禁令、解耦手段 |
+
+> ⚠️ **本节不写"popup 几种状态""verify 几项"这类数字**——它们已经漂移过三次
+> （规范说 5 种、代码 8 个；verify 说 10 项、实际 12）。要数字就去看代码或 `--help`。
 
 ---
 
@@ -39,7 +66,7 @@
 | [0004](./decisions/0004-request-level-identity-proxy.md) | 请求级身份代理，不切 Cookie |
 | [0005](./decisions/0005-adopt-wxt-conventions.md) | 接入 WXT 约定，放弃自定 `src/content/` 结构 |
 | [0006](./decisions/0006-no-per-request-nonce.md) | **不用 per-request nonce**，改为按路径的常驻 DNR 规则 |
-| [0007](./decisions/0007-v1-video-only-bangumi-deferred.md) | v1 只支持普通视频，番剧留作 v1.5 实验性功能（**已被 0019 部分取代**） |
+| [0007](./decisions/0007-v1-video-only-bangumi-deferred.md) | ~~v1 只支持普通视频，番剧留作 v1.5~~（**已被 0019–0023 取代**：番剧/国创/电影已支持） |
 | [0008](./decisions/0008-cookies-permission-for-playback-credential.md) | **推翻 Q5「不申请 cookies」**：登录必须读 httpOnly 的 SESSDATA |
 | [0009](./decisions/0009-drop-passphrase-mode.md) | 移除口令模式与自动锁定：防不住本机程序的机制一律不加 |
 | [0010](./decisions/0010-page-proxy-via-tab-ids.md) | 页面代理用 tabIds 限定 + 常驻规则（不 hook fetch） |
@@ -55,7 +82,7 @@
 | [0020](./decisions/0020-pgc-sync-injection-and-reload.md) | **PGC 完整流：`sessionStorage` 同步注入 + 二次加载**（整页加载路径，现行实现） |
 | [0021](./decisions/0021-patch-pgc-preview-flags.md) | **改写 PGC 试看标记**：只换流不够，播放器会在 361 秒处主动停 |
 | [0022](./decisions/0022-hide-pgc-preview-toast.md) | **隐藏「试看中」提示条**：只藏含 `PromptBar` 的，不误伤跳过片头/续播 |
-| [0023](./decisions/0023-intercept-playview-durl-swap.md) | **SPA 切集拦 `playview` 换完整集 dash**：切集时 `__playinfo__` 不赋值，注入无效 |
+| [0023](./decisions/0023-intercept-playview-durl-swap.md) | **SPA 切集拦 `playview` 换完整集 dash**：切集时 `__playinfo__` 不赋值，注入无效；换 durl 会把画质锁在 720P |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 

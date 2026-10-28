@@ -80,7 +80,7 @@ hook window.nano setter → 包住 createPlayer(config)
 | `script.text = 源码`（内联） | **扩展装不上** | MV3 的 `extension_pages` **拒绝** `script-src 'unsafe-inline'`（Edge 156 报 `Insecure CSP value`；换 `minimum_chrome_version: 132` 也无效）。平台封死 |
 | **`world: 'MAIN'` 内容脚本**（现行） | ✅ 生效 | 浏览器在 `document_start` 直接注入主世界，不受 CSP 限制，也不需要 `web_accessible_resources` |
 
-现行实现：`entrypoints/main-hook.content.ts` 里 `import '@/public/main-world.js'` +
+现行实现：`entrypoints/main-hook.content.ts` 里 `import '@/src/content/main-world.js'` +
 `defineContentScript({ world: 'MAIN', runAt: 'document_start' })`。
 **两个入口（MAIN / ISOLATED）的 `matches` 必须一致**，只改一边会出现"有 hook 没报到"或反之。
 

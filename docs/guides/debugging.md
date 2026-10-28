@@ -183,7 +183,9 @@ console.log('cleared', rules.length);
 
 **没覆盖的**：Service Worker 被系统杀掉导致规则残留。正式版要在启动时执行一次"清空所有 session 规则"兜底。
 
-**怎么重跑**：起 `node poc/q2-dnr-concurrency/echo-server.cjs`，加载该目录为扩展，打开「选项」，点按钮。
+**怎么重跑**：在 `edge://extensions` 里把 `poc/q2-dnr-concurrency/` 整个目录加载为扩展，打开它的「选项」页，先点「① 先测 L1」确认 DNR 能改 Cookie 头，再点「② 跑完整测试」。
+**不需要本地服务**：回声地址写死在 `poc/q2-dnr-concurrency/lab.js` 的 `echoHost`（默认 httpbin，被限流时换 postman-echo）。
+⚠️ 曾经这里写的是"起 `node poc/q2-dnr-concurrency/echo-server.cjs`"——**那个文件从来没有过**，2026-10-29 由 `check-docs` 抓出。
 
 ---
 
@@ -358,7 +360,7 @@ node_modules/.bin/vitest run tests/unit/content/main-world-real.test.ts
 （`vitest` 在 `node_modules/.bin` 下，不依赖包管理器在 PATH 里。Windows 上也可以写成
 `node node_modules/vitest/vitest.mjs run <file>`。）
 
-那里有 9 个用例直接对 `public/main-world.js` 的真源码断言，其中最关键的是
+那里有 9 个用例直接对 `src/content/main-world.js` 的真源码断言，其中最关键的是
 **"启用后也不建 setInterval"**。
 
 ⚠️ **验证测试本身有效的方法**（踩过）：把 `setInterval(patchSsUser, 100)` 临时加回
@@ -405,7 +407,7 @@ content 收到 ready  → 发 cfg  → ...
 
 | 位置 | 做法 |
 | --- | --- |
-| `public/main-world.js` | `cfgApplied` 闸门：`ready` 只回一次（`enabled` 变化仍然生效） |
+| `src/content/main-world.js` | `cfgApplied` 闸门：`ready` 只回一次（`enabled` 变化仍然生效） |
 | `entrypoints/content.ts` | 收到 `ready` 后**不再回 `cfg`** |
 
 只留一道也能断环，但**任何一道被后人"优化"掉都会立刻复发**。

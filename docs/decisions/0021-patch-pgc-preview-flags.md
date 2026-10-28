@@ -69,7 +69,7 @@ P2 路线（缓存 + 二次加载，实施方案见 `.workbuddy-ai/analysis/PGC-
 
 ## 后果
 
-- `public/main-world.js` 新增常量 `PGC_PREVIEW_FLAGS`（字段 → 改写值），
+- `src/content/main-world.js` 新增常量 `PGC_PREVIEW_FLAGS`（字段 → 改写值），
   与 `PATCH_PATHS` / `PROGRESS_PATCH_PATHS` **并列、不合并**
 - `scripts/check-patch-scope.mjs` 增加第三组校验：
   常量必须与本文档的授权集一致；改写代码只能在 `pgcPatchPlayinfo` 里出现

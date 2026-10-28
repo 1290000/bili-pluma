@@ -15,8 +15,9 @@ build/
 *.crx
 *.pem
 
-# 本项目只发源码，不发预编译包（docs/03-open-questions.md Q16）
-# 若误提交产物会导致"提供可用侵权工具"的观感，务必保持忽略
+# 产物不入库（`dist/` 里是本地打包结果）。
+# 分发规则见 docs/decisions/0018-ship-built-artifacts.md：可发 zip，但必须同时提供带源码版本。
+# 误提交产物会导致"提供可用侵权工具"的观感，务必保持忽略。
 
 # ---------- 测试与覆盖 ----------
 coverage/
@@ -90,10 +91,7 @@ poc/probe/result-*.json
 # 里面是每个提交的完整文件快照，会被 lint / prettier 扫到。
 .git-rewrite/
 
-# 例外：Q2 的汇总是**结论**不是原始数据，必须入库
-!poc/verify/result-q2-summary.json
-
 # Q2 完整原始数据（110KB，含 240 条请求明细）。
-# 摘要已入库（result-q2-summary.json），需要明细时重跑即可。
+# 摘要已入库（见上面的例外），需要明细时重跑即可。
 poc/verify/result-q2-auto.full.json
 poc/verify/q2-lab*.png

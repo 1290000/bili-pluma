@@ -4,8 +4,8 @@
  * 所有匹配逻辑必须引用本文件，不许在别处硬编码路径字符串。
  * B站改路径时只改这一个文件。
  *
- * ⚠️ `enabled` 字段反映的是 **2026-10-25 的实测结论**，不是文档抄来的清单。
- * 来源：poc/verify/RESULT.md、docs/03-open-questions.md Q4、ADR 0007。
+ * ⚠️ `enabled` 字段反映的是**实测结论**（最近一次 2026-10-28 真机重测），不是文档抄来的清单。
+ * 来源：poc/verify/RESULT.md、docs/03-open-questions.md Q4、ADR 0007 / 0019 / 0023。
  */
 
 export const BILI_API_HOST = 'api.bilibili.com';
@@ -61,7 +61,7 @@ export const ROUTES_REVISION = 3;
  * 正确的做法是**按证据报警**：只有真的出现取流失败时，才在诊断页提示"可能是接口变了"。
  * 日期本身回答的是"这份清单是哪天的"，不是"它过期了" —— 让人自己判断。
  */
-export const ROUTES_CHECKED_AT = '2026-10-27';
+export const ROUTES_CHECKED_AT = '2026-10-28';
 
 export const PROXY_ROUTES = [
   {

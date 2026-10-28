@@ -19,7 +19,7 @@
 
 ### 为什么 MV3 里没有第二条路（穷举验证）
 
-`poc/verify/result-channel-probe.json` 逐个测了所有可能的通道：
+逐个测了所有可能的通道（原始 JSON 未入库，见 `.gitignore`）：
 
 | 通道 | 结果 | 原因 |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ B站的凭据只通过 `Set-Cookie` 下发，而 JS 读不到这个响应头（W
 
 ## 验证
 
-`poc/verify/result-incognito-probe.json`：
+当时的无痕探针输出（原始 JSON 未入库，见 `.gitignore`）：
 
 ```
 主账号（普通窗口）       mid={{主账号mid}}  uname={{主账号昵称}}            vip=0
@@ -91,7 +91,7 @@ DNR 在 tabIds 限定的规则里注入播放账号凭据
 
 这是无法绕过的一步：扩展默认不在无痕窗口运行，需要用户在 `edge://extensions` 详情页勾选。
 
-**实测的坑（`poc/verify/result-login-flow.json`）**：
+**实测的坑（`poc/verify/e2e-login.cjs` 的输出，原始 JSON 未入库）**：
 
 ```
 incognitoAllowed: false
@@ -175,7 +175,7 @@ split 模式下普通/无痕 background 是**两个独立实例**，都会收到
 ## 相关
 
 - 前一版：[ADR 0011](./0011-playback-login-overwrites-primary.md)
-- 验证数据：`poc/verify/result-incognito-probe.json`
+- 验证数据：无痕探针输出（原始 JSON 未入库，见 `.gitignore`）
 - 参考实现：
   - Bili Dual Account Helper（油猴）：`GM_xmlhttpRequest` + `anonymous: true`
   - bilipai：`CookieJar.NO_COOKIES` + 拦截器绑定会话

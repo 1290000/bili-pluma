@@ -102,11 +102,11 @@ for (const el of document.querySelectorAll('.bpx-player-toast-item')) {
 | 改 `user_status.has_paid` / `vip_info` | 那是服务端对账号权益的陈述，改了是纯谎报 |
 | 隐藏整个 `.bpx-player-*` 提示层 | 会连带吃掉真实错误提示（网络、解码、画质） |
 | 在没有注入完整流的页面上隐藏 | 用户会以为能看，实际还是 6 分钟 —— 更坏的欺骗 |
-| 用 CSS 注入到页面的样式表 | 必须走 `public/main-world.js` 自己的 `<style>` 标签，随开关可拆，且不污染页面样式表 |
+| 用 CSS 注入到页面的样式表 | 必须走 `src/content/main-world.js` 自己的 `<style>` 标签，随开关可拆，且不污染页面样式表 |
 
 ## 后果
 
-- `public/main-world.js` 新增 `PGC_TOAST_SELECTOR = '.bpx-player-toast-text'` 常量，
+- `src/content/main-world.js` 新增 `PGC_TOAST_SELECTOR = '.bpx-player-toast-text'` 常量，
   与 `PATCH_PATHS` / `PROGRESS_PATCH_PATHS` / `PGC_PREVIEW_FLAGS` **并列不合并**
   （四份清单授权四类不同的改写，合并后就分不清哪条为了什么）
 - `scripts/check-patch-scope.mjs` 增加第四组校验：选择器必须与本文档一致

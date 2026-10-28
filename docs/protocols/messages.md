@@ -21,20 +21,20 @@ MV3 的四个执行环境内存不共享：
 
 ---
 
-## 三条通道
+## 四条通道
 
 ```
 ┌─────────────┐   channel A    ┌──────────────┐   channel B   ┌─────────────┐
 │ MAIN world  │ ←postMessage→  │ ISOLATED     │ ←sendMessage→ │ Service     │
 │ (net-hook)  │               │ (content)    │               │ Worker      │
-└─────────────┘               └──────────────┘               └──────┬──────┘
-                                                                    │
-                                                             channel C
-                                                                    │
-                                                    ┌───────────────▼────┐
-                                                    │ Popup / Options /  │
-                                                    │ Login Window       │
-                                                    └────────────────────┘
+└─────────────┘               └──────┬───────┘               └──────┬──────┘
+                                     │                              │
+                              channel D                      channel C
+                                     │                              │
+                          ┌──────────▼──────────┐        ┌──────────▼─────────┐
+                          │ Popup（直连取数）    │        │ Popup / Options /  │
+                          │                     │        │ Login Window       │
+                          └─────────────────────┘        └────────────────────┘
 ```
 
 | 通道 | 机制 | 安全要点 |
@@ -42,6 +42,11 @@ MV3 的四个执行环境内存不共享：
 | A：MAIN ↔ ISOLATED | `window.postMessage` | **必须带随机 channelToken**，且 ISOLATED 侧二次校验 URL 白名单 |
 | B：ISOLATED ↔ SW | `chrome.runtime.sendMessage` | 需处理 SW 休眠导致的连接失败，重试一次 |
 | C：UI ↔ SW | `chrome.runtime.sendMessage` | 凭据永不下发给 UI，只下发"是否健康"之类的状态 |
+| D：ISOLATED ↔ 扩展页面 | `chrome.tabs.sendMessage` | popup 向活动标签页**直连**要当前页取流数据，**不经 SW** |
+
+> ⚠️ 本文标题曾写"三条通道"，而 D 节当时插在 A 后面（顺序是 A→D→B→C）。两处都在 2026-10-28 更正。
+> D 不是可有可无的一条：popup 的「当前页解锁画质」（`02-ui-spec.md` §2.3）**只走 D**，
+> SW 里根本没有这份数据。
 
 ---
 
@@ -84,25 +89,6 @@ ISOLATED **从不向 MAIN 发送凭据**，凭据只存在于 background，换 C
 
 `ssr-playinfo` 会被上报多次（hello / ready / 延迟补报）—— `__playinfo__` 与 `__INITIAL_STATE__`
 谁先就绪不确定。合并规则：能力只接受可用基线且不被后到的坏消息抹掉，`user` 后到覆盖先到。
-
----
-
-## 通道 D：ISOLATED ↔ 扩展页面（popup / 诊断页）
-
-**新增于 2026-10-26。** 与通道 B/C 不同，这条**不经 Service Worker**。
-
-```
-扩展页面 --chrome.tabs.sendMessage(tabId, {type:'page/summary:get'})--> content
-扩展页面 <--{type:'page/summary:ok', view: PageTracksView}---------------
-```
-
-| 为什么直连 | 说明 |
-| --- | --- |
-| 数据只对"当前这个标签页"有意义 | content 本来就在那个页面里，绕 SW 只是多一份要维护的缓存 |
-| 不存在缓存过期 | 每次都拿到最新值，不会出现"popup 显示上一页数据" |
-| 代价 | 目标标签页没有 content script 时 `sendMessage` **抛异常**（不是返回空），调用方必须 catch |
-
-类型在 `src/shared/types/messages.ts` 的 `PageQueryMsg` / `PageQueryReply`。
 
 ---
 
@@ -189,10 +175,29 @@ popup 打开 → send({ type: 'account/summary' }) → 渲染对应状态
 
 ---
 
+## 通道 D：ISOLATED ↔ 扩展页面（popup / 诊断页）
+
+**新增于 2026-10-26。** 与通道 B/C 不同，这条**不经 Service Worker**。
+
+```
+扩展页面 --chrome.tabs.sendMessage(tabId, {type:'page/summary:get'})--> content
+扩展页面 <--{type:'page/summary:ok', view: PageTracksView}---------------
+```
+
+| 为什么直连 | 说明 |
+| --- | --- |
+| 数据只对"当前这个标签页"有意义 | content 本来就在那个页面里，绕 SW 只是多一份要维护的缓存 |
+| 不存在缓存过期 | 每次都拿到最新值，不会出现"popup 显示上一页数据" |
+| 代价 | 目标标签页没有 content script 时 `sendMessage` **抛异常**（不是返回空），调用方必须 catch |
+
+类型在 `src/shared/types/messages.ts` 的 `PageQueryMsg` / `PageQueryReply`。
+
+---
+
 ## 协议演进规则
 
 1. **现行没有版本号字段**，只有命名空间标记 `__ns`（防误收别人的消息）。
-   所以改消息形状必须**两边同时改**（`public/main-world.js` ↔ `entrypoints/content.ts`），
+   所以改消息形状必须**两边同时改**（`src/content/main-world.js` ↔ `entrypoints/content.ts`），
    没有兼容层兜底。真要引入版本号，等第一次不兼容改动时再加。
 2. **新增字段必须可选**，老版本收到不认识的字段应忽略而非报错。
 3. **删除字段必须先标记 deprecated 一个版本**，再删。
@@ -211,7 +216,7 @@ popup 打开 → send({ type: 'account/summary' }) → 渲染对应状态
 | --- | --- |
 | 消息类型定义 | `src/shared/types/messages.ts` |
 | 错误码 | `src/shared/types/errors.ts` |
-| MAIN world 脚本（整份，含通道） | `public/main-world.js` |
+| MAIN world 脚本（整份，含通道） | `src/content/main-world.js` |
 | ISOLATED 侧编排 + 通道令牌 | `entrypoints/content.ts` |
 | SW 入口 + 消息分发 | `entrypoints/background.ts` |
 | 各消息处理函数 | `src/background/handlers/*.handler.ts` |

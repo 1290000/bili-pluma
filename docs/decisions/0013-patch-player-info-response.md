@@ -8,7 +8,7 @@
 [Q12](../03-open-questions.md) 定的是：**不做伪装会员标识，连开关都不放**。
 理由是收益小（只是界面顺眼）、有风控风险、有伦理问题（用户误以为自己有会员）。
 
-但 P1 实装后，`public/main-world.js` 实际做的事比 Q12 的字面范围大：
+但 P1 实装后，`src/content/main-world.js` 实际做的事比 Q12 的字面范围大：
 
 | 做法 | 状态 |
 | --- | --- |
@@ -68,7 +68,7 @@ DNR 换完 Cookie 服务端照样返回低画质——这条链路不会因为�
 - **必须在根 `README.md` 诚实描述**：本扩展会修改播放器用于判断会员状态的本地响应，
   以便让画质切换不被拦截；**不改变账号在服务端的真实权益**。
 - Q12 的表格补一句「例外见 ADR 0013」，但 Q12 的结论本身不变。
-- `public/main-world.js` 的 `PATCH_PATHS` 常量是这条授权的**唯一落地点**，
+- `src/content/main-world.js` 的 `PATCH_PATHS` 常量是这条授权的**唯一落地点**，
   加任何新路径都必须回来更新本 ADR。
 - 若将来 B 站改成在别的接口里给会员状态，本 ADR 需要重新评估，**不要顺手扩 `PATCH_PATHS`**。
 
@@ -76,7 +76,7 @@ DNR 换完 Cookie 服务端照样返回低画质——这条链路不会因为�
 
 ### 为什么追加
 
-`public/main-world.js` 的 `PATCH_PATHS` 实际是三个路径，比本文原授权多一个 `nav`。
+`src/content/main-world.js` 的 `PATCH_PATHS` 实际是三个路径，比本文原授权多一个 `nav`。
 按本文「加任何新路径都必须回来更新本 ADR」的要求，这里补授权，**不是**默许既有代码。
 
 追加的事实依据（来自实装后的用户反馈，不是推测）：
@@ -104,4 +104,4 @@ Q12 一个字没改：**界面上的会员标识不做伪装**。`nav` 属于"�
 
 - [Q12](../03-open-questions.md)：不做伪装会员标识（结论不变）
 - [ADR 0010](./0010-page-proxy-via-tab-ids.md)：页面侧必须做两件事（藏 `__playinfo__` + 伪装本地会员状态）
-- `public/main-world.js`：`PATCH_PATHS` / `patchVipScoped`
+- `src/content/main-world.js`：`PATCH_PATHS` / `patchVipScoped`

@@ -29,8 +29,9 @@ GPL-3.0-only · Chrome 120+ / Edge · 当前 v0.9.0（未进 1.0，仍在观察�
   （上面说的"改写会员状态"只骗播放器界面，账号实际权益不变）
 - ❌ **不解锁你没有的权益**：4K / 1080P60 来自你登录的大会员账号，没有大会员就没有这些画质；
   会员专享的番剧 / 国创 / 电影同理——**播放账号本身要有该内容的观看权**（没买的单片、地区限制的内容照样看不了）
-- ✅ **支持番剧 / 国创 / 电影**：主账号只能试看的集数，会自动改用播放账号取流（[ADR 0019](./docs/decisions/0019-pgc-async-playurl-injection.md)）。
-  免费集不接管——主账号本来就能看，接管只会把观看进度记到播放账号上
+- 🚧 **番剧 / 国创 / 电影：源码已支持，随下一版发布**（[ADR 0019](./docs/decisions/0019-pgc-async-playurl-injection.md) – [ADR 0023](./docs/decisions/0023-intercept-playview-durl-swap.md)）。
+  **`0.9.0` 的 zip 里没有**，想现在用请从源码构建
+  - 主账号只能试看的集数会自动改用播放账号取流；免费集不接管——主账号本来就能看，接管只会把观看进度记到播放账号上
 - ❌ **不支持直播**——这是决定，不是遗漏
 
 ---
@@ -77,7 +78,7 @@ popup 里应显示「已接管」——这是生效的标志。
 - **AI 代理 / 新来的开发者：先读 [AGENTS.md](./AGENTS.md)**
 - **clone 后先跑一次** `git config core.hooksPath .githooks`
   —— 提交时会自动检查敏感信息，见 [.githooks/README.md](./.githooks/README.md)
-- 改完代码跑 `node scripts/verify.mjs`（10 项检查，`--help` 看说明）
+- 改完代码跑 `node scripts/verify.mjs`（`--help` 看检查项）
 - 文档索引：[docs/README.md](./docs/README.md)　未决问题：[docs/03](./docs/03-open-questions.md) §0
 
 ## 致谢

@@ -7,7 +7,7 @@
 
 ## 现象
 
-实测（`poc/verify/verify-cookie-overwrite.cjs`，全新 profile）：
+实测（一次性脚本，全新 profile；可复跑的是 `poc/verify/e2e-dual.cjs`）：
 
 ```
 ① 登录主账号（普通用户）
@@ -102,5 +102,5 @@ cookieOverwritten: true
 
 ## 相关
 
-- 实测脚本：`poc/verify/verify-cookie-overwrite.cjs`
+- 可复跑的双账号验证：`poc/verify/e2e-dual.cjs`（当时的一次性脚本未入库）
 - 原决策：[ADR 0004](./0004-request-level-identity-proxy.md)

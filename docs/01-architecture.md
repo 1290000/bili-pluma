@@ -51,20 +51,6 @@ B站已对同类项目实际发出律师函并导致关停：
 
 ---
 
-## 修订说明（v0.1 → v0.2）
-
-v0.1 有三处判断错误，本稿全部推翻重写。**其中第三条带来的架构简化，比前两条加起来更重要。**
-
-| # | v0.1 的错误判断 | 事实 | 影响 |
-|---|---|---|---|
-| 1 | "杜比全景声/Hi-Res 在浏览器内基本播不出来，建议定位成下载后本地播放" | **错。B站官方网页端就原生支持 Hi-Res 和杜比全景声**。Hi-Res 走标准 FLAC in fMP4，Chrome/Edge 原生解码；杜比（EC-3）需装 Microsoft 的 EC-3 解码扩展 + 开 `media foundation playback` 相关 flag，官方前端本来就在走这条路 | §4.4 整节重写。**网页内播放是主路径，不再降级为下载**。本方案的"音质"卖点从"做不到"变成"可完整交付" |
-| 2 | "bilipai 是单账号模型，完全没有多身份路由，必须自己写" | **错。bilipai 已有成熟的多账号设计**：可配置哪个账号为"播放账号"专门解锁高画质，且做了请求与账号的强绑定、"高画质使用当前播放账号的 Web 登录态，不再强制追加授权"。它的 CHANGELOG 里甚至记录了"正式版（双账号）比 dev（单账号）更卡"的性能优化 | **参考价值从"接口文档"升级为"可直接照搬的设计蓝本"**。§5.1 整节重写 |
-| 3 | 把 Dual Account Helper 当成"cookie 切换式、会串号的劣质实现" | **错，而且错得很关键**。它是**共享浏览器、请求级代理**的架构：浏览器全程保持主账号 A 登录态，只对 7 个白名单取流接口用 `anonymous:true` 排除 A 的 cookie，用 B 的 cookie 独立重发。**不切换、不写入浏览器 cookie jar、不串号** | **原 §6.2 的"劫持 + 重放 + 伪装响应"整段删除**，降级为"已有人验证过的成熟模式"。架构风险大幅下降，PoC 周期可显著缩短 |
-
-**最重要的架构性结论**：第 3 条意味着——**这个项目不需要本地常驻服务也能跑起来。** 下一步要做的不是"发明架构"，而是"把 Dual Account Helper 的请求级代理模式，从油猴沙箱搬到 MV3 扩展，再补上扫码登录和凭据加密"。工作量比 v0.1 预估的小一半。
-
----
-
 ## 0. 结论先行
 
 | 问题 | v0.4 结论 | 把握度 |
@@ -126,11 +112,11 @@ v0.1 的三进程模型（扩展 + Rust Core + Flutter）在这个需求上**过
 │  │  ├─ vault.ts    : B 凭据加密存储（AES-GCM + chrome.storage）   │  │
 │  │  ├─ qr.ts       : 扫码登录（生成二维码 / 轮询 / 落地凭据）     │  │
 │  │  ├─ session.ts  : 保活、失效探测、VIP 到期提醒                 │  │
-│  │  ├─ wbi.ts      : WBI 签名（番剧 playview 需重签 w_rid）       │  │
-│  │  └─ stats.ts    : 代理成功率、自动策略探测缓存                 │  │
+│  │  ├─ wbi.ts      : WBI 签名（普通视频 playurl 用）              │  │
+│  │  └─ stats.ts    : 代理成功率统计                               │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                    │
-│  Popup: 账号状态 / 扫码登录 / 画质体检 / 代理开关 / 诊断           │
+│  Popup: 账号状态 / 扫码登录 / 解锁画质 / 代理开关 / 诊断           │
 └────────────────────────────────────────────────────────────────────┘
                               │（可选，v2）
                               ▼
@@ -211,7 +197,7 @@ v0.2 曾设计"三档"（主密码派生 / `storage.session` / Native Messaging�
 | ❌ 不能防 | 本机程序（同时拿得到密文与密钥） |
 
 **不要宣称"军事级加密"。** 这是很多开源项目的通病，也是招致攻击的靶标。
-未来若引入系统级保护（DPAPI / Native Messaging），属于 v2 范围，见附录 A.3。
+未来若引入系统级保护（DPAPI / Native Messaging），属于 v2 范围（[附录 A](#附录-a已撤回的方案只剩结论) 第 3 条）。
 
 ### 3.3 身份隔离的三条铁律
 
@@ -232,7 +218,7 @@ v0.2 曾设计"三档"（主密码派生 / `storage.session` / Native Messaging�
 
 **唯一真相源是 `src/shared/constants/routes.ts`**。本节只记结论，**不抄清单**——抄一次就漂移一次。
 
-v1 只有两条路径 `enabled: true`：
+v1 有**三条**路径 `enabled: true`：
 
 | 路径 | 方法 | 依据 |
 |---|---|---|
@@ -240,8 +226,9 @@ v1 只有两条路径 `enabled: true`：
 | `/x/player/playurl` | GET | 旧版兜底，本次未观测到，保留 |
 | `/pgc/player/web/playurl` | GET | 番剧 / 国创 / 电影。页面**不调用**它，由主世界主动调（[ADR 0019](./decisions/0019-pgc-async-playurl-injection.md)） |
 
-`/pgc/player/web/v2/playurl` 与直播 2 条**仍 `enabled: false`**：
-v2 实测是空壳（200 + code 0 但既无 dash 也无 durl）；直播是 v1 不做。**别顺手改 true。**
+`/pgc/player/web/v2/playurl`、`/ogv/player/playview` 与直播 2 条**仍 `enabled: false`**：
+v2 实测是空壳（200 + code 0 但既无 dash 也无 durl）；`playview` 是 GET 但**一开就灰屏**
+（§4.1c 第 5 条）；直播是 v1 不做。**别顺手改 true。**
 
 ### 4.1b 响应体改写：决策 5 的两个例外
 
@@ -259,21 +246,30 @@ v2 实测是空壳（200 + code 0 但既无 dash 也无 durl）；直播是 v1 �
 > 曾经这里写"Dual Account Helper 的 7 个伪装路径 v1 全部不做"——那是在 ADR 0013 之前。
 > 现在的边界是**只做上表这些**，其余（如 `/pgc/view/web/season`）仍不做。
 
-### 4.1c PGC 页：不靠 DNR，靠替换播放器的取流回调
+### 4.1c PGC 页：两条完全不同的路（整页加载 / SPA 切集）
 
-这是 ADR 0019 引入的**第二条链路**，与 §4.1 的 DNR 是并列关系，不是替代：
+PGC 有**两条取流路径**，搞混会浪费一整天（[ADR 0023](./decisions/0023-intercept-playview-durl-swap.md) 的核心事实）：
 
-| | 普通视频 `/video/*` | PGC `/bangumi/play/*` |
-| --- | --- | --- |
-| 取流由谁发起 | 页面自己（XHR） | 页面**不发**，SSR 写死在 HTML |
-| DNR 怎么用 | 改页面的 playurl 请求头 | 改**主世界自己发起**的 PGC 请求 |
-| 主世界做什么 | **藏** `__playinfo__`，逼播放器走 API | **保留** `__playinfo__`，替换 `createPlayer` 的取流回调 |
-| 何时接管 | 总是 | 只在 `play_video_type === 'preview'`（免费集不接管，否则进度会记到播放账号） |
+| | 普通视频 `/video/*` | PGC **整页加载** | PGC **SPA 切集**（右侧选集） |
+| --- | --- | --- | --- |
+| 取流由谁发起 | 页面自己（XHR） | 页面**不发**，SSR 写死在 HTML | 页面发 **`GET /ogv/player/playview`** |
+| `__playinfo__` | 页面会读它 → 必须**藏** | 必须**保留**（藏了就没流） | **完全不赋值**，cid 停在上一集 |
+| 主世界做什么 | 藏 `__playinfo__`，逼播放器走 playurl | P2 缓存 + `__playinfo__` setter **同步注入**完整流 | 拦 `playview` 的**响应**，换完整集 dash |
+| DNR 怎么用 | 改页面的 playurl 请求头 | 改主世界主动发起的 PGC 请求 | **不开白名单**（开了就灰屏） |
+| 何时接管 | 总是 | 只在 `play_video_type === 'preview'` | 同上（免费集不接管，否则进度记到播放账号） |
 
-三条硬约束（每条都是实测踩出来的，见 ADR 0019）：
-1. PGC 页**绝不能**藏 `__playinfo__`（藏了就是黑屏）
-2. 接口响应必须**合并到 SSR 骨架**（直接替换 → `readyState=0`、黑屏且不报错）
-3. 失败必须降级回原 SSR 数据，并落诊断日志（否则用户只看到"又变回试看"）
+**硬约束**（每条都是实测踩出来的）：
+
+1. PGC 页**绝不能**藏 `__playinfo__`（藏了就是黑屏）。
+2. 接口响应必须**合并到 SSR 骨架**（直接替换 → `readyState=0`、黑屏且不报错）。
+3. 失败必须降级回原 SSR 数据，并落诊断日志（否则用户只看到"又变回试看"）。
+4. **换流必须用 `fnval=4048` 取 dash，不能用 `fnval=0` 取 durl**：`fnval=0` 无论 `qn` 传 80 还是 120
+   都只返回 720P，用户在画质菜单点 4K 就是"切换失败"；而且两种响应的 `type` 连**类型**都不同
+   （`"DASH"` 字符串 vs `3` 数字），播放器靠它选管道。
+5. **`playview` 绝不能进 DNR 白名单**：换 Cookie 后服务端返回 dash，与播放器已按 durl 准备好的
+   管道冲突 → 灰屏（两次事故的真正机理）。
+6. **`playview` 的 `timelength` 骗人**：它是整集时长，而 `durls` 只有 4 组 × 6 分钟。
+   判"够不够长"只能看流自己。
 
 ### 4.2 为什么是 DNR 换 Cookie
 
@@ -310,41 +306,41 @@ v2 实测是空壳（200 + code 0 但既无 dash 也无 durl）；直播是 v1 �
 - 事实：B站官方网页端**原生支持** Hi-Res 播放，走 DASH 里的 FLAC 音轨。
 - 技术要求：视频须由 UP 主投 24bit / ≥48kHz 的音频；播放器侧 Chrome/Edge 原生支持 FLAC 解码。
 - **结论：零额外工作**。只要 playurl 用播放账号拿到 `dash.flac.audio`，网页播放器就能播。
-- 唯一注意：`fnval` 必须包含 Hi-Res 位（`+256`），v0.2 建议默认用 `4048 | 256 = 4304` 或直接 `fnval=4304`（若回退再降级）。
+- **不需要我们关心 `fnval`**：取流请求由页面自己发，`fnval` 是 B站 前端决定的，天然正确。
+  我们只在 PGC 换流时自己拼一次，用的是 `fnval=4048`（见 §4.1c 第 4 条）。
+
+> ⚠️ 本节曾给出一张 `fnval` 位表（"`+256` = Hi-Res""`+2048` = 杜比"）并建议"`4048 | 256 = 4304`"。
+> **那张表是推算值、从未实测**（Q9），而且算术就是错的：`4048` 已含 `256` 位，
+> `4048 | 256` 仍等于 `4048`，`4304` 是把同一位加了两遍。**别再照抄任何 fnval 数字**；
+> 需要时按 Q9 的二分法实测。
 
 **杜比全景声（E-AC-3 / EC-3）**
 - 事实：B站网页端**能播**，但需要两个前置条件（这是"环境问题"不是"能力问题"）：
   1. 安装 Microsoft 的 **EC-3 编码扩展**（Store 包 ID `9nvjqjbdkn97`）；Windows 10/11 通常预装。
   2. 启用 Chromium 的 **media foundation playback** 相关特性（`chrome://flags/#enable-media-foundation-clear` 等；注意新版本 Chrome 对该 flag 有调整，131+ 行为变化需实测）。
 - 硬件链路：Windows 需在"声音设置"里把输出格式设为"杜比全景声家庭影院"或至少 E-AC-3 直通，且耳机/功放支持空间音频。
-- **结论：扩展不需要做解码**，只需保证 playurl 的 `fnval` 含 Dolby 位（`+2048`），让播放器拿到 `dash.dolby.audio`。剩下的是用户环境配置。
-- **产品动作**：做一个"音质环境自检"面板，检测系统是否有 EC-3 解码器（可查 `navigator.mediaCapabilities` 或尝试短音频播放）、并给出一键跳转安装链接。这比"假装支持"有用得多。
+- **结论：扩展不需要做解码**，只需让播放器拿到 `dash.dolby.audio`（同样由页面自己的 `fnval` 决定）。剩下的是用户环境配置。
+- **产品动作：不做"音质自检"面板。** 独立自检页已砍（[ADR 0016](./decisions/0016-drop-quality-report-page.md)），
+  能力退化成诊断页里的一个折叠块：**能真测的只有 FLAC 一行**，杜比给三条自查清单
+  （Store ID + flags + 系统设置）。理由见 `docs/guides/audio-environment.md`。
 
-**修订后的 fnval 组合建议**：
-
-| 目标 | fnval | 说明 |
-|---|---|---|
-| 最全（含 HDR/Dolby/Hi-Res/8K/AV1） | `4304`（= 4096+256+... 按位查表拼） | 推荐默认；若服务器拒绝再降 |
-| 保守（DASH + 4K + Dolby） | `4048` | v0.1 用的值，不含 Hi-Res 位 |
-| 纯 DASH | `16` | 兜底 |
-
-> ⚠️ **不要依赖第三方文档核对位表**：`bilibili-API-collect` 已于 2026-01-28 因律师函永久关停、仓库 archived 且内容清空。实现时**必须从官方前端抓包拿真实 `fnval` 值**，再用二分法探测各位的效果。详见待确认清单 Q9。
-
-### 4.4 番剧 OGV —— ❌ 原方案作废，改走 §4.1c 的异步取流注入
+### 4.4 番剧 OGV —— ❌ 原方案作废（结论见 §4.1c）
 
 原判断：番剧新播放器走 `/ogv/player/playview`，是 **POST + 表单 + csrf + wbi 签名**三重要求，
 需要按 B 的身份重算 `w_rid` 与 `csrf`。
 
-**实测结论：这条请求根本不存在。** 番剧页零网络请求，取流结果由服务端写进 HTML，
-播放器的 `reqHttpPlayUrlInfo` 直接返回 SSR 数据（证据见
-[`poc/verify/RESULT.md`](../poc/verify/RESULT.md) §三）。没有可拦截的请求，重签也就无从下手。
+**两处判断都错了，但错法不同，别混在一起记：**
 
-原 WBI 重签方案**不要照着实现**；`core/wbi/signer.ts` 只服务于普通视频的 playurl。
+| 原判断 | 实测 | 现状 |
+| --- | --- | --- |
+| `playview` 是 POST | **它是 GET**（`routes.ts` 有记录，2026-10-28 真机重测） | 方法错，但"不进 DNR 白名单"的结论仍然成立，理由完全换了一个（见 §4.1c 第 5 条） |
+| 番剧页零请求，只有 SSR | 整页加载确实零请求；**SPA 切集会发 `playview`** | 只对了一半，另一半是 ADR 0023 补上的 |
+| 需要 WBI 重签 | 不需要。`core/wbi/signer.ts` 只服务普通视频的 playurl | 原方案不要照着实现 |
 
-**但这不代表 PGC 无法支持。** 2026-10-27 实测发现播放器的异步取流回调可以被替换
-（删掉 `prefetch.playUrl` 后它会回退去调 `reqHttpPlayUrlInfo`），于是走
-[ADR 0019](./decisions/0019-pgc-async-playurl-injection.md) 的链路，见 §4.1c。
-[ADR 0007](./decisions/0007-v1-video-only-bangumi-deferred.md) 的"不支持番剧"部分已被取代。
+**PGC 现在是怎么支持的**：整页加载走 P2 缓存 + setter 同步注入（[ADR 0020](./decisions/0020-pgc-sync-injection-and-reload.md)），
+SPA 切集走响应层换流（[ADR 0023](./decisions/0023-intercept-playview-durl-swap.md)），
+外加试看标记改写与提示条隐藏（[ADR 0021](./decisions/0021-patch-pgc-preview-flags.md) / [ADR 0022](./decisions/0022-hide-pgc-preview-toast.md)）。
+详见 §4.1c。[ADR 0007](./decisions/0007-v1-video-only-bangumi-deferred.md) 的"不支持番剧"部分已被取代。
 
 ---
 
@@ -451,7 +447,8 @@ Dual Account Helper 的用户为什么需要"反复复制粘贴"？因为它只�
 
 ## 7. 技术选型 —— 见 [04-project-structure.md](./04-project-structure.md) §〇
 
-**本节原内容（Rust + Flutter 选型表、flutter_rust_bridge、SQLCipher + DPAPI 等）已归档到 [附录 A](#附录-a已撤回的方案归档)，仅供参考。**
+**本节原内容（Rust + Flutter 选型表、flutter_rust_bridge、SQLCipher + DPAPI 等）已删除，
+只剩三句结论，见 [附录 A](#附录-a已撤回的方案只剩结论)。**
 
 v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vitest / pnpm）在 [04-project-structure.md](./04-project-structure.md) §〇 统一维护，**不在本文档重复**——避免两处不一致。
 
@@ -466,7 +463,7 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 | 难点 | 严重度 | 缓解 |
 |---|---|---|
 | **DNR 规则的并发安全**（同时多个视频页取流） | **已消除（Q2 实测通过）** | 改为按路径的常驻规则，无 per-request 状态 → 不存在并发撞车。见 [ADR 0006](./decisions/0006-no-per-request-nonce.md) |
-| ~~番剧 `/ogv/player/playview` 的 csrf + WBI 重签~~ | ~~中高~~ **已消除（Q4 实测：不存在这条请求）** | 番剧页走 SSR 注入，**playurl 一次都不发**，所以代理与重签都无从下手。v1 不支持番剧（[ADR 0007](./decisions/0007-v1-video-only-bangumi-deferred.md)），这条不再是待实现项 |
+| ~~番剧 `/ogv/player/playview` 的 csrf + WBI 重签~~ | ~~中高~~ **已消除（原判断两处都错）** | 它不是 POST 也不需要 WBI 重签；整页加载走 SSR 注入、SPA 切集走响应换流，都不需要重签（§4.1c / [ADR 0023](./decisions/0023-intercept-playview-durl-swap.md)）。**番剧已支持**，这条不再是待实现项 |
 | `__playinfo__` 注入依赖前端变量名 | 中（降级为兜底手段） | 主路径已改为代理，注入只是"代理失败时的备用" |
 | 设备 Cookie 补齐（防 -412） | 中 | 照搬 `DEVICE_COOKIES` 列表，从 `document.cookie` 借 |
 | ~~`cookie/refresh` 原子性~~ | ~~中~~ **已取消** | 不做定时刷新，改为惰性检查（[ADR 0015](./decisions/0015-lazy-health-check-no-alarms.md)）。本节下方 §8.2 有说明 |
@@ -556,7 +553,7 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 ### P2：可用（约 1 周）
 
 - **总开关 UI**（能力已在 P1 就位：`enableProxy` / `disableProxy` / `proxy/set` 消息）
-- Popup 七种状态（见 [02-ui-spec.md](./02-ui-spec.md)）
+- Popup 八种 `PopupState`（七种界面表现，见 [02-ui-spec.md](./02-ui-spec.md) §3）
 - 页内角标（原生 DOM + Shadow DOM）
 - 失败回退主账号 + 日志脱敏
 - 设备 Cookie 补齐（防 `-412`）
@@ -565,7 +562,7 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 > **已作废**：
 > - P1 实测确认**只有 `/x/player/wbi/playurl` 一条有效**，其余 6 条在 `routes.ts` 里标 `enabled: false`
 > - 「三种发送策略」是油猴 `GM_xmlhttpRequest` 的产物，扩展用 DNR 后不存在这个问题
-> - 番剧 v1 不做（[ADR 0007](./decisions/0007-v1-video-only-bangumi-deferred.md)）
+> - 番剧 OGV 的「POST + WBI 重签」原判断作废，但**番剧本身已支持**（§4.1c / ADR 0019–0023）
 
 **验收**：装到全新浏览器，扫码一次后，任意视频页画质提升；点赞/历史仍归主账号。
 
@@ -658,7 +655,14 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 
 ---
 
-## 附：v0.1 错误清单（供 code review 时避免重犯）
+## 附：v0.1 已被推翻的判断
+
+> **这是唯一一份 v0.1 错误清单。** 原先还有一节「修订说明（v0.1 → v0.2）」，
+> 与下表有三行重复，2026-10-28 合并删除——同一件事只留一处。
+>
+> **其中「Dual Account Helper 是请求级代理」这条带来的架构简化最大**：它意味着
+> **本项目不需要本地常驻服务**。要做的不是发明架构，而是把这个模式从油猴沙箱搬到
+> MV3 扩展，再补扫码登录与凭据加密。
 
 | 错误 | 后果 | 教训 |
 |---|---|---|
@@ -673,43 +677,11 @@ v1 的实际技术选型（WXT / TypeScript / Preact / 原生 CSS 变量 / Vites
 
 ---
 
-## 附录 A：已撤回的方案归档
+## 附录 A：已撤回的方案（只剩结论）
 
-> 以下内容**全部不适用于 v1**，仅作为历史记录保留，避免将来重复犯错。看这些内容前请先确认你没被绕进去。
+> 完整设计已删（v0.1 的 Rust + Flutter 三进程、WebSocket 配对桥、TLS 指纹模拟选型表），
+> 2026-10-28 压缩成下面三句——它们已经是全部有用信息，细节对 v1 零行动价值。
 
-### A.1 三进程方案（v0.1，已撤回）
-
-原设计：`浏览器扩展 + Rust Core 常驻进程 + Flutter GUI`，理由是"扩展拿不到高画质，必须由本地服务持副账号身份独立取流"。
-
-**撤回原因**：Dual Account Helper 证明请求级代理在 JS 层就能完成全部取流，引入独立进程只增加两套语言、FFI 绑定、安装签名、自动更新的维护成本。见 [ADR 0001](./decisions/0001-use-mv3-pure-extension.md)。
-
-### A.2 跨进程通信设计（v0.1，已撤回）
-
-原设计：WebSocket 桥（`ws://127.0.0.1:<动态端口>/bridge`）+ 6 位配对码 + 扩展侧离线队列 + Connection State 状态机（missing_token / connecting / authenticating / connected / unauthorized / disconnected）。
-
-**撤回原因**：同 A.1，v1 没有第二个进程。
-
-**若 v2 做桌面端**，这套设计仍有参考价值（优于 Native Messaging：免注册 host manifest、跨浏览器一致）。届时再启用。
-
-### A.3 Rust + Flutter 选型（v0.2，已归档）
-
-| 模块 | 曾考虑的选型 | 备注 |
-|---|---|---|
-| Core | Rust 2021 + tokio + axum | 单二进制 |
-| HTTP | `rquest`（TLS 指纹模拟）优先，`reqwest` 兜底 | B站 CDN 对指纹可能敏感 |
-| 凭据 | `rusqlite` + SQLCipher + Windows DPAPI | 比扩展的档 1 强一个层级 |
-| 加密 | `argon2` + `chacha20poly1305` + `secrecy` + `zeroize` | 标准组合 |
-| Flutter ↔ Rust | `flutter_rust_bridge` v2 | **粗粒度 API**，别做成细粒度 RPC |
-| 进程模型 | Core 独立进程，Flutter 只做客户端 | Flutter 崩了不影响后台 |
-| 播放 | WebView2 或外挂本地播放器 | 别用 Flutter 的 `video_player` |
-
-**若 v2 真要做桌面端**，且只针对 Windows，**C# + WPF/WinUI3 + WebView2 的总成本比 Rust + Flutter 更低**（WebView2 是微软自家组件）。选 Rust 的唯一硬理由是"要跨平台"。
-
-### A.4 "劫持 + 重放 + 伪造响应"（v0.1，已删除）
-
-原设计：劫持播放器的 heartbeat 请求 → Core 用主账号身份重放 → 向播放器返回伪造的 200，用来同时满足"高画质"和"历史归主"。
-
-**删除原因**：采用请求级代理后，浏览器全程是主账号，历史天然归主，**这段逻辑完全不需要**。
-
-这是架构选型带来的最大红利：**不是"更优雅地解决了问题"，而是"让问题不存在"。**
-
+1. **三进程（扩展 + Rust Core + Flutter GUI）已撤回**：请求级代理在 JS 层就能完成全部取流，引入独立进程只多出两套语言、FFI 绑定、安装签名与自动更新的维护成本（[ADR 0001](./decisions/0001-use-mv3-pure-extension.md)）。
+2. **跨进程通信（WebSocket 桥 + 配对码 + 连接状态机）随之作废**：v1 没有第二个进程。若 v2 真做桌面端，那套设计优于 Native Messaging（免注册 host manifest、跨浏览器一致），届时再取回。
+3. **桌面端若要做，只针对 Windows 时 C# + WPF/WinUI3 + WebView2 的成本低于 Rust + Flutter**（WebView2 是微软自家组件）；选 Rust 的唯一硬理由是要跨平台。**v1 不做，也不再讨论。**

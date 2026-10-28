@@ -118,7 +118,12 @@ Object.defineProperty(window, '__playinfo__', {
 
 **结论：网络层用 DNR，页面状态用 MAIN world 脚本。两者互补，不能互相替代。**
 
-实现：`src/content/main-world.ts`（注入到主世界）+ `entrypoints/content.ts`（注入 + 通信）。
+实现：`src/content/main-world.js`（注入到主世界）+ `entrypoints/content.ts`（注入 + 通信）。
+
+> 2026-10-28 更正：注入方式已从"资源文件 + `<script src>`"改为
+> `entrypoints/main-hook.content.ts` 的 `world: 'MAIN'` + `import`（原方式异步加载，
+> 赶不上 PGC 页的内联脚本，见 [ADR 0023](./0023-intercept-playview-durl-swap.md) 的背景一节）。
+> 本 ADR 的**决策**（网络层 DNR + 页面状态主世界脚本）不变。
 
 ## 已知风险与缓解
 
@@ -154,5 +159,5 @@ Cookie 可能还没写全。重复上报是安全的——同一个 tabId 会覆
 ## 相关
 
 - DNR 字段文档：Chrome `declarativeNetRequest` 官方文档
-- 实测脚本：`poc/verify/probe-tabids.cjs`
+- 实测脚本：`poc/verify/check-urlfilter.cjs`（当时的探针未入库）
 - 原 DNR 实现：[`src/platform/http/dnr.ts`](../../src/platform/http/dnr.ts)

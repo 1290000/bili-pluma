@@ -12,7 +12,7 @@
 
 这个分析**只覆盖了主账号**，漏了播放账号。
 
-2026-10-25 实测扫码登录成功后（`poc/verify/probe-qrlogin-success.cjs`）：
+2026-10-25 实测扫码登录成功后（探针脚本当时一次性使用，未入库）：
 
 ```
 data.url   → https://passport.biligame.com/x/passport-login/web/crossDomain
@@ -55,6 +55,6 @@ data.url   → https://passport.biligame.com/x/passport-login/web/crossDomain
 
 ## 相关
 
-- 实测脚本：`poc/verify/probe-qrlogin-success.cjs`
+- 可复跑的登录验证：`poc/verify/e2e-login.cjs`（当时的探针脚本未入库，只留结论）
 - 原分析：[`03-open-questions.md`](../03-open-questions.md) Q5
 - 凭据类型：[`src/shared/types/account.ts`](../../src/shared/types/account.ts) 的 `Credential`
