@@ -27,6 +27,12 @@
 import { browser } from 'wxt/browser';
 
 import { renderBadge, removeBadge } from '@/src/content/isolated/badge';
+import {
+  applyHdrInput,
+  describeHdrInput,
+  describeHdrPlayback,
+  describeTracks,
+} from '@/src/content/isolated/badge-input';
 import { PageState } from '@/src/content/isolated/page-state';
 import {
   isPreviewSsr,
@@ -439,23 +445,8 @@ function listenMainWorld(): void {
       badgeState.dolbyVisionAvailable = s.dolbyVision === true;
       paintBadge();
 
-      const aud = (s.audio ?? []).map((a) => `${a.id}(${Math.round(a.bw / 1000)}k)`).join(',');
-      const flac = s.flac
-        ? `FLAC id=${s.flac.id} ${Math.round(s.flac.bw / 1000)}k${s.flac.sampleRate ? ` ${s.flac.sampleRate}Hz` : ''}`
-        : '无';
-      const dolby = s.dolby?.length
-        ? s.dolby.map((a) => `${a.id}(${Math.round(a.bw / 1000)}k)`).join(',')
-        : '无';
-
-      // 视频轨按高度分组，标出各 codecid
-      const vids = [...new Set((s.video ?? []).map((v) => `${v.h}p/cc${v.codecid}`))].join(',');
-
-      reportQuality({
-        height: 0,
-        note:
-          `下发轨道 视频=[${vids}] 音频=[${aud}] Hi-Res=${flac} 杜比=${dolby}` +
-          ` 杜比视界=${s.dolbyVision ? '有' : '无'}`,
-      });
+      // 一行日志：这次下发到底有哪些轨（拼接逻辑抽到 badge-input.ts，可单测）
+      reportQuality({ height: 0, note: describeTracks(s) });
       return;
     }
 
@@ -478,59 +469,18 @@ function listenMainWorld(): void {
         vDetail?: string;
         aDetail?: string;
       };
-      // 用实际播放数据更新角标。
-      // 高度来自 <video>.videoHeight，编码来自 SourceBuffer 的实际 mime ——
-      // 这两个都是"真的在解什么"的直接证据
+
       /**
-       * ⚠️ `h.h` 为 0 时**不要覆盖**已有的有效高度。
+       * 写状态 + 两行诊断日志都抽到 `badge-input.ts` 了。
        *
-       * 切画质瞬间主世界会连发多条 `hdr`，其中几条 `h` 是 0（新轨还没 metadata）。
-       * 旧代码无条件赋值，`playingHeight` 被归零 → 角标闪回「已接管」。
-       *
-       * 高度为 0 只表示"此刻读不到"，不是"没在播"。
+       * 那里锁着两条踩过的规则（`h` 为 0 不清零、`'?'` 映射成 null），
+       * 而它们原先埋在下面这 80 行里、没有任何测试。见该文件头注释。
        */
-      const nextH = h.h ?? 0;
-      if (nextH > 0) badgeState.playingHeight = nextH;
-      badgeState.videoFamily = h.family ?? '';
-      badgeState.audioFamily = h.audioFamily ?? '';
-      // 'high' / 'standard' → 布尔；其他（'?'）表示读不到，保持 null
-      badgeState.videoDynamicRange =
-        h.video === 'high' ? true : h.video === 'standard' ? false : null;
-      // HEVC profile 用来在详情里标 10bit（弱信号，仅作排查线索）
-      badgeState.displayDynamicRange =
-        h.display === 'high' ? true : h.display === 'standard' ? false : null;
-      badgeState.hevcProfile = h.profile ?? '';
-      // 实际帧率：来源是 playurl 轨道清单里的 frame_rate
-      badgeState.frameRate = typeof h.frameRate === 'number' ? h.frameRate : 0;
+      applyHdrInput(badgeState, h);
       paintBadge();
 
-      /**
-       * 诊断：把角标判定的**完整输入**打出来。
-       *
-       * 为什么需要：用户环境有 HDR 显示能力，自动化测试环境没有，
-       * 导致 `(dynamic-range: high)` 在两边结果不同，无法复现。
-       * 这条日志让用户在自己机器上看一次视频，就能把真实输入带出来。
-       *
-       * 只记技术状态，不含任何凭据。
-       */
-      reportQuality({
-        height: 0,
-        note:
-          `[角标输入] h=${String(h.h ?? 0)} fps=${String(h.frameRate ?? 0)}` +
-          ` family=${h.family ?? '?'} audio=${h.audioFamily ?? '?'}` +
-          ` profile=${h.profile ?? '?'}` +
-          ` display=${h.display ?? '?'} video=${h.video ?? '?'}` +
-          ` dv=${String(badgeState.dolbyVisionAvailable)}`,
-      });
-
-      reportQuality({
-        height: h.h ?? 0,
-        note:
-          `画面 ${h.w ?? 0}x${h.h ?? 0} | 视频=${h.family ?? '?'}` +
-          ` | 音频=${h.audioFamily ?? '?'}` +
-          ` | 活跃 视频${h.vsb?.active ?? 0}/${h.vsb?.total ?? 0} 音频${h.asb?.active ?? 0}/${h.asb?.total ?? 0}` +
-          ` | HDR=${h.display ?? '?'}/${h.video ?? '?'}`,
-      });
+      reportQuality({ height: 0, note: describeHdrInput(h, badgeState.dolbyVisionAvailable) });
+      reportQuality({ height: h.h ?? 0, note: describeHdrPlayback(h) });
 
       // 逐条明细单独打一行，切换音质时看这个
       if (h.vDetail || h.aDetail) {
