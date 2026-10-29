@@ -1229,6 +1229,42 @@
      */
     if (typeof fromSetter === 'boolean') pgcTrace.patchedInSetter = fromSetter;
 
+    /**
+     * **把注入结果告诉 ISOLATED 侧**（2026-10-29 修：首次进入番剧页 popup 显示「等待取流…」）。
+     *
+     * ## 为什么必须有这条
+     *
+     * `pageState.playback`（popup §2.3 徽章的数据源）只有两种写法：
+     *   1. `prepareFullStream` 里取流成功后
+     *   2. 切集时收到 `pgc-playview-stream`
+     *
+     * **首次进入走的是第三条路**：`sessionStorage` 里已经有缓存 → 这里同步注入
+     * → **ISOLATED 侧从头到尾不知道发生过这件事**。于是 `playback` 恒为 null，
+     * popup 显示「等待取流…」—— 而画面其实已经 3840×2160。
+     *
+     * 真机现场（ep3854816）：`video 3840×2160`、`dur 1173`，
+     * 而 popup 是 `{title:'等待取流…', badges:[]}`。切到下一集立刻正常
+     * （那条走 `pgc-playview-stream`），所以用户看到的是"切一下就好了"。
+     *
+     * ## 为什么复用 `pgc-playview-stream` 而不是新加消息类型
+     *
+     * ISOLATED 侧对它的处理正好是我们要的（先 `setPageKey` 再 `applyPlayback`），
+     * 语义也一致 —— 都是"播放账号侧拿到了这份流"。
+     * 新加类型要多改 `messages.ts` + `check-messages`，收益为零。
+     *
+     * ⚠️ 只发**注入后的 `video_info`**，不是整份 `__playinfo__` ——
+     * `applyPlayback` 只需要流字段，几十 KB 的 `arc`/`plugin` 没有用。
+     */
+    if (IS_PGC && pgcPatchedCid) {
+      safePost({
+        __ns: NS,
+        type: 'pgc-playview-stream',
+        token: token,
+        cid: String(pgcPatchedCid),
+        result: next,
+      });
+    }
+
     var timelength = next.timelength || 0;
     pgcPost(
       'patch',

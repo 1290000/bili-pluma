@@ -1493,3 +1493,65 @@ describe('截断容差两处一致', () => {
     expect(mainWorldSlack?.replace(/\s/g, '')).toBe('5000');
   });
 });
+
+/**
+ * 注入成功后必须通知 ISOLATED 侧（2026-10-29 修：首次进入番剧页 popup 显示「等待取流…」）。
+ *
+ * ## 为什么这条必须存在
+ *
+ * `pageState.playback`（popup 徽章的数据源）只有两个写入点：
+ * `prepareFullStream` 取流成功、以及切集时的 `pgc-playview-stream`。
+ *
+ * **首次进入走的是第三条路**：sessionStorage 里已有缓存 → 主世界同步注入
+ * → ISOLATED 侧不知道，`playback` 恒 null → popup 显示「等待取流…」，
+ * 而画面其实已经是 3840×2160。切一集就正常（那条发通知），
+ * 所以用户看到的是"切一下就好了"。
+ *
+ * 真机现场：ep3854816 首次进入 `{title:'等待取流…', badges:[]}`，
+ * 而 `video.videoWidth = 3840`。
+ */
+describe('注入成功后通知 ISOLATED（修首次进入 popup 空白）', () => {
+  const CID = 253153139;
+
+  function ssrOf(cid: number) {
+    const s = ssrPreview();
+    (s.result.arc as { cid: number }).cid = cid;
+    (s.result.video_info as { cid?: number }).cid = cid;
+    return s;
+  }
+
+  it('★ 同步注入成功 → 发出 pgc-playview-stream，且带 cid 与注入后的流', async () => {
+    const sb = bootAt(PGC_URL);
+    await ready(sb);
+
+    sb.win.sessionStorage.setItem(
+      'pluma:pgc-vi:' + String(CID),
+      JSON.stringify({ vi: cachedFullVideoInfo(), exp: Date.now() + 60_000 }),
+    );
+
+    sendCfg(sb, { enabled: true });
+    await flush();
+    sb.page.__playinfo__ = ssrOf(CID);
+    await flush();
+
+    // 必须有这条通知 —— 否则 ISOLATED 不知道注入发生过
+    const notice = sb.sent.find((m) => m.type === 'pgc-playview-stream');
+    expect(notice, '注入成功后必须发 pgc-playview-stream').toBeDefined();
+    expect(notice?.cid).toBe(String(CID));
+
+    // 带的是**注入后**的流（完整集），不是 SSR 原样
+    const vi = notice?.result as { dash?: { duration?: number } } | undefined;
+    expect(vi?.dash?.duration).toBeGreaterThan(1000);
+  });
+
+  it('没有缓存 → 不发这条通知（没注入就没有"拿到了什么"可报）', async () => {
+    const sb = bootAt(PGC_URL);
+    await ready(sb);
+
+    sendCfg(sb, { enabled: true });
+    await flush();
+    sb.page.__playinfo__ = ssrOf(CID);
+
+    expect(sb.sent.find((m) => m.type === 'pgc-playview-stream')).toBeUndefined();
+  });
+});
