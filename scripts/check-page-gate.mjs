@@ -46,8 +46,24 @@ import { join } from 'node:path';
 
 const ROOT = process.cwd();
 
-/** 必须走统一判据的文件（漏一个就等于某个入口在自说自话） */
-const MUST_USE_GATE = ['entrypoints/popup/main.tsx', 'src/background/handlers/tabs.handler.ts'];
+/**
+ * 必须走统一判据的文件（漏一个就等于某个入口在自说自话）。
+ *
+ * ⚠️ 2026-10-29 补入 `entrypoints/background.ts`：
+ * 它用 `/^https?:\/\/(www\.)?bilibili\.com\/(video|bangumi\/play)\//` 判
+ * 「这个标签页还是不是播放页」，决定要不要撤掉 DNR 标签页规则。
+ * 这个文件**没有**进过本列表，所以规则 1 从来没管它 —— 它就这么带着一份手写判据
+ * 活了一整轮 PGC 开发（B-02）。加进来后规则 1 立刻抓到。
+ *
+ * `src/platform/page/page-state-client.ts` 不在 MUST_USE_GATE 里：
+ * 它**不判断**播放页，只用 `PLAY_PAGE_URL_PATTERNS` 喂 `tabs.query`，
+ * 已被规则 2b（常量必须含两个模式）与规则 3（不许出现字面量）覆盖。
+ */
+const MUST_USE_GATE = [
+  'entrypoints/popup/main.tsx',
+  'src/background/handlers/tabs.handler.ts',
+  'entrypoints/background.ts',
+];
 
 /**
  * content script 入口：`matches` 必须写字面量，且两个模式都要在。

@@ -22,6 +22,7 @@ import { handleAffectedTabs, handleTabsReload } from '@/src/background/handlers/
 import { handleStatsRecent } from '@/src/background/handlers/stats.handler';
 import { reconcileTabRules, rebuildRulesIfEnabled } from '@/src/platform/http/dnr';
 import { recordStat } from '@/src/platform/storage/stats-store';
+import { parsePlayPage } from '@/src/shared/utils/video-page';
 
 /**
  * 是否是"需要保留标签页代理规则"的播放页。
@@ -29,9 +30,30 @@ import { recordStat } from '@/src/platform/storage/stats-store';
  * 两类：普通视频 `/video/*`、PGC `/bangumi/play/*`（ADR 0019）。
  * 离开这两类页面就把规则撤掉 —— 不撤的话，之后这个标签页里任何
  * 命中白名单的请求都会带播放账号的 Cookie 发出去。
+ *
+ * ## 为什么走 `parsePlayPage()` 而不是手写正则（B-02 / B-03）
+ *
+ * 原来这里是 `/^https?:\/\/(www\.)?bilibili\.com\/(video|bangumi\/play)\//`。
+ * AGENTS.md §4.3 写明「判据只许走 `parsePlayPage()`」——
+ * 这个文件因为不在 `check-page-gate` 的 `MUST_USE_GATE` 里（2026-10-29 已补入），
+ * 带着一份手写判据活了一整轮 PGC 开发。
+ *
+ * 两者**语义不等价**，新判据更严格：hostname 必须是 `www.bilibili.com` / `bilibili.com`，
+ * `/video/` 后必须 `BV` 开头，`/bangumi/play/` 后必须有 ep/ss 数字。
+ *
+ * ## 严格化的方向性是**安全**的（别以为是漏了）
+ *
+ * 旧正则多接受的两种 —— `/video/非BV`、`/bangumi/play/`（空尾）—— 在 B站上都不是真实播放页。
+ * 判成"不是播放页"的唯一后果是**撤掉这个标签页的规则**（见下方 `onUpdated`），
+ * 也就是"少代理一点"。反过来（多判成播放页）才会留下一条无主规则，
+ * 让该标签页里所有命中白名单的请求继续带播放账号 Cookie —— 那才是危险方向。
+ * 所以这里宁可严，不可宽。
+ *
+ * `export` 是为了让 `tests/unit/platform/background-play-page.test.ts` 能测这个接线：
+ * 判据本身已有 38 例单测（`video-page.test.ts`），但"这里到底调没调它"没有任何守卫。
  */
-function isVideoPageUrl(url: string): boolean {
-  return /^https?:\/\/(www\.)?bilibili\.com\/(video|bangumi\/play)\//.test(url);
+export function isVideoPageUrl(url: string): boolean {
+  return parsePlayPage(url) !== null;
 }
 
 /**

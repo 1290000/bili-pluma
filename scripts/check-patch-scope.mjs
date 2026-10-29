@@ -48,6 +48,25 @@ const ROOT = process.cwd();
 /** 实际执行改写的文件（裸 JS，main world） */
 const MAIN_WORLD = 'src/content/main-world.js';
 
+/**
+ * 主机白名单的**真相源**（TS 常量）。
+ *
+ * ## 为什么需要跨文件比对（B-06，2026-10-29）
+ *
+ * `main-world.js` 是裸 JS，**没法 import TS 常量**，所以 `PATCH_HOSTS` 必然要手写一份。
+ * 两份清单手工同步 = 必然漂移，而漂移的后果是静默的：
+ *
+ *   ADR 0027 加 `api.biliapi.net` 时，只靠 `main-world.js` 里的一行注释提醒
+ *   「必须与 routes.ts 的 `BILI_API_HOSTS` 保持一致」。谁下次只改一边：
+ *     - 只改 `routes.ts` → DNR 会换 Cookie，但 `main-world.js` 不改响应体
+ *       → 会员字段没伪装 → 播放器判「无权限」→ 「点了 4K 菜单变了画面没变」
+ *     - 只改 `main-world.js` → 改写一个 DNR 没代理的主机，请求仍是主账号身份，白写
+ *   两种都不会报错，只会在真机上表现为「画质上不去」。
+ *
+ * 所以这里把「两边必须一致」变成机器断言。
+ */
+const ROUTES_TS = 'src/shared/constants/routes.ts';
+
 /** 授权的唯一来源（会员字段伪装） */
 const ADR_0013 = 'docs/decisions/0013-patch-player-info-response.md';
 
@@ -174,6 +193,48 @@ function sameSet(a, b) {
 }
 
 /**
+ * 从 `routes.ts` 里抽出 `BILI_API_HOSTS` 的成员。
+ *
+ * 它的写法是 `export const BILI_API_HOSTS = [BILI_API_HOST, 'api.biliapi.net'] as const;` ——
+ * **第一个元素是个标识符**（`BILI_API_HOST`），不是一个字面量。
+ * 所以不能套用 `extractStringArray()`（它只抓引号里的内容，会漏掉那一个）。
+ *
+ * 这里的做法：先取出 `BILI_API_HOST` 那个字符串常量，再把数组里的
+ * 引号字面量也收进来，最后把标识符替换成它的值。
+ * 数组结构变了（比如改成函数调用）就返回 null，让检查红 ——
+ * 静默返回空数组会让断言变成"两边都空"的假绿。
+ *
+ * @param {string} src routes.ts 全文
+ * @returns {string[] | null} null 表示解析失败
+ */
+function extractRoutesHosts(src) {
+  const constMatch = /export\s+const\s+BILI_API_HOST\s*=\s*['"]([^'"]+)['"]/.exec(src);
+  if (!constMatch) return null;
+  const hostConst = constMatch[1] ?? '';
+
+  const arrMatch = /export\s+const\s+BILI_API_HOSTS\s*=\s*\[([^\]]*)\]/.exec(src);
+  if (!arrMatch) return null;
+
+  /** @type {string[]} */
+  const out = [];
+  for (const token of (arrMatch[1] ?? '').split(',')) {
+    const trimmed = token.trim();
+    if (!trimmed) continue;
+
+    const quoted = /^['"]([^'"]+)['"]$/.exec(trimmed);
+    if (quoted) {
+      out.push(quoted[1] ?? '');
+    } else if (trimmed === 'BILI_API_HOST') {
+      out.push(hostConst);
+    } else {
+      // 认不出的形态（函数调用 / 展开运算符）→ 判失败，不要猜
+      return null;
+    }
+  }
+  return out.length > 0 ? out : null;
+}
+
+/**
  * 从源码里抽出一个 `var NAME = { ... }` 形式的**对象键**列表。
  *
  * 只认一级键（`a: v` 或 `'a.b': v`），不递归 —— 常量本身是扁平结构。
@@ -251,6 +312,55 @@ async function main() {
     problems.push({
       what: `${MAIN_WORLD} 的 PATCH_HOSTS 与授权主机不一致`,
       why: `实际：${JSON.stringify(actualHosts)}｜授权：${JSON.stringify(AUTHORIZED_HOSTS)}\n    → 加新主机等于扩大改写范围，必须先改 ADR 0013`,
+    });
+  }
+
+  // ── B-06：PATCH_HOSTS 必须与 routes.ts 的 BILI_API_HOSTS **集合完全一致** ──
+  //
+  // 上面那条比对的是 `AUTHORIZED_HOSTS`（脚本里的硬编码）；这一条比对的是
+  // `routes.ts`（代码里的真相源）。两者都要有：
+  //   - `AUTHORIZED_HOSTS` 防"扩大越权"（多一个主机）
+  //   - `BILI_API_HOSTS`   防"两处漂移"（DNR 代理的主机与响应体改写的主机不同步）
+  // 只留前一条的话，谁会同时改 routes.ts 与这里的 AUTHORIZED_HOSTS，
+  // 而 `main-world.js` 没改，检查仍然全绿 —— 正是 ADR 0027 加域名时的实际情形。
+  let actualDnrHosts = null;
+  try {
+    const routesSrc = await readFile(join(ROOT, ROUTES_TS), 'utf8');
+    actualDnrHosts = extractRoutesHosts(routesSrc);
+    if (actualDnrHosts === null) {
+      problems.push({
+        what: `在 ${ROUTES_TS} 里解析不出 \`export const BILI_API_HOSTS = [...]\``,
+        why:
+          '主机白名单的真相源丢失或换了形态（比如变成函数调用）。检查器不能猜，' +
+          "请改用 `export const BILI_API_HOSTS = [BILI_API_HOST, '…']` 的形态，或同步更新本脚本。",
+      });
+    }
+  } catch {
+    problems.push({
+      what: `找不到 ${ROUTES_TS}`,
+      why: '主机白名单的真相源缺失。`PATCH_HOSTS` 就没有可比对的基准了。',
+    });
+  }
+
+  if (actualHosts !== null && actualDnrHosts !== null && !sameSet(actualHosts, actualDnrHosts)) {
+    const extraInJs = actualHosts.filter((h) => !actualDnrHosts.includes(h));
+    const missingInJs = actualDnrHosts.filter((h) => !actualHosts.includes(h));
+    problems.push({
+      what: `${MAIN_WORLD} 的 PATCH_HOSTS 与 ${ROUTES_TS} 的 BILI_API_HOSTS 不一致（B-06）`,
+      why: [
+        extraInJs.length > 0
+          ? `PATCH_HOSTS 多出：${extraInJs.join(', ')} —— 这些主机 DNR 不会代理，改写等于白写`
+          : '',
+        missingInJs.length > 0
+          ? `PATCH_HOSTS 缺少：${missingInJs.join(', ')} —— DNR 换了 Cookie 但响应体没改写，` +
+            '会员字段仍是"未开通"，播放器判无权限（ADR 0027 踩过：点了 4K 菜单变了画面没变）'
+          : '',
+        `PATCH_HOSTS：${JSON.stringify(actualHosts)}`,
+        `BILI_API_HOSTS：${JSON.stringify(actualDnrHosts)}`,
+        '→ 主世界是裸 JS 无法 import TS 常量，两份必须手工同步；加主机时改完 routes.ts 记得改这里',
+      ]
+        .filter(Boolean)
+        .join('\n    '),
     });
   }
 
@@ -388,14 +498,14 @@ async function main() {
 
   if (actualToast === null) {
     problems.push({
-      what: `在 ${MAIN_WORLD} 里找不到 \`var PGC_TOAST_SELECTOR = [...]\``,
+      what: `在 ${MAIN_WORLD} 里找不到 \`var PGC_TOAST_ITEM = [...]\``,
       why: 'PGC 试看提示条选择器丢失了。要么被改名，要么隐藏逻辑被移除 —— 都要人工确认（用户会重新报"角标挡画面"）。',
     });
   } else if (!sameSet(actualToast, AUTHORIZED_PGC_TOAST)) {
     const extra = actualToast.filter((x) => !AUTHORIZED_PGC_TOAST.includes(x));
     const missing = AUTHORIZED_PGC_TOAST.filter((x) => !actualToast.includes(x));
     problems.push({
-      what: `${MAIN_WORLD} 的 PGC_TOAST_SELECTOR 与 ADR 0022 授权集不一致`,
+      what: `${MAIN_WORLD} 的 PGC_TOAST_ITEM 与 ADR 0022 授权集不一致`,
       why: [
         extra.length > 0
           ? `多出未授权选择器：${extra.join(', ')} —— 隐藏范围扩大，必须先在 ADR 0022 里授权`
@@ -458,7 +568,7 @@ async function main() {
 
   if (problems.length === 0) {
     console.log(
-      `[patch] ✅ 会员字段 ${AUTHORIZED_PATHS.length} 条路径 · 观看进度 ${AUTHORIZED_PROGRESS_PATHS.length} 条路径 · PGC 试看标记 ${AUTHORIZED_PGC_FLAGS.length} 个字段 · PGC 提示条 ${AUTHORIZED_PGC_TOAST.length} 个选择器 · ${AUTHORIZED_HOSTS.length} 个主机`,
+      `[patch] ✅ 会员字段 ${AUTHORIZED_PATHS.length} 条路径 · 观看进度 ${AUTHORIZED_PROGRESS_PATHS.length} 条路径 · PGC 试看标记 ${AUTHORIZED_PGC_FLAGS.length} 个字段 · PGC 提示条 ${AUTHORIZED_PGC_TOAST.length} 个选择器 · ${AUTHORIZED_HOSTS.length} 个主机（与 ${ROUTES_TS} 一致）`,
     );
     return;
   }

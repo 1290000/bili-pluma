@@ -89,6 +89,17 @@ const STEPS = [
     args: ['scripts/check-workflow-logs.mjs'],
     first: true,
   },
+  {
+    // 2026-10-29 加：本脚本 12 项全绿的 3 天里，`dist/pluma-0.9.0.zip` 一直缺图标、
+    // 缺 world:'MAIN' 入口、带着已废弃的 web_accessible_resources ——
+    // 也就是说**用户装到的扩展里主世界 hook 根本没跑**。
+    // 上面所有检查看的都是源码，没有一项看产物（B-01 / B-08）。
+    // 没有 zip 时本项跳过（dist/ 是本地目录），有 zip 才断言。
+    name: 'artifact',
+    cmd: process.execPath,
+    args: ['scripts/check-artifact.mjs'],
+    first: true,
+  },
   { name: 'test', cmd: binPath('vitest'), args: ['run'], first: false, slow: true },
 ];
 
@@ -106,6 +117,7 @@ const STEP_DOC = {
     '响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）',
   'page-gate': '「是不是播放页」只许走 parsePlayPage()，路径字面量不许越界',
   'workflow-logs': 'Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）',
+  artifact: 'dist/*.zip 与源码一致：含图标、world:MAIN 入口、无 WAR、main-world.js 字节一致',
   test: 'vitest run',
 };
 
