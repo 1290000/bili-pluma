@@ -230,17 +230,20 @@ v1 有**三条**路径 `enabled: true`：
 v2 实测是空壳（200 + code 0 但既无 dash 也无 durl）；`playview` 是 GET 但**一开就灰屏**
 （§4.1c 第 5 条）；直播是 v1 不做。**别顺手改 true。**
 
-### 4.1b 响应体改写：决策 5 的两个例外
+### 4.1b 响应体改写：决策 5 的四类例外
 
-决策 5 说"不做伪装会员标识"，但**有两类精确到字段的例外**，各带一个 ADR 与路径常量，
+决策 5 说"不做伪装会员标识"，但**有四类精确到字段/选择的例外**，各带一个 ADR 与一个常量，
 **不许合并、不许互相顶替**：
 
-| 常量 | 路径 | 改什么 | 授权 |
+| 常量 | 路径 / 作用面 | 改什么 | 授权 |
 | --- | --- | --- | --- |
 | `PATCH_PATHS` | `/x/web-interface/nav`、`/x/player/wbi/v2`、`/x/player/v2` | 只改 vip 的 `status` / `type` / `due_date`；**禁改 `mid` / `rights`** | [ADR 0013](./decisions/0013-patch-player-info-response.md) |
 | `PROGRESS_PATCH_PATHS` | `/x/player/wbi/playurl`、`/x/player/playurl` | 只改 `last_play_time` / `last_play_cid`，把被换成"播放账号的 0"的进度还原成主账号自己的 | [ADR 0017](./decisions/0017-restore-primary-progress-in-playurl.md) |
+| `PGC_PREVIEW_FLAGS` | PGC 播放数据（`playview` 响应 / `__playinfo__`） | 只改 `play_video_type` / `play_check.play_detail` / `video_info.is_preview`；**不动 `user_status.has_paid` / `vip_info`** | [ADR 0021](./decisions/0021-patch-pgc-preview-flags.md) |
+| `PGC_TOAST_ITEM` + `PGC_TOAST_MARK` | PGC 播放器 DOM（`.bpx-player-toast-item`） | 只隐藏内部含 `[class*="PromptBar"]` 的 toast item；**不碰跳过片头/片尾** | [ADR 0022](./decisions/0022-hide-pgc-preview-toast.md) |
 
-改前者是为了让画质菜单不弹充值页；改后者是为了修"看到一半重新打开从 0 开始"。
+四类的分工：`PATCH_PATHS` 让画质菜单不弹充值页；`PROGRESS_PATCH_PATHS` 修"看到一半重新打开从 0 开始"；
+`PGC_PREVIEW_FLAGS` 让播放器不在 361 秒处主动停；`PGC_TOAST_ITEM`/`PGC_TOAST_MARK` 只藏含 `PromptBar` 的提示条。
 **加路径或主机 = 扩大越权，先改 ADR 再改代码**，`scripts/check-patch-scope.mjs` 会卡死。
 
 > 曾经这里写"Dual Account Helper 的 7 个伪装路径 v1 全部不做"——那是在 ADR 0013 之前。
