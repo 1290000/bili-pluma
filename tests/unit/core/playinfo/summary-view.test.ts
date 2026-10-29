@@ -487,7 +487,7 @@ describe('describeUnlock：PGC 页不做对比（ADR 0024）', () => {
  * 125 / 112 / 80 **高度完全相同**，`heightLabel` 必然把它们折叠成一个。
  */
 describe('unlockedBadges：同高度多档（用 quality id 区分）', () => {
-  it('ss34412 的真实档位：三个 1080 档分别标出，不是一个笼统的 1080P', () => {
+  it('ss34412 的真实档位：1080 档里只标 HDR 与 1080P+（1080P 已按用户要求去掉）', () => {
     const badges = unlockedBadges(
       cap({
         maxHeight: 1080,
@@ -498,15 +498,25 @@ describe('unlockedBadges：同高度多档（用 quality id 区分）', () => {
     );
     expect(badges).toContain('HDR');
     expect(badges).toContain('1080P+');
-    expect(badges).toContain('1080P');
+    /**
+     * ⚠️ 2026-10-29 用户要求：`80`(1080P) 不再出徽章。
+     *
+     * 理由：**不开大会员也能看 1080P**，它不是"这个身份额外拿到了什么"，
+     * 标出来等于把"人人都有"说成"解锁成果"。
+     * 同一批改动还删了 `116`(1080P60)，因为已有 `60fps` 徽章表达帧数。
+     * 见 `src/shared/utils/quality.ts` 的 `BADGE_QUALITY_NAMES`。
+     */
+    expect(badges).not.toContain('1080P');
     // 只有高度信息时才会出现的那种"折叠"，这里不许再出现：
     // 即不能只有一个 1080P 而没有 1080P+ / HDR
-    expect(badges.filter((b) => b.startsWith('1080P')).length).toBe(2);
+    expect(badges.filter((b) => b.startsWith('1080P')).length).toBe(1);
   });
 
   it('按 id 降序（与 B 站画质菜单顺序一致）', () => {
     const badges = unlockedBadges(cap({ maxHeight: 1080, topQualityIds: [80, 125, 112] }));
-    expect(badges.slice(0, 3)).toEqual(['HDR', '1080P+', '1080P']);
+    // 80(1080P) 已删 → 只剩 HDR / 1080P+
+    expect(badges.slice(0, 2)).toEqual(['HDR', '1080P+']);
+    expect(badges).not.toContain('1080P');
   });
 
   it('没有 id（老数据/解析失败）时退回高度标签，不猜档位', () => {
@@ -573,7 +583,8 @@ describe('真实档位对照：视频页与番剧页不是同一套档位', () =
     );
     expect(badges).toContain('HDR');
     expect(badges).toContain('1080P+');
-    expect(badges).toContain('1080P');
+    // 80(1080P) 已删除，见 quality.ts 的 BADGE_QUALITY_NAMES
+    expect(badges).not.toContain('1080P');
     expect(badges).not.toContain('4K');
   });
 
@@ -759,5 +770,85 @@ describe('topQualityIds 扩容后的徽章数量', () => {
     });
     // 按 id 降序：125(HDR) → 120(4K) → 112(1080P+)，80(1080P) 被过滤
     expect(r?.badges).toEqual(['HDR', '4K', '1080P+']);
+  });
+});
+
+/**
+ * 问题 5：关掉总开关后，画质区整块不显示。
+ *
+ * ## 原来的症状
+ *
+ * 关掉开关 → popup 仍显示「主账号基线未知（本页没有 SSR 数据）· 1080P」。
+ * 那时**根本没在代理**，这行字描述的是一个不存在的东西 ——
+ * 既不是对比、也不是错误，纯粹是噪音。用户要求"直接去掉"。
+ *
+ * ## 为什么用 `null` 而不是新加一个"空视图"类型
+ *
+ * `null` 原来只表示"不是播放页"。现在多一个含义"开关关着"。
+ * 两者在 UI 上的处理**相同**（都不渲染画质卡），所以不需要区分 ——
+ * popup 只需要知道"画这张卡吗"。
+ *
+ * 但**不能共用同一句提示文案**：非播放页是「打开视频页可见」（那句在这里成立），
+ * 开关关着是**什么都不显示**（用户刚亲手关的，再说"去视频页看看"是装傻）。
+ * 所以 `popup/main.tsx` 不再根据 `null` 反推文案，而是两层判断分开写。
+ */
+describe('describeUnlock：总开关关着时不产出视图（问题 5）', () => {
+  /** 一份完整的视频页数据，用来证明"数据齐了也不显示" */
+  const PLAY_VIEW = view({
+    pageKey: 'BV1jt421t7XH',
+    primary: {
+      usable: true,
+      reason: 'ssr',
+      capability: cap({ maxHeight: 1080, topQualityIds: [80] }),
+      user: { uname: 'x', face: null, level: 6 },
+      mid: '1000001',
+      loggedIn: 'yes',
+    },
+    playback: { capability: cap({ maxHeight: 2160, topQualityIds: [120] }) },
+    diff: {
+      heightGain: 1080,
+      frameRateGain: 0,
+      hiResGained: false,
+      dolbyAudioGained: false,
+      dolbyVisionGained: false,
+      improved: true,
+    },
+  });
+
+  it('proxyEnabled=false → 返回 null（数据齐全也不显示）', () => {
+    expect(describeUnlock(PLAY_VIEW, false)).toBeNull();
+  });
+
+  it('proxyEnabled=true → 正常出视图（对照，证明不是永久 null）', () => {
+    const r = describeUnlock(PLAY_VIEW, true);
+    expect(r).not.toBeNull();
+    expect(r?.improved).toBe(true);
+  });
+
+  it('不传第二个参数时默认 true（向后兼容，老调用点行为不变）', () => {
+    expect(describeUnlock(PLAY_VIEW)).toEqual(describeUnlock(PLAY_VIEW, true));
+  });
+
+  it('proxyEnabled=false 时，连「主账号基线未知」那句也不产出（问题 5 的原症状）', () => {
+    /** 构造"没有 SSR 数据"的情形 —— 正是用户报的那一条 */
+    const noSsr = view({
+      // 必须是**视频页**：PGC 页的锚点固定是「播放账号提供」，
+      // 「主账号基线未知」那句只在视频页出现（见 anchorText 的 isVideoPage 分支）
+      pageKey: 'BV1jt421t7XH',
+      primary: {
+        usable: false,
+        reason: 'absent',
+        capability: null,
+        user: null,
+        mid: null,
+        loggedIn: 'unknown',
+      },
+      playback: null,
+      diff: null,
+    });
+    // 开关开着时会显示锚点「主账号基线未知（本页没有 SSR 数据）」
+    expect(describeUnlock(noSsr, true)?.anchor).toContain('主账号基线未知');
+    // 关着时整块不产出
+    expect(describeUnlock(noSsr, false)).toBeNull();
   });
 });

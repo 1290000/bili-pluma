@@ -86,6 +86,25 @@ export const PGC_ANCHOR = '播放账号提供';
  * | `1080P60`(116) | —— | 标 |
  * | `HDR`(125) / `4K`(120) / `8K` | 不能 | 标 |
  *
+ * ## ⚠️ `'1080P'` 这一项现在是**冗余防御**，但故意留着（2026-10-29）
+ *
+ * 同一天用户要求从 `BADGE_QUALITY_NAMES` 删掉 `80`(1080P) 与 `116`(1080P60)，
+ * 于是 `unlockedBadges()` **再也不会产出 `'1080P'`** —— 这一项过滤的是
+ * 一个不会出现的值，字面上已经是死条目。
+ *
+ * **仍然留着**，理由两条：
+ *
+ * 1. **它是文档**：这张表回答的是"PGC 页哪些档不该标"，
+ *    而 1080P **在 PGC 页确实不该标**（试看就能看）。删掉它会让"为什么
+ *    PGC 页没有 1080P"这个问题的答案散落到另一个文件里。
+ * 2. **回归保险**：万一 `80` 被加回 `BADGE_QUALITY_NAMES`（比如产品改主意），
+ *    删了这里就会让 1080P 徽章在番剧页直接冒出来 —— **而不会有任何测试变红**
+ *    （因为它是"过滤一个不存在的值"，删掉它测试照样绿）。
+ *
+ * 也就是说：**这一项的成本是 0，收益是"将来某个改动不会静默走错"**。
+ * 上面那条交叉校验断言（必须能在 `QUALITY_NAMES` 找到）对它仍然成立 ——
+ * `QUALITY_NAMES` 里 `80` 还在（它描述的是"这个 id 叫什么"，与"要不要标"无关）。
+ *
  * ## 为什么用字符串集合而不是 qid 集合
  *
  * 过滤发生在 `unlockedBadges()` **之后** —— 那一层的输出已经是标签文本，
@@ -200,10 +219,41 @@ function anchorText(view: PageTracksView): string {
  * 生成 §2.3 的视图。
  *
  * @param view content 报来的当前页数据；`null` 表示不是视频页 / 还没报到
- * @returns `null` 时 popup 该显示"打开任意视频页查看效果"
+ * @param proxyEnabled 总开关是否开着。**`false` 时返回 `null`，整块画质区不渲染**
+ *   （2026-10-29 用户要求，见下面那段注释）
+ * @returns `null` 时 popup 不渲染画质卡
  */
-export function describeUnlock(view: PageTracksView | null): UnlockSummary | null {
+export function describeUnlock(
+  view: PageTracksView | null,
+  proxyEnabled = true,
+): UnlockSummary | null {
   if (!view) return null;
+
+  /**
+   * ## 关掉总开关后，这条整块不显示（2026-10-29 用户要求）
+   *
+   * 原来的问题是：开关关了以后 popup 仍然显示
+   * 「主账号基线未知（本页没有 SSR 数据）· 1080P」——
+   * 而那时**根本没有在代理**，这行字描述的是一个不存在的东西。
+   * 它既不是画质对比，也不是错误，纯粹是噪音。
+   *
+   * 用户的原话是要求"直接去掉，不要显示画质对比区"。
+   *
+   * ## ⚠️ 为什么返回 `null` 而不是调一个新的"空视图"
+   *
+   * `null` 在本函数里原来只表示"不是播放页"。现在多一个含义"开关关着"。
+   * **两者在 UI 上的处理相同**（都不渲染画质卡），所以不需要区分 ——
+   * popup 只需要知道"画这张卡吗"。
+   *
+   * 但**它们不该共用一句话**。原来非播放页会显示「打开任意视频页查看效果」，
+   * 那是给"你在首页"用的提示。开关关着时**什么都不能显示**：
+   * 用户刚亲手关的开关，再弹一句"去视频页看看"是在装傻。
+   * 所以调用方（`popup/main.tsx`）**不再根据 `null` 反推文案**，
+   * 而是：非播放页根本进不到这里（它先判 `page.kind`）→ 什么都不渲染。
+   *
+   * 判据传参而不是在这里读存储：`core/` 不许碰 `chrome.*`（AGENTS §5.2）。
+   */
+  if (!proxyEnabled) return null;
 
   const playback = view.playback?.capability ?? null;
   const anchor = anchorText(view);
