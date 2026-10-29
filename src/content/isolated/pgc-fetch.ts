@@ -16,6 +16,8 @@
 
 import { hasPlayableStream } from '@core/playinfo/pgc-merge';
 
+import { isVideoInfoTruncated } from './pgc-cache-inject';
+
 /** 取流超时。实测 118–388ms，8 秒足够容错 */
 export const FETCH_TIMEOUT_MS = 8_000;
 
@@ -23,6 +25,15 @@ export type FetchOutcome =
   | { kind: 'ok'; result: Record<string, unknown> }
   /** 服务端明确拒绝（无权益 / 风控）—— **不该重试，也不该刷新** */
   | { kind: 'denied'; code: number }
+  /**
+   * 有流，但流短于元数据（试看流）—— **不是可用完整流**（G1，2026-10-29）。
+   *
+   * 以前这里和 `ok` 混在一起：`hasPlayableStream()` 只看"有没有 durl"，
+   * 试看流也放行；调用方先 `applyPlayback()`、再合并，直到下游
+   * `shouldWritePgcCache()` 才被拒 —— 上游说成功、下游说不行。
+   * 现在在入口就把这个信号分开，调用方不必各自再判一次。
+   */
+  | { kind: 'truncated' }
   /** 网络 / 超时 / 解析失败 —— 可以下次再试 */
   | { kind: 'error'; detail: string };
 
@@ -68,6 +79,14 @@ export async function fetchPgcPlayurl(cid: string, url: string): Promise<FetchOu
   const result = o?.result;
   if (!result || typeof result !== 'object') return { kind: 'error', detail: 'no-result' };
   if (!hasPlayableStream(result)) return { kind: 'denied', code: 0 };
+
+  /**
+   * **有流 ≠ 完整流**（G1）。
+   *
+   * 试看流也有 `durl`，靠 `hasPlayableStream` 拦不住；必须在入口用长度判据
+   * （与写入/读取缓存用的是同一个 `isVideoInfoTruncated`）区分出来。
+   */
+  if (isVideoInfoTruncated(result)) return { kind: 'truncated' };
 
   return { kind: 'ok', result: result as Record<string, unknown> };
 }

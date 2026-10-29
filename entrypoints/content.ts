@@ -940,6 +940,13 @@ async function tryUpgradeForQuality(cid: string, ssrInfo: unknown): Promise<bool
 
   const outcome = await fetchPgcPlayurl(cid, buildPlayurlUrl(cid));
   if (outcome.kind !== 'ok') {
+    if (outcome.kind === 'truncated') {
+      reportQuality({
+        height: 0,
+        note: '[PGC] 画质补取拿到的是截断流（试看），不替换、不写缓存',
+      });
+      return false;
+    }
     reportQuality({
       height: 0,
       note: `[PGC] 画质补取失败（${outcome.kind === 'denied' ? `code=${outcome.code}` : outcome.detail}），保持现有画质`,
@@ -964,7 +971,12 @@ async function tryUpgradeForQuality(cid: string, ssrInfo: unknown): Promise<bool
 
   /**
    * 走到这里才写缓存 —— **只有真正要用的那份才进 LRU**。
+   * 入口已用长度闸拦过截断流（G1），这里再防御一次：写缓存是不可逆动作。
    */
+  if (!shouldWritePgcCache(merged)) {
+    reportQuality({ height: 0, note: '[PGC] 补取结果是截断流，拒绝写缓存（防御）' });
+    return false;
+  }
   await writePgcCache(cid, merged);
   const epFromUrl = parsePlayPage(location.href);
   writePgcSessionCache(cid, merged, epFromUrl?.kind === 'pgc' ? epFromUrl.epId : null);
@@ -1391,6 +1403,15 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
   const outcome = await fetchPgcPlayurl(cid, buildPlayurlUrl(cid));
 
   if (outcome.kind !== 'ok') {
+    if (outcome.kind === 'truncated') {
+      reportQuality({
+        height: 0,
+        note: '[PGC] 取回流短于元数据（试看），不写缓存、不刷新，按试看播放',
+      });
+      pgcReloadTrace.orchestrateExit = 'fetch-truncated';
+      pgcReloadTrace.lastReason = '取流入口识别到截断流（G1）';
+      return;
+    }
     const why =
       outcome.kind === 'denied'
         ? `服务端拒绝（code=${outcome.code}）`
