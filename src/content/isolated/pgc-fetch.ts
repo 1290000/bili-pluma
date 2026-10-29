@@ -43,7 +43,11 @@ export type FetchOutcome =
  * @param cid   章节 id
  * @param url   由 `buildPlayurlUrl` 生成
  */
-export async function fetchPgcPlayurl(cid: string, url: string): Promise<FetchOutcome> {
+export async function fetchPgcPlayurl(
+  cid: string,
+  url: string,
+  expectedMs = 0,
+): Promise<FetchOutcome> {
   if (!cid) return { kind: 'error', detail: 'no-cid' };
 
   let res: Response;
@@ -86,7 +90,7 @@ export async function fetchPgcPlayurl(cid: string, url: string): Promise<FetchOu
    * 试看流也有 `durl`，靠 `hasPlayableStream` 拦不住；必须在入口用长度判据
    * （与写入/读取缓存用的是同一个 `isVideoInfoTruncated`）区分出来。
    */
-  if (isVideoInfoTruncated(result)) return { kind: 'truncated' };
+  if (isVideoInfoTruncated(result, expectedMs)) return { kind: 'truncated' };
 
   return { kind: 'ok', result: result as Record<string, unknown> };
 }

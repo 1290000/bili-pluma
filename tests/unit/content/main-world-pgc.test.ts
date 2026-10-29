@@ -1424,6 +1424,37 @@ describe('读取侧：拒绝截断缓存（问题 5 的第三道防线）', () =
     expect(traceOf(sb)?.cacheRejectedTruncated).toBeFalsy();
   });
 
+  it('⚠️ 完整多段 durl 不被误杀（段长相加 = timelength）', async () => {
+    /**
+     * 2026-10-29 verifier 反例：以前只看 `durl[0]`，多段完整流会被判截断。
+     * 主世界与 ISOLATED 两侧必须同时改成"按段相加"。
+     */
+    const sb = bootAt(PGC_URL);
+    await ready(sb);
+
+    sb.win.sessionStorage.setItem(
+      SS_KEY + String(CID),
+      JSON.stringify({
+        vi: {
+          timelength: 1440000,
+          durl: [
+            { length: 720000, url: 'https://example/a.m4s' },
+            { length: 720000, url: 'https://example/b.m4s' },
+          ],
+        },
+        exp: Date.now() + 60_000,
+      }),
+    );
+
+    const ssr = ssrPreview();
+    (ssr.result.arc as { cid: number }).cid = CID;
+    (ssr.result.video_info as { cid?: number }).cid = CID;
+    sb.page.__playinfo__ = ssr;
+
+    expect(vi(sb).timelength).toBe(1440000);
+    expect(traceOf(sb)?.cacheRejectedTruncated).toBeFalsy();
+  });
+
   it('⚠️ 完整 dash 不被误杀', async () => {
     const sb = bootAt(PGC_URL);
     await ready(sb);

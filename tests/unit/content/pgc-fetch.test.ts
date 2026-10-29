@@ -131,4 +131,18 @@ describe('fetchPgcPlayurl：有流 ≠ 完整流（G1）', () => {
     expect(out).toEqual({ kind: 'error', detail: 'no-cid' });
     expect(fn).not.toHaveBeenCalled();
   });
+
+  it('expectedMs：接口缺 timelength 时用第二参照判截断', async () => {
+    mockFetch(async () => jsonResponse({ code: 0, result: { durl: [{ length: 180_160 }] } }));
+
+    const out = await fetchPgcPlayurl('1', URL, 1_166_528);
+    expect(out).toEqual({ kind: 'truncated' });
+  });
+
+  it('expectedMs：完整流（段长 = 参照）→ ok', async () => {
+    mockFetch(async () => jsonResponse({ code: 0, result: { durl: [{ length: 1_166_528 }] } }));
+
+    const out = await fetchPgcPlayurl('1', URL, 1_166_528);
+    expect(out.kind).toBe('ok');
+  });
 });

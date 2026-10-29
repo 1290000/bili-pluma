@@ -94,57 +94,68 @@ export function isPreviewSsr(ssrData: unknown): boolean {
  *
  * @returns `true` 表示"流不够长，需要注入完整流"
  */
-export function isStreamTruncated(ssrData: unknown): boolean {
-  const vi = readVideoInfo(ssrData);
-  if (!vi) return false;
-
-  const timelengthMs = typeof vi.timelength === 'number' ? vi.timelength : 0;
-
+/** 流时长的候选来源；拿不到返回 0。 */
+function streamDurationMs(vi: Record<string, unknown>): number {
   /**
-   * ## 单段 `durl` 优先（2026-10-28 加，`playview` 的响应形状）
+   * ① `durl`：**把所有段相加**。
    *
-   * `/ogv/player/playview` 的响应是 `data.video_info`，而且**没有 `dash`**，
-   * 完整时是单段 `durl`（长度 = timelength）、试看时是 `durls`（4 组 × 6 分钟）。
-   *
-   * ⚠️ **不能拿 `timelength` 判断能不能播**：`playview` 的 `timelength`
-   * 是 1440000（整集 24 分钟），而 `durls` 只有 4 × 360 秒。
-   * 必须看**流自己**有多长。
+   * 以前只看 `durl[0]`，多段完整流（durl 流水线）会被误判成截断 ——
+   * 2026-10-29 verifier 探针抓到的反例：`{timelength:600000, durl:[300000,300000]}`。
    */
-  if (Array.isArray(vi.durl) && vi.durl.length > 0 && timelengthMs > 0) {
-    const first = vi.durl[0] as Record<string, unknown> | undefined;
-    const len = first && typeof first.length === 'number' ? first.length : 0;
-    if (len > 0) return len < timelengthMs - TRUNCATION_SLACK_MS;
+  if (Array.isArray(vi.durl) && vi.durl.length > 0) {
+    let total = 0;
+    for (const seg of vi.durl) {
+      if (seg && typeof seg === 'object') {
+        const len = (seg as Record<string, unknown>).length;
+        if (typeof len === 'number' && len > 0) total += len;
+      }
+    }
+    if (total > 0) return total;
   }
 
+  // ② dash 顶层 duration（秒）
   const dash = vi.dash as Record<string, unknown> | undefined;
   const dashSec = dash && typeof dash.duration === 'number' ? dash.duration : 0;
+  if (dashSec > 0) return dashSec * 1000;
 
-  // 有完整长度的 dash：够长就不用注入
-  if (dashSec > 0 && timelengthMs > 0) {
-    return dashSec * 1000 < timelengthMs - TRUNCATION_SLACK_MS;
-  }
-
-  // 没有 dash（纯 durl 流水线）：durl 组的总时长 vs timelength
+  // ③ durls：第一组各段求和（各画质组时长相同；playview 试看 = 1 段 6 分钟）
   const durls = vi.durls;
-  if (Array.isArray(durls) && durls.length > 0 && timelengthMs > 0) {
-    let totalMs = 0;
-    for (const g of durls) {
-      if (!g || typeof g !== 'object') continue;
-      const segs = (g as Record<string, unknown>).durl;
-      if (!Array.isArray(segs)) continue;
+  if (Array.isArray(durls) && durls.length > 0) {
+    const first = durls[0] as Record<string, unknown> | undefined;
+    const segs = first?.durl;
+    if (Array.isArray(segs)) {
+      let total = 0;
       for (const s of segs) {
         if (s && typeof s === 'object') {
           const len = (s as Record<string, unknown>).length;
-          if (typeof len === 'number') totalMs += len;
+          if (typeof len === 'number' && len > 0) total += len;
         }
       }
-      break; // 只看第一组（各画质组时长相同）
+      if (total > 0) return total;
     }
-    if (totalMs > 0) return totalMs < timelengthMs - TRUNCATION_SLACK_MS;
   }
 
-  // 判断不了 → 保守返回 false，不要贸然注入
-  return false;
+  return 0;
+}
+
+/**
+ * `video_info` 的流是否短于参照时长。
+ *
+ * @param expectedMs 第二参照（SSR 的 `timelength` / 当前流时长）。
+ *                   接口缺 `timelength` 时靠它兜底；0 表示没有第二参照。
+ */
+function isTruncatedVideoInfo(vi: Record<string, unknown>, expectedMs = 0): boolean {
+  const timelengthMs = typeof vi.timelength === 'number' ? vi.timelength : 0;
+  const refMs = Math.max(timelengthMs, expectedMs > 0 ? expectedMs : 0);
+  if (!(refMs > 0)) return false;
+  const durationMs = streamDurationMs(vi);
+  if (!(durationMs > 0)) return false;
+  return durationMs < refMs - TRUNCATION_SLACK_MS;
+}
+
+export function isStreamTruncated(ssrData: unknown): boolean {
+  const vi = readVideoInfo(ssrData);
+  return vi ? isTruncatedVideoInfo(vi) : false;
 }
 
 /**
@@ -265,9 +276,9 @@ export const TRUNCATION_SLACK_MS = 5000;
  * @param videoInfo 合并后的 `video_info`（`mergeVideoInfo()` 的返回值或缓存里的那份）
  * @returns `true` 表示**流短于 timelength**（试看流），不该当完整流用
  */
-export function isVideoInfoTruncated(videoInfo: unknown): boolean {
+export function isVideoInfoTruncated(videoInfo: unknown, expectedMs = 0): boolean {
   if (!videoInfo || typeof videoInfo !== 'object') return false;
-  return isStreamTruncated({ result: videoInfo });
+  return isTruncatedVideoInfo(videoInfo as Record<string, unknown>, expectedMs);
 }
 
 /**
@@ -334,9 +345,9 @@ export function isSyncCacheUsable(raw: string | null): boolean {
  * @param merged `mergeVideoInfo()` 的结果
  * @returns `true` = 是完整流，可以写缓存 + 刷新；`false` = 试看流，停止
  */
-export function shouldWritePgcCache(merged: unknown): boolean {
+export function shouldWritePgcCache(merged: unknown, expectedMs = 0): boolean {
   if (!merged || typeof merged !== 'object') return false;
-  return !isVideoInfoTruncated(merged);
+  return !isVideoInfoTruncated(merged, expectedMs);
 }
 
 /**

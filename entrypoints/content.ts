@@ -938,7 +938,9 @@ async function tryUpgradeForQuality(cid: string, ssrInfo: unknown): Promise<bool
   }
   if (alreadyTried) return false;
 
-  const outcome = await fetchPgcPlayurl(cid, buildPlayurlUrl(cid));
+  // 第二参照：当前 SSR 流的时长（接口缺 timelength 时兜底）
+  const expectedMs = expectedDurationMs(ssrInfo);
+  const outcome = await fetchPgcPlayurl(cid, buildPlayurlUrl(cid), expectedMs);
   if (outcome.kind !== 'ok') {
     if (outcome.kind === 'truncated') {
       reportQuality({
@@ -973,7 +975,7 @@ async function tryUpgradeForQuality(cid: string, ssrInfo: unknown): Promise<bool
    * 走到这里才写缓存 —— **只有真正要用的那份才进 LRU**。
    * 入口已用长度闸拦过截断流（G1），这里再防御一次：写缓存是不可逆动作。
    */
-  if (!shouldWritePgcCache(merged)) {
+  if (!shouldWritePgcCache(merged, expectedMs)) {
     reportQuality({ height: 0, note: '[PGC] 补取结果是截断流，拒绝写缓存（防御）' });
     return false;
   }
@@ -1400,7 +1402,14 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
     /* 读不到就当没试过 */
   }
 
-  const outcome = await fetchPgcPlayurl(cid, buildPlayurlUrl(cid));
+  /**
+   * 第二参照：SSR 当前这份流自己的时长。
+   * 接口缺 `timelength` 时，靠它仍能判"够不够长"（G1 Phase 2）。
+   */
+  const ssrVideoInfo = readSsrVideoInfo(ssr);
+  const expectedMs = expectedDurationMs(ssrVideoInfo);
+
+  const outcome = await fetchPgcPlayurl(cid, buildPlayurlUrl(cid), expectedMs);
 
   if (outcome.kind !== 'ok') {
     if (outcome.kind === 'truncated') {
@@ -1421,7 +1430,6 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
   }
 
   // 合并到 SSR 骨架（字段白名单在 core/playinfo/pgc-merge.ts）
-  const ssrVideoInfo = readSsrVideoInfo(ssr);
   const merged = mergeVideoInfo(ssrVideoInfo, outcome.result);
   if (!merged) {
     reportQuality({ height: 0, note: '[PGC] 接口有流但合并不出可用字段，按试看播放' });
@@ -1506,7 +1514,7 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
    * **代价**：这一集在本次会话里不会再尝试取流（`pgcCacheTried` 已置 true）。
    * 用户刷新页面可以重试。这比"无限刷新"和"把坏数据存 100 分钟"都好。
    */
-  if (!shouldWritePgcCache(merged)) {
+  if (!shouldWritePgcCache(merged, expectedMs)) {
     reportQuality({
       height: 0,
       note:
@@ -1575,6 +1583,18 @@ function readSsrVideoInfo(ssr: unknown): unknown {
     ((o.data as Record<string, unknown> | undefined)?.result as
       Record<string, unknown> | undefined);
   return result?.video_info ?? null;
+}
+
+/**
+ * 从 `video_info` 取一个可用的时长参照（毫秒）；取不到返回 0。
+ *
+ * 用作截断判据的**第二参照**：接口响应缺 `timelength` 时，至少还能跟
+ * 页面当前这份流比 —— 避免"判不了就放行"（G1 Phase 2）。
+ */
+function expectedDurationMs(videoInfo: unknown): number {
+  if (!videoInfo || typeof videoInfo !== 'object') return 0;
+  const t = (videoInfo as Record<string, unknown>).timelength;
+  return typeof t === 'number' && t > 0 ? t : 0;
 }
 
 function report(): void {

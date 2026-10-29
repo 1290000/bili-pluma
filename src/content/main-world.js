@@ -347,11 +347,16 @@
     var timelengthMs = typeof vi.timelength === 'number' ? vi.timelength : 0;
     if (!(timelengthMs > 0)) return false;
 
-    // ① 单段 durl 优先（与 pgc-cache-inject.ts 的顺序一致）
+    // ① durl：把所有段相加（多段完整流不能只看第一段；2026-10-29 verifier 反例）
     if (Array.isArray(vi.durl) && vi.durl.length > 0) {
-      var first = vi.durl[0];
-      var len = first && typeof first.length === 'number' ? first.length : 0;
-      if (len > 0) return len < timelengthMs - PGC_TRUNCATION_SLACK_MS;
+      var totalDurlMs = 0;
+      for (var di = 0; di < vi.durl.length; di += 1) {
+        var seg = vi.durl[di];
+        if (seg && typeof seg === 'object' && typeof seg.length === 'number' && seg.length > 0) {
+          totalDurlMs += seg.length;
+        }
+      }
+      if (totalDurlMs > 0) return totalDurlMs < timelengthMs - PGC_TRUNCATION_SLACK_MS;
     }
 
     // ② dash

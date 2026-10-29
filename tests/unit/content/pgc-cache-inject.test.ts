@@ -474,6 +474,29 @@ describe('isVideoInfoTruncated：直接收 video_info', () => {
       }),
     ).toBe(false);
   });
+
+  it('⑧ 多段 durl：按段相加，不再只看第一段（verifier 反例）', () => {
+    expect(
+      isVideoInfoTruncated({
+        timelength: 600_000,
+        durl: [{ length: 300_000 }, { length: 300_000 }],
+      }),
+    ).toBe(false);
+    expect(
+      isVideoInfoTruncated({
+        timelength: 600_000,
+        durl: [{ length: 180_000 }, { length: 180_000 }],
+      }),
+    ).toBe(true);
+  });
+
+  it('⑨ expectedMs 第二参照：接口缺 timelength 也能判', () => {
+    // 没有 timelength，但 SSR 告诉我们是 19 分钟 → 180 秒的流必须判截断
+    expect(isVideoInfoTruncated({ durl: [{ length: 180_160 }] }, 1_166_528)).toBe(true);
+    expect(isVideoInfoTruncated({ durl: [{ length: 1_166_528 }] }, 1_166_528)).toBe(false);
+    // 没有第二参照时仍保守放行
+    expect(isVideoInfoTruncated({ durl: [{ length: 180_160 }] }, 0)).toBe(false);
+  });
 });
 
 /**
