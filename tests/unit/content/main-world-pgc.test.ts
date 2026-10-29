@@ -1586,3 +1586,61 @@ describe('注入成功后通知 ISOLATED（修首次进入 popup 空白）', () 
     expect(sb.sent.find((m) => m.type === 'pgc-playview-stream')).toBeUndefined();
   });
 });
+
+/**
+ * G7（2026-10-30）：`pgcPlayviewIsTruncated` 必须与主判据一致。
+ *
+ * ## 为什么单开一组
+ *
+ * 主世界有**三个**截断判据：`pgcVideoInfoTruncated`（缓存注入）、
+ * `pgcPlayviewIsTruncated`（SPA 换流）、以及 ISOLATED 侧的同名逻辑。
+ * 前两个都是手写裸 JS，无法 import；不一致的后果是"上层觉得是试看、下层觉得完整"。
+ *
+ * 旧实现把 `durls` **每组首段**相加：试看 4 组 × 360109ms ≈ 1440s ≈ timelength
+ * → 误判完整 → `pgcMaxQualityId`（需 dash）返回 0 → `pgcSwapPlayviewBody` 跳过换流。
+ *
+ * ⚠️ 真机 2026-10-30（ep341217/218）响应当前同时带 `durl` 与 `durls`，先命中
+ * `durl` 分支，所以这个 bug **没有复现**；本组测试守的是"只有 durls"的形状。
+ */
+describe('G7：playview 截断判据（与主判据一致）', () => {
+  function loadPlayviewPredicate(): (vi: unknown) => boolean {
+    const m = /function pgcPlayviewIsTruncated\(vi\) \{[\s\S]*?\n {2}\}/.exec(SOURCE);
+    expect(m, '源码里找不到 pgcPlayviewIsTruncated').not.toBeNull();
+    return new Function(`${String(m?.[0])}; return pgcPlayviewIsTruncated;`)() as (
+      vi: unknown,
+    ) => boolean;
+  }
+
+  const previewDurls = {
+    timelength: 1_440_000,
+    durls: Array.from({ length: 4 }, () => ({ durl: [{ length: 360_109 }] })),
+  };
+
+  it('只有 durls 的试看（4 组 × 360109）→ true（旧实现会判 false）', () => {
+    expect(loadPlayviewPredicate()(previewDurls)).toBe(true);
+  });
+
+  it('durls 单组多段 = timelength → false（完整流不许误杀）', () => {
+    expect(
+      loadPlayviewPredicate()({
+        timelength: 1_440_000,
+        durls: [{ durl: [{ length: 720_000 }, { length: 720_000 }] }],
+      }),
+    ).toBe(false);
+  });
+
+  it('单段 durl 完整 → false；多段 durl 完整 → false', () => {
+    const fn = loadPlayviewPredicate();
+    expect(fn({ timelength: 1_440_000, durl: [{ length: 1_440_000 }] })).toBe(false);
+    expect(fn({ timelength: 1_440_000, durl: [{ length: 720_000 }, { length: 720_000 }] })).toBe(
+      false,
+    );
+  });
+
+  it('没有 timelength / 没有流 → false（判不了就放行）', () => {
+    const fn = loadPlayviewPredicate();
+    expect(fn({ durl: [{ length: 180_000 }] })).toBe(false);
+    expect(fn({ timelength: 1_440_000 })).toBe(false);
+    expect(fn(null)).toBe(false);
+  });
+});

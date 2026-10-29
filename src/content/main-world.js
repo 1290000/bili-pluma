@@ -2768,27 +2768,52 @@
     return max;
   }
 
+  /**
+   * `/ogv/player/playview` 的流是否短于 `timelength`（G7，2026-10-30）。
+   *
+   * ## 为什么不能只看"每组首段"
+   *
+   * 旧实现把 `durls` **每个画质组的首段**相加：
+   *   试看 = 4 组 × 1 段 × 360109ms → total ≈ 1440s ≈ timelength
+   *   → 误判"完整" → 随后 `pgcMaxQualityId` 在无 dash 的响应上返回 0
+   *   → `pgcSwapPlayviewBody` 直接 return null，跳过换流。
+   *
+   * 真机 2026-10-30（ep341217/218）响应当前同时带 `durl` 与 `durls`，
+   * 先命中 `durl` 分支，所以没有复现；但只要出现"只有 durls"的形状就会踩到。
+   * 这里改成与 ISOLATED 的 `streamDurationMs` 一致：**同一组内全段相加**。
+   */
   function pgcPlayviewIsTruncated(vi) {
     if (!vi || typeof vi !== 'object') return false;
     var timelength = typeof vi.timelength === 'number' ? vi.timelength : 0;
+    if (!(timelength > 0)) return false;
 
-    // 单段 durl：直接看它多长
+    // ① durl：所有段相加（多段完整流不能只看第一段）
     if (Array.isArray(vi.durl) && vi.durl.length > 0) {
-      var dl = typeof vi.durl[0].length === 'number' ? vi.durl[0].length : 0;
-      if (timelength > 0 && dl > 0) return dl < timelength - 5000;
+      var totalDurl = 0;
+      for (var di = 0; di < vi.durl.length; di += 1) {
+        var seg = vi.durl[di];
+        if (seg && typeof seg === 'object' && typeof seg.length === 'number' && seg.length > 0) {
+          totalDurl += seg.length;
+        }
+      }
+      if (totalDurl > 0) return totalDurl < timelength - 5000;
       return false;
     }
 
-    // 多段 durls：把各段加起来
+    // ② durls：**同一组内**全段相加（不是每组首段相加）
     if (Array.isArray(vi.durls) && vi.durls.length > 0) {
+      var firstGroup = vi.durls[0];
+      var segs = firstGroup && firstGroup.durl;
       var total = 0;
-      for (var i = 0; i < vi.durls.length; i += 1) {
-        var segs = vi.durls[i] && vi.durls[i].durl;
-        if (Array.isArray(segs) && segs.length > 0) {
-          total += typeof segs[0].length === 'number' ? segs[0].length : 0;
+      if (Array.isArray(segs)) {
+        for (var si = 0; si < segs.length; si += 1) {
+          var s = segs[si];
+          if (s && typeof s === 'object' && typeof s.length === 'number' && s.length > 0) {
+            total += s.length;
+          }
         }
       }
-      if (timelength > 0 && total > 0) return total < timelength - 5000;
+      if (total > 0) return total < timelength - 5000;
       return false;
     }
 
