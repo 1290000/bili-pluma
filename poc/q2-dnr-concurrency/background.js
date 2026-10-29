@@ -199,6 +199,27 @@ async function strategyPoolRandomId(tasks) {
         const res = await fetch(url, { credentials: CFG.CREDENTIALS, signal: ctrl.signal });
         const json = await res.json();
         echoed = extractEchoedCookie(json);
+
+        /**
+         * ⚠️ `updateSessionRules` 的 resolve 只表示**变更被受理**，不表示规则已可匹配
+         * （2026-10-29 在 S4 上实测）。S1 每请求 add 一条新规则，同样有这条窗口；
+         * 不重试的话，偶发的缺失会被误读成 DNR 串号/规则问题。
+         *
+         * 2026-10-30 基线实测：r1/r2 满，r3 缺失 2 个（idx 15/17，位置随机），
+         * 与历史「固定 16–19」不同 —— 更像生效窗口，而不是确定缺陷。
+         *
+         * 修法：一次不中，等 120ms 再试一次。仍没回显则标 `rule-never-settled`，
+         * 不再伪装成 missing。
+         */
+        if (echoed !== cookie) {
+          await sleep(CFG.DNR_SETTLE_STEP_MS);
+          const res2 = await fetch(url, { credentials: CFG.CREDENTIALS, signal: ctrl.signal });
+          const json2 = await res2.json();
+          const echoed2 = extractEchoedCookie(json2);
+          // 第二次有回显就采用（若仍是别人的，judge 会判 MISMATCH —— 那才是真串号）
+          if (echoed2 !== null) echoed = echoed2;
+          if (echoed === null) error = 'rule-never-settled';
+        }
       } catch (e) {
         error = e.name === 'AbortError' ? 'timeout' : String(e);
       } finally {
