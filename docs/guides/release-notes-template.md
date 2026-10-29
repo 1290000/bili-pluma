@@ -15,7 +15,7 @@
 | 部分 | 来源 | 随版本变？ |
 | --- | --- | --- |
 | **本版内容** | **`CHANGELOG.md` 对应版本节** | ✅ 会变 |
-| 下载 / 怎么用 / 边界 / 已知限制 / 许可证 | `package.mjs` 的 `releaseNotes()` | ❌ 基本不变 |
+| 下载 / **校验和** / 怎么用 / 边界 / 已知限制 / 许可证 | `package.mjs` 的 `releaseNotes()` | 基本不变（**校验和每次打包都会变**） |
 
 **判据：会不会随版本变？** 会变的写 `CHANGELOG.md`，不变的写在模板里。
 
@@ -142,7 +142,14 @@ B站双账号画质助手。用主账号浏览、点赞、收藏，让一个大�
 | 文件 | 内容 |
 | --- | --- |
 | `pluma-<版本>.zip` | 构建产物，解压后在 `edge://extensions`（Chrome 用 `chrome://extensions`）加载 |
-| `pluma-<版本>-with-source.zip` | 同上 + 完整源码 |
+| `pluma-<版本>-with-source.zip` | 同上 + 完整源码（含 `BUILD.md` 构建凭证） |
+
+### 校验和
+
+| 文件 | sha256 |
+| --- | --- |
+| `pluma-<版本>.zip` | `<打包时计算，全 64 位>` |
+| `pluma-<版本>-with-source.zip` | `<打包时计算，全 64 位>` |
 
 也可以自己从源码构建：`pnpm install && pnpm build`，加载 `.output/chrome-mv3`。
 

@@ -86,6 +86,7 @@ Windows 资源管理器「全部解压」时**总是先用 zip 文件名建一�
 同样**平铺在 zip 根**（规则与上面一致）：
 
 ```
+BUILD.md               ← 构建凭证（package.mjs 生成：commit / Node / wxt / 逐文件 sha256）
 extension/             ← 构建产物放这里（manifest.json 在这层）
 src/
 entrypoints/
@@ -189,12 +190,22 @@ mid 不是密钥，可它能直接打开一个人的 B 站主页。
 
 ### 3. 打包
 
+> ⚠️ **打包前必须先完成 §5（更新 CHANGELOG）并提交。**
+> `package.mjs` 有 clean-tree 门：工作区不干净（含未跟踪的新文件）会直接拒绝打包 ——
+> 因为 `BUILD.md` 要记录 commit，脏工作区意味着 zip 里的源码不等于任何 commit。
+> 同时 `.output` 必须比源码新，否则拒绝（先 build 再打包）。
+
 ```bash
 node scripts/package.mjs
 ```
 
 产出 `dist/pluma-<版本>.zip` 与 `dist/pluma-<版本>-with-source.zip`。
-脚本会自检：`manifest.json` 在根、版本号一致、不含被排除的目录。任一不符直接报错退出。
+脚本会自检：`manifest.json` 在根、版本号一致、不含被排除的目录、工作区干净、
+`.output` 不比源码旧。任一不符直接报错退出。
+
+源码版根目录会多一个 **`BUILD.md`**：记录版本、commit、构建命令、Node/wxt/lockfile、
+以及 `extension/**` 逐文件 sha256。`verify` 的 `artifact` 项会逐条核对它与 zip 内实际字节；
+凭证对不上时 `verify` 会红。
 
 ### 4. 人工冒烟测试（**硬性，不可省**）
 
@@ -215,7 +226,7 @@ node scripts/package.mjs
 - [ ] 关掉总开关 → 刷新 → 画质回落到 1080P（判据见验收清单 §5）
 - [ ] 打开非视频页 → popup 显示"未生效"
 
-### 5. 更新 CHANGELOG.md
+### 5. 更新 CHANGELOG.md（**必须在 §3 打包之前完成**）
 
 **Release 正文的「本版内容」直接从这里提取**，所以这一步不是可选项 ——
 找不到 `## <版本号>` 那一节，打包会硬失败（退出码 2）。
@@ -259,6 +270,11 @@ gh release view v0.9.0 --json body --jq '.body' | diff - dist/release-notes.md
 
 # 3. tag 是否指向预期的提交
 git ls-remote --tags origin | grep v0.9.0
+
+# 4. 附件 sha256 与 release notes 的「校验和」一致
+sha256sum dist/pluma-0.9.0.zip dist/pluma-0.9.0-with-source.zip
+# Windows PowerShell：
+# Get-FileHash dist/pluma-0.9.0.zip,dist/pluma-0.9.0-with-source.zip -Algorithm SHA256
 ```
 
 ### 8. 自动转发到 Telegram 群
