@@ -43,6 +43,18 @@ export default tseslint.config(
       'dist/**', // 发布产物：构建结果 + 用户解压出来的副本，不该参与 lint
       'poc/**', // Q2 是独立扩展，裸 JS，不参与主项目 lint
       /**
+       * 临时目录：反例验证 / 基线证据的落脚点，**不该参与 lint**。
+       *
+       * 与 `dist/**` 是同一类东西（都不进版本库），但 `.tmp/` 原来漏了 ——
+       * `.gitignore` 忽略它、ESLint 却不读 `.gitignore`，于是任何一次
+       * "把仓库副本或验证脚本放进 `.tmp/` 做反例"都会让 lint 项整片变红
+       * （2026-10-30 实测：副本里的 `.cjs` 让总错误从 0 涨到 6、exit 1），
+       * 把一手证据变成"仓库脏了"的假警报。
+       *
+       * 2026-10-30 补。见 `.workbuddy-ai/plans/2026-10-30-refactor-plan-v2.md` S0.1。
+       */
+      '.tmp/**',
+      /**
        * 主世界脚本：**唯一一个不进 lint 的业务文件**，故意如此。
        *
        * 它是近 3000 行纯 JS，职责是 hook 页面的 `fetch` / `XHR` / `MediaSource`
