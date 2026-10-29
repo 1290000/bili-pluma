@@ -77,7 +77,6 @@ export type RequestMsg =
     }
   /** 取最近 1 小时的取流成功率时序（popup「已降级」状态的条形图） */
   | { type: 'stats/recent' };
-
 /** background → UI / content */
 export type ResponseMsg =
   /**
@@ -176,6 +175,94 @@ export type PageQueryReply =
   | { type: 'page/summary:ok'; view: PageTracksView }
   /** content 在，但还没报到（脚本刚注入、页面还没解析出 bvid） */
   | { type: 'page/summary:none'; reason: 'not-ready' };
+
+/**
+ * 页面 → content：要一份 **popup 渲染结果的完整快照**（给自动化/bsk 用）。
+ *
+ * ## 为什么需要它（2026-10-29）
+ *
+ * `chrome-extension://` 页面被 bsk 的 Agent Window sandbox 拒绝 `evaluate`，
+ * 于是 popup 到底渲染成什么样**只能靠用户手点截图**。UI bug 因此只能靠肉眼，
+ * 每个都要用户配合一轮，极慢。
+ *
+ * 这条消息把"popup 会渲染成什么"变成一段可读 JSON。
+ *
+ * ## 为什么挂在 content 侧，而不是 background
+ *
+ * 快照要三样东西：`describePopup()`（`core`，纯函数）、账号摘要（`background`）、
+ * 当前页数据（`content` 独有）。**只有 content 侧能一次凑齐** ——
+ * 它在页面里，能顺手向 background 转发一次 `account/summary`。
+ *
+ * 反过来（放 background）则要 background 反查活动标签页的 content，
+ * 多一次往返，且 background 拿不到 `pageState`。
+ *
+ * ## ⚠️ 只读，且**不带凭据**
+ *
+ * `AGENTS.md §5.2`：任何 `*:ok` 消息都不得携带凭据。
+ * 这里的账号部分只用 `AccountSummary` 级字段（uname / mid / vipLabel / expireAt / healthy），
+ * **绝不带 SESSDATA / bili_jct / 完整 Cookie**。
+ *
+ * ## ⚠️ 不在 popup 的渲染路径上
+ *
+ * popup 仍然自己发 `proxy/status` + `account/summary` + `stats/recent` + `page/summary:get`。
+ * 这条消息只给自动化用 —— 让 popup 依赖它会多一层调试代码，
+ * 而且快照与真实渲染之间的偏差会变成新的 bug 来源。
+ */
+export type PageSnapshotMsg = { type: 'page/snapshot:get' };
+
+/** `page/snapshot:get` 的应答。字段与 popup 的渲染输入一一对应 */
+export interface PopupSnapshotReply {
+  /**
+   * 胶囊状态（`describePopup()` 的产出）。
+   *
+   * `null` 表示拿不到 `proxy/status`（SW 未就绪 / 上下文失效）——
+   * 与 popup 的 `load.kind === 'error'` 同义。
+   */
+  view: {
+    state: string;
+    pill: string;
+    tone: string;
+    line?: string;
+    needsLogin: boolean;
+  } | null;
+  /** 主账号卡片（**不含** mid 以外的任何标识性凭据） */
+  primary: {
+    uname: string | null;
+    level: number | null;
+    loggedIn: 'yes' | 'no' | 'unknown';
+    source: 'live' | 'cached' | 'none';
+    /** 没有昵称时 popup 实际会显示的那句话 */
+    placeholder: string;
+  };
+  /** 播放账号摘要。`null` = 未配置或读不出来 */
+  playbackAccount: {
+    uname: string;
+    mid: number;
+    vipLabel: 'none' | 'monthly' | 'annual';
+    expireAt: number | null;
+    healthy: boolean;
+  } | null;
+  /** §2.3 画质区。`null` = 不是播放页 / 还没数据 / **总开关关着** */
+  unlock: {
+    title: string;
+    badges: string[];
+    anchor: string;
+    improved: boolean;
+  } | null;
+  /** 当前页 */
+  page: { kind: 'play' | 'other'; pageKey: string | null; p: number | null };
+  /** 总开关与规则数，方便直接判"现在生效了吗" */
+  proxy: { enabled: boolean; hasCredential: boolean; ruleCount: number };
+  /** popup 会用到的全部"原始字符串"，方便断言文案 */
+  texts: {
+    /** 主账号栏那一行（昵称或占位文案） */
+    primaryLine: string;
+    /** 画质卡标题 + 锚点拼起来（`null` 表示不渲染画质卡） */
+    unlockLine: string | null;
+  };
+}
+
+export type PageSnapshotReply = { type: 'page/snapshot:ok'; snapshot: PopupSnapshotReply };
 
 /**
  * 穷举检查工具 —— ⚠️ **当前没有任何调用方**（分发处用 `if` 链，不是 `switch`）。
