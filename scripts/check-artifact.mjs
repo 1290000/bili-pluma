@@ -63,6 +63,7 @@
  * 退出码：0 通过或跳过｜1 有产物不合格｜2 脚本自身出错
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -72,8 +73,9 @@ const ROOT = process.cwd();
 const DIST_DIR = join(ROOT, 'dist');
 const BUILD_DIR = join(ROOT, '.output', 'chrome-mv3');
 
-/** 只查主产物；`-with-source.zip` 里面多一层 `extension/`，结构不同，另行核对 */
-const ARTIFACT_RE = /^pluma-[\d.]+\.zip$/;
+/** 轻量版与源码版都要查 */
+const ARTIFACT_RE = /^pluma-[\d.]+(-with-source)?\.zip$/;
+const SOURCE_ARTIFACT_RE = /^pluma-[\d.]+-with-source\.zip$/;
 
 /**
  * 「主世界代码已进产物」的特征串 —— 四段，覆盖四类响应体改写能力。
@@ -341,6 +343,124 @@ function checkZip(buf) {
 }
 
 /**
+ * 检查 `-with-source.zip` 的构建凭证（G6，ADR 0018 的「可独立重建并比对」）。
+ *
+ * ## 断言
+ *
+ * 1. 根目录有 `BUILD.md`
+ * 2. `BUILD.md` 有「版本」与 40 位「提交」
+ * 3. `BUILD.md` 的版本 == `extension/manifest.json` 的 version
+ * 4. `BUILD.md` 的 sha256 表逐条与 `extension/**` 实际字节一致，且行数相等
+ * 5. 源码版里**不许**有 `安装说明.txt`（那是轻量版的；混进来会让人以为源码版可直接加载）
+ *
+ * ## 为什么逐条比对而不是只看表存在
+ *
+ * 凭证的价值在于「可独立验证」。如果只断言 BUILD.md 存在，那么改坏一个哈希、
+ * 或者产物被替换而凭证没更新，都发现不了 —— 那和没有凭证一样。
+ *
+ * @param {Buffer} buf
+ * @returns {{ problems: string[], notes: string[] }}
+ */
+function checkSourceZip(buf) {
+  /** @type {string[]} */
+  const problems = [];
+  /** @type {string[]} */
+  const notes = [];
+
+  const entries = readCentralDirectory(buf);
+  const byName = new Map(entries.map((e) => [e.name, e]));
+
+  const buildEntry = byName.get('BUILD.md');
+  if (!buildEntry) {
+    problems.push(
+      'with-source.zip 根目录没有 BUILD.md —— 源码版缺少构建凭证（G6）。' +
+        '重新用 `node scripts/package.mjs` 打包',
+    );
+    return { problems, notes };
+  }
+
+  const text = readEntry(buf, buildEntry).toString('utf8');
+  const version = /^- 版本：(.+)$/m.exec(text)?.[1]?.trim();
+  const commit = /^- 提交：([0-9a-f]{40})$/m.exec(text)?.[1];
+
+  if (!version) problems.push('BUILD.md 缺少「- 版本：…」行');
+  if (!commit) problems.push('BUILD.md 缺少 40 位「- 提交：…」行');
+
+  const rows = [...text.matchAll(/^\| ([0-9a-f]{64}) \| (.+) \|$/gm)].map((m) => ({
+    hash: m[1],
+    path: m[2].trim(),
+  }));
+  if (rows.length === 0) problems.push('BUILD.md 没有 sha256 表（或格式不对）');
+
+  const manifestEntry = byName.get('extension/manifest.json');
+  if (!manifestEntry) {
+    problems.push('with-source.zip 里没有 extension/manifest.json');
+  } else {
+    try {
+      const manifestVersion = JSON.parse(readEntry(buf, manifestEntry).toString('utf8')).version;
+      if (version && manifestVersion !== version) {
+        problems.push(
+          `BUILD.md 版本 ${version} ≠ extension/manifest.json ${String(manifestVersion)}`,
+        );
+      }
+    } catch (err) {
+      problems.push(
+        `extension/manifest.json 不是合法 JSON：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  if ([...byName.keys()].some((n) => n === '安装说明.txt' || n.endsWith('/安装说明.txt'))) {
+    problems.push(
+      'with-source.zip 里不应有 安装说明.txt（它是轻量版的；源码版会让人误以为可直接加载）',
+    );
+  }
+
+  const rowMap = new Map(rows.map((r) => [r.path, r.hash]));
+  const extEntries = entries.filter(
+    (e) => e.name.startsWith('extension/') && !e.name.endsWith('/'),
+  );
+
+  if (rows.length > 0 && extEntries.length !== rows.length) {
+    problems.push(
+      `BUILD.md 表 ${String(rows.length)} 行，extension/ 实际 ${String(extEntries.length)} 个文件 —— 不符`,
+    );
+  }
+
+  let mismatched = 0;
+  for (const e of extEntries) {
+    const expected = rowMap.get(e.name);
+    if (!expected) {
+      problems.push(`BUILD.md 缺少 ${e.name} 的哈希`);
+      continue;
+    }
+    let actual;
+    try {
+      actual = createHash('sha256').update(readEntry(buf, e)).digest('hex');
+    } catch (err) {
+      problems.push(`${e.name} 读不出来：${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    if (actual !== expected) {
+      mismatched += 1;
+      problems.push(
+        `${e.name} 哈希不符（BUILD.md ${expected.slice(0, 8)}… / 实际 ${actual.slice(0, 8)}…）`,
+      );
+    }
+  }
+
+  if (problems.length === 0) {
+    notes.push(
+      `BUILD.md 校验通过（版本 ${String(version)} · commit ${String(commit).slice(0, 8)}… · ${String(rows.length)} 条哈希）`,
+    );
+  } else if (mismatched > 0) {
+    notes.push(`有 ${String(mismatched)} 个文件哈希不符`);
+  }
+
+  return { problems, notes };
+}
+
+/**
  * 断言 4：主世界代码在 zip 里、且四类改写能力的特征串都在。
  *
  * ## 为什么不比对「zip 里有没有 main-world.js」
@@ -482,7 +602,7 @@ async function main() {
 
     let result;
     try {
-      result = checkZip(buf);
+      result = SOURCE_ARTIFACT_RE.test(name) ? checkSourceZip(buf) : checkZip(buf);
     } catch (err) {
       console.error(
         `\n[artifact] ❌ ${name} 解析失败：${err instanceof Error ? err.message : String(err)}`,

@@ -35,6 +35,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -238,7 +239,7 @@ function extractChangelogSection(changelog, version) {
  * 而且同样的内容在 `安装说明.txt` 里已经有第三份了。
  * 规范说明见 `docs/guides/release-notes-template.md`。
  */
-async function releaseNotes(version) {
+async function releaseNotes(version, checksums) {
   const changelog = await readFile(join(ROOT, 'CHANGELOG.md'), 'utf8');
   const section = extractChangelogSection(changelog, version);
 
@@ -269,7 +270,14 @@ ${section}
 | 文件 | 内容 |
 | --- | --- |
 | \`pluma-${version}.zip\` | 构建产物，解压后在 \`edge://extensions\`（Chrome 用 \`chrome://extensions\`）加载 |
-| \`pluma-${version}-with-source.zip\` | 同上 + 完整源码 |
+| \`pluma-${version}-with-source.zip\` | 同上 + 完整源码（含 \`BUILD.md\` 构建凭证） |
+
+### 校验和
+
+| 文件 | sha256 |
+| --- | --- |
+| \`pluma-${version}.zip\` | \`${checksums.light}\` |
+| \`pluma-${version}-with-source.zip\` | \`${checksums.src}\` |
 
 也可以自己从源码构建：\`pnpm install && pnpm build\`，加载 \`.output/chrome-mv3\`。
 
@@ -479,7 +487,157 @@ async function zipDir(cwd, outFile, topDir) {
 
 async function sha256(file) {
   const buf = await readFile(file);
-  return createHash('sha256').update(buf).digest('hex').slice(0, 16);
+  return createHash('sha256').update(buf).digest('hex');
+}
+
+/** 读 git 输出；失败时抛错，由调用方决定怎么报。 */
+function gitOutput(args) {
+  return execFileSync('git', args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+}
+
+/** 递归找「最新修改时间」的文件，用于判断 `.output` 是否比源码旧。 */
+async function newestMtime(p) {
+  const s = await stat(p);
+  const rel = relative(ROOT, p).split('\\').join('/');
+  if (!s.isDirectory()) return { path: rel, mtime: s.mtimeMs };
+
+  let newest = { path: rel, mtime: 0 };
+  for (const e of await readdir(p, { withFileTypes: true })) {
+    const child = await newestMtime(join(p, e.name));
+    if (child.mtime > newest.mtime) newest = child;
+  }
+  return newest;
+}
+
+/**
+ * G6 自检：git 可用 + 工作区干净 + `.output` 不比源码旧。
+ *
+ * ## 为什么必须在这里红
+ *
+ * `BUILD.md` 要记录「这份 zip 由哪个 commit 构建」。如果工作区是脏的，
+ * 或者 `.output` 是旧构建，那么 ZIP 里的字节**不等于任何一个 commit** ——
+ * 凭证只会说谎，比没有凭证更糟（它会让人相信一个假的对应关系）。
+ *
+ * 1.0.0 实测就是先打包（22:15）、后提交 CHANGELOG（22:16）：
+ * zip 对应的是一个不存在的 commit 状态。
+ *
+ * @returns {Promise<string | null>} commit；自检失败返回 null（问题已记入 problems）
+ */
+async function checkProvenanceInputs() {
+  let commit;
+  try {
+    commit = gitOutput(['rev-parse', 'HEAD']);
+  } catch {
+    fail(
+      '无法读取 git commit',
+      '不能用 git 记录 provenance。确认这是 git 仓库，且 git 在 PATH 里。',
+    );
+    return null;
+  }
+  if (!/^[0-9a-f]{40}$/.test(commit)) {
+    fail('git rev-parse HEAD 返回的不是 40 位 commit', `实际：${commit}`);
+    return null;
+  }
+
+  let status;
+  try {
+    // --untracked-files=all：未跟踪但会进源码包的新文件也算脏
+    status = gitOutput(['status', '--porcelain', '--untracked-files=all']);
+  } catch {
+    fail('无法读取 git status', '工作区状态未知，不能证明产物 = 源码。');
+    return null;
+  }
+  if (status !== '') {
+    fail(
+      '工作区不干净（G6 clean-tree 门）',
+      'BUILD.md 要记录 commit，脏工作区意味着 zip 里的源码不等于任何 commit。\n' +
+        '    先提交（或 stash）再打包。未提交改动：\n' +
+        status
+          .split('\n')
+          .map((l) => `      ${l}`)
+          .join('\n'),
+    );
+    return null;
+  }
+
+  const inputs = [
+    'src',
+    'entrypoints',
+    'public',
+    'wxt.config.ts',
+    'package.json',
+    'tsconfig.json',
+    'pnpm-lock.yaml',
+  ];
+  let newest = { path: '', mtime: 0 };
+  for (const rel of inputs) {
+    const abs = join(ROOT, rel);
+    if (!existsSync(abs)) continue;
+    const m = await newestMtime(abs);
+    if (m.mtime > newest.mtime) newest = m;
+  }
+
+  const manifestStat = await stat(MANIFEST);
+  if (newest.mtime > manifestStat.mtimeMs) {
+    fail(
+      '.output 比源码旧（G6 新鲜度门）',
+      `最新输入：${newest.path}（${new Date(newest.mtime).toISOString()}）\n` +
+        `    manifest.json：${new Date(manifestStat.mtimeMs).toISOString()}\n` +
+        '    先重新构建，否则 zip 里的产物不是这份源码构建的。',
+    );
+    return null;
+  }
+
+  return commit;
+}
+
+/**
+ * 生成 `BUILD.md` —— 源码版 zip 的构建凭证（ADR 0018 的「可独立重建并比对」）。
+ *
+ * @param opts.extDir 真正要进 zip 的 `extension/` 目录（从 staging 读，不读 `.output`）
+ * @returns {Promise<string>} Markdown 文本
+ */
+async function buildProvenance({ version, commit, extDir }) {
+  const files = (await walkFiles(extDir)).sort();
+  const rows = [];
+  for (const rel of files) {
+    const buf = await readFile(join(extDir, rel));
+    rows.push(`| ${createHash('sha256').update(buf).digest('hex')} | extension/${rel} |`);
+  }
+
+  const lockHash = createHash('sha256')
+    .update(await readFile(join(ROOT, 'pnpm-lock.yaml')))
+    .digest('hex');
+  const wxtVersion = JSON.parse(
+    await readFile(join(ROOT, 'node_modules', 'wxt', 'package.json'), 'utf8'),
+  ).version;
+
+  return [
+    '# BUILD PROVENANCE',
+    '',
+    '> 由 `scripts/package.mjs` 生成。逐文件哈希针对 `extension/**`（真正进 zip 的字节）；',
+    '> `BUILD.md` 自身与 zip 容器的时间戳不在表内。',
+    '',
+    `- 版本：${version}`,
+    `- 提交：${commit}`,
+    '- 工作区：clean',
+    '- 构建命令：`node node_modules/wxt/bin/wxt.mjs build`',
+    `- Node：${process.version}`,
+    `- wxt：${wxtVersion}`,
+    `- pnpm-lock.yaml sha256：${lockHash}`,
+    `- extension/** 文件数：${String(files.length)}`,
+    '',
+    '## extension/** sha256',
+    '',
+    '| sha256 | 相对路径 |',
+    '| --- | --- |',
+    ...rows,
+    '',
+  ].join('\n');
 }
 
 async function sizeOf(file) {
@@ -513,6 +671,9 @@ async function main() {
 
   // ── 3. 自检：版本号 ──
   const version = await readVersion();
+
+  // ── 3b. G6 provenance 前置：git 可用 + 工作区干净 + .output 不比源码旧 ──
+  const commit = await checkProvenanceInputs();
 
   // ── 4. 自检：源码版需要的顶层条目都在 ──
   // REQUIRED 缺失直接判失败；其余缺失只记一条 note（允许可选文件不存在）
@@ -603,11 +764,25 @@ async function main() {
     present.push(entry);
   }
 
+  // 构建凭证要写进源码版根目录（与 extension/ 平级），哈希从 staging 里算
+  const provenance = await buildProvenance({
+    version,
+    commit,
+    extDir: join(stagingSrc, 'extension'),
+  });
+  await writeFile(join(stagingSrc, 'BUILD.md'), provenance, 'utf8');
+
   await zipDir(stagingSrc, join(DIST_DIR, srcName), TOP_DIR);
   await rm(stagingSrc, { recursive: true, force: true });
 
   // ── 7. Release 说明 ──
-  await writeFile(join(DIST_DIR, 'release-notes.md'), await releaseNotes(version), 'utf8');
+  const lightSha = await sha256(join(DIST_DIR, lightName));
+  const srcSha = await sha256(join(DIST_DIR, srcName));
+  await writeFile(
+    join(DIST_DIR, 'release-notes.md'),
+    await releaseNotes(version, { light: lightSha, src: srcSha }),
+    'utf8',
+  );
 
   // ── 8. 报告 ──
   const light = join(DIST_DIR, lightName);
