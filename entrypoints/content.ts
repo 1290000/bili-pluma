@@ -70,6 +70,7 @@ import {
   paintBadge as paintBadgeFromModule,
 } from '@/src/content/isolated/badge-state';
 import { handleHello } from '@/src/content/isolated/hello-timing';
+import { describeSsrGate, gateSsrPlayinfo } from '@/src/content/isolated/ssr-gate';
 import { mergeVideoInfo } from '@core/playinfo/pgc-merge';
 import { expectedDurationMs, readSsrVideoInfo } from '@core/playinfo/pgc-duration';
 import { PROXY_ENABLED_KEY } from '@platform/http/dnr';
@@ -627,21 +628,29 @@ function listenMainWorld(): void {
           ` tried=${String(pgcCacheTried)}`,
       });
 
-      if (!playInfo || playInfo.kind !== 'pgc') return;
-      const cid = readCidFromSsr(d.data);
-      if (!cid) {
-        reportQuality({ height: 0, note: '[PGC] 读不出 cid，放弃' });
+      /**
+       * 门控链已下沉到 `src/content/isolated/ssr-gate.ts`（S3.4）。
+       *
+       * 原来这里是 5 个连着 `return` 的判定，**静默得像什么都没发生** ——
+       * 2026-10-28 真机现场 `cacheBytes=0`、`lastStage='boot'`，诊断页里
+       * 一行 PGC 日志都没有，无法判断是"消息没到"还是"到了但判定没过"。
+       *
+       * 现在每层退出都有名字（`describeSsrGate`），并逐个写进诊断日志。
+       */
+      const gate = gateSsrPlayinfo({
+        pageKind: playInfo?.kind ?? null,
+        cid: readCidFromSsr(d.data),
+        handledCid: pgcHandledCid,
+        alreadyTried: pgcCacheTried,
+      });
+
+      if (gate.kind === 'skip') {
+        reportQuality({ height: 0, note: describeSsrGate(gate) });
         return;
       }
-      /**
-       * cid 变了 = SPA 切集。重置"只做一次"的状态，让新集重新走完整流程。
-       * （同页重复上报同一个 cid 时保持 `pgcCacheTried === true`，不重复取流）
-       */
-      if (cid !== pgcHandledCid) {
-        pgcHandledCid = cid;
-        pgcCacheTried = false;
-      }
-      if (pgcCacheTried) return;
+
+      // 通过门控 → 落状态：记住本集、标记"已试过"
+      pgcHandledCid = gate.cid;
       pgcCacheTried = true;
 
       /**
@@ -655,7 +664,7 @@ function listenMainWorld(): void {
        * "SSR 本来就是完整流"，于是走早退分支、永不 reload ——
        * 那就是「重开开关后卡在试看」。详见 `orchestratePgc` 里的长注释。
        */
-      void orchestratePgc(cid, d.data, d.pgcPatched === true);
+      void orchestratePgc(gate.cid, d.data, d.pgcPatched === true);
       return;
     }
 
