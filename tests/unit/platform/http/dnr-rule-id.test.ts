@@ -70,6 +70,15 @@ function installChromeStub(): { rules: CapturedRule[]; readd: () => Promise<Capt
           rules.push(r);
         }
       },
+      /**
+       * 2026-10-30 加（O1）：`enableProxy()` 现在会先 `removeAllPathRules()` 清整个 ID 段，
+       * 而那一步要读 `getSessionRules()`。桩当初只实现了 `updateSessionRules`，
+       * 于是修复后这里报 `getSessionRules is not a function`。
+       *
+       * ⚠️ 这**不是**为了"让测试变绿"而补桩，而是被测代码确实多了这个依赖 ——
+       * 桩必须跟上真实 API 的使用面，否则测试测的是"一个不存在的最小实现"。
+       */
+      getSessionRules: async (): Promise<CapturedRule[]> => [...rules],
     },
     storage: {
       local: {

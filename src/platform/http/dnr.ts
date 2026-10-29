@@ -158,10 +158,10 @@ export async function enableProxy(cookie: string, paths?: string[]): Promise<voi
     throw new Error('白名单里没有启用中的代理路径，无法开启');
   }
 
-  await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: addRules.map((r) => r.id),
-    addRules,
-  });
+  // ⚠️ 必须先清整个路径规则段，不能只删"当前白名单算出的 ID"——见 installPathRules 的注释（O1）
+  await removeAllPathRules();
+
+  await chrome.declarativeNetRequest.updateSessionRules({ addRules });
 
   await chrome.storage.local.set({ [ENABLED_KEY]: true });
 }
@@ -288,18 +288,47 @@ export async function rebuildRulesIfEnabled(): Promise<{ rebuilt: number; cleare
   return { rebuilt: count, cleared };
 }
 
-/** 装全局路径规则（不含标签页规则），返回装了几条 */
+/**
+ * 装全局路径规则（不含标签页规则），返回装了几条。
+ *
+ * ## ⚠️ `removeRuleIds` 必须覆盖**整个路径规则段**，不能只算当前白名单的 ID
+ *
+ * 2026-10-30 修（O1）。原实现是：
+ *
+ * ```ts
+ * removeRuleIds: addRules.map((r) => r.id)   // 只删"当前白名单算出的那几个 ID"
+ * ```
+ *
+ * 这在**插入**路径时没问题：新旧 ID 集合互相覆盖。
+ * 但**删掉白名单中间一项**时会留下残留 —— 旧的后位 ID 不在新集合里：
+ *
+ * ```
+ * 旧白名单 [wbi, playurl, pgc] → ID 10000 / 10001 / 10002（Cookie=旧账号）
+ * 新白名单 [wbi, pgc]          → ID 10000 / 10001（Cookie=新账号）
+ *                                ↑ 10002 原属 pgc，且**不被删除** → 残留
+ * ```
+ *
+ * 残留那条规则的 Cookie 是**上一次的**。若用户在此期间换过播放账号，
+ * 它会继续带着**旧账号凭据**发请求 —— 正是本文件开头说的那种
+ * 「能骗过用户的 bug」：画质静默异常，而 popup 上一切正常。
+ *
+ * 所以这里改为先**扫出该段所有现存规则**再一起删（`listPathRuleIds()`），
+ * 让"白名单增删"这件事不再依赖"只能往后追加"这条需要人记住的纪律。
+ *
+ * 代价：多一次 `getSessionRules()`（微秒级，且本来 `removeAllPathRules` 也在做同样的事）。
+ */
 async function installPathRules(cookie: string): Promise<number> {
   const addRules = defaultProxyPaths()
     .map((p) => buildPathRule(p, cookie))
     .filter((r): r is chrome.declarativeNetRequest.Rule => r !== null);
 
+  // 先清掉整个路径规则段（含已不在白名单里的残留 ID），再原子性 add。
+  // 顺序不能反：反了就等于"先加新的再删旧的"，中间态会有重复规则。
+  await removeAllPathRules();
+
   if (addRules.length === 0) return 0;
 
-  await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: addRules.map((r) => r.id),
-    addRules,
-  });
+  await chrome.declarativeNetRequest.updateSessionRules({ addRules });
 
   return addRules.length;
 }
