@@ -69,6 +69,7 @@ import {
   createBadgeState,
   paintBadge as paintBadgeFromModule,
 } from '@/src/content/isolated/badge-state';
+import { handleHello } from '@/src/content/isolated/hello-timing';
 import { mergeVideoInfo } from '@core/playinfo/pgc-merge';
 import { expectedDurationMs, readSsrVideoInfo } from '@core/playinfo/pgc-duration';
 import { PROXY_ENABLED_KEY } from '@platform/http/dnr';
@@ -507,41 +508,24 @@ function listenMainWorld(): void {
     if (!d || d.__ns !== NS) return;
 
     if (d.type === 'hello') {
-      const f = d.flags;
-      reportQuality({
-        height: 0,
-        note: `主世界就绪 readyState=${f?.readyState ?? '?'} define=${f?.define ?? '?'} hadExisting=${String(f?.hadExisting)} playinfo=${f?.playinfo ?? '?'}`,
-      });
       /**
-       * 主世界先发 `hello` 时，立刻把配置推过去。
+       * 时序逻辑已下沉到 `src/content/isolated/hello-timing.ts`（S3.4 前置）。
        *
-       * ## ⚠️ `enabled` 必须是**真实的开关状态**，不能写死 `true`（2026-10-29 修）
+       * 那里把两条硬约束变成了可测的代码：
+       *   1. `tellMainWorld(true)` 必须**同步**发出，不能等异步（2026-10-29 事故）
+       *   2. `ready` 绝不回 `cfg`，否则无限回环 → Out of Memory（2026-10-26 事故）
        *
-       * 这里原来写的是 `tellMainWorld(true)` —— 无论总开关开还是关都告诉主世界"开"。
-       * 后果：`main-world.js` 的 `cfgEnabled` 永远是 `true`，
-       * 于是「关开关后刷新番剧页 → 注入缓存的 4K 流 → 画质不回落」这条
-       * **靠 `cfgEnabled` 判断的门控永远不会生效**（真机实测：关开关后 `patched: 648`、
-       * `dashH` 仍含 2160）。
-       *
-       * 为什么当初写死：那时的假设是"能收到 hello 就说明扩展在工作"。
-       * 但 hello 只说明**主世界脚本跑起来了**，与用户有没有关总开关无关。
-       * 这两件事必须分开。
-       *
-       * 这里不能 `await`（`window.postMessage` 监听器是同步的，等异步会让 hello 的
-       * 回应时序错乱）。所以用 `void` 异步查完再补发一次 —— 主世界对 `enabled`
-       * 的更新是幂等都安全的（它只是改一个布尔量）。
+       * ⚠️ 不 await 返回的 promise —— 那正是第 1 条要避免的事。
        */
-      tellMainWorld(true);
-      void sendToBackground({ type: 'proxy/status' }).then((r) => {
-        const st = r as { type?: string; enabled?: boolean } | null;
-        if (st?.type !== 'proxy/status:ok') return;
-        /**
-         * 只在**明确关闭**时补发 `false`。
-         *
-         * 不补发 `true`：上面已经发过一次 `true`（那是"hook 已就绪、可以工作"的意思），
-         * 而 `cfg` 每发一条主世界都会走一遍 `syncHooks()` —— 没必要为"开着"再多触发一次。
-         */
-        if (st.enabled === false) tellMainWorld(false);
+      void handleHello(d.flags, {
+        reportQuality,
+        tellMainWorld,
+        queryProxyStatus: () =>
+          sendToBackground({ type: 'proxy/status' }).then((r) => {
+            const st = r as { type?: string; enabled?: boolean } | null;
+            if (st?.type !== 'proxy/status:ok') return null;
+            return { enabled: st.enabled === true };
+          }),
       });
       return;
     }
