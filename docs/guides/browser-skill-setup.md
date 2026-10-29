@@ -209,6 +209,65 @@ details: tool.evaluate cannot access tab … because its URL is
 
 ---
 
+## 7b. 让新构建生效：`reload-extension.mjs`（2026-10-29）
+
+改完代码要验证，必须让浏览器用上新构建。`edge://extensions/` 上的「重新加载」点不到
+（`edge://` 被沙箱按 URL 挡掉，**连截图都拿不到**，所以也没有"点一下"这种取巧），
+`chrome.runtime.reload()` 又只能由扩展自己调。所以写了个脚本走第四条路：
+**让浏览器自己重读那批文件**。
+
+```bash
+node poc/probe/reload-extension.mjs              # 构建 → 重载 → 校验（最常用）
+node poc/probe/reload-extension.mjs --no-build   # 用现有 .output 重载
+node poc/probe/reload-extension.mjs --dry-run    # 只打印判断，不动任何文件
+```
+
+**它会强制结束浏览器再重新拉起**（`--dry-run` 除外）。登录态不受影响 —— cookie 早就落盘了。
+
+### 四个坑（都是实测，改之前先看）
+
+| # | 现象 | 真因 |
+| --- | --- | --- |
+| 1 | `Preferences` 里 `extensions.settings` 是空的 | 扩展配置在 **`Secure Preferences`**。只读前者会得出"一个扩展都没装" |
+| 2 | "浏览器还在跑"恒为真，永远走强杀分支 | `tasklist /FI IMAGENAME eq msedge.exe` **会匹配 `msedgewebview2.exe`**（WebView2 宿主，永不退出）。正确判据是 CSV 第一列**精确等于**进程名 |
+| 3 | `taskkill` 不带 `/F` 杀不掉 | Edge 渲染进程拒绝"请求关闭"，回的是"只能强制终止该进程 /F" |
+| 4 | `evaluate` 的表达式被截断，报 `unexpected argument` | spawn 带了 `shell: true`，`!` 触发历史展开、`"` 被剥掉。**必须 `shell: false`** |
+
+### 校验用哪个标签页
+
+浏览器重启后那个 B站标签页在**用户窗口**里，而沙箱只允许操作 Agent Window 内的标签页：
+
+| 办法 | 结果 |
+| --- | --- |
+| 直接 `evaluate --tab-id` | ❌ `can only act on tabs inside the Agent Window` |
+| `tab borrow` 借过来 | ❌ **要弹确认框**（`borrow_confirmation: always`），无人值守下报 `could not display a confirmation request` |
+| **自己 `tab create` 一个** | ✅ 不需要确认，判据一样成立 |
+
+### 重载**不碰** storage —— 别为此加备份
+
+`reload-extension.mjs` 只做「关浏览器 → 重启 → 校验」，**不写任何文件**。
+**扩展的 storage 目录一个字节都不动**（扩展 ID 由 `.output/chrome-mv3` 的绝对路径决定，路径不变 ID 就不变）。
+
+密钥丢失只有一种场景：**手动卸载扩展**（Chromium 会清空 `Local Extension Settings/<id>/`，
+里面有 `pluma:vault:key`）。这件事在开发回归里不会发生 —— 没人会为了测 bug 去卸载扩展，
+那等于把登录态也一起扔掉。
+
+所以**这里不提供备份脚本**。曾经写过一个，后来整段删除，理由值得记：
+
+> 它是为一个不存在的场景写的。为了让它「能用」，先后修了 5 处问题
+> （判据写成 `pluma:vault:` 太宽、`EBUSY` 假判据、`LOCK` 可打开假判据、
+> 备份排在关浏览器之前导致必然失败、`alloc(4MB)` × N 的内存浪费）。
+> **一个不存在的需求，修多久都是负收益。**
+
+两条要留下的教训（换成别的脚本也一样适用）：
+
+1. **不要打印密钥内容来"确认备份成功"**，连前缀都不要 —— 数文件和字节数就够。
+   （2026-10-29 我用 `head -c 20` 看了一眼，等于把密钥搬进了聊天记录。）
+2. 真要做备份，**整目录搬到仓库之外**，不要把一个秘密从它的沙箱里提取成单独文件。
+   `.gitignore` 不能当防线。
+
+---
+
 ## 8. 已验证的事实（2026-10-26）
 
 `BV1jt421t7XH`，真实双账号：
