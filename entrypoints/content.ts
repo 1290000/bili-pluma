@@ -64,7 +64,13 @@ import {
   shouldResetGuardForBadCache,
 } from '@/src/content/isolated/pgc-reload-plan';
 import { restoreResumeTime, saveResumeTime } from '@/src/content/isolated/pgc-resume';
+import { watchPlaybackQuality } from '@/src/content/isolated/quality-watch';
+import {
+  createBadgeState,
+  paintBadge as paintBadgeFromModule,
+} from '@/src/content/isolated/badge-state';
 import { mergeVideoInfo } from '@core/playinfo/pgc-merge';
+import { expectedDurationMs, readSsrVideoInfo } from '@core/playinfo/pgc-duration';
 import { PROXY_ENABLED_KEY } from '@platform/http/dnr';
 import { writePgcCache } from '@platform/storage/pgc-cache-store';
 import { readPrimaryProfile, savePrimaryProfile } from '@platform/storage/primary-profile-store';
@@ -194,11 +200,18 @@ try {
 const pageState = new PageState();
 
 /**
- * 角标需要的状态。
+ * 角标状态与绘制入口已下沉到 `src/content/isolated/badge-state.ts`（S3.2）。
+ *
+ * ⚠️ 本轮**只搬走了类型定义、初始状态工厂、绘制入口**，
+ * 实例与 `paintBadge()` 的调用点仍在本文件 —— 它被 8 处读写、8 处调用，
+ * 一次性搬走要改 16 处，属于在无法被反例覆盖的地方做大范围机械改动。
+ * 等 S3.4 消息泵路由表化、调用点收敛后再搬实例。
  *
  * ⚠️ 全部来自**主世界的实际观测**，不用 `accept_quality` 之类的接口字段——
  * 后者在未登录时就会返回含 8K 的完整数组，拿它展示等于骗用户。
  */
+const badgeState = createBadgeState();
+
 /**
  * 本页是否**曾经**成功接管过。
  *
@@ -236,42 +249,6 @@ let hasEverActivated = false;
  */
 let proxyEnabledKnown: boolean | null = null;
 
-const badgeState = {
-  proxying: false,
-  playingHeight: 0,
-  videoFamily: '',
-  audioFamily: '',
-  /** 当前轨道的实际帧率（0 = 未知） */
-  frameRate: 0,
-  /**
-   * 浏览器 `(video-dynamic-range: high)` 的结果。
-   *
-   * 用来消除"SDR 的 HEVC 被误标成 HDR"：B站会给普通 4K 转 HEVC 省码率，
-   * 那种轨也是 HEVC 但属于 SDR，只有浏览器确认是 HDR 才标徽章。
-   */
-  videoDynamicRange: null as boolean | null,
-  /**
-   * `(dynamic-range: high)` 的结果 —— **显示设备**是否支持 HDR。
-   *
-   * 与 `videoDynamicRange`（视频通道是否以 HDR 呈现）是两个不同的量：
-   *   - display: high → 屏幕/系统开了 HDR
-   *   - video: high   → 这条视频真的在走 HDR 输出
-   *
-   * 实测发现 `video` 会误报 standard（尤其 AV1 编码的 HDR 轨），
-   * 所以判断 HDR 时必须两个信号一起看。
-   */
-  displayDynamicRange: null as boolean | null,
-  /** HEVC 的 profile 段（如 `2.4.L153.90`），用于详情里标 10bit */
-  hevcProfile: '' as string,
-  /**
-   * 本视频是否**提供**杜比视界版本（来自服务端 `dash.dolby.vision`）。
-   *
-   * ⚠️ 是"视频能力"不是"当前播放状态"。只用在详情，
-   * 不能当主文案 —— 否则就成了"视频有 DV 轨"说成"你在看 DV"。
-   */
-  dolbyVisionAvailable: false,
-};
-
 /**
  * 用户是否允许显示页内角标（设置页「显示」分区控制）。
  *
@@ -299,14 +276,13 @@ let pgcCacheTried = false;
  */
 let pgcHandledCid = '';
 
-/** 重画角标。所有字段变化后统一调这一个入口 */
+/** 重画角标。所有字段变化后统一调这一个入口（实现已下沉到 `badge-state.ts`） */
 function paintBadge(): void {
-  // 关掉时不只是"不画"，还要把已经画出来的摘掉
-  if (!badgeEnabled) {
-    removeBadge();
-    return;
-  }
-  renderBadge(tokensCss, badgeState);
+  paintBadgeFromModule(badgeState, badgeEnabled, {
+    render: renderBadge,
+    remove: removeBadge,
+    tokensCss,
+  });
 }
 
 /**
@@ -1574,28 +1550,9 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
   reloadWithGuard(cid, `已取到完整流并缓存（cid=${cid}，时长=${String(merged.timelength ?? 0)}）`);
 }
 
-/** 从主世界报来的 `ssr-playinfo` 里取 `video_info`（骨架） */
-function readSsrVideoInfo(ssr: unknown): unknown {
-  if (!ssr || typeof ssr !== 'object') return null;
-  const o = ssr as Record<string, unknown>;
-  const result =
-    (o.result as Record<string, unknown> | undefined) ??
-    ((o.data as Record<string, unknown> | undefined)?.result as
-      Record<string, unknown> | undefined);
-  return result?.video_info ?? null;
-}
-
-/**
- * 从 `video_info` 取一个可用的时长参照（毫秒）；取不到返回 0。
- *
- * 用作截断判据的**第二参照**：接口响应缺 `timelength` 时，至少还能跟
- * 页面当前这份流比 —— 避免"判不了就放行"（G1 Phase 2）。
- */
-function expectedDurationMs(videoInfo: unknown): number {
-  if (!videoInfo || typeof videoInfo !== 'object') return 0;
-  const t = (videoInfo as Record<string, unknown>).timelength;
-  return typeof t === 'number' && t > 0 ? t : 0;
-}
+// `readSsrVideoInfo` / `expectedDurationMs` 已下沉到
+// `src/core/playinfo/pgc-duration.ts`（S3.3）—— 两者都是无副作用的纯判据，
+// 留在这里既测不到也违反 `docs/04-project-structure.md` 原则 1。
 
 function report(): void {
   const info = parsePlayPage(location.href);
@@ -1755,31 +1712,6 @@ function report(): void {
     }
     paintBadge();
   })();
-}
-
-/**
- * 观测页面实际播放画质，上报给 background 写进诊断日志。
- *
- * @param send 由 `main()` 注入的 `reportQuality`。**不要在这里直接调
- *   `browser.runtime.sendMessage`** —— 扩展重新加载后会同步抛出
- *   `Extension context invalidated`，而调用点只接得住 Promise 拒绝。
- */
-function watchPlaybackQuality(send: (payload: { height: number; note?: string }) => void): void {
-  let lastReported = -1;
-
-  const sample = (): void => {
-    const v = document.querySelector('video');
-    if (!v) return;
-    const h = v.videoHeight;
-    if (!h || h === lastReported) return;
-    lastReported = h;
-
-    send({ height: h });
-  };
-
-  for (const delay of [2000, 5000, 10000, 20000]) {
-    window.setTimeout(sample, delay);
-  }
 }
 
 export default defineContentScript({
