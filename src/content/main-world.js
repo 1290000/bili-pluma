@@ -2796,8 +2796,8 @@
           totalDurl += seg.length;
         }
       }
-      if (totalDurl > 0) return totalDurl < timelength - 5000;
-      return false;
+      if (totalDurl > 0) return totalDurl < timelength - PGC_TRUNCATION_SLACK_MS;
+      // 段长全无效 → 继续看 durls（与 ISOLATED 的 streamDurationMs 一致）
     }
 
     // ② durls：**同一组内**全段相加（不是每组首段相加）
@@ -2813,7 +2813,7 @@
           }
         }
       }
-      if (total > 0) return total < timelength - 5000;
+      if (total > 0) return total < timelength - PGC_TRUNCATION_SLACK_MS;
       return false;
     }
 

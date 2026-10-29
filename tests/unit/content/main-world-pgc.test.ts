@@ -1606,9 +1606,11 @@ describe('G7：playview 截断判据（与主判据一致）', () => {
   function loadPlayviewPredicate(): (vi: unknown) => boolean {
     const m = /function pgcPlayviewIsTruncated\(vi\) \{[\s\S]*?\n {2}\}/.exec(SOURCE);
     expect(m, '源码里找不到 pgcPlayviewIsTruncated').not.toBeNull();
-    return new Function(`${String(m?.[0])}; return pgcPlayviewIsTruncated;`)() as (
-      vi: unknown,
-    ) => boolean;
+    // 函数现在引用同文件的 PGC_TRUNCATION_SLACK_MS；单独执行时补上（值取自源码，避免硬编码漂移）
+    const slack = /var PGC_TRUNCATION_SLACK_MS = ([^;]+);/.exec(SOURCE)?.[1] ?? '5000';
+    return new Function(
+      `var PGC_TRUNCATION_SLACK_MS = ${slack}; ${String(m?.[0])}; return pgcPlayviewIsTruncated;`,
+    )() as (vi: unknown) => boolean;
   }
 
   const previewDurls = {
@@ -1618,6 +1620,16 @@ describe('G7：playview 截断判据（与主判据一致）', () => {
 
   it('只有 durls 的试看（4 组 × 360109）→ true（旧实现会判 false）', () => {
     expect(loadPlayviewPredicate()(previewDurls)).toBe(true);
+  });
+
+  it('durl 段长全无效时继续看 durls（与 ISOLATED 一致）', () => {
+    expect(
+      loadPlayviewPredicate()({
+        timelength: 1_440_000,
+        durl: [{ length: 0 }],
+        durls: [{ durl: [{ length: 360_109 }] }],
+      }),
+    ).toBe(true);
   });
 
   it('durls 单组多段 = timelength → false（完整流不许误杀）', () => {
