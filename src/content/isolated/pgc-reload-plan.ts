@@ -124,6 +124,58 @@ export function makeGuard(now: number): ReloadGuard {
 }
 
 /**
+ * 这个刷新护栏该不该被**作废**（2026-10-29 加，问题 5 的「坏缓存自愈」）。
+ *
+ * ## 为什么护栏会挡住一条合法路径
+ *
+ * `MAX_RELOAD_ATTEMPTS = 1` 的语义是「**同一集本会话刷过一次就够**」，
+ * 它隐含假设：**刷过一次就应该好了**。
+ *
+ * 但坏缓存的场景打破了这个假设：
+ *
+ * ```
+ * 第 1 轮  坏缓存 → hadSync=true → 不刷新（老的 bug），但 guard 已被写
+ * 第 2 轮  坏缓存被识别 → hadSync=false → **想刷** → alreadyTried=true → 拒绝
+ *         → 停在 180 秒，且没有任何提示
+ * ```
+ *
+ * 护栏数的是**次数**，它不知道第 1 次刷的时候缓存是坏的、所以刷了也没用。
+ *
+ * ## 判定规则
+ *
+ * **只有「刚丢弃了一份坏缓存」这一个事件**才作废护栏。理由：那个失效原因
+ * （缓存内容坏）**已经被处理掉了**，下一次刷新是**不同原因**驱动的，
+ * 理应允许。这与护栏的设计意图一致 —— 防的是"同一个原因反复刷"。
+ *
+ * ## ⚠️ 为什么不能顺手在 `hadSync === false` 时清
+ *
+ * `hadSync === false` 有两种成因：
+ *   1. `sessionStorage` 那份是坏的（该清）
+ *   2. `storage.local` 有、`sessionStorage` 还没写过（**正常首访第二趟**，不该清）
+ *
+ * 第 2 种情况下护栏本来就是对的（防止那次刷新失败后反复刷）。
+ * 区分这两种，必须由调用方判断"是不是真的丢弃了坏数据"，不能靠这个函数猜。
+ *
+ * ## 为什么作废护栏不会打开"无限刷新"
+ *
+ * 因为 `shouldWritePgcCache()` 那道闸在刷新**之前**就 return 了：
+ *
+ * ```
+ * 坏缓存 → 丢弃 → 作废护栏 → 取流
+ *   ├─ 取到好流 → 写缓存 → reload → 第二趟 setter 有数据 → 注入成功（1 次刷新，结束）
+ *   └─ 仍是试看 → shouldWritePgcCache=false → **return，不写也不刷** → 循环终止
+ * ```
+ *
+ * 所以最坏情况是"用户每次手动刷新都多一次取流请求"，**不会自动循环**。
+ *
+ * @param droppedBadCache 调用方是否**确实**丢弃了一份截断流
+ * @returns `true` 表示应当删掉这一集的 guard，让刷新得以发生
+ */
+export function shouldResetGuardForBadCache(droppedBadCache: boolean): boolean {
+  return droppedBadCache === true;
+}
+
+/**
  * 组装取流 URL。
  *
  * 参数集来自 2026-10-27 实测：**只要 cid 就能调通**，不需要 `ep_id`、不需要 WBI 签名

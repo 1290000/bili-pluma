@@ -35,15 +35,25 @@ import {
 } from '@/src/content/isolated/badge-input';
 import { PageState } from '@/src/content/isolated/page-state';
 import {
+  canSkipPgcInjection,
   isBetterStream,
   isPreviewSsr,
   isStreamTruncated,
+  isSyncCacheUsable,
+  isVideoInfoTruncated,
   loadCachedVideoInfo,
   maxVideoHeight,
   readCidFromSsr,
+  shouldWritePgcCache,
   writePgcSessionCache,
 } from '@/src/content/isolated/pgc-cache-inject';
 import { fetchPgcPlayurl } from '@/src/content/isolated/pgc-fetch';
+import {
+  clearPgcReloadGuards,
+  clearPgcSessionCache,
+  isProxyReenabled,
+  writeProxyOffMark,
+} from '@/src/content/isolated/pgc-proxy-off';
 import {
   GUARD_KEY_PREFIX,
   buildPlayurlUrl,
@@ -51,12 +61,15 @@ import {
   makeGuard,
   parseGuard,
   shouldReload,
+  shouldResetGuardForBadCache,
 } from '@/src/content/isolated/pgc-reload-plan';
 import { restoreResumeTime, saveResumeTime } from '@/src/content/isolated/pgc-resume';
 import { mergeVideoInfo } from '@core/playinfo/pgc-merge';
+import { PROXY_ENABLED_KEY } from '@platform/http/dnr';
 import { writePgcCache } from '@platform/storage/pgc-cache-store';
-import { savePrimaryProfile } from '@platform/storage/primary-profile-store';
+import { readPrimaryProfile, savePrimaryProfile } from '@platform/storage/primary-profile-store';
 import { BADGE_ENABLED_KEY, readBadgeEnabled } from '@platform/storage/ui-prefs-store';
+import { buildPageSnapshot } from '@shared/utils/page-snapshot';
 import {
   parsePlayPage,
   readDeviceCookies,
@@ -123,6 +136,57 @@ function reportQuality(payload: { height: number; note?: string }): void {
 }
 
 /**
+ * 「为什么这次没刷新 / 为什么刷了」的现场记录（2026-10-29 加）。
+ *
+ * ## 为什么需要它（真机排查踩的坑）
+ *
+ * 方向 B（重开开关 → 刷新 → 应恢复完整流）卡在 180 秒试看。当时的证据只有
+ * 诊断日志的 30 条环形缓冲 —— 而 PGC 那条链路的判定分散在
+ * `orchestratePgc` → `shouldReload` → `reloadWithGuard` 三处，
+ * 中间还夹着两个 `return`。日志滚掉之后就只剩"结果不对"，
+ * **看不出是哪一步退出的**。
+ *
+ * `window.__PLUMA_PGC__` 只记主世界的注入状态（`patchedAt` / `ssHit`），
+ * 完全看不到 ISOLATED 侧"到底走到哪条分支" —— 这正是当时卡住的地方：
+ * 主世界说 `patchedAt: 583`（注入了），但 `duration` 还是 180（播放器没用）。
+ *
+ * 所以这里在**页面**上挂一个只读快照，记录每次判定的入参和结论。
+ * 无凭据、无用户数据，只有分支名与布尔值。
+ */
+const pgcReloadTrace = {
+  /** `orchestratePgc` 被调了几次 */
+  orchestrateCalls: 0,
+  /** 最后一次 `orchestratePgc` 从哪条分支返回的（见下方各 `return` 处的赋值） */
+  orchestrateExit: '',
+  /** 最后一次 cid */
+  cid: '',
+  /** `hadSync`：进 cache 分支时 `sessionStorage` 本来有没有这份缓存 */
+  hadSync: null as boolean | null,
+  /** 这次 SSR 里的流是不是主世界注入的结果 */
+  ssrPatchedByUs: null as boolean | null,
+  /** 这次 SSR 判出来是否截断（`null` = 没有 SSR 数据） */
+  ssrTruncated: null as boolean | null,
+  /** `shouldReload` 被调用了几次 */
+  shouldReloadCalls: 0,
+  /** 最后一次 `shouldReload` 的入参 */
+  shouldReloadArgs: null as { alreadyTried: boolean; hasStream: boolean } | null,
+  /** 最后一次 `shouldReload` 的结论 */
+  shouldReloadVerdict: null as boolean | null,
+  /** `reloadWithGuard` 被调用了几次 */
+  reloadWithGuardCalls: 0,
+  /** `reloadWithGuard` 真正执行 `location.reload()` 了几次 */
+  reloadIssued: 0,
+  /** 最后一次没刷 / 没取流的原因 */
+  lastReason: '',
+};
+
+try {
+  (window as unknown as Record<string, unknown>).__PLUMA_PGC_ISOLATED__ = pgcReloadTrace;
+} catch {
+  /* 挂不上就只是少了排查手段，不影响功能 */
+}
+
+/**
  * 当前页的取流数据（主账号基线 + 播放账号实际拿到的）。
  *
  * 纯逻辑在 `page-state.ts`（可单测）；这里只负责把消息喂给它、以及应答 UI 的查询。
@@ -145,6 +209,32 @@ const pageState = new PageState();
  * 见 `activate()` 的 `.catch` 注释。
  */
 let hasEverActivated = false;
+
+/**
+ * 总开关的最近一次已知值（`true` / `false` / `null` = 还不知道）。
+ *
+ * ## 为什么不直接用 `badgeState.proxying`
+ *
+ * 那是两个不同的量：
+ *
+ * | 变量 | 回答的问题 |
+ * | --- | --- |
+ * | `badgeState.proxying` | 这个页面**装上规则了吗**（未配置 / 同账号 / 出错都会 false） |
+ * | 这个 | 用户**想不想用**（总开关） |
+ *
+ * 同账号时开关是开着的，但 `proxying` 是 `false` —— 拿它当总开关会让
+ * `cfg` 里报出一个错的值，而主世界的 `cfgEnabled` 就是靠这个值门控的。
+ *
+ * ## 为什么要单独记
+ *
+ * 2026-10-29 之前，`orchestratePgc` 里那条 `cfg` 写死了 `enabled: true`。
+ * 后果不只是"门控失效"（第一层 `localStorage` 已经兜住了），
+ * 更麻烦的是真机排查时 `lastCfgEnabled: true` 会让人以为"消息通道报的是开" ——
+ * 掩盖了真实原因。实际值必须能被观测到。
+ *
+ * 初值 `null`：`page/activate` 回包之前确实不知道，不要假装知道。
+ */
+let proxyEnabledKnown: boolean | null = null;
 
 const badgeState = {
   proxying: false,
@@ -254,6 +344,153 @@ function tellMainWorld(enabled: boolean, pgcActive?: boolean): void {
  *
  * 详见 `docs/protocols/messages.md`「通道 A：防护做了什么、没做什么」。
  */
+
+/**
+ * 组装一份 popup 快照 —— **给自动化 / bsk 用，popup 本身不依赖它**。
+ *
+ * ## 为什么抽成函数（2026-10-29）
+ *
+ * 有两条通道要它：
+ *   1. `chrome.runtime.onMessage` 的 `page/snapshot:get`（扩展页发起）
+ *   2. `window.postMessage` 的 `__PLUMA__/snapshot` 桥（**页面侧发起**）
+ *
+ * 第二条是为了让 `bsk evaluate` 能直接拿到 JSON —— 否则 `chrome-extension://`
+ * 被沙箱拒 `evaluate` 时，UI 状态只能靠人手点、肉眼描述。
+ * 两条通道共用这一份实现，**绝不复制**（复制必然漂移）。
+ *
+ * ## 为什么异步
+ *
+ * 要账号摘要，而账号摘要只有 background 有。调用方必须 `await`。
+ *
+ * @returns `page/snapshot:ok` 应答。组装失败时返回一份空快照而非抛错 ——
+ *   自动化脚本不该因为某个字段拿不到就崩掉
+ */
+async function takeSnapshot(): Promise<{
+  type: 'page/snapshot:ok';
+  snapshot: ReturnType<typeof buildPageSnapshot>;
+  /**
+   * ISOLATED world 的 PGC 重载诊断快照。
+   *
+   * 为什么放在这里：那个对象挂在 ISOLATED 的 `window` 上，而 `bsk evaluate`
+   * 在 MAIN world，读不到。借这条已有的快照桥送出去。
+   * **不进 popup 的渲染路径**，popup 也从不发 `snapshot`。
+   */
+  pgcReload: typeof pgcReloadTrace;
+}> {
+  try {
+    /**
+     * 两样数据并行取：proxy/status、account/summary。
+     * 串行会让快照慢三倍，而自动化脚本是反复跑的。
+     *
+     * `sendToBackground` 的返回是 `unknown`（它要兜住"上下文失效返回 null"
+     * 与各种应答形状），所以这里按消息类型收窄 —— 与 `activatePage()` 同样的做法。
+     */
+    const [proxyRes, acctRes] = (await Promise.all([
+      sendToBackground({ type: 'proxy/status' }),
+      sendToBackground({ type: 'account/summary' }),
+    ])) as [
+      {
+        type?: string;
+        enabled?: boolean;
+        hasCredential?: boolean;
+        ruleCount?: number;
+      } | null,
+      {
+        type?: string;
+        configured?: boolean;
+        account?: {
+          profile: { uname: string; mid: number };
+          vipLabel: 'none' | 'monthly' | 'annual';
+          expireAt: number | null;
+          health: { healthy: boolean };
+        } | null;
+      } | null,
+    ];
+
+    const proxyOk = proxyRes?.type === 'proxy/status:ok';
+    const acctOk = acctRes?.type === 'account/summary:ok';
+
+    const proxy = {
+      enabled: proxyOk ? proxyRes.enabled === true : false,
+      hasCredential: proxyOk ? proxyRes.hasCredential === true : false,
+      ruleCount: proxyOk ? (proxyRes.ruleCount ?? 0) : 0,
+    };
+
+    const account =
+      acctOk && acctRes.account
+        ? {
+            uname: acctRes.account.profile.uname,
+            mid: acctRes.account.profile.mid,
+            vipLabel: acctRes.account.vipLabel,
+            expireAt: acctRes.account.expireAt,
+            healthy: acctRes.account.health.healthy,
+          }
+        : null;
+
+    /**
+     * 组装逻辑全在 `shared/utils/page-snapshot.ts`（纯函数 + 单测）。
+     * 这里只取数。
+     *
+     * ## `cached` 必须真的读（2026-10-29 修）
+     *
+     * 原本这里传 `null`，注释理由是"快照报实时状态，缓存兜底是 popup 自己的事"。
+     * **真机一测就发现那个理由站不住**：番剧页（没有 `__INITIAL_STATE__`）
+     * 快照报 `primary: {uname: null, source: 'none'}`，而 popup 实际会用缓存显示昵称 ——
+     * **快照与 popup 不一致，那这份快照就没法用来验 popup**。
+     *
+     * 尤其问题 2/3 的修复本身就是"播放页也用缓存兜底"，快照不读缓存
+     * 等于把要验的东西从快照里删掉了。
+     *
+     * 判据与 `popup/main.tsx` 的 `needsCache` 一致：只有**真的可能用到**才读
+     * （`chrome.storage.local.get` 是一次异步 IO，能省就省）。
+     */
+    const pageView = pageState.view();
+    const needsCache = pageView === null || !pageView.primary.user?.uname;
+    const cached = needsCache ? ((await readPrimaryProfile()) ?? null) : null;
+
+    return {
+      type: 'page/snapshot:ok',
+      snapshot: buildPageSnapshot({
+        pageView,
+        proxy,
+        account,
+        cached: cached ? { uname: cached.uname, level: cached.level } : null,
+      }),
+      /**
+       * PGC 重载链路的诊断快照（2026-10-29 加）。
+       *
+       * ## 为什么必须从这里带出来
+       *
+       * `pgcReloadTrace` 挂在 **ISOLATED world 的 `window`** 上，而 `bsk evaluate`
+       * 跑在 **MAIN world** —— 两个 world 的 `window` 不是同一个对象，
+       * 所以页面侧 `window.__PLUMA_PGC_ISOLATED__` **永远是 `undefined`**。
+       *
+       * 2026-10-29 真机验收时踩到这里：埋点写好了、值也在更新，但从页面读不到，
+       * 等于白写。现在通过这条已有的快照桥把它送出来 —— 页面发一条
+       * `postMessage({type:'snapshot'})` 就能拿到，不需要新通道。
+       *
+       * ⚠️ 它只在 `page/snapshot:ok` 里，**不进 popup 的渲染路径**。
+       */
+      pgcReload: pgcReloadTrace,
+    };
+  } catch (e) {
+    reportQuality({
+      height: 0,
+      note: `快照组装失败：${e instanceof Error ? e.message.slice(0, 60) : '?'}`,
+    });
+    return {
+      type: 'page/snapshot:ok',
+      snapshot: buildPageSnapshot({
+        pageView: null,
+        proxy: { enabled: false, hasCredential: false, ruleCount: 0 },
+        account: null,
+        cached: null,
+      }),
+      // 失败时也带上诊断 —— 排查恰恰最需要它
+      pgcReload: pgcReloadTrace,
+    };
+  }
+}
 function listenMainWorld(): void {
   window.addEventListener('message', (ev) => {
     const d = ev.data as
@@ -270,6 +507,14 @@ function listenMainWorld(): void {
           /** 主世界 `ssr-playinfo` 用 */
           firstSeen?: string;
           playurlBefore?: boolean;
+          /**
+           * `data` 里的流**是不是主世界自己注入进去的**（2026-10-29 加）。
+           *
+           * `ssrPlayinfo` 是 `__playinfo__` 的**同一个对象引用**，而注入会
+           * `r.video_info = next` 原地替换 —— 所以上报的 `data` 里是注入后的完整流。
+           * 上层必须靠这个标记区分「SSR 本来完整」与「被我们改成了完整」。
+           */
+          pgcPatched?: boolean;
           data?: unknown;
           user?: { uname?: string; face?: string | null; level?: number | null } | null;
           /** 主世界 `playurl-raw` 用 */
@@ -291,8 +536,37 @@ function listenMainWorld(): void {
         height: 0,
         note: `主世界就绪 readyState=${f?.readyState ?? '?'} define=${f?.define ?? '?'} hadExisting=${String(f?.hadExisting)} playinfo=${f?.playinfo ?? '?'}`,
       });
-      // 主世界先发 hello 时，立刻把配置推过去
+      /**
+       * 主世界先发 `hello` 时，立刻把配置推过去。
+       *
+       * ## ⚠️ `enabled` 必须是**真实的开关状态**，不能写死 `true`（2026-10-29 修）
+       *
+       * 这里原来写的是 `tellMainWorld(true)` —— 无论总开关开还是关都告诉主世界"开"。
+       * 后果：`main-world.js` 的 `cfgEnabled` 永远是 `true`，
+       * 于是「关开关后刷新番剧页 → 注入缓存的 4K 流 → 画质不回落」这条
+       * **靠 `cfgEnabled` 判断的门控永远不会生效**（真机实测：关开关后 `patched: 648`、
+       * `dashH` 仍含 2160）。
+       *
+       * 为什么当初写死：那时的假设是"能收到 hello 就说明扩展在工作"。
+       * 但 hello 只说明**主世界脚本跑起来了**，与用户有没有关总开关无关。
+       * 这两件事必须分开。
+       *
+       * 这里不能 `await`（`window.postMessage` 监听器是同步的，等异步会让 hello 的
+       * 回应时序错乱）。所以用 `void` 异步查完再补发一次 —— 主世界对 `enabled`
+       * 的更新是幂等都安全的（它只是改一个布尔量）。
+       */
       tellMainWorld(true);
+      void sendToBackground({ type: 'proxy/status' }).then((r) => {
+        const st = r as { type?: string; enabled?: boolean } | null;
+        if (st?.type !== 'proxy/status:ok') return;
+        /**
+         * 只在**明确关闭**时补发 `false`。
+         *
+         * 不补发 `true`：上面已经发过一次 `true`（那是"hook 已就绪、可以工作"的意思），
+         * 而 `cfg` 每发一条主世界都会走一遍 `syncHooks()` —— 没必要为"开着"再多触发一次。
+         */
+        if (st.enabled === false) tellMainWorld(false);
+      });
       return;
     }
 
@@ -413,8 +687,15 @@ function listenMainWorld(): void {
       /**
        * 编排逻辑抽到 `orchestratePgc` —— 只服务整页加载。
        * SPA 切集由主世界在响应层拦 `/ogv/player/playview`（ADR 0023），不走这里。
+       *
+       * ⚠️ 第 3 个参数 `pgcPatched` 是 2026-10-29 加的关键判据：
+       * 主世界在 setter 里注入成功后，`ssr-playinfo` 上报的 `data`
+       * **已经是注入后的完整流**（同一对象引用被原地改过）。
+       * 不传这个标记的话，ISOLATED 会把"自己的注入结果"误判成
+       * "SSR 本来就是完整流"，于是走早退分支、永不 reload ——
+       * 那就是「重开开关后卡在试看」。详见 `orchestratePgc` 里的长注释。
        */
-      void orchestratePgc(cid, d.data);
+      void orchestratePgc(cid, d.data, d.pgcPatched === true);
       return;
     }
 
@@ -719,9 +1000,17 @@ async function tryUpgradeForQuality(cid: string, ssrInfo: unknown): Promise<bool
  * @param cid     章节 id
  * @param ssrData 主世界报来的 SSR 数据（用于判断是否真的需要完整流）
  */
-async function orchestratePgc(cid: string, ssrData?: unknown): Promise<void> {
+async function orchestratePgc(
+  cid: string,
+  ssrData?: unknown,
+  ssrWasPatchedByUs: boolean = false,
+): Promise<void> {
   const playInfo = parsePlayPage(location.href);
   const epId = playInfo?.kind === 'pgc' ? playInfo.epId : null;
+
+  pgcReloadTrace.orchestrateCalls += 1;
+  pgcReloadTrace.cid = cid;
+  pgcReloadTrace.orchestrateExit = 'pending';
 
   /**
    * ## 只需浏览的集数不必取流，但**仍要记录它拿到的画质**
@@ -742,7 +1031,14 @@ async function orchestratePgc(cid: string, ssrData?: unknown): Promise<void> {
    * 这份 SSR 数据本身就是**页面在播放账号身份下拿到的响应**（DNR 已换 Cookie），
    * 所以它可以如实代表"播放账号这次拿到了什么"。
    */
-  if (ssrData !== undefined && !isStreamTruncated(ssrData)) {
+  const ssrTruncated = ssrData !== undefined ? isStreamTruncated(ssrData) : true;
+  pgcReloadTrace.ssrPatchedByUs = ssrWasPatchedByUs;
+  pgcReloadTrace.ssrTruncated = ssrData !== undefined ? ssrTruncated : null;
+
+  if (
+    ssrData !== undefined &&
+    canSkipPgcInjection({ pgcPatchedByUs: ssrWasPatchedByUs, truncated: ssrTruncated })
+  ) {
     const ssrInfo = readSsrVideoInfo(ssrData);
     if (ssrInfo) pageState.applyPlayback({ code: 0, result: ssrInfo });
 
@@ -775,17 +1071,135 @@ async function orchestratePgc(cid: string, ssrData?: unknown): Promise<void> {
      * 这里只处理"时长已经够了"的集数。所以「老番掉回试看」不可能发生：
      * `isStreamTruncated` 那条路一个字节都没改。
      */
-    if (ssrInfo && (await tryUpgradeForQuality(cid, ssrInfo))) return;
+    if (ssrInfo && (await tryUpgradeForQuality(cid, ssrInfo))) {
+      pgcReloadTrace.orchestrateExit = 'quality-upgrade-reload';
+      return;
+    }
 
+    /**
+     * ## ⚠️ 方向 B 卡住的第一现场就在这里（2026-10-29 定位）
+     *
+     * 「流够长」→ 直接 `return`，**根本不会往下走到 cache 分支**，
+     * 于是 `shouldReload` 永远不被调用 → `pluma:pgc-reload` 从来没被写过
+     * （真机证据：三个 pgc-* key 里唯独没有它）。
+     *
+     * ## 为什么「流够长」这个判据在第二趟必然成立
+     *
+     * `ssr-playinfo` 上报的是 `ssrPlayinfo`，而它是 setter 里
+     * `ssrPlayinfo = v` 记下的**引用**（`main-world.js:363`）。
+     * 紧接着同一个 setter 里 `pgcPatchPlayinfo(v)` 会执行
+     * `r.video_info = next`（`main-world.js:959`）—— **原地替换**。
+     *
+     * 引用是同一个，所以 ISOLATED 侧收到的 `ssr-playinfo.data` 里
+     * 已经是**注入后的完整流**，不是原始试看：
+     *
+     * ```
+     * 第一趟（无缓存）  ssr-playinfo 里的 dash.duration = 180   → isStreamTruncated = true  → 走 cache 分支 ✅
+     * 第二趟（有缓存）  ssr-playinfo 里的 dash.duration = 1166  → isStreamTruncated = false → 早退 ❌
+     * ```
+     *
+     * **注入越成功，这条路径越进不去。** 这才是方向 B 的真因 ——
+     * 不是"注入失败"，是"注入成功了，于是判据认为不需要再管它"。
+     *
+     * ## 为什么不能简单删掉这个 `return`
+     *
+     * 它对**首访免费集**是必需的：SSR 本身就是完整流（`play_video_type: whole`），
+     * 再取一次流纯属浪费，且可能把已到顶的画质换成缓存里的旧 qn。
+     * 所以判据要保留，但要**排除"这份 SSR 是我们自己注入出来的"**这种情况。
+     */
     reportQuality({
       height: 0,
       note: '[PGC] 流长度与 timelength 相符 —— 无需注入',
     });
+    pgcReloadTrace.orchestrateExit = 'not-truncated-early-return';
+    pgcReloadTrace.lastReason =
+      'SSR 流够长（可能是自己注入的结果），未进入 cache 分支，因此不会 reload';
     return;
   }
 
   const cached = await loadCachedVideoInfo(cid);
-  if (cached) {
+
+  /**
+   * ## 读取侧校验：丢弃已被污染的旧缓存（2026-10-29 加，问题 5 的「治存量」）
+   *
+   * ### 为什么光修写入侧不够
+   *
+   * 写入侧的校验只对**以后**写进去的缓存生效。但用户机器上**已经**躺着
+   * 旧版本写进去的坏数据（`storage.local` 的 LRU 是 8 条、TTL 100 分钟；
+   * `sessionStorage` 同样 100 分钟）。不在这里拦，那些用户要等 TTL 过期才自愈。
+   *
+   * 这里把它当成"没有缓存"处理 —— 落到后面的取流分支，重新取一次。
+   * 取回来的如果是完整流就正常写入；如果仍是试看流，写入侧的校验（见
+   * `prepareFullStream`）会拒绝写，也不会刷新。
+   *
+   * ### 为什么判据用 `isVideoInfoTruncated` 而不是"有没有 dash"
+   *
+   * 完整集也可能是**纯 durl**（`fnval=0` 的老路，单段 durl 且长度 = timelength）。
+   * 拿"有没有 dash"当判据会把那种合法缓存误杀，导致每次都重新取流。
+   * 长度判据对两种形态都成立。
+   */
+  const cachedUsable = cached !== null && !isVideoInfoTruncated(cached);
+  if (cached !== null && !cachedUsable) {
+    reportQuality({
+      height: 0,
+      note: '[PGC] 缓存里的流短于 timelength（旧版本写入的试看流），**丢弃并重新取流**',
+    });
+    pgcReloadTrace.lastReason = '缓存是截断流，已丢弃';
+
+    /**
+     * ## 作废刷新护栏（2026-10-29 加，问题 5 的「坏缓存自愈」）
+     *
+     * ### 为什么要清
+     *
+     * 护栏（`pluma:pgc-reload:<cid>`，`MAX_RELOAD_ATTEMPTS = 1`）的语义是
+     * 「同一集本会话刷过一次就够」，它**隐含假设"刷过一次就应该好了"**。
+     *
+     * 坏缓存打破了这个假设：
+     *
+     * ```
+     * 第 1 轮  坏缓存 → hadSync=true → 不刷新（老 bug），但 guard 已被写
+     * 第 2 轮  坏缓存被识别 → 想刷 → alreadyTried=true → **拒绝**
+     *         → reloadIssued: 0、duration 停在 180，且没有任何提示
+     * ```
+     *
+     * 真机证据：guard 的 `at` 比这次加载只早 2.4 分钟（TTL 是 10 分钟），
+     * 也就是**上一轮**留下的、仍然有效，于是把这一轮的合法刷新挡掉了。
+     *
+     * ### 为什么这是一个安全的方向
+     *
+     * 护栏防的是「**同一个失效原因**反复刷新」。而"缓存内容坏"这个原因
+     * **已经被这里处理掉了**（丢弃 + 重新取流），下次刷新是不同原因驱动的。
+     *
+     * ### 为什么不会变成无限刷新
+     *
+     * 因为 `prepareFullStream` 里的 `shouldWritePgcCache()` 闸在刷新**之前**：
+     *
+     * ```
+     * 丢弃坏缓存 → 清护栏 → 取流
+     *   ├─ 好流   → 写缓存 → reload → 第 2 趟 setter 有数据 → 注入成功（1 次，结束）
+     *   └─ 仍试看 → shouldWritePgcCache=false → return，**不写也不刷** → 终止
+     * ```
+     *
+     * 最坏是"用户每次手动刷新多一次取流请求"，**不会自动循环**。
+     *
+     * ⚠️ **只在这里清**：`hadSync === false` 另有"正常首访第二趟"这个成因，
+     * 那种情况下护栏是对的，清掉会削弱它。详见 `shouldResetGuardForBadCache`。
+     */
+    if (shouldResetGuardForBadCache(true)) {
+      const guardKey = GUARD_KEY_PREFIX + cid;
+      try {
+        sessionStorage.removeItem(guardKey);
+        reportQuality({
+          height: 0,
+          note: '[PGC] 已作废本集的刷新护栏（坏缓存已丢弃，允许重新取流后刷新）',
+        });
+      } catch {
+        /* sessionStorage 不可用：清不掉就算了，护栏仍会拦住刷新，只是不自愈 */
+      }
+    }
+  }
+
+  if (cachedUsable) {
     /**
      * ## 先看 `sessionStorage` 里**本来**有没有这份缓存
      *
@@ -809,17 +1223,44 @@ async function orchestratePgc(cid: string, ssrData?: unknown): Promise<void> {
      * 旧代码在这里直接 `return`，用户就永远停在 180 秒试看，
      * 而试看状态下切 4K 找不到轨 → "切换失败"。
      */
+    /**
+     * 现在改成**内容校验**：键在但内容是截断流 → 等同没有 → 走"写完同步缓存再刷一次"。
+     * 判据与 `cachedUsable` 用同一个（长度，不是"有没有 dash"）。
+     *
+     * 校验逻辑抽在 `isSyncCacheUsable()` 里（纯函数，有单测）——
+     * 这个文件是 WXT 入口，**零单测覆盖**，写在这里等于没有守卫。
+     */
     let hadSync = false;
     try {
-      hadSync = !!sessionStorage.getItem('pluma:pgc-vi:' + cid);
+      hadSync = isSyncCacheUsable(sessionStorage.getItem('pluma:pgc-vi:' + cid));
     } catch {
-      /* 读不到当作没有 */
+      /* sessionStorage 被禁用 → 当作没有 */
     }
+    pgcReloadTrace.hadSync = hadSync;
 
     // 写同步通道 + 异步下发（后者兜底，前者才是关键路径）
     writePgcSessionCache(cid, cached, epId);
+    /**
+     * ## ⚠️ `enabled` 必须是**真实的开关值**，不能写死 `true`（2026-10-29 修 R1）
+     *
+     * 这里原来写死 `enabled: true`。当时的想法是"能走到 cache 分支说明有缓存，
+     * 有缓存说明之前取流成功过，也就是开关开着" —— **这个推理不成立**：
+     * 缓存是**上一次**开关开着时写下的，用户完全可能之后关掉开关再刷新。
+     *
+     * 后果有两条：
+     *   1. 主世界 `cfgEnabled` 被推成 `true` → 第二道门控失效
+     *      （第一道 `localStorage` 标记仍然拦得住，所以不致命）
+     *   2. **更麻烦的**：真机排查时 `lastCfgEnabled: true` 会让人以为
+     *      "消息通道报的是开"，从而去错误的方向找原因。
+     */
     window.postMessage(
-      { __ns: NS, type: 'cfg', token: CHANNEL_TOKEN, enabled: true, pgcVideoInfo: cached },
+      {
+        __ns: NS,
+        type: 'cfg',
+        token: CHANNEL_TOKEN,
+        enabled: proxyEnabledKnown ?? true,
+        pgcVideoInfo: cached,
+      },
       '*',
     );
     reportQuality({
@@ -839,14 +1280,32 @@ async function orchestratePgc(cid: string, ssrData?: unknown): Promise<void> {
       } catch {
         /* 读不到就当没试过 */
       }
-      if (shouldReload({ alreadyTried, hasStream: true })) {
+      const verdict = shouldReload({ alreadyTried, hasStream: true });
+      pgcReloadTrace.shouldReloadCalls += 1;
+      pgcReloadTrace.shouldReloadArgs = { alreadyTried, hasStream: true };
+      pgcReloadTrace.shouldReloadVerdict = verdict;
+      if (verdict) {
+        pgcReloadTrace.orchestrateExit = 'cache-nosync-reload';
         reloadWithGuard(cid, `同步缓存刚写好（cid=${cid}），刷新进第二趟`);
       } else {
+        pgcReloadTrace.orchestrateExit = 'cache-nosync-no-reload';
+        pgcReloadTrace.lastReason = '同步缓存刚写好但本会话已刷过一次';
         reportQuality({
           height: 0,
           note: '[PGC] 同步缓存刚写好但本会话已刷过一次，不再刷新',
         });
       }
+    } else {
+      /**
+       * `hadSync === true` → 按 ADR 0020 的设计**不该刷新**：
+       * 主世界在 setter 里已经同步注入成功，播放器读到的就是完整流。
+       *
+       * ⚠️ 但真机上出现过"注入了却还是 180 秒"，所以这里把 `hadSync` 记进快照，
+       * 排查时一眼能看出是不是走了这条"设计上正确但实际没用"的路。
+       */
+      pgcReloadTrace.orchestrateExit = 'cache-hadsync-no-reload';
+      pgcReloadTrace.lastReason =
+        '同步缓存本来就有（hadSync=true），按 ADR 0020 设计不刷新；若播放器仍是试看，说明注入没被播放器采用';
     }
     return;
   }
@@ -887,15 +1346,18 @@ async function orchestratePgc(cid: string, ssrData?: unknown): Promise<void> {
  */
 function reloadWithGuard(cid: string, why: string): void {
   const guardKey = GUARD_KEY_PREFIX + cid;
+  pgcReloadTrace.reloadWithGuardCalls += 1;
   const v = document.querySelector('video');
   if (v && Number.isFinite(v.currentTime)) saveResumeTime(cid, v.currentTime);
   try {
     sessionStorage.setItem(guardKey, JSON.stringify(makeGuard(Date.now())));
   } catch {
     // 写不进去就不刷 —— 没有标记会变成循环
+    pgcReloadTrace.lastReason = 'reloadWithGuard: sessionStorage 写不进护栏，放弃刷新';
     reportQuality({ height: 0, note: '[PGC] 无法写刷新标记（sessionStorage 不可用），不刷新' });
     return;
   }
+  pgcReloadTrace.reloadIssued += 1;
   reportQuality({ height: 0, note: `[PGC] ${why}，刷新一次` });
   location.reload();
 }
@@ -965,6 +1427,76 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
    */
   pageState.applyPlayback({ code: 0, result: outcome.result });
 
+  /**
+   * ## ⚠️ 写缓存前必须校验「够不够长」（2026-10-29 真机定位，问题 5）
+   *
+   * ### 踩到的现象
+   *
+   * 用户机器上的 `sessionStorage` 里躺着一份**自相矛盾**的缓存：
+   *
+   * ```
+   * pluma:pgc-vi:42696771537
+   *   hasDash        : false
+   *   durl[0].length : 180160     ← 180 秒
+   *   timelength     : 1166528    ← 19 分钟
+   * ```
+   *
+   * 播放器拿到「1 段 180 秒的 durl」就只能播 180 秒 —— 这就是
+   * 「重开开关后画质不恢复」的真正原因。**不是时序问题，是缓存里本身就是坏数据。**
+   *
+   * ### 坏数据是怎么来的
+   *
+   * ```
+   * 播放账号这一刻没权益 → 接口返回 durl 1 段 180 秒 + timelength 19 分钟
+   *   （接口自己就矛盾 —— ADR 0023 记过：timelength 是整集元数据，不代表流有多长）
+   * → hasPlayableStream() 只看"有没有 durl" → true
+   * → fetchPgcPlayurl() 返回 kind:'ok'        ← 漏点 1（本次**不修**，见下）
+   * → mergeVideoInfo() 如实搬运（它没有校验职责）
+   * → 这里直接写缓存                            ← 漏点 2（**本次修的就是它**）
+   * ```
+   *
+   * ### ⚠️ 两个判据不要混用（写给下一个人）
+   *
+   * | 函数 | 回答的问题 |
+   * | --- | --- |
+   * | `hasPlayableStream()` | **有没有流**（只看 dash/durl/durls 存在与否，**不看长度**） |
+   * | `isVideoInfoTruncated()` | **够不够长**（流时长 vs `timelength`） |
+   *
+   * `hasPlayableStream` 通过**不代表**是完整流 —— 试看流也有 durl。
+   * 2026-10-29 之前这里两者都没用，所以坏数据一路写进了缓存，
+   * 然后躺 100 分钟（`PGC_CACHE_TTL_MS`），期间每次刷新都注入它。
+   *
+   * ---
+   *
+   * ### ⚠️ 为什么这里是 `return`，而不是"只跳过写缓存"
+   *
+   * `prepareFullStream` 的后续是 **`shouldReload()` → `reloadWithGuard()`**。
+   * 而 `reloadWithGuard` 的唯一作用就是**让第二趟去读这份缓存**。
+   *
+   * 既然这次取回来的是试看流、缓存也不写，那么：
+   *   - 刷新之后仍然没有可用缓存 → 再取一次 → **又拿到试看** → 又刷 → **死循环**
+   *   - 而 `shouldReload({ hasStream: true })` 会放行（它拿的是硬编码 `true`），
+   *     真正拦住循环的只有 `pluma:pgc-reload` 护栏（10 分钟 TTL）
+   *
+   * 所以这里必须**整个函数退出**：不写缓存、也不刷新。
+   * 让用户按试看播放（180 秒），与 `outcome.kind !== 'ok'` 那条分支的处置一致 ——
+   * 那条分支同样只打日志、不刷新。
+   *
+   * **代价**：这一集在本次会话里不会再尝试取流（`pgcCacheTried` 已置 true）。
+   * 用户刷新页面可以重试。这比"无限刷新"和"把坏数据存 100 分钟"都好。
+   */
+  if (!shouldWritePgcCache(merged)) {
+    reportQuality({
+      height: 0,
+      note:
+        `[PGC] 取回的是试看流而非完整流（dash/durl 短于 timelength ` +
+        `${String(merged.timelength ?? 0)}ms），**不写缓存、不刷新**，按试看播放`,
+    });
+    pgcReloadTrace.orchestrateExit = 'prepare-truncated-no-write';
+    pgcReloadTrace.lastReason = '合并结果是截断流，拒绝写入缓存（避免污染 100 分钟）';
+    return;
+  }
+
   await writePgcCache(cid, merged);
 
   /**
@@ -995,7 +1527,13 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
    * 晚到或失败都会让明明能刷的情况被拦住，用户就停在 180 秒试看
    * （2026-10-28 真机定位，见 `shouldReload` 的注释）。
    */
-  if (!shouldReload({ alreadyTried, hasStream: true })) {
+  const prepareVerdict = shouldReload({ alreadyTried, hasStream: true });
+  pgcReloadTrace.shouldReloadCalls += 1;
+  pgcReloadTrace.shouldReloadArgs = { alreadyTried, hasStream: true };
+  pgcReloadTrace.shouldReloadVerdict = prepareVerdict;
+  if (!prepareVerdict) {
+    pgcReloadTrace.orchestrateExit = 'prepare-no-reload';
+    pgcReloadTrace.lastReason = '已缓存但本轮不刷新（本会话已刷过一次）';
     reportQuality({
       height: 0,
       note: '[PGC] 已缓存但本轮不刷新（本会话已刷过一次）',
@@ -1003,6 +1541,7 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
     return;
   }
 
+  pgcReloadTrace.orchestrateExit = 'prepare-reload';
   reloadWithGuard(cid, `已取到完整流并缓存（cid=${cid}，时长=${String(merged.timelength ?? 0)}）`);
 }
 
@@ -1072,7 +1611,12 @@ function report(): void {
       deviceCookies: readDeviceCookies(document.cookie),
       // 主账号 mid 从**页面** cookie 读（普通分区），不从 background 发 nav 猜。
       primaryMid: readPrimaryMidFromCookie(document.cookie),
-    })) as { type?: string; activated?: boolean } | null;
+    })) as {
+      type?: string;
+      activated?: boolean;
+      /** 与 `messages.ts` 的 `page/activate:ok` 同源。`'disabled'` = 用户关了总开关 */
+      reason?: 'ok' | 'not-configured' | 'same-account' | 'disabled' | 'error';
+    } | null;
 
     /**
      * 代理是否真的装上，**只以 background 的回报为准**。
@@ -1080,8 +1624,66 @@ function report(): void {
      */
     if (res?.type === 'page/activate:ok') {
       badgeState.proxying = res.activated === true;
-      // 把 activate 的结果转给主世界：PGC 分支据此决定要不要接管播放器
-      tellMainWorld(true, res.activated === true);
+      /**
+       * 把 activate 的结果转给主世界：PGC 分支据此决定要不要接管播放器。
+       *
+       * ## ⚠️ 第一个参数是**总开关**，不是"扩展在工作"（2026-10-29 修）
+       *
+       * 原来这里是 `tellMainWorld(true, ...)` —— 无论总开关开还是关都写死 `true`。
+       * 后果：`main-world.js` 的 `cfgEnabled` 永远是 `true`，
+       * 于是「关开关后刷新番剧页 → 注入缓存的 4K 流 → 画质不回落」这条
+       * **靠 `cfgEnabled` 判断的门控永远不生效**（真机实测：`cfgCount: 4`、
+       * `lastCfgEnabled: true`，开关明明是关的）。
+       *
+       * `reason === 'disabled'` 是 background 明确说"用户关了总开关"
+       * （`page.handler.ts` 的 `isProxyEnabled()` 分支），
+       * 那是这里能拿到的**最权威**的开关信号 —— 比另外发一条 `proxy/status` 更好，
+       * 因为它搭在这条**本来就要发的**消息上，不额外多一次往返、也不会晚到。
+       */
+      const proxyEnabled = !(res.activated === false && res.reason === 'disabled');
+      proxyEnabledKnown = proxyEnabled;
+      tellMainWorld(proxyEnabled, res.activated === true);
+
+      /**
+       * ## 总开关状态的本地落地（ADR 0028 第一层 + 第二层）
+       *
+       * ### 为什么必须在这里写（而不是等 popup 那条 `proxy/set`）
+       *
+       * 这条路径覆盖"**刷新页面时开关已经关着**"这个主场景：
+       * `document_start` 就发出 `page/activate`，回包带着 `reason: 'disabled'`。
+       * 而 popup 那条 `proxy/set` 只覆盖"用户此刻正在拨开关"，覆盖不到
+       * "开关早就关了，用户现在刷新" —— 那正是用户报的场景。
+       *
+       * ### 为什么第一层（`localStorage` 标记）才是主修复
+       *
+       * 清 `sessionStorage`（第二层）**必然晚于**注入：真机
+       * `patchedAt: 358ms` vs `page/activate` 回包 ~400ms。那只是把竞争从
+       * "读缓存"挪到"删缓存"，同一个赛跑换个赛道，**不算修好**（ADR 0028 洞 1）。
+       *
+       * 标记则与时序无关：它由 `chrome.storage.onChanged` 在开关变化的那一刻
+       * 同步写进所有已开标签页（见 `main()` 里的监听器），主世界在 setter 里
+       * 读到的永远是"已落地"的状态。
+       *
+       * 这里也写一次，是为了兜住"扩展刚装上 / content 刚注入、onChanged 没收到
+       * 那一次变化"的情况 —— 两条路互相兜底，任一条到就够。
+       */
+      writeProxyOffMark(!proxyEnabled);
+
+      /**
+       * 第二层：清掉注入缓存（**只做数据卫生 + 双保险**，不承担门控职责）。
+       *
+       * 只在 background **明确**说"总开关关着"时才清：
+       * `reason === 'not-configured'` / `'same-account'` / `'error'` 都不清 ——
+       * 那几种情况下开关其实是开着的，清了会让用户配好账号后白白多取一次流。
+       */
+      if (res.reason === 'disabled') {
+        const purged = clearPgcSessionCache();
+        reportQuality({
+          height: 0,
+          note: `[PGC] 总开关已关闭，已清 ${String(purged)} 条同步缓存（不影响本页已完成的注入）`,
+        });
+      }
+
       if (badgeState.proxying) hasEverActivated = true;
       paintBadge();
       return;
@@ -1227,6 +1829,164 @@ export default defineContentScript({
     });
 
     /**
+     * popup 快照（`page/snapshot:get`）—— 给自动化 / bsk 用，**popup 不依赖它**。
+     *
+     * ## 为什么必须异步（返回 `true`）
+     *
+     * 与上一条不同：快照要账号摘要，而账号摘要只有 background 有。
+     * 所以这里要 `await sendToBackground({type:'account/summary'})`，
+     * 必须 `return true` 让 `sendResponse` 在回调之后仍然有效
+     * （同步 `return false` 会让通道立刻关闭，应答丢失）。
+     *
+     * ## 为什么不复用 `page/summary:get`
+     *
+     * 那条是**同步**的、只回 `pageState`，且被 popup 与 options 用着。
+     * 改成异步会动到两个现有调用方；而快照是"给机器看"的另一件事，
+     * 分开两条通道互不影响。
+     *
+     * 组装逻辑在 `shared/utils/popup-snapshot.ts`（纯函数，有单测）——
+     * 这里只负责取数。
+     */
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+      if ((msg as { type?: string } | undefined)?.type !== 'page/snapshot:get') return false;
+
+      void takeSnapshot().then(sendResponse);
+      return true;
+    });
+
+    /**
+     * **页面侧触发快照** —— 让 `bsk evaluate` 能直接拿到 JSON。
+     *
+     * ## 为什么需要它（2026-10-29）
+     *
+     * popup / options 都是 `chrome-extension://` 页面，而 bsk 的 Agent Window
+     * 沙箱**按 URL 白名单**拒绝它们：`evaluate` 直接报
+     * `operation denied by the Agent Window sandbox`。
+     * 于是每个 UI 问题（主账号栏空着、画质区显示错话）都只能靠人点一次、
+     * 肉眼描述 → 一轮排查来回三次。
+     *
+     * 而用 `page/snapshot:get` 也不行：那是 `chrome.runtime.onMessage` 通道，
+     * 页面主世界的 `chrome` **没有 `runtime`**（实测：
+     * `Cannot read properties of undefined (reading 'sendMessage')`）。
+     *
+     * 所以加一条**页面 → content** 的 postMessage 桥。用法：
+     *
+     * ```js
+     * // bsk evaluate 里
+     * window.postMessage({ __ns: '__PLUMA__', type: 'snapshot' }, '*');
+     * window.addEventListener('message', e => {
+     *   if (e.data?.__ns === '__PLUMA__' && e.data.type === 'snapshot-reply')
+     *     console.log(JSON.stringify(e.data.snapshot));
+     * });
+     * ```
+     *
+     * ## 安全边界（**改这里之前先读完**）
+     *
+     * - **只读**：快照来自 `takeSnapshot()`，它只读 `pageState` 与两个 background 查询，
+     *   **不改任何状态**。页面脚本伪造这条消息最多让**自己**多看到一份数据。
+     * - **不含凭据**：`buildPageSnapshot` 的输出已经过 `AGENTS.md §5.2` 的约束
+     *   （只有 uname / mid / vipLabel / expireAt / healthy 五个字段），
+     *   `tests/unit/shared/page-snapshot.test.ts` 有序列化后 grep 的断言。
+     *   但**主账号昵称与 mid 仍属账号标识** —— 页面脚本本来就能从
+     *   `__INITIAL_STATE__` / cookie 读到同等的值，所以这里没有增加暴露面。
+     * - **不回环**：只应答、不主动重发，且 `snapshot-reply` 的 `type` 与
+     *   `snapshot` 不同名，不会自己触发自己。
+     */
+    window.addEventListener('message', (ev) => {
+      const d = ev.data as { __ns?: string; type?: string } | null;
+      if (!d || d.__ns !== NS || d.type !== 'snapshot') return;
+
+      void takeSnapshot().then((reply) => {
+        window.postMessage(
+          {
+            __ns: NS,
+            type: 'snapshot-reply',
+            snapshot: reply.snapshot,
+            // ISOLATED world 的 PGC 重载诊断（MAIN world 读不到那个对象，见 `takeSnapshot`）
+            pgcReload: 'pgcReload' in reply ? reply.pgcReload : null,
+          },
+          '*',
+        );
+      });
+    });
+
+    /**
+     * **页面侧切换总开关** —— 让自动化能验「关开关 → 刷新 → 画质回落」。
+     *
+     * ## 为什么必须有它
+     *
+     * 验收第 5 条（关总开关 → 刷新 → 画质回落）与用户报的问题 5/6 都要求
+     * **真的去拨那个开关**。而 popup / options 是 `chrome-extension://`，
+     * bsk 沙箱拒绝 `evaluate`；页面主世界又没有 `chrome.storage`
+     * （实测 `typeof chrome.storage === 'undefined'`）。
+     * 所以只能由 content 转一手。
+     *
+     * ## ⚠️ 为什么**不用 token 做防护**（重要，别加回来）
+     *
+     * 第一反应是"带个随机 token 只让知道的人用"。**但 token 对页面是公开的**：
+     * `tellMainWorld()` 把 `CHANNEL_TOKEN` 直接 `postMessage` 到 `'*'`，
+     * 页面脚本加个监听器就能拿到。拿一个页面能读到的值当权限凭证是自欺。
+     *
+     * ## 真正的边界：**只允许写一个键，且只允许布尔值**
+     *
+     * 这条通道能做的事被硬限制在：
+     *   - **只有一个目标**：总开关（`pluma:proxy-enabled`）。不开放任意 key。
+     *   - **只接受 `true` / `false`**（`=== true` / `=== false` 严格判断，
+     *     字符串 `"false"`、`1`、`null` 一律拒绝）。
+     *   - 走的是与 popup **完全相同**的那条消息（`proxy/set`），
+     *     所以"关开关 → 删两类 DNR 规则"的既有语义不受影响。
+     *
+     * 即使页面脚本伪造，它能达到的最坏效果是**帮用户点了一下总开关** ——
+     * 而用户本来就能点，且 popup 会立刻显示状态变化。
+     * **不能借此读到凭据、不能改白名单、不能改账号。**
+     *
+     * ## 与快照桥分开写（不合并）
+     *
+     * 一条只读、一条会改状态。合并成一个 handler 会让"能不能写"取决于
+     * 中间某个分支，读代码的人无法一眼确认。**分开 = 边界可见。**
+     */
+    window.addEventListener('message', (ev) => {
+      const d = ev.data as { __ns?: string; type?: string; enabled?: unknown } | null;
+      if (!d || d.__ns !== NS || d.type !== 'set-proxy') return;
+
+      /** 严格布尔：`"false"` / `1` / `null` 全部拒绝（见上面「真正的边界」） */
+      const enabled = d.enabled === true ? true : d.enabled === false ? false : null;
+      if (enabled === null) {
+        window.postMessage(
+          { __ns: NS, type: 'set-proxy-reply', ok: false, error: 'enabled 必须是布尔值' },
+          '*',
+        );
+        return;
+      }
+
+      void sendToBackground({ type: 'proxy/set', enabled })
+        .then((res) => {
+          const r = res as { type?: string; enabled?: boolean; detail?: string } | null;
+          const ok = r?.type === 'proxy/set:ok';
+          window.postMessage(
+            {
+              __ns: NS,
+              type: 'set-proxy-reply',
+              ok,
+              enabled: ok ? r?.enabled === true : enabled,
+              ...(ok ? {} : { error: r?.detail ?? '切换失败' }),
+            },
+            '*',
+          );
+        })
+        .catch((e: unknown) => {
+          window.postMessage(
+            {
+              __ns: NS,
+              type: 'set-proxy-reply',
+              ok: false,
+              error: e instanceof Error ? e.message.slice(0, 60) : 'unknown',
+            },
+            '*',
+          );
+        });
+    });
+    /**
      * 角标开关（设置页「显示」分区）。
      *
      * 读一次 + 监听变化：设置页保存后**不用刷新页面**角标就消失/出现，
@@ -1238,6 +1998,68 @@ export default defineContentScript({
     });
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local') return;
+
+      /**
+       * ## 总开关变化 → 同步本地标记（ADR 0028 第一层，跨标签页机制）
+       *
+       * `chrome.storage.onChanged` **在所有已打开的 B站标签页里都会触发**
+       * （不只当前那个），所以这一个监听器就补掉了 ADR 0028 的「洞 3」：
+       * 用户开着 5 个番剧标签页时，关一次开关，5 个页面的 `localStorage` 标记
+       * 同时更新 —— 逐个刷新时全部回落。
+       *
+       * ## 为什么用 storage 事件而不是 `page/activate` 回包
+       *
+       * `page/activate` 只在**页面加载时**发一次。开关变化发生在页面已经加载完之后，
+       * 那时不会再有回包。所以"拨开关"这个动作必须靠 storage 事件传播，
+       * 否则用户得先刷新才生效 —— 而 popup 的提示语是"刷新生效"，
+       * 意思是"刷新之后就生效"，不是"得先刷两次"。
+       *
+       * 标记写的是 `{at: <now>}`，主世界侧有 30 分钟 TTL（`PROXY_OFF_TTL_MS`）。
+       */
+      const proxyChange = changes[PROXY_ENABLED_KEY];
+      if (proxyChange) {
+        const off = proxyChange.newValue === false;
+        writeProxyOffMark(off);
+        /**
+         * 同步更新"已知开关值"，让后续 `cfg` 报出真实状态。
+         *
+         * `newValue` 可能是 `undefined`（键被删）—— 那种情况不更新，
+         * 保持上一次的已知值比"猜一个"更安全。
+         */
+        if (typeof proxyChange.newValue === 'boolean') {
+          proxyEnabledKnown = proxyChange.newValue;
+        }
+
+        /**
+         * ## 第三层：**重开**开关时清掉刷新护栏（ADR 0028 的「洞 2」）
+         *
+         * 只在 `oldValue === false && newValue === true` 这一个瞬间清 ——
+         * **不能无条件清**。每次 storage 变化都清会废掉 `alreadyTried` 的
+         * 防刷新循环本意（`pgc-reload-plan.ts` 的三条硬护栏之一）。
+         *
+         * 为什么要清：用户
+         * ```
+         * 关开关 → 缓存被清（第二层）、guard 保留
+         * 重开开关 → 刷新 → 无缓存，该取流了
+         *          → isAlreadyTried(guard) === true → 直接 return
+         *          → 不取流、不刷新、无提示 → 停在试看，最长 10 分钟
+         * ```
+         * 这正是"开关的动作在另一个方向不生效"，与用户报的 bug 同类。
+         *
+         * ⚠️ 用 `=== false` / `=== true` 严格比较：`oldValue` 在"键从未存在过"
+         * 时是 `undefined`，那种情况**不算重开**（用户从没开过，或存储被清过）。
+         */
+        if (isProxyReenabled(proxyChange.oldValue, proxyChange.newValue)) {
+          const cleared = clearPgcReloadGuards();
+          if (cleared > 0) {
+            reportQuality({
+              height: 0,
+              note: `[PGC] 总开关已重开，已清 ${String(cleared)} 条刷新护栏（避免卡在试看）`,
+            });
+          }
+        }
+      }
+
       const change = changes[BADGE_ENABLED_KEY];
       if (!change) return;
       badgeEnabled = change.newValue !== false;

@@ -189,6 +189,46 @@ function readVideoInfo(data: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * 这份 SSR 数据**是否已经不需要我们再管**（可以直接走"无需注入"）。
+ *
+ * ## 为什么不能只用 `!isStreamTruncated()`（2026-10-29 真机踩到）
+ *
+ * `ssr-playinfo` 上报的 `data` 是 `__playinfo__` 的**同一个对象引用**
+ * （`main-world.js` 的 setter 里 `ssrPlayinfo = v`），而紧接着的
+ * `pgcPatchPlayinfo(v)` 会 `r.video_info = next` **原地替换**。
+ *
+ * 于是第二趟（缓存命中、注入成功）时，ISOLATED 侧拿到的 SSR **已经是完整流**：
+ *
+ * ```
+ * 第一趟（无缓存）  dash.duration = 180   → isStreamTruncated = true  → 走 cache 分支 ✅
+ * 第二趟（有缓存）  dash.duration = 1166  → isStreamTruncated = false → 早退 ❌
+ * ```
+ *
+ * **注入越成功，那条路越进不去** —— 表现为「重开开关后卡在试看」，
+ * 且 `pluma:pgc-reload` 永远不会被写（真机证据）。
+ *
+ * ## 判据
+ *
+ * | 情况 | `pgcPatchedByUs` | `truncated` | 结论 |
+ * | --- | --- | --- | --- |
+ * | 首访免费集（SSR 本来就完整） | `false` | `false` | **跳过取流**（省一次请求，且不该换掉已到顶的画质） |
+ * | 第二趟（我们注入成了完整流） | `true` | `false` | **继续走 cache 分支**（要让 reload 逻辑有机会跑） |
+ * | 试看（真·截断） | 任意 | `true` | **继续走 cache 分支** |
+ *
+ * @param opts.pgcPatchedByUs SSR 里的流是不是主世界注入的结果
+ * @param opts.truncated      流时长是否短于 `timelength`
+ * @returns `true` 表示"不用再管，可以早退"
+ */
+export function canSkipPgcInjection(opts: {
+  pgcPatchedByUs: boolean;
+  truncated: boolean;
+}): boolean {
+  // 被我们改过的 SSR 不能作为"本来就完整"的证据
+  if (opts.pgcPatchedByUs) return false;
+  return !opts.truncated;
+}
+
+/**
  * 判定容差：5 秒。
  *
  * 实测 `timelength = 1440083ms`、`dash.duration = 1441s`（= 1441000ms），
@@ -196,6 +236,108 @@ function readVideoInfo(data: unknown): Record<string, unknown> | null {
  * 于是每集都刷一次 —— 那不是功能，是骚扰。
  */
 export const TRUNCATION_SLACK_MS = 5000;
+
+/**
+ * 长度判据的**薄包装**：直接收 `video_info` 本身。
+ *
+ * ## 为什么需要它
+ *
+ * `isStreamTruncated()` 的入参是**带外壳的整份数据**
+ * （`{result: {video_info}}` / `{data: {result: …}}` / playview 的 `{data: {video_info}}`），
+ * 因为它最早是给 `ssr-playinfo` 用的。
+ *
+ * 但写入/读取缓存的那几处手里只有**合并后的 `video_info`**
+ * （`mergeVideoInfo()` 的返回值、`PgcCacheEntry.videoInfo`）。
+ * 那些地方要判"够不够长"。
+ *
+ * ## 为什么不直接改 `isStreamTruncated` 的签名
+ *
+ * 它已有既有测试与 4 个调用方，改签名等于让所有调用点跟着动 —— 风险大于收益。
+ *
+ * ## 为什么不直接传 `videoInfo` 进去（它其实也能认）
+ *
+ * `readVideoInfo()` 确实有一条"`result` 本身就是 video_info"的兜底
+ * （判据是有 `durl`/`dash`/`timelength` 之一），所以直接传也能跑通。
+ * **但那是隐式兼容**：哪天那条兜底被改掉，这里会静默退化成"永远判不截断"，
+ * 而判不截断的后果正是「坏数据被写进缓存」。显式包一层
+ * （`{result: videoInfo}`）走的是**已有测试覆盖的主路径**，更稳。
+ *
+ * @param videoInfo 合并后的 `video_info`（`mergeVideoInfo()` 的返回值或缓存里的那份）
+ * @returns `true` 表示**流短于 timelength**（试看流），不该当完整流用
+ */
+export function isVideoInfoTruncated(videoInfo: unknown): boolean {
+  if (!videoInfo || typeof videoInfo !== 'object') return false;
+  return isStreamTruncated({ result: videoInfo });
+}
+
+/**
+ * `sessionStorage` 里那份同步缓存的原文**能不能当"有缓存"用**（2026-10-29 加）。
+ *
+ * ## 为什么不能只判"键在不在"
+ *
+ * 主世界必须在 `__playinfo__` 赋值的**同一毫秒**读完缓存并注入
+ * （`createPlayer` 紧跟其后 0~2ms），所以它只读 `sessionStorage`。
+ * ISOLATED 侧据此决定"要不要刷一次"（`hadSync`）。
+ *
+ * 踩过的真机：`sessionStorage` 里躺着一份**旧版本写坏的**缓存
+ * （`durl[0].length: 180160` vs `timelength: 1166528`）——
+ * 键在 → `hadSync = true` → 不刷新；而主世界读它时被自己的校验拒了
+ * （`ssHit: false`）→ setter 位置没数据 → 只能等 `cfg` 补注入（晚 1450ms）
+ * → 播放器早已用 SSR 的 180 秒流起播。**两侧判据不一致，症状是"永远 180 秒"。**
+ *
+ * 现在：**内容可用才算有**。坏缓存等同没有 → 走"写完同步缓存再刷一次"。
+ *
+ * @param raw `sessionStorage.getItem()` 的原文；`null` = 键不存在
+ * @returns 能否当作"已有可用同步缓存"
+ *
+ * ⚠️ 判据用**长度**（`isVideoInfoTruncated`），不是"有没有 dash" ——
+ * 完整集也可能是纯 `durl`（`fnval=0` 老路），拿 dash 判会误杀。
+ */
+export function isSyncCacheUsable(raw: string | null): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as { vi?: unknown } | null;
+    if (!parsed || typeof parsed !== 'object') return false;
+    const vi = parsed.vi;
+    if (!vi || typeof vi !== 'object') return false;
+    return !isVideoInfoTruncated(vi);
+  } catch {
+    // 解析失败 = 不可用（宁可多刷一次，也不要拿一坨坏数据去注入）
+    return false;
+  }
+}
+
+/**
+ * 取流成功后，**这份合并结果该不该写进缓存并刷新**（2026-10-29 加，问题 5）。
+ *
+ * ## 为什么把它抽成纯函数
+ *
+ * 判断本身只有一行（`isVideoInfoTruncated(merged)`），但它决定的是
+ * **"要不要写缓存" + "要不要刷新"两个动作**，而且这两件事在
+ * `prepareFullStream` 里是耦合的 —— 一旦判断写错，坏数据会躺 100 分钟。
+ *
+ * 原先是内联在 `entrypoints/content.ts` 里的一个 `if`。那意味着：
+ * **删掉它，所有测试仍然全绿**（反例验证实测过）。所以抽到这里，
+ * 让"删掉守卫"这件事能被打红。
+ *
+ * ## ⚠️ 为什么是 `shouldWrite` 而不是 `return`
+ *
+ * 返回 `false` 时调用方应当**整个函数退出**：既不写缓存，也**不刷新**。
+ * 因为 `prepareFullStream` 后续唯一的动作就是 `reloadWithGuard()`，
+ * 而刷新的意义是"让第二趟去读这份缓存"。既然没写缓存：
+ *   - 刷了也没有缓存可读 → 再取一次 → 又拿到试看 → 再刷 → **死循环**
+ *   - 真正拦住循环的只有 `pluma:pgc-reload` 护栏（10 分钟 TTL），
+ *     靠它兜底是"靠副作用"，不该是设计
+ *
+ * 所以这里明确回答"这次取流结果值得写入吗"，调用方据此决定继续还是退出。
+ *
+ * @param merged `mergeVideoInfo()` 的结果
+ * @returns `true` = 是完整流，可以写缓存 + 刷新；`false` = 试看流，停止
+ */
+export function shouldWritePgcCache(merged: unknown): boolean {
+  if (!merged || typeof merged !== 'object') return false;
+  return !isVideoInfoTruncated(merged);
+}
 
 /**
  * 读缓存，命中就返回可下发的 `video_info`。

@@ -11,6 +11,7 @@ import {
   parseGuard,
   resumeTarget,
   shouldReload,
+  shouldResetGuardForBadCache,
 } from '../../../src/content/isolated/pgc-reload-plan';
 
 /**
@@ -164,5 +165,128 @@ describe('resumeTarget：刷新后恢复播放位置', () => {
     expect(resumeTarget('600', 0)).toBeNull();
     expect(resumeTarget(NaN, 0)).toBeNull();
     expect(resumeTarget(undefined, 0)).toBeNull();
+  });
+});
+
+/**
+ * `shouldResetGuardForBadCache` —— 坏缓存自愈时作废护栏（2026-10-29，问题 5）。
+ *
+ * ## 它解决的是一个"护栏挡住合法路径"的死锁
+ *
+ * ```
+ * 第 1 轮  坏缓存 → hadSync=true → 不刷新（老 bug），但 guard 已被写（attempts=1）
+ * 第 2 轮  坏缓存被识别 → 想刷 → alreadyTried=true → **拒绝**
+ *         → reloadIssued: 0、duration 停在 180、没有任何提示
+ * ```
+ *
+ * 真机证据：guard 的 `at` 比那次加载只早 **2.4 分钟**（TTL 10 分钟），
+ * 是上一轮留下的、仍然有效，于是把这一轮合法的刷新挡掉了。
+ *
+ * `MAX_RELOAD_ATTEMPTS = 1` 隐含假设「刷过一次就应该好了」，
+ * 而坏缓存恰恰打破它 —— 第 1 次刷的时候缓存是坏的，刷了也没用。
+ *
+ * ⚠️ 反例验证：把 `shouldResetGuardForBadCache` 改成恒返回 `false`，
+ * 下面第 1 条必红。
+ */
+describe('shouldResetGuardForBadCache：作废护栏的唯一条件', () => {
+  it('① 确实丢弃了坏缓存 → 作废护栏', () => {
+    expect(shouldResetGuardForBadCache(true)).toBe(true);
+  });
+
+  it('② 没有丢弃坏缓存 → **不动**护栏（防削弱正常防循环）', () => {
+    /**
+     * 这条是最重要的约束。
+     *
+     * `hadSync === false` 有两种成因：
+     *   1. `sessionStorage` 那份是坏的（该清）
+     *   2. `storage.local` 有、`sessionStorage` 还没写过（**正常首访第二趟**，不该清）
+     *
+     * 第 2 种情况下护栏本来就是对的 —— 它防的是"那次刷新失败后反复刷"。
+     * 无条件清护栏会让 `alreadyTried` 永远为 false → 取流失败时**无限刷新**。
+     */
+    expect(shouldResetGuardForBadCache(false)).toBe(false);
+  });
+
+  it('③ 严格布尔：真值不等于 true 都不算', () => {
+    /**
+     * 与 `set-proxy` 通道的严格布尔口径一致。
+     * 传进来 `"true"` / `1` 这种，说明调用方写错了，**不要**顺势清护栏。
+     */
+    expect(shouldResetGuardForBadCache(true)).toBe(true);
+    // @ts-expect-error 故意传字符串，验证严格比较不把 "true" 当真
+    expect(shouldResetGuardForBadCache('true')).toBe(false);
+    // @ts-expect-error 故意传数字 1，验证严格比较不把真值当 true
+    expect(shouldResetGuardForBadCache(1)).toBe(false);
+    // @ts-expect-error 故意传 undefined，验证缺参时不清护栏
+    expect(shouldResetGuardForBadCache(undefined)).toBe(false);
+  });
+});
+
+/**
+ * 端到端：**坏缓存 → 作废护栏 → 允许刷新**这条链走通（2026-10-29）。
+ *
+ * ## 为什么要把三个函数串起来测
+ *
+ * 单测各自绿不代表合起来对。真机那个死锁正是"三个函数各自都对，但组合起来
+ * 永远返回 false"：
+ *
+ * ```
+ * isAlreadyTried(guard, now)        → true   （护栏有效，2.4 分钟前写的）
+ * shouldReload({ alreadyTried })    → false  （被护栏挡住）
+ * shouldResetGuardForBadCache(true) → ?      （本该作废护栏）
+ * ```
+ *
+ * 这条把三步按真实顺序走一遍，断言"清完之后 shouldReload 就放行了"。
+ */
+describe('端到端：坏缓存作废护栏后，刷新得以发生', () => {
+  const NOW = 1_793_277_792_545; // 真机 guard 的时间戳
+
+  it('作废前：护栏有效 → shouldReload 拒绝（这就是真机卡住的状态）', () => {
+    const guard = makeGuard(NOW - 2.4 * 60 * 1000);
+    const alreadyTried = isAlreadyTried(parseGuard(JSON.stringify(guard)), NOW);
+
+    expect(alreadyTried).toBe(true);
+    expect(shouldReload({ alreadyTried, hasStream: true })).toBe(false);
+  });
+
+  it('作废后：护栏清空 → shouldReload 放行', () => {
+    // 模拟 sessionStorage.removeItem 之后的读取结果
+    const afterRemoval = parseGuard(null);
+    const alreadyTried = isAlreadyTried(afterRemoval, NOW);
+
+    expect(alreadyTried).toBe(false);
+    expect(shouldReload({ alreadyTried, hasStream: true })).toBe(true);
+  });
+
+  it('三步串起来：坏缓存 → 决定作废 → 刷新放行', () => {
+    const guard = makeGuard(NOW - 2.4 * 60 * 1000);
+    const droppedBadCache = true;
+
+    // 1. 先看作废前的判定（真机卡在这里）
+    const before = isAlreadyTried(parseGuard(JSON.stringify(guard)), NOW);
+    expect(shouldReload({ alreadyTried: before, hasStream: true })).toBe(false);
+
+    // 2. 作废决策
+    const reset = shouldResetGuardForBadCache(droppedBadCache);
+    expect(reset).toBe(true);
+
+    // 3. 作废后重新判定
+    const guardAfterReset = reset ? parseGuard(null) : parseGuard(JSON.stringify(guard));
+    const after = isAlreadyTried(guardAfterReset, NOW);
+    expect(shouldReload({ alreadyTried: after, hasStream: true })).toBe(true);
+  });
+
+  it('⚠️ 没丢弃坏缓存时：即使护栏过期也不额外放宽', () => {
+    /**
+     * 防过度修复的反面：正常路径（首访第二趟）不该因为"想做自愈"而放宽。
+     * 护栏过期后本来就允许再试一次，那是既有语义，不由这个改动提供。
+     */
+    const guard = makeGuard(NOW - 2.4 * 60 * 1000);
+    const reset = shouldResetGuardForBadCache(false);
+    expect(reset).toBe(false);
+
+    // 不作废 → 仍按原逻辑判定（护栏有效 → 拒绝）
+    const alreadyTried = isAlreadyTried(parseGuard(JSON.stringify(guard)), NOW);
+    expect(shouldReload({ alreadyTried, hasStream: true })).toBe(false);
   });
 });

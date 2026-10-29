@@ -1129,3 +1129,67 @@ describe('主机白名单与 routes.ts 一致', () => {
     expect(BILI_API_HOSTS).toContain('api.bilibili.com');
   });
 });
+
+describe('token 握手观测埋点（B-04，只观测不改行为）', () => {
+  /**
+   * ## 这个测试守什么
+   *
+   * `tokenLocked` 一旦置 true 就没有复位分支（B-04）。改握手风险高（回环曾导致 OOM），
+   * 所以 1.0.0 的决策是**只做观测**（`docs/plans/1.0.0-release-plan.md` §11 D1）。
+   *
+   * 「只观测」不等于「不修」：观测值必须能被诊断导出读到（D1 补充说明），
+   * 否则等于没观测。这里断言的就是那份观测值真的会被写、且写得对。
+   *
+   * ## 为什么必须测到"被拒"这一条
+   *
+   * 埋点最容易写错的位置就是**放在 `return` 之后** —— 那样代码看起来对、
+   * 正常路径也有值，但 B-04 关心的"新 token 被拒"永远记不下来。
+   * 所以下面第 3 条专门用**换了 token 的 cfg** 走一遍拒绝分支。
+   */
+  const HANDSHAKE = '__PLUMA_HANDSHAKE__';
+
+  function traceOf(sb: Sandbox): Record<string, unknown> | undefined {
+    return sb.page[HANDSHAKE] as Record<string, unknown> | undefined;
+  }
+
+  it('脚本一加载就暴露埋点对象（字段齐全，不是 undefined）', () => {
+    const sb = boot();
+    const trace = traceOf(sb);
+    expect(trace, '主世界没有暴露 __PLUMA_HANDSHAKE__，诊断导出拿不到 tokenLocked').toBeDefined();
+    expect(trace).toMatchObject({ locked: false, matches: null, seen: 0, rejected: 0 });
+  });
+
+  it('收到第一条 cfg 后 locked=true、matches=true', async () => {
+    const sb = boot();
+    enable(sb);
+    await flush();
+
+    expect(traceOf(sb)).toMatchObject({ locked: true, matches: true, seen: 1, rejected: 0 });
+  });
+
+  it('换了 token 的 cfg 被拒时，matches=false 且 rejected 递增（B-04 的那个状态）', async () => {
+    const sb = boot();
+    enable(sb);
+    await flush();
+
+    // ISOLATED 侧重新注入了 —— 新 token 与锁定的不同
+    sb.win.postMessage(
+      { __ns: '__PLUMA__', type: 'cfg', token: 'another-token', enabled: true },
+      '*',
+    );
+    await flush();
+
+    expect(traceOf(sb)).toMatchObject({ locked: true, matches: false, seen: 2, rejected: 1 });
+  });
+
+  it('埋点是同一个对象引用（原地更新，抓取方拿到的是最新值）', async () => {
+    const sb = boot();
+    const ref = traceOf(sb);
+    enable(sb);
+    await flush();
+
+    // 不是每轮重新赋值一个新对象 —— 否则外部持有的引用会停在旧值上
+    expect(traceOf(sb)).toBe(ref);
+    expect(ref).toMatchObject({ locked: true, seen: 1 });
+  });
+});

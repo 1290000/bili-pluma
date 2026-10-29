@@ -124,9 +124,127 @@
    */
   var cfgApplied = false;
 
+  /**
+   * 「token 握手现在处于什么状态」的埋点对象（B-04，2026-10-29）。
+   *
+   * 只观测，不改握手行为 —— 理由见「通信」一节里写它的那段注释
+   * （`docs/plans/1.0.0-release-plan.md` §11 决策 D1：方案丙）。
+   *
+   * 「最近一次收到的 token 是否与锁定的相同」这个字段（`matches`）
+   * 决定了几件事：`false` + `locked === true` 就是「新 token 被拒」的状态。
+   *
+   * 注意别和 `window.__PLUMA_MAIN__` 搞混：那个是**布尔守卫**，
+   * 含义是"主世界脚本已经加载过"（重复注入靠它挡），由本文件最开头置位。
+   * 所以这里**不能**复用它，另开 `window.__PLUMA_HANDSHAKE__`。
+   *
+   * ⚠️ **在这里就建好并挂上去**，不要等第一条 `cfg` 才建：
+   * 诊断侧可能在页面加载早期就来读，那时 `undefined` 和"没锁定"分不清，
+   * 而这两件事在排查 B-04 时完全不是一回事。
+   */
+  var handshakeTrace = { locked: false, matches: null, seen: 0, rejected: 0 };
+
+  /**
+   * `cfg` 里那个 `enabled` 开关的**最近一次明确值**。`null` = 还没收到任何 `cfg`。
+   *
+   * ⚠️ 与文件后面那个 `var enabled = false` **不是一回事**，别合并：
+   *   - `enabled`（第 47 行）是主世界自己的**行为开关**，初值 `false`，
+   *     决定要不要藏 `__playinfo__` / 轮询会员状态
+   *   - 这个的用途只有一个：**在诊断里回答"当时开关是什么值"**
+   *     （`lastSkipEnabled` 要报它）。`enabled` 在 `cfg` 到达前是 `false`，
+   *     conflate 会把"还没收到"误报成"用户关了"
+   */
+  var cfgEnabled = null;
+
+  try {
+    window.__PLUMA_HANDSHAKE__ = handshakeTrace;
+  } catch (e) {}
+
   var IS_PGC = location.pathname.indexOf('/bangumi/play/') === 0;
 
-  /** `false` = `page/activate` 明确回报"没装规则"（未配置 / 总开关关 / 同账号） */
+  /**
+   * ## 观测 `createPlayer` 的调用时刻 —— **只记时间，不改行为**（2026-10-29 加）
+   *
+   * ## 为什么需要它
+   *
+   * 真机现场：`ssAt 749 / patchedAt 750`（注入只晚 1ms，确实在 setter 里同步做了），
+   * 但 `video.duration` 仍是 180。纸面上"同步注入 + 1ms"该赢，实际没赢。
+   *
+   * 继续推理已经失败过一次（我先后猜过「durls 求和误判」「cfg 补注入」，
+   * 都被数据推翻）。所以把「播放器什么时候调用 `createPlayer`」**测出来**：
+   *
+   * - `createPlayerAt > patchedAt` → 注入先于读数据，播放器**应该**读到新流。
+   *   若 `duration` 仍 180，说明播放器读的**不是** `__playinfo__`（或读的是被缓存的副本）。
+   * - `createPlayerAt < patchedAt` → 播放器先读了旧数据，注入再成功也没用，**必须 reload**。
+   *
+   * ## ⚠️ 只用 `apply` 透传，绝不替换逻辑（ADR 0019 的教训）
+   *
+   * ADR 0019 曾经想「hook `createPlayer` 换回调」，真机三条证据把它否掉了。
+   * 那个否掉的结论是「**不要靠改 createPlayer 来注入流**」，
+   * 不是「不能观察它」。这里只在调用**之前**记一个时间戳，然后原样 `apply` ——
+   * 参数不碰、返回值不碰、`this` 不碰。
+   *
+   * ## 为什么挂 `window.nano` 的 setter
+   *
+   * `createPlayer` 不是全局函数，它挂在页面自己赋值的 `window.nano` 上
+   * （`poc/probe/probe-pgc-timing.cjs` 实测验证过这条路可行）。
+   * 在 `document_start` 抢在页面脚本之前挂 setter，才能在 `nano` 一赋值就包住它。
+   *
+   * 失败（页面没有 `nano` / `defineProperty` 被拒）只影响观测，不影响功能。
+   */
+  function installCreatePlayerProbe() {
+    if (!IS_PGC) return;
+    var nanoRef;
+    try {
+      Object.defineProperty(window, 'nano', {
+        configurable: true,
+        enumerable: true,
+        get: function () {
+          return nanoRef;
+        },
+        set: function (v) {
+          nanoRef = v;
+          if (!v || typeof v.createPlayer !== 'function') return;
+          // 已经包过就不再包（防止重复注入叠罗汉）
+          if (v.createPlayer.__plumaProbed) return;
+          var orig = v.createPlayer;
+          var wrapped = function () {
+            try {
+              pgcTrace.createPlayerCalls += 1;
+              if (pgcTrace.createPlayerAt < 0) {
+                pgcTrace.createPlayerAt = performance.now
+                  ? Math.round(performance.now())
+                  : -1;
+              }
+            } catch (e) {}
+            // 原样透传：参数、this、返回值全不动
+            return orig.apply(this, arguments);
+          };
+          wrapped.__plumaProbed = true;
+          v.createPlayer = wrapped;
+        },
+      });
+    } catch (e) {
+      /* 观测装不上就算了，不影响播放 */
+    }
+  }
+
+  /**
+   * `page/activate` 的结果。`false` = 明确没装规则（未配置 / 总开关关 / 同账号 / 出错）。
+   *
+   * ## ⚠️ 它**不是**判断总开关的合适信号（2026-10-29 真机否掉过一次）
+   *
+   * 它只由 `page/activate` 的回复驱动（`content.ts:1085`），而那条路要走
+   * content → background 解密凭据 → 装 DNR 规则 → 返回。页面对 `__playinfo__`
+   * 的赋值在 ~409–599ms，**这两者没有先后保证**。
+   *
+   * 曾经把门控写成 `if (pgcActive !== true) return;`（未知即拒绝），真机一测：
+   * **开关正常开着时 `skipUnknownCount` 也会 +1**，注入从 ~600ms 拖到 1879ms。
+   * 原因：`hello` 那条 `cfg`（`content.ts:296`）**不带 `pgcActive`**，只带 `enabled`。
+   * 所以"`pgcActive` 未知"是**每次正常加载的常态**，不是极端时序。
+   *
+   * 现在：`null` 一律放行；总开关的判断改用 `cfgEnabled`（见 `pgcPatchPlayinfo`）。
+   * 这个变量只剩一个用途 —— `pgcActive === false` 时拦住"页面级激活失败"那几种情况。
+   */
   var pgcActive = null;
 
   /**
@@ -170,6 +288,20 @@
   var PGC_SS_PREFIX = 'pluma:pgc-vi:';
 
   /**
+   * 截断判定的容差：**5 秒**。
+   *
+   * ⚠️ **必须与 `src/content/isolated/pgc-cache-inject.ts` 的
+   * `TRUNCATION_SLACK_MS` 一致**。主世界是裸 JS，无法 import 那个常量。
+   *
+   * 为什么需要容差：实测 `timelength = 1440083ms`、`dash.duration = 1441s`
+   * （= 1441000ms），差 917ms 是正常的秒/毫秒取整。不设容差的话完整集
+   * 也会被误判成"被截断"，于是每集都白取一次流。
+   *
+   * 一致性由 `tests/unit/content/main-world-pgc.test.ts` 读源码比对断言。
+   */
+  var PGC_TRUNCATION_SLACK_MS = 5000;
+
+  /**
    * 同步读缓存。
    *
    * @param {string} cid 章节 id
@@ -178,6 +310,77 @@
    * ⚠️ **永不抛错**：`sessionStorage` 在隐私模式 / 配额满 / 跨源 iframe 里可能抛。
    * 抛在 `document_start` 会让整份脚本挂掉，那比"没有缓存"严重得多。
    */
+  /**
+   * 判断一份 `video_info` 的流**是否短于 `timelength`**（= 试看流）。
+   *
+   * ## 为什么主世界也要判这一道（2026-10-29 加，问题 5 的最后一道防线）
+   *
+   * ISOLATED 侧已经在**写入**（`prepareFullStream`）和**读取**（`orchestratePgc`）
+   * 两处校验了。这里是第三道，理由有两条：
+   *
+   * 1. **旧版本的坏数据还在用户机器上**。`sessionStorage` 的 TTL 是 100 分钟，
+   *    只要它还没过期，主世界就可能读到 —— 而主世界正是**直接把它注入**的那一方。
+   * 2. 主世界与 ISOLATED 是两个 world，`cfg.pgcVideoInfo` 那条**绕过 sessionStorage**
+   *    直接送进来（见 `cfg` 分支），那条路不经过 `pgcReadCacheSync`。
+   *
+   * ## 判据与 `pgc-cache-inject.ts` 的 `isStreamTruncated` **必须同源**
+   *
+   * 裸 JS 无法 import，所以这里是**手写的一份等价实现**。
+   * 两者不一致的后果是"上层觉得是试看、下层觉得能用"，注入照旧发生。
+   * 一致性由 `tests/unit/content/main-world-pgc.test.ts` 读源码逐个比对常量断言。
+   *
+   * ## ⚠️ 不能拿"有没有 dash"当判据
+   *
+   * 完整集也可能是**纯 durl**（`fnval=0` 的老路：单段 durl，长度 = timelength）。
+   * 用"有没有 dash"会把那种合法缓存误杀 → 每次进页面都白取一次流。
+   * 长度判据对两种形态都成立。
+   *
+   * 判断不了（没有可比的时长字段）时**返回 false**（放行）—— 与
+   * `isStreamTruncated` 的"保守不注入"方向一致：宁可播一次旧缓存，
+   * 也不要因为判不出来就把正常数据丢掉。
+   *
+   * @param {object} vi `video_info`
+   * @returns {boolean} `true` = 流短于 timelength（试看流）
+   */
+  function pgcVideoInfoTruncated(vi) {
+    if (!vi || typeof vi !== 'object') return false;
+    var timelengthMs = typeof vi.timelength === 'number' ? vi.timelength : 0;
+    if (!(timelengthMs > 0)) return false;
+
+    // ① 单段 durl 优先（与 pgc-cache-inject.ts 的顺序一致）
+    if (Array.isArray(vi.durl) && vi.durl.length > 0) {
+      var first = vi.durl[0];
+      var len = first && typeof first.length === 'number' ? first.length : 0;
+      if (len > 0) return len < timelengthMs - PGC_TRUNCATION_SLACK_MS;
+    }
+
+    // ② dash
+    var dash = vi.dash;
+    var dashSec = dash && typeof dash.duration === 'number' ? dash.duration : 0;
+    if (dashSec > 0) return dashSec * 1000 < timelengthMs - PGC_TRUNCATION_SLACK_MS;
+
+    // ③ durls：只看第一组的段总长（各画质组时长相同）
+    var durls = vi.durls;
+    if (Array.isArray(durls) && durls.length > 0) {
+      var totalMs = 0;
+      for (var gi = 0; gi < durls.length; gi += 1) {
+        var g = durls[gi];
+        if (!g || typeof g !== 'object') continue;
+        var segs = g.durl;
+        if (!Array.isArray(segs)) continue;
+        for (var si = 0; si < segs.length; si += 1) {
+          var s = segs[si];
+          if (s && typeof s === 'object' && typeof s.length === 'number') totalMs += s.length;
+        }
+        break;
+      }
+      if (totalMs > 0) return totalMs < timelengthMs - PGC_TRUNCATION_SLACK_MS;
+    }
+
+    // 判断不了 → 放行
+    return false;
+  }
+
   function pgcReadCacheSync(cid) {
     if (!cid) return null;
     try {
@@ -187,7 +390,90 @@
       if (!o || typeof o !== 'object') return null;
       // 过期判断：流地址实测约 110 分钟，缓存写的时候带 ttl
       if (typeof o.exp === 'number' && Date.now() > o.exp) return null;
-      return o.vi && typeof o.vi === 'object' ? o.vi : null;
+      var vi = o.vi && typeof o.vi === 'object' ? o.vi : null;
+      if (!vi) return null;
+      /**
+       * 读取侧的第三道防线：**短于 timelength 的缓存不拿来注入**。
+       *
+       * 旧版本会把「durl 180 秒 + timelength 19 分钟」这种自相矛盾的数据
+       * 写进缓存（写入侧校验是 2026-10-29 才加的）。那种数据注入进去，
+       * 播放器只能播 180 秒 —— 表现为「重开开关后画质不恢复」。
+       *
+       * 这里返回 `null` 而不是删掉 key：主世界不该做删除（它是页面的"旁观者"），
+       * 而且删了也没用 —— ISOLATED 侧下一趟会重新写。返回 null 的效果是
+       * "这次没有缓存可用"，播放器照常播 SSR 的试看流，等 ISOLATED 去取完整流。
+       */
+      if (pgcVideoInfoTruncated(vi)) {
+        pgcTrace.cacheRejectedTruncated = true;
+        pgcPost('cache-truncated', '同步缓存短于 timelength，拒绝注入');
+        return null;
+      }
+      return vi;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * 总开关「关着」的本地标记（ADR 0028 第一层）。
+   *
+   * ⚠️ **必须与 `entrypoints/content.ts` 的 `PROXY_OFF_KEY` 字符串一致**。
+   * 主世界是裸 JS（不参与 TS 编译），无法共享常量，所以两边各写一份；
+   * 不一致的后果是"门控静默失效"，与 `PGC_SS_PREFIX` 是同一类风险。
+   * 一致性由 `tests/unit/content/main-world-pgc.test.ts` 读源码断言。
+   */
+  var PROXY_OFF_KEY = 'pluma:proxy-off';
+
+  /**
+   * 标记的时间上界：30 分钟。
+   *
+   * ## 为什么必须有上界（ADR 0028「第一层」的「新鲜」一条）
+   *
+   * 标记记的是**写入那一刻**的状态，不是**读的那一刻**的状态。
+   * 某次写入失败（配额满 / 隐私模式 / SW 没醒）会留下一个旧标记，
+   * 若永久有效就会**永久拦住注入** —— 那等于让 PGC 功能静默消失。
+   *
+   * 给一个时间上界，把"最多错多久"变成可陈述的数字：最坏 30 分钟。
+   * 到期后标记自动失效、恢复放行，用户重开开关也不会被困住。
+   */
+  var PROXY_OFF_TTL_MS = 30 * 60 * 1000;
+
+  /**
+   * 读「总开关关着」的标记 —— **三态**，与 `cfgEnabled` 同构。
+   *
+   * | 返回 | 含义 | 调用方动作 |
+   * | --- | --- | --- |
+   * | `true` | 标记存在且新鲜 → 开关明确关着 | **不注入** |
+   * | `null` | 没有标记 / 已过期 / 读不出来 | 放行（判不了） |
+   *
+   * ⚠️ **永不返回 `false`**：用 `null` 表示"判不了"，这样调用点写成
+   * `=== true` 才拦，**默认方向是放行**。ADR 0028 的硬约束是
+   * 「不放行比多注入危险得多」—— 判不了时宁可多注入一次。
+   *
+   * ## 为什么用 `localStorage` 而不是 `sessionStorage`
+   *
+   * 三个性质缺一不可（ADR 0028「第一层」的表格）：
+   *   - **同步 API**：读在 `__playinfo__` 的 setter 里，只有微秒级预算
+   *   - **跨标签页共享**：一处写，所有已开的番剧标签页全部生效（补掉洞 3）
+   *   - **不依赖扩展消息**：`cfg` 永远不到也照样能判（不违背"不许绑异步通道"）
+   *
+   * ⚠️ **永不抛错**：隐私模式 / 配额满时 `localStorage` 会抛。
+   * 抛在 `document_start` 会让整份脚本挂掉，那比"没有门控"严重得多。
+   *
+   * @returns {boolean|null} `true` = 明确关着；`null` = 判不了
+   */
+  function pgcReadProxyOff() {
+    try {
+      var raw = window.localStorage.getItem(PROXY_OFF_KEY);
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      if (!o || typeof o !== 'object') return null;
+      var at = o.at;
+      if (typeof at !== 'number') return null;
+      // 未来时间戳（用户改过系统时钟）也算数，但同样受上界约束
+      var age = Date.now() - at;
+      if (!(age < PROXY_OFF_TTL_MS)) return null;
+      return true;
     } catch (e) {
       return null;
     }
@@ -240,6 +526,18 @@
         },
         set: function (v) {
           playinfoValue = v;
+          /**
+           * 记录 `__playinfo__` 被赋值的时刻（只观测）。
+           *
+           * 与 `patchedAt` 相减 = 「赋值 → 注入完成」的耗时；
+           * 与 `createPlayerAt` 相减 = 「赋值 → 播放器建好」的耗时。
+           * 排查「注入了但 duration 还是 180」时这三个时刻必须一起看。
+           */
+          try {
+            if (pgcTrace.playinfoAt < 0 && performance.now) {
+              pgcTrace.playinfoAt = Math.round(performance.now());
+            }
+          } catch (e) {}
           // 只记第一次赋值：之后播放器自己写的值都是客户端数据，不能当主账号基线
           if (ssrFirstSeen === 'none') {
             ssrFirstSeen = 'set';
@@ -341,7 +639,8 @@
              * 而 `pgcActive === false`（明确没装规则）仍然拦住 —— 那个是"用户关了开关"，
              * 只在 `cfg` 到达后才会被置位，属于**收紧**而不是放宽。
              */
-            pgcPatchPlayinfo(v);
+            // `true` = 来自 setter 同步路径（唯一能赶上播放器的时机）
+            pgcPatchPlayinfo(v, true);
           }
         },
       });
@@ -402,6 +701,116 @@
     patchedAt: -1,
     cacheBytes: 0,
     lastStage: '',
+
+    /**
+     * ## 这次注入**有没有赶上播放器**（2026-10-29 加，排查「注入了但 duration 还是 180」）
+     *
+     * 真机现场（`ep3854818`，开关开着、刷新后）：
+     *
+     * ```
+     * ssAt      : 749   ← setter 触发
+     * patchedAt : 750   ← 只晚 1ms，注入**确实**在 setter 里同步完成
+     * duration  : 180   ← 但播放器仍在播试看
+     * ```
+     *
+     * 纸面上「同步注入 + 只差 1ms」应该赢，实际没赢。所以需要把
+     * 「注入」和「播放器读数据」这两件事的先后**测出来**，而不是继续推理。
+     *
+     * - `patchedInSetter`：注入发生在 setter 同步路径（true）还是 `cfg` 补注入（false）。
+     *   ⚠️ **不能用 `lastStage` 代替** —— `cfg` 分支会在注入之后把 `lastStage`
+     *   覆写成 `'cfg-with-cache'`，看它完全判断不出注入来源（已害过一次误判）。
+     * - `injectedFrom` / `injectedTo`：注入前后 `dash.duration`。
+     *   若 from=180、to=1166 则注入数据是对的，问题在「播放器没采用」；
+     *   若 to 也是 180，则注入本身有问题。
+     * - `createPlayerAt`：页面 `createPlayer` 被调用的时刻（`-1` = 没观测到）。
+     *   与 `patchedAt` 比大小就能定死是「读之前」还是「读之后」。
+     * - `playinfoAt`：`__playinfo__` 被赋值的时刻，用于核对 setter 时序。
+     */
+    patchedInSetter: null,
+    injectedFrom: -1,
+    injectedTo: -1,
+    createPlayerAt: -1,
+    createPlayerCalls: 0,
+    playinfoAt: -1,
+    /**
+     * 读取侧有没有因为"流短于 timelength"而拒绝过同步缓存（2026-10-29 加，问题 5）。
+     *
+     * `true` = 至少有一次读到了试看流缓存并**没有**注入它。
+     * 排查「重开开关后仍卡在试看」时要看这个：它为 true 说明坏缓存被挡住了，
+     * 剩下的问题在 ISOLATED 侧能不能取到完整流。
+     */
+    cacheRejectedTruncated: false,
+
+    /**
+     * 注入被门控拦下的**累计次数**（2026-10-29 加，配合问题 4 的门控）。
+     *
+     * 为什么计数而不是只记 `lastStage`：`lastStage` 是"最后一次"，
+     * 刷新一次就被覆盖；而这两个数的意义在于**判断分支死活**：
+     *
+     * - `skipDisabledCount`：「总开关关着所以不注入」。**预期内**的正常拒绝，
+     *   关开关后刷新番剧页应该看到它 ≥1、且画质回落。
+     * - `skipInactiveCount`：「`page/activate` 回报未激活（未配置 / 同账号 / 出错）」。
+     *   也属于预期内。
+     *
+     * ⚠️ **曾经还有一个 `skipUnknownCount`**（"`pgcActive` 还没到就不注入"），
+     * 2026-10-29 真机实测后删掉：它在**开关正常开着**时也会 +1，
+     * 因为 `pgcActive` 要等 `page/activate` 往返，而 `hello` 那条 `cfg`
+     * 只带 `enabled`。拿"未知"当拒绝等于每次正常加载都漏一次注入。
+     * 现在未知一律放行，改用 `cfgEnabled` 判断总开关（见 `pgcPatchPlayinfo`）。
+     */
+    skipDisabledCount: 0,
+    skipInactiveCount: 0,
+    /**
+     * 被**第一道**（`localStorage` 的 `pluma:proxy-off` 标记）拦下的次数（ADR 0028）。
+     *
+     * ## 为什么三个计数必须分开（不能合成一个）
+     *
+     * 上一轮排查走了三版弯路，一半原因是"看不出是哪条路在拦"。
+     * 三道门控是**冗余观测**而不是互补条件，所以：
+     *
+     * | 计数器 | 含义 | 关着开关刷新后应看到 |
+     * | --- | --- | --- |
+     * | `skipProxyOffCount` | 被 ① `localStorage` 标记拦了 | **≥1**（第一道先跑，必然先命中） |
+     * | `skipDisabledCount` | 被 ② `cfgEnabled` 拦了 | 可能为 0（① 先拦了） |
+     * | `skipInactiveCount` | 被 ③ `pgcActive` 拦了 | 可能为 0 |
+     *
+     * **关着开关多刷几次，应当同时看到过 `skip-proxy-off` 和 `skip-disabled`；
+     * 只看到一条说明另一条坏了。** 合成一个计数就做不到这个判断。
+     */
+    skipProxyOffCount: 0,
+    /**
+     * 「cfg 还没到，先不注入，等它到了再补」的次数。
+     *
+     * **不是错误，是常态**：`cfg` 要等 `page/activate` 往返，必然晚于 SSR 赋值。
+     * 计数是为了回答"这个分支到底被走了多少次" ——
+     * 如果它一直是 0，说明时序变了（cfg 早于 SSR 了），那时可以简化门控。
+     */
+    deferUnknownCount: 0,
+    /**
+     * 最后一次 skip 时 `cfg.enabled` 的值：`true` / `false` / `null`（`null` = 还没收到 cfg）。
+     *
+     * ⚠️ 只有 `lastStage` 是 `skip-*` 时它才有意义。用途：看到
+     * `lastStage: 'skip-disabled'` 时要能立刻确认"是总开关关了"。
+     */
+    lastSkipEnabled: null,
+    /**
+     * **最近一次收到的 `cfg.enabled`**（`true` / `false` / `null`）。
+     *
+     * 与 `lastSkipEnabled` 的区别：那个只在**跳过时**才写，这个每收到一条 `cfg`
+     * 都会更新。加它的理由（2026-10-29）：
+     *
+     * 排查「关开关后仍然注入 4K」时，我需要知道**主世界到底有没有收到
+     * `enabled: false`** —— 而 `lastSkipEnabled` 是 `null` 时有两种可能：
+     *   1. 门控没触发（因为 `cfgEnabled` 一直是 `true`）
+     *   2. 门控触发了但 `cfgEnabled` 也是 `null`
+     *
+     * 这两件事的修法完全不同（前者改 ISOLATED 侧的下发，后者改主世界的判断），
+     * 而原来的埋点**区分不出来**。有了这个字段就能一眼看出。
+     */
+    lastCfgEnabled: null,
+    /** 收到过几条 `cfg`（与 `__PLUMA_HANDSHAKE__.seen` 独立计数，这个是主循环里的） */
+    cfgCount: 0,
+
     /**
      * 同步读 `sessionStorage` 的结果（2026-10-28 加，用于定位"新标签页同步读不到"）。
      *
@@ -436,6 +845,13 @@
     pgcTrace.bootAt = performance.now ? Math.round(performance.now()) : -1;
     pgcTrace.lastStage = 'boot';
     window.__PLUMA_PGC__ = pgcTrace;
+
+    /**
+     * 装 `createPlayer` 观测（只记时刻，不改行为 —— 见函数头注释）。
+     *
+     * 必须在这里调：越早越好，要抢在页面内联脚本给 `window.nano` 赋值之前。
+     */
+    installCreatePlayerProbe();
   }
 
   function pgcPost(stage, detail) {
@@ -501,11 +917,204 @@
    *
    * 见 `pgcPatchPreviewFlags`（ADR 0021）—— 只换流不够，播放器会在 361 秒处停。
    */
-  function pgcPatchPlayinfo(v) {
+  /**
+   * @param v 待注入的 `__playinfo__` 对象
+   * @param {boolean=} fromSetter 这次调用是否来自 `__playinfo__` 的 setter。
+   *   `true` = setter 同步路径（能赶上播放器）；`false` = `cfg` 到达后的补注入（必然晚）。
+   *   **只用于埋点**（`pgcTrace.patchedInSetter`），不参与任何分支判断 ——
+   *   以免"为了观测而改变行为"。
+   */
+  function pgcPatchPlayinfo(v, fromSetter) {
     if (pgcPatched || !pgcCachedVideoInfo) return;
-    // 没装规则（未配置 / 总开关关 / 同账号）时不该注入：
-    // 那种情况下这个缓存也未必对得上当前账号权益
-    if (pgcActive === false) return;
+
+    /**
+     * ## 总开关门控 —— **只有明确 `true` 才注入**（2026-10-29 修问题 4）
+     *
+     * ### 原来的写法错在哪
+     *
+     * ```js
+     * if (pgcActive === false) return;   // ← 只拦"明确关闭"
+     * ```
+     *
+     * `pgcActive` 的初值是 `null`（"还不知道"），于是 **`cfg` 到达之前放行**。
+     * 而 `cfg` 要跨进程往返，`__playinfo__` 的 setter 却是页面自己同步赋值的
+     * （实测 409–599ms）。两者**没有先后保证** —— 赛跑输了就注入缓存里的 4K 流，
+     * 于是**关掉总开关后刷新番剧页，画质不回落**（问题 4 的真因）。
+     *
+     * `sessionStorage` 里的 `pluma:pgc-vi:<cid>` 是完整 4K 流（实测
+     * `height: [2160,1080,720,480,360]`、`timelength` 整集），
+     * 而同标签页刷新**不清 sessionStorage** —— 所以这份数据一直在手边。
+     *
+     * ⚠️ **不清 `sessionStorage`**：那份缓存是有效数据，用户重开开关后
+     * 立刻就能用上，不用重新取流。这里只做"不注入"，不做"删数据"。
+     */
+    /**
+     * 门控：**用 `cfgEnabled`（总开关），不用 `pgcActive`（页面级激活结果）**。
+     *
+     * ## 为什么换信号（2026-10-29 真机实测，推翻了当天早些时候的版本）
+     *
+     * 上一版写成 `if (pgcActive !== true) return;`（把"未知"翻转成拒绝），
+     * 意图是修「关开关后刷新番剧页画质不回落」。**真机一测就否掉了**：
+     *
+     * ```
+     * 开关【正常开着】进 ep3854818 →
+     *   skipUnknownCount: 1        ← 被"未知"拦了一次
+     *   lastSkipEnabled:  true     ← 而当时开关明明是开的
+     *   patchedAt:        1879ms   ← 正常应在 ~600ms
+     * ```
+     *
+     * 原因：`pgcActive` **只由 `page/activate` 的回复驱动**（`content.ts:1085`），
+     * 而 `page/activate` 要走 content → background 解密凭据 → 装 DNR 规则 → 返回。
+     * 而 `hello` 那条 `cfg`（`content.ts:296`）**不带 `pgcActive`**，只带 `enabled`。
+     *
+     * 所以"`pgcActive` 未知"**不是极端时序，是每次正常加载都会发生的常态**。
+     * 拿它当门控 = 用"必然漏一次注入"换"关开关后不回落"，
+     * 而漏掉的这一次是**用户正常看番时的第一次注入**（`MEMORY` 里记着：
+     * `__playinfo__` 必须在 setter 里同步注入，晚一步播放器就已经按试看起步了）。
+     *
+     * ## 现在用 `cfgEnabled`
+     *
+     * `enabled` 由 `content.ts:296` 在收到 `hello` 时**立刻**下发（不等任何往返），
+     * 所以它比 SSR 赋值早是常态。语义也对得上：`pgcPatchPlayinfo` 要防的是
+     * 「用户关了总开关」，那正是 `enabled === false`。
+     *
+     * | `cfgEnabled` | 含义 | 动作 | lastStage |
+     * | --- | --- | --- | --- |
+     * | `false` | 用户关了总开关 | 不注入 | `skip-disabled` |
+     * | `true` | 开关开着 | 注入（若 `pgcActive === false` 再拦一道） | `patched` / `skip-inactive` |
+     * | `null` | 连 `hello` 都还没到 | 注入 | `patched` |
+     *
+     * ⚠️ **`null` 放行**（与上一版相反）：`cfg` 一条都没到时，
+     * `__playinfo__` 的 setter 也还没装（`syncHooks` 靠 `cfg` 驱动），
+     * 所以这里根本不会被调用到。真到了这里说明 hook 已装但配置没来 ——
+     * 那种情况**宁可注入**（缓存里的流是对的，注入最多是没生效，不注入是必然没效果）。
+     */
+    /**
+     * ## 三态门控（2026-10-29 第三版，**真机实测两轮才定下来**）
+     *
+     * | `cfgEnabled` | 含义 | 动作 | lastStage |
+     * | --- | --- | --- | --- |
+     * | `false` | 用户关了总开关 | **不注入** | `skip-disabled` |
+     * | `true` | 开关开着 | 注入 | `patched` |
+     * | `null` | cfg 还没到 | **注入**（放行） | `patched-unconfirmed` |
+     *
+     * ### 为什么 `null` 必须放行（第三版结论，两次真机 + 3 条现有测试否定了"等 cfg"）
+     *
+     * 真机时序（`ep3854818`，开关关闭）：
+     *
+     * ```
+     * ssAt      : 357ms   ← SSR 赋值，setter 触发
+     * patchedAt : 358ms   ← 注入发生（此刻 cfg 还没到）
+     * cfgCount  : 4       ← cfg 全部在 358ms 之后才到
+     * ```
+     *
+     * 我一度改成"`null` 也等 cfg"，立刻打破三条既有测试，其中一条是
+     * **ADR 0020 的最终修法**：`cfg 完全不到场时，只要有 sessionStorage 就在 setter 里注入`。
+     * 那条断言的是"**不允许把注入绑在任何异步通道上**" —— 这是 PGC 支持的根基
+     * （`cfg` 可能永远不到，那时不注入就等于功能不存在）。
+     *
+     * **所以 `null` 必须放行。** "关开关后不回落"不能靠这里拦。
+     *
+     * ### 为什么最终还是靠 `cfgEnabled` 拦，而不是"清缓存"（第四版结论）
+     *
+     * 我一度想改成"开关关闭时由 ISOLATED 侧把 `sessionStorage` 里的缓存清掉"。
+     * **架构评审否掉了，理由成立**：清缓存的时机（`page/activate` 回包）**必然晚于**
+     * 这里的注入（实测 358ms）。那只是把竞争从"读缓存"挪到"删缓存"，
+     * 同一个赛跑、换了个赛道 —— **不算修好**。
+     *
+     * 而且它还有 B 面：`content.ts` 的 `orchestratePgc` 里 `alreadyTried` 为 true
+     * 时直接 return、不取流不刷新，所以"清 vi 但留 guard"会让用户
+     * **重开开关后永久卡在试看**，直到 guard 的 10 分钟 TTL 过期。
+     *
+     * 所以现在这一道 `cfgEnabled === false` 保留 —— 它**能覆盖"关闭后刷新"这个主场景**
+     * （那时 `page/activate` 通常抢在 SSR 之前，因为 `disableProxy` 之后
+     * `isProxyEnabled()` 读 storage 很快）。真正覆盖不了的边角场景由
+     * ADR 0028 的 `localStorage` 读时校验解决（见那份 ADR）。
+     */
+    /**
+     * ## ① 第一道门控：`localStorage` 的「开关关着」标记（ADR 0028 第一层，**核心**）
+     *
+     * ### 为什么它排在最前面
+     *
+     * 三道门控是**冗余观测**，任一道明确为「关」就拦，没有一道明确为「关」就注入。
+     * 既然 ① 和 ② 都会在"关开关"时为「关」，就必须**先判 ①** —— 否则日志里
+     * 永远只出现 `skip-disabled`，看不出"两条冗余观测各自还活着吗"。
+     * 关着开关多刷几次应当同时看到过 `skip-proxy-off` 与 `skip-disabled`。
+     *
+     * ### 为什么这道能修好「关开关后画质不回落」
+     *
+     * 前两版（`pgcActive !== true`、`cfgEnabled !== true`）都试过门控，全被否 ——
+     * 根因是**信号必然晚于注入**：真机 `ssAt 357ms / patchedAt 358ms / cfgCount 4`，
+     * `cfg` 全部在注入之后才到。任何依赖扩展消息的判据都赢不了这场赛跑。
+     *
+     * `localStorage` 不同：**同步 API + 跨标签页共享 + 不依赖扩展消息**。
+     * 用户在 popup 里关开关的那一刻，标记就写好了；之后任何一次刷新，
+     * setter 里读到的都是"已经关着" —— **与时序无关**，因为它不在赛道上。
+     *
+     * ### 为什么 `null` 放行（不是 `!== true` 就拦）
+     *
+     * ADR 0020 的硬约束：**不允许把注入绑在任何异步通道上**。`cfg` 可能永远不到
+     * （扩展上下文失效 / SW 没唤醒 / content script 崩了），那时不注入就等于
+     * "这个功能不存在"。标记读不出来（隐私模式 / 配额满 / 从没写过）同理 ——
+     * **判不了就放行**，最坏是多注入一次，而不是功能静默消失。
+     *
+     * 有 TTL（`PROXY_OFF_TTL_MS`）兜底：写入失败留下的旧标记最多再拦 30 分钟，
+     * 之后自动失效、恢复放行。
+     */
+    if (pgcReadProxyOff() === true) {
+      pgcTrace.skipProxyOffCount += 1;
+      pgcTrace.lastStage = 'skip-proxy-off';
+      pgcPost('skip', '本地标记显示总开关已关闭（proxy-off 新鲜），不注入');
+      return;
+    }
+
+    /**
+     * ## ② 第二道门控：`cfgEnabled`（总开关，`hello` 时同步下发）
+     *
+     * | `cfgEnabled` | 含义 | 动作 | lastStage |
+     * | --- | --- | --- | --- |
+     * | `false` | 用户关了总开关 | **不注入** | `skip-disabled` |
+     * | `true` | 开关开着 | 注入 | `patched` |
+     * | `null` | cfg 还没到 | **注入**（放行） | `patched-unconfirmed` |
+     *
+     * 与 ① 是**同一件事的两个独立观测**（冗余，不是互补）：① 不依赖扩展消息，
+     * ② 不依赖页面存储能力，**任一条能到就够**。
+     *
+     * 真机时序（`ep3854818`，开关关闭）说明为什么不能只靠这一道：
+     *
+     * ```
+     * ssAt      : 357ms   ← SSR 赋值，setter 触发
+     * patchedAt : 358ms   ← 注入发生（此刻 cfg 还没到）
+     * cfgCount  : 4       ← cfg 全部在 358ms 之后才到
+     * ```
+     *
+     * 所以这一道**结构性必然漏掉第一次注入** —— 它只是双保险，不是主修复。
+     * 主修复是上面那道 `localStorage`。
+     */
+    if (cfgEnabled === false) {
+      pgcTrace.skipDisabledCount += 1;
+      pgcTrace.lastStage = 'skip-disabled';
+      pgcTrace.lastSkipEnabled = cfgEnabled;
+      pgcPost('skip', '总开关已关闭（cfgEnabled=false），不注入');
+      return;
+    }
+    // `cfgEnabled === null`：放行，但标记出来（便于排查"为什么关着却注入了"）
+    if (cfgEnabled === null) pgcTrace.lastStage = 'patched-unconfirmed';
+
+    /**
+     * ## ③ 第三道门控：页面级激活失败（未配置 / 同账号 / 出错）。
+     * `null`（`page/activate` 还没回来）**不拦**。
+     *
+     * 与 ② 是**互补的**：② 管"用户不想用"，③ 管"想用但用不了"。
+     */
+    if (pgcActive === false) {
+      pgcTrace.skipInactiveCount += 1;
+      pgcTrace.lastStage = 'skip-inactive';
+      pgcTrace.lastSkipEnabled = cfgEnabled;
+      pgcPost('skip', 'page/activate 回报未激活（pgcActive=false），不注入');
+      return;
+    }
+
     var inner = v && v.result ? v : v && v.data && v.data.result ? v.data : null;
     if (!inner || !inner.result) return;
 
@@ -586,16 +1195,54 @@
       delete next.durls;
     }
 
+    /**
+     * 记录**注入前后**的 `dash.duration`（2026-10-29 加，只观测）。
+     *
+     * 排查「注入了但 duration 仍是 180」时，这两个值能把问题切成两半：
+     *
+     * | from | to | 结论 |
+     * | --- | --- | --- |
+     * | 180 | 1166 | 注入数据是对的 → 问题在「播放器没采用」 |
+     * | 180 | 180 | 注入本身没换掉 dash → 问题在注入逻辑 |
+     *
+     * ⚠️ 必须在 `r.video_info = next` **之前**取 `from`，否则拿到的是新值。
+     */
+    var prevDash = base && base.dash && typeof base.dash === 'object' ? base.dash : null;
+    pgcTrace.injectedFrom =
+      prevDash && typeof prevDash.duration === 'number' ? prevDash.duration : -1;
+
     r.video_info = next;
     // 试看标记（ADR 0021）—— 只换流不够，播放器会在 361 秒处主动停
     var flags = pgcPatchPreviewFlags(r);
     pgcPatched = true;
     pgcTrace.patchedAt = performance.now ? Math.round(performance.now()) : -1;
     pgcTrace.lastStage = 'patched';
+
+    var nextDash = next.dash && typeof next.dash === 'object' ? next.dash : null;
+    pgcTrace.injectedTo = nextDash && typeof nextDash.duration === 'number' ? nextDash.duration : -1;
+
+    /**
+     * `patchedInSetter`：这次注入发生在 setter 同步路径，还是 `cfg` 补注入。
+     *
+     * 由调用方通过 `pgcPatchPlayinfo(v, fromSetter)` 传进来 —— 不能靠 `lastStage` 判断，
+     * 因为 `cfg` 分支会在注入**之后**把它覆写成 `'cfg-with-cache'`。
+     */
+    if (typeof fromSetter === 'boolean') pgcTrace.patchedInSetter = fromSetter;
+
     var timelength = next.timelength || 0;
     pgcPost(
       'patch',
-      '已注入缓存流：字段=' + moved + ' 试看标记=' + flags + ' 时长=' + timelength,
+      '已注入缓存流：字段=' +
+        moved +
+        ' 试看标记=' +
+        flags +
+        ' 时长=' +
+        timelength +
+        ' dashDur ' +
+        pgcTrace.injectedFrom +
+        '→' +
+        pgcTrace.injectedTo +
+        (fromSetter === true ? ' (setter)' : fromSetter === false ? ' (cfg补)' : ''),
     );
 
     /**
@@ -2862,6 +3509,25 @@
       playurlBefore: ssrPlayurlBefore,
       data: ssrPlayinfo || null,
       user: primaryUser(),
+      /**
+       * ## 这份 `data` 里的流**是不是我们自己注入进去的**（2026-10-29 加）
+       *
+       * ## 为什么必须告诉 ISOLATED 侧
+       *
+       * `ssrPlayinfo` 是 setter 里 `ssrPlayinfo = v` 记下的**引用**，
+       * 而同一个 setter 紧接着 `pgcPatchPlayinfo(v)` 会
+       * `r.video_info = next` **原地替换**。引用没变，所以上报出去的
+       * `data` 里已经是注入后的完整流。
+       *
+       * 后果：ISOLATED 侧拿它判 `isStreamTruncated()` 会得到 `false`
+       * （完整流当然"够长"），于是走「无需注入」的早退分支，
+       * **永远进不到 cache 分支，也就永远不会 reload** ——
+       * 这正是「重开开关后卡在试看」的真因。
+       *
+       * **注入越成功，那条路越进不去。** 所以这个布尔量是必需的：
+       * 让上层能区分「SSR 本来就是完整流」和「SSR 被我们改成了完整流」。
+       */
+      pgcPatched: pgcPatched,
     });
   }
 
@@ -2884,12 +3550,37 @@
      */
     var hasPgcPayload = d.pgcVideoInfo && typeof d.pgcVideoInfo === 'object';
 
+    /**
+     * 埋点：这条 `cfg` 收到了。对象本身在脚本开头就建好挂上 `window` 了，
+     * 这里只**原地累加**，不重新赋值（否则诊断侧持有的引用会停在旧对象上）。
+     */
+    handshakeTrace.seen += 1;
+
     if (!tokenLocked) {
       if (d.token && typeof d.token === 'string') {
         token = d.token;
         tokenLocked = true;
       }
-    } else if (!d.token || d.token !== token) {
+    }
+
+    /**
+     * 埋点：这条 `cfg` 与锁定的 token 对不对得上。
+     *
+     * ⚠️ **位置在拒绝分支之前**：B-04 关心的恰恰是被 `return` 掉的那些条，
+     * 写在 `return` 之后等于永远看不到"新 token 被拒"这个状态。
+     *
+     * 三种情况分开记，别合并成一个 boolean：
+     *   - 还没锁定（首条 cfg 没带 token）→ `matches = null`（"未知"，不是"不匹配"）
+     *   - 锁定了且相等 → `true`
+     *   - 锁定了但不等 / 没带 token → `false`
+     */
+    if (tokenLocked) {
+      handshakeTrace.matches = !!d.token && d.token === token;
+      if (!handshakeTrace.matches) handshakeTrace.rejected += 1;
+    }
+    handshakeTrace.locked = tokenLocked;
+
+    if (tokenLocked && (!d.token || d.token !== token)) {
       // token 对不上：只有"纯数据"能通过，任何开关/状态一律拒绝
       if (!hasPgcPayload || d.enabled !== undefined || d.pgcActive !== undefined) return;
     }
@@ -2910,6 +3601,18 @@
     if (typeof d.pgcActive === 'boolean') pgcActive = d.pgcActive;
 
     /**
+     * 记下 `enabled` 的明确值，供 `pgcTrace.lastSkipEnabled` 使用。
+     *
+     * 与下面 `if (!!d.enabled !== enabled)` 那段**分开写**：那个是行为开关，
+     * 这个是诊断值。`d.enabled` 缺失时（伪造的 cfg / 老版本 ISOLATED）
+     * 不覆盖已记下的值 —— 否则一次缺字段的 cfg 会把"开关开着"抹成 `null`。
+     */
+    if (typeof d.enabled === 'boolean') cfgEnabled = d.enabled;
+    // 埋点：每收到一条 cfg 都记，用来区分"没收到 false"与"收到了但没触发"
+    pgcTrace.cfgCount += 1;
+    pgcTrace.lastCfgEnabled = cfgEnabled;
+
+    /**
      * PGC 完整流缓存（ADR 0020）—— ISOLATED 侧从 `storage.local` 预读后下发给这里。
      *
      * ## 为什么数据要往 `cfg` 里塞（明明 ADR 里有"握手消息不许放大对象"）
@@ -2922,6 +3625,26 @@
      * （那还含 `arc` / `plugin` / 弹幕配置等，几倍大且用不上）。
      */
     if (IS_PGC && d.pgcVideoInfo && typeof d.pgcVideoInfo === 'object') {
+      /**
+       * ## 第三道防线也管这条路（2026-10-29 加，问题 5）
+       *
+       * `cfg.pgcVideoInfo` **绕过 `sessionStorage`** 直接把 `video_info` 送进来，
+       * 所以上面 `pgcReadCacheSync()` 的校验管不到它。
+       *
+       * 正常情况下 ISOLATED 侧在写入前已经校验过了（`prepareFullStream`），
+       * 走到这里应该是干净的。但两个理由让这道值得留：
+       *   1. `cfg` 可能来自**另一个标签页**写进 `storage.local` 的旧坏数据
+       *   2. 防御性：任何一条新加的写入路径漏了校验，这里都能兜住
+       *
+       * 拒绝时**不赋值** `pgcCachedVideoInfo` —— 保持 `null`，
+       * 于是后面的 `pgcPatchPlayinfo()` 会因为"没有缓存"直接返回，
+       * 播放器照常播 SSR 的试看流。
+       */
+      if (pgcVideoInfoTruncated(d.pgcVideoInfo)) {
+        pgcTrace.cacheRejectedTruncated = true;
+        pgcPost('cache-truncated', 'cfg 送来的缓存短于 timelength，拒绝注入');
+        return;
+      }
       pgcCachedVideoInfo = d.pgcVideoInfo;
       /**
        * 记住这份缓存对应的 cid（消息里带 `pgcCid` 就用它，否则沿用当前页面 cid）。
@@ -2935,7 +3658,7 @@
       pgcTrace.lastStage = 'cfg-with-cache';
       pgcPost('cfg', '收到缓存 video_info（' + pgcTrace.cacheBytes + ' B）');
       // 缓存可能比 `__playinfo__` 赋值晚到 —— 那就补一次
-      if (playinfoValue && !pgcPatched) pgcPatchPlayinfo(playinfoValue);
+      if (playinfoValue && !pgcPatched) pgcPatchPlayinfo(playinfoValue, false);
     }
 
     /**

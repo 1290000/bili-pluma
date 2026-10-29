@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
+import { hasPlayableStream, mergeVideoInfo } from '@core/playinfo/pgc-merge';
+
 import {
+  canSkipPgcInjection,
   isBetterStream,
   isPreviewSsr,
   isStreamTruncated,
+  isSyncCacheUsable,
+  isVideoInfoTruncated,
   maxVideoHeight,
   readCidFromSsr,
+  shouldWritePgcCache,
 } from '../../../src/content/isolated/pgc-cache-inject';
 
 /**
@@ -306,5 +312,377 @@ describe('isBetterStream', () => {
    */
   it('当前 720、取回也只有 720 → 不动（老番场景）', () => {
     expect(isBetterStream(720, vi(720))).toBe(false);
+  });
+});
+
+/**
+ * `canSkipPgcInjection` —— 「重开开关后卡在试看」的守卫（2026-10-29）。
+ *
+ * ## 这条测试守的是一个**反直觉**的 bug
+ *
+ * 注入越成功，`orchestratePgc` 的早退分支越容易被误触发：
+ *
+ * ```
+ * 主世界 setter：
+ *   ssrPlayinfo = v          ← 记下引用
+ *   pgcPatchPlayinfo(v)      ← 原地 r.video_info = next，引用不变
+ * → 上报给 ISOLATED 的 data 已经是注入后的完整流
+ * → isStreamTruncated() 得到 false（完整流当然"够长"）
+ * → 走「无需注入」早退 → cache 分支永不执行 → 永不 reload
+ * ```
+ *
+ * 真机表现：`patchedAt: 583` + `duration: 180` 同时成立，
+ * 且 `sessionStorage` 里**从来没有** `pluma:pgc-reload`。
+ *
+ * ⚠️ 反例验证：把 `if (opts.pgcPatchedByUs) return false;` 删掉，
+ * 下面第 2、3 条必红。
+ */
+describe('canSkipPgcInjection：区分「SSR 本来就完整」与「被我们改成了完整」', () => {
+  it('① 首访免费集：SSR 本来就完整、没被我们改过 → 跳过取流', () => {
+    expect(canSkipPgcInjection({ pgcPatchedByUs: false, truncated: false })).toBe(true);
+  });
+
+  it('② 第二趟：注入成了完整流（truncated=false）→ **不能**跳过，要继续走 cache 分支', () => {
+    /**
+     * 这是本组最重要的一条。若返回 true 就回到「永不 reload」的老 bug。
+     */
+    expect(canSkipPgcInjection({ pgcPatchedByUs: true, truncated: false })).toBe(false);
+  });
+
+  it('③ 我们注入过、但流仍是截断（异常情况）→ 继续走 cache 分支', () => {
+    expect(canSkipPgcInjection({ pgcPatchedByUs: true, truncated: true })).toBe(false);
+  });
+
+  it('④ 真·试看、没注入过 → 继续走 cache 分支（取流）', () => {
+    expect(canSkipPgcInjection({ pgcPatchedByUs: false, truncated: true })).toBe(false);
+  });
+
+  it('⑤ 四种组合穷举，只有「没注入过 + 不截断」才跳过', () => {
+    const cases: Array<[boolean, boolean, boolean]> = [
+      [false, false, true], // 唯一跳过
+      [false, true, false],
+      [true, false, false],
+      [true, true, false],
+    ];
+    for (const [patched, truncated, expected] of cases) {
+      expect(
+        canSkipPgcInjection({ pgcPatchedByUs: patched, truncated }),
+        `pgcPatchedByUs=${String(patched)} truncated=${String(truncated)}`,
+      ).toBe(expected);
+    }
+  });
+});
+
+/**
+ * `isVideoInfoTruncated` —— 直接收 `video_info` 的长度判据（2026-10-29 加，问题 5）。
+ *
+ * ## 它守的是一个**已经污染过真实用户缓存**的 bug
+ *
+ * 用户机器上的 `sessionStorage` 里躺着：
+ * ```
+ * pluma:pgc-vi:42696771537
+ *   durl[0].length : 180160     ← 180 秒
+ *   timelength     : 1166528    ← 19 分钟
+ *   hasDash        : false
+ * ```
+ * 播放器拿到「1 段 180 秒 durl」只能播 180 秒 → 「重开开关后画质不恢复」。
+ *
+ * 而写入侧 / 读取侧当时**都没调过任何长度判据** —— `isStreamTruncated` 明明能识别它。
+ *
+ * ⚠️ 反例验证：把 `isStreamTruncated` 里的 `<` 改成 `>`，本组第 2、3 条必红。
+ */
+describe('isVideoInfoTruncated：直接收 video_info', () => {
+  it('① 截断的 durl（真机那份坏数据）→ true', () => {
+    /**
+     * 逐字段照抄真机 `sessionStorage` 里的内容，不改一个数。
+     * 这条是整组的地基：判据对它返回 false，坏数据就会被写进缓存。
+     */
+    expect(
+      isVideoInfoTruncated({
+        timelength: 1166528,
+        quality: 80,
+        durl: [{ length: 180160, url: 'https://example/preview.m4s' }],
+      }),
+    ).toBe(true);
+  });
+
+  it('② 完整单段 durl（length ≈ timelength）→ false（不许误杀）', () => {
+    /**
+     * `fnval=0` 老路的完整集形态：单段 durl，长度就等于 timelength。
+     * 误杀它的后果是"每次进页面都白取一次流"，比不修还差。
+     */
+    expect(
+      isVideoInfoTruncated({
+        timelength: 1440000,
+        durl: [{ length: 1440000, url: 'https://example/full.m4s' }],
+      }),
+    ).toBe(false);
+  });
+
+  it('③ 完整 dash → false（不许误杀）', () => {
+    expect(
+      isVideoInfoTruncated({
+        timelength: 1440083,
+        dash: { duration: 1441, video: [{ height: 2160 }] },
+      }),
+    ).toBe(false);
+  });
+
+  it('④ 试看 dash（180s vs 19 分钟）→ true', () => {
+    expect(
+      isVideoInfoTruncated({
+        timelength: 1166528,
+        dash: { duration: 180, video: [{ height: 1080 }] },
+      }),
+    ).toBe(true);
+  });
+
+  it('⑤ 空对象 / null / 非对象 → false（判不了就放行）', () => {
+    /**
+     * 方向必须与 `isStreamTruncated` 的"保守不注入"一致：
+     * 判不出来时**不要**把数据当坏的丢掉，否则会把合法缓存误杀。
+     */
+    expect(isVideoInfoTruncated({})).toBe(false);
+    expect(isVideoInfoTruncated(null)).toBe(false);
+    expect(isVideoInfoTruncated(undefined)).toBe(false);
+    expect(isVideoInfoTruncated('x')).toBe(false);
+    expect(isVideoInfoTruncated({ timelength: 1166528 })).toBe(false); // 只有 timelength，没有流
+  });
+
+  it('⑥ 容差 5 秒：差 917ms 不算截断（实测 dash 1441s vs timelength 1440083ms）', () => {
+    expect(
+      isVideoInfoTruncated({
+        timelength: 1_441_000,
+        dash: { duration: 1441, video: [{}] },
+      }),
+    ).toBe(false);
+  });
+
+  it('⑦ durls：只看第一组的段总长', () => {
+    // 4 组 × 1 段 × 360109ms = 截断（vs 24 分钟）
+    expect(
+      isVideoInfoTruncated({
+        timelength: 1_440_000,
+        durls: Array.from({ length: 4 }, () => ({ durl: [{ length: 360_109 }] })),
+      }),
+    ).toBe(true);
+    // 单组内多段累加够长 → 不截断
+    expect(
+      isVideoInfoTruncated({
+        timelength: 1_440_000,
+        durls: [{ durl: [{ length: 720_000 }, { length: 720_000 }] }],
+      }),
+    ).toBe(false);
+  });
+});
+
+/**
+ * 端到端：**坏数据不会走完「取流 → 合并 → 写缓存」这条链**（2026-10-29，问题 5）。
+ *
+ * ## 为什么这条必须存在
+ *
+ * 单测 `isVideoInfoTruncated` 只证明"判据本身对"。但真正的 bug 是
+ * **判据从没被调用**。所以这里把链路上每一步都用真实函数串起来：
+ *
+ * ```
+ * 接口响应（无权益时的形状）
+ *   → hasPlayableStream()   放行（它只看"有没有流"）
+ *   → mergeVideoInfo()      合并非 null
+ *   → isVideoInfoTruncated() **必须拦住**
+ * ```
+ *
+ * 只要最后一步返回 false，坏数据就会被写进缓存并躺 100 分钟 ——
+ * 那正是用户在真机上遇到的状态。
+ *
+ * ⚠️ 这条也顺便把「`hasPlayableStream` 放行 ≠ 是完整流」这件事变成可执行的断言，
+ * 避免下一个人看到 `hasPlayableStream` 返回 true 就以为安全了。
+ */
+describe('端到端：坏数据链路必须在写入前被拦住', () => {
+  /** 无权益时接口返回的真实形状（真机 sessionStorage 那份的来源） */
+  const PREVIEW_API_RESULT = {
+    quality: 80,
+    timelength: 1166528, // 整集 19 分钟
+    format: 'mp4',
+    durl: [{ length: 180160, url: 'https://example/preview.m4s' }],
+  };
+
+  it('hasPlayableStream 会放行它（只判有无流，不判长度）', () => {
+    /**
+     * 这是**已知且本次不修**的漏点（决策：取流侧语义不动）。
+     * 断言它放行，是为了把"这里不安全"钉成事实 ——
+     * 谁哪天以为 `hasPlayableStream === true` 就等于"完整流"，这条会提醒他。
+     */
+    expect(hasPlayableStream(PREVIEW_API_RESULT)).toBe(true);
+  });
+
+  it('mergeVideoInfo 也会产出非 null（它只负责搬字段，不负责验长度）', () => {
+    const merged = mergeVideoInfo({ is_preview: true }, PREVIEW_API_RESULT);
+    expect(merged).not.toBeNull();
+    // 合并结果就是真机缓存里那份自相矛盾的数据
+    expect(merged?.timelength).toBe(1166528);
+    const durl = merged?.durl as { length: number }[] | undefined;
+    expect(durl?.[0]?.length).toBe(180160);
+  });
+
+  it('但 isVideoInfoTruncated 能拦住它 —— 这就是写入侧校验的价值', () => {
+    const merged = mergeVideoInfo({ is_preview: true }, PREVIEW_API_RESULT);
+    expect(isVideoInfoTruncated(merged)).toBe(true);
+  });
+
+  it('完整流走完同一条链 → 不被拦（防过度修复）', () => {
+    const fullApiResult = {
+      quality: 120,
+      timelength: 1166528,
+      dash: { duration: 1166, video: [{ height: 2160 }] },
+    };
+    expect(hasPlayableStream(fullApiResult)).toBe(true);
+    const merged = mergeVideoInfo({ is_preview: false }, fullApiResult);
+    expect(merged).not.toBeNull();
+    expect(isVideoInfoTruncated(merged)).toBe(false);
+  });
+});
+
+/**
+ * `shouldWritePgcCache` —— 写入侧的**唯一决策点**（2026-10-29，问题 5）。
+ *
+ * ## 为什么它必须是纯函数而不是内联的 `if`
+ *
+ * 它原先内联在 `entrypoints/content.ts` 的 `prepareFullStream` 里。
+ * 反例验证实测：**把那个 `if` 删掉，当时所有测试仍然全绿** ——
+ * 因为 `content.ts` 是 WXT 入口，没有任何测试能覆盖它。
+ *
+ * 而这个判断一旦失效，坏数据就会躺进缓存 100 分钟，期间每次刷新都注入它。
+ * 所以抽成纯函数，让"删掉守卫"这件事能被测试打红。
+ *
+ * ⚠️ 反例验证：把 `shouldWritePgcCache` 改成恒返回 `true`，本组第 1、2 条必红。
+ */
+describe('shouldWritePgcCache：写入侧决策', () => {
+  it('① 截断流（真机那份坏数据）→ 不写', () => {
+    expect(
+      shouldWritePgcCache({
+        timelength: 1166528,
+        quality: 80,
+        durl: [{ length: 180160 }],
+      }),
+    ).toBe(false);
+  });
+
+  it('② 试看 dash（180s vs 19 分钟）→ 不写', () => {
+    expect(
+      shouldWritePgcCache({
+        timelength: 1166528,
+        dash: { duration: 180, video: [{ height: 1080 }] },
+      }),
+    ).toBe(false);
+  });
+
+  it('③ 完整 dash → 写', () => {
+    expect(
+      shouldWritePgcCache({
+        timelength: 1166528,
+        dash: { duration: 1166, video: [{ height: 2160 }] },
+      }),
+    ).toBe(true);
+  });
+
+  it('④ 完整单段 durl（length = timelength）→ 写（防误杀）', () => {
+    expect(
+      shouldWritePgcCache({
+        timelength: 1440000,
+        durl: [{ length: 1440000 }],
+      }),
+    ).toBe(true);
+  });
+
+  it('⑤ null / 非对象 → 不写（宁可少写，不可写错）', () => {
+    /**
+     * `mergeVideoInfo` 返回 null 时本来就不该走到这里；万一走到了，
+     * "不写"是安全方向 —— 空对象写进缓存等于让下一趟注入一个空流。
+     */
+    expect(shouldWritePgcCache(null)).toBe(false);
+    expect(shouldWritePgcCache(undefined)).toBe(false);
+    expect(shouldWritePgcCache('x')).toBe(false);
+  });
+
+  it('⑥ 只有 timelength、没有流字段 → 写（判不了就放行，交给上游把关）', () => {
+    /**
+     * 与 `isVideoInfoTruncated` 的方向一致：判不出来时不要自作主张拒绝。
+     * 真正保证"有流"的是 `mergeVideoInfo` 的 `hasStreamField`（它在更上游）。
+     */
+    expect(shouldWritePgcCache({ timelength: 1166528 })).toBe(true);
+  });
+});
+
+/**
+ * `isSyncCacheUsable`：`sessionStorage` 里那份原文能不能当"有缓存"用（2026-10-29）。
+ *
+ * ## 为什么这条必须存在
+ *
+ * 原来的判据是 `!!sessionStorage.getItem(key)` —— 只问键在不在。
+ * 真机踩到「键在但内容是坏数据」：`hadSync = true` → 不刷新；
+ * 而主世界读它时被自己的校验拒了 → setter 位置没数据 → 只能等 cfg 补注入（晚 1450ms）
+ * → 播放器早已用 SSR 的 180 秒流起播 → **永远 180 秒**。
+ *
+ * 校验逻辑抽成纯函数就是为了这条测试 —— `entrypoints/content.ts` 是 WXT 入口，
+ * 零单测覆盖，写在调用处等于没有守卫。
+ */
+describe('isSyncCacheUsable：同步缓存的原文可用性', () => {
+  /** 真机抓到的那份坏数据：1 段 180 秒 durl，却配 19 分钟的 timelength */
+  const BAD_RAW = JSON.stringify({
+    vi: {
+      type: 3,
+      format: 'flv',
+      quality: 80,
+      timelength: 1166528,
+      durl: [{ order: 1, length: 180160, url: 'https://example.invalid/x.mp4' }],
+    },
+    exp: Date.now() + 3_600_000,
+  });
+
+  /** 完整流：dash 时长与 timelength 一致 */
+  const GOOD_DASH_RAW = JSON.stringify({
+    vi: {
+      quality: 120,
+      timelength: 1166528,
+      dash: { duration: 1167, video: [{ id: 120, height: 2160, base_url: 'a' }] },
+    },
+    exp: Date.now() + 3_600_000,
+  });
+
+  /** 完整流但走纯 durl（fnval=0 老路）：单段长度 ≈ timelength */
+  const GOOD_DURL_RAW = JSON.stringify({
+    vi: { quality: 80, timelength: 1166528, durl: [{ order: 1, length: 1166500 }] },
+    exp: Date.now() + 3_600_000,
+  });
+
+  it('★ 键不存在 → 不可用', () => {
+    expect(isSyncCacheUsable(null)).toBe(false);
+    expect(isSyncCacheUsable('')).toBe(false);
+  });
+
+  it('★ 真机那份坏数据（180 秒 durl + 19 分钟 timelength）→ 不可用（本修复的核心）', () => {
+    expect(isSyncCacheUsable(BAD_RAW)).toBe(false);
+  });
+
+  it('完整 dash → 可用（不许误杀）', () => {
+    expect(isSyncCacheUsable(GOOD_DASH_RAW)).toBe(true);
+  });
+
+  it('完整单段 durl（len ≈ timelength）→ 可用（不许误杀）', () => {
+    expect(isSyncCacheUsable(GOOD_DURL_RAW)).toBe(true);
+  });
+
+  it('坏 JSON → 不可用（宁可多刷一次，也不拿坏数据去注入）', () => {
+    expect(isSyncCacheUsable('{not json')).toBe(false);
+    expect(isSyncCacheUsable('null')).toBe(false);
+    expect(isSyncCacheUsable('[]')).toBe(false);
+  });
+
+  it('缺 vi 字段 → 不可用', () => {
+    expect(isSyncCacheUsable(JSON.stringify({ exp: Date.now() }))).toBe(false);
+  });
+
+  it('vi 不是对象 → 不可用', () => {
+    expect(isSyncCacheUsable(JSON.stringify({ vi: 'oops' }))).toBe(false);
   });
 });
