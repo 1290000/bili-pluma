@@ -31,11 +31,12 @@ export default defineConfig({
      * ⚠️ **每段上限 65535**（Chrome 扩展版本号规范）。
      * 别把日期往里塞（`20261026` 超限，装不上）。
      *
-     * `0.9.0` 的含义是「v1 范围已完整落地并通过六条验收，但仍明确在观察期」，
-     * 而非「刚开了个头」。`1.0.0` 留给「首个稳定版」。
+     * `1.0.0` = 首个稳定版：番剧 / 国创 / 电影已进发行包，六条验收与 PGC 三条
+     * 都在 1.0.0 的构建上真机重跑过（`docs/guides/v1-acceptance-checklist.md`）。
+     * `0.9.0` 曾表示「v1 范围已落地但仍在观察期」。
      * 与白名单修订号（`ROUTES_REVISION`）**是两个号，不同步变化**。
      */
-    version: '0.9.0',
+    version: '1.0.0',
     minimum_chrome_version: '120',
     // ⚠️ 声明 action 是必须的，否则工具栏图标不绑定任何行为、点了毫无反应也不报错。
     // P2 起加了 default_popup：**有 popup 时 `chrome.action.onClicked` 不再触发**，
