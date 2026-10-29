@@ -28,6 +28,7 @@ import {
 } from '@core/ui/popup-state';
 import { readPrimaryProfile } from '@platform/storage/primary-profile-store';
 import type { PageTracksView } from '@shared/types/playinfo';
+import { primaryPlaceholder, resolvePrimaryCard } from '@shared/utils/primary-card';
 import { parsePlayPage } from '@shared/utils/video-page';
 import { render } from 'preact';
 import { useCallback, useEffect, useState } from 'preact/hooks';
@@ -74,12 +75,13 @@ const VIP_TAG: Record<'none' | 'monthly' | 'annual', string> = {
  * 非播放页没有 content script，实时拿不到——这是决策 4（扩展不读主账号凭据）的
  * 直接后果，不是缺功能。所以退一步读缓存，**并且不标注时间**（用户明确不要
  * "3 天前看到"这种句子：它既不占价值，又在提醒用户"这信息可能不准"）。
+ *
+ * ⚠️ **"该从哪读"的判据在 `shared/utils/primary-card.ts`**（纯函数 + 单测）。
+ * 播放页现在也会在实时拿不到时退到缓存兜底（问题 2/3），但**确认未登录时仍然不读**——
+ * 那条纪律的完整说明与分支表都在那个文件里，改之前先读它。
+ * 本文件只负责"真去读"。
  */
-interface PrimaryCard {
-  uname: string | null;
-  level: number | null;
-  loggedIn: 'yes' | 'no' | 'unknown';
-}
+type PrimaryCard = import('@shared/utils/primary-card').PrimaryCard;
 
 /** 打开设置页；`hash` 用来深链到某个分区（`#/quality` 等，见 options/main.tsx 的路由） */
 function openOptions(hash = ''): void {
@@ -108,34 +110,40 @@ async function readPageView(): Promise<PageView> {
 }
 
 /**
- * 读主账号卡片的原料。
+ * 读主账号卡片的原料 —— **只负责取数，"该从哪读"的判据在纯函数里**。
  *
- * **播放页优先用实时数据**：那份数据里 `loggedIn` 是三态（`yes`/`no`/`unknown`），
- * 能区分"没登录"和"还没读到"。缓存没有这个信息，只有"存过"和"没存过"。
+ * `resolvePrimaryCard()`（`shared/utils/primary-card.ts`）决定：
+ *   - 播放页有实时昵称 → 用实时
+ *   - 播放页确认未登录 → **不读缓存**，如实报未登录（原纪律，防游客显示成别人）
+ *   - 播放页 `unknown` / `yes` 但没昵称 → 缓存兜底（修问题 2 番剧页、问题 3 刚进页面）
+ *   - 非播放页 → 缓存（无 content script，ADR 0025）
  *
- * ⚠️ 缓存**不能**在播放页兜底。播放页上读缓存会把"游客"显示成"某个昵称"——
- * 而那份昵称可能是上一个账号的。宁可显示"未登录"。
+ * 这里只做两件事：把实时片段取出来、按需读一次缓存。判据本身有单测
+ * （`tests/unit/shared/primary-card.test.ts`），所以本文件不需要为它写测试。
  */
 async function readPrimaryCard(page: PageView): Promise<PrimaryCard> {
-  if (page.kind === 'play') {
-    const info = page.view?.primary;
-    return {
-      uname: info?.user?.uname || null,
-      level: info?.user?.level ?? null,
-      loggedIn: info?.loggedIn ?? 'unknown',
-    };
-  }
+  const live =
+    page.kind === 'play'
+      ? {
+          kind: 'play' as const,
+          primary: page.view?.primary
+            ? {
+                uname: page.view.primary.user?.uname ?? null,
+                level: page.view.primary.user?.level ?? null,
+                loggedIn: page.view.primary.loggedIn,
+              }
+            : null,
+        }
+      : { kind: 'other' as const };
 
   /**
-   * 非播放页：读缓存。
-   *
-   * `loggedIn` 记成 `'yes'` —— 能存下这份档案，就说明**存的那一刻**读到了
-   * `DedeUserID`（`savePrimaryProfile()` 的签名强制要求）。这是它对"当前是否登录"
-   * 的全部保证：**过去登录过**。所以文案不能说"已登录"，只能说昵称。
+   * 只在**真的可能用到缓存**时才去读 —— `readPrimaryProfile()` 是一次
+   * `chrome.storage.local.get`，popup 的生命以秒计，能省就省。
    */
-  const cached = await readPrimaryProfile();
-  if (!cached) return { uname: null, level: null, loggedIn: 'unknown' };
-  return { uname: cached.uname, level: cached.level, loggedIn: 'yes' };
+  const needsCache = live.kind === 'other' || !live.primary?.uname;
+  const cached = needsCache ? ((await readPrimaryProfile()) ?? null) : null;
+
+  return resolvePrimaryCard(live, cached);
 }
 
 function App() {
@@ -156,6 +164,7 @@ function App() {
     uname: null,
     level: null,
     loggedIn: 'unknown',
+    source: 'none',
   });
   /** 到期日的相对描述依赖"现在"，渲染期取一次即可 */
   const [now] = useState(() => Date.now());
@@ -338,8 +347,17 @@ function App() {
 
   const snap = load.kind === 'ok' ? load.snap : null;
   const view = snap ? describePopup(snap) : null;
-  /** §2.3 的视图模型（纯函数在 core，可单测） */
-  const unlock = describeUnlock(page.kind === 'play' ? page.view : null);
+  /**
+   * §2.3 的视图模型（纯函数在 core，可单测）。
+   *
+   * ⚠️ **总开关关着时传 `false`** —— `describeUnlock` 会返回 `null`，
+   * 整块画质区不渲染（2026-10-29 用户要求）。没开代理时显示
+   * 「主账号基线未知 · 1080P」描述的是一件不存在的事。
+   */
+  const unlock = describeUnlock(
+    page.kind === 'play' ? page.view : null,
+    snap?.proxy.enabled !== false,
+  );
 
   /**
    * 成功率条形图的数据。
@@ -389,8 +407,12 @@ function App() {
             {/* ── §2.3 当前页解锁画质（核心价值区）──
                 规范原文："整个 popup 唯一不能省的部分"。
                 必须有对比锚点 —— 没有"主账号仅可用 1080P"这行，
-                用户感受不到这个插件做了什么。 */}
-            {page.kind === 'play' ? (
+                用户感受不到这个插件做了什么。
+
+                ⚠️ 开关关着时 `unlock` 是 `null`，这一块**什么都不渲染**（问题 5）。
+                不能退回「正在读取本页取流数据…」—— 那是在开关关着、
+                根本没有取流的情况下撒谎。 */}
+            {page.kind === 'play' && snap?.proxy.enabled !== false ? (
               unlock && page.view ? (
                 <div class="unlock">
                   {/* pageKey 在 PGC 页是 `ep:3854821`，前面加「番剧页 · 」比
@@ -458,7 +480,7 @@ function App() {
                 <span class="p-avatar">主</span>
                 <span class="p-main">
                   <span class="p-name">
-                    {primaryUname || (primaryLoggedIn === 'no' ? '未登录' : '打开视频页后可见')}
+                    {primaryUname || primaryPlaceholder(page.kind, primaryLoggedIn)}
                   </span>
                   <span class="p-sub">收藏 · 点赞 · 评论 · 历史</span>
                 </span>

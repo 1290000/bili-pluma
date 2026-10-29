@@ -54,14 +54,52 @@ const TAB_RULE_SPAN = 10000;
 /** 路径常驻规则区段大小 */
 const PATH_RULE_SPAN = 1000;
 
-/** 路径 → 规则 ID。同一路径永远同一个 ID */
+/**
+ * 路径 → 规则 ID。**按白名单下标止式分配**（B-05，2026-10-29）。
+ *
+ * ## 为什么不再用哈希
+ *
+ * 原实现把路径散列到 1000 个槽：
+ * ```js
+ * let h = 0;
+ * for (...) h = (h * 31 + path.charCodeAt(i)) % PATH_RULE_SPAN;
+ * return PATH_RULE_BASE + h;
+ * ```
+ * 白名单只有 3 条时实测不碰撞（10170 / 10891 / 10900），但**碰撞概率随条数平方增长**：
+ * 按生日问题估算，扩到约 40 条时碰撞概率已过半。
+ *
+ * 碰撞的后果不是报错，是**静默覆盖**：两条路径算出同一个 ID →
+ * `updateSessionRules` 后一条顶掉前一条 → 有一条 playurl 永远不带播放账号 Cookie →
+ * 那条路径的画质静默回落，而 popup 上一切正常。
+ * 属于「能骗过用户的 bug」，比报错严重（`docs/plans/1.0.0-release-plan.md` §6.2 判据 1）。
+ *
+ * 止式分配天然无碰撞：数组下标就是 ID 的偏移。
+ *
+ * ## ⚠️ ID 稳定性依赖白名单（`ENABLED_ROUTE_PATHS`）的顺序
+ *
+ * **改顺序 = 改 ID**，会让已装的规则失效一次（旧 ID 的规则留在 `sessionRules` 里
+ * 直到 SW 重启或 `removeAllPathRules()`，新 ID 的规则同时存在 → 短暂重复）。
+ * 实际影响很小（规则内容一样，都是同一条 Cookie），但要知道这件事存在：
+ * 增删路径时**往后追加**，不要插到中间。
+ *
+ * ## 不在白名单里就返回 -1
+ *
+ * 选 -1 而不是抛错：调用方 `buildPathRule()` 已经在前面用 `isProxyPath()` 过滤了一道，
+ * 走到这里是"调用方漏了守卫"的编程错误。返回 -1 会让 `buildPathRule()` 之后的
+ * `.filter((r) => r !== null)` 之外多出一个"ID 非法"的规则，**加一条显式断言更好**——
+ * 见 `buildPathRule()` 里的 `if (id < 0) return null`。
+ *
+ * 为什么不抛错：`enableProxy()` / `installPathRules()` 都在异步链上，
+ * 抛错会变成一次未处理的 rejection（SW 里表现为"什么都没发生"）。
+ * 静默返回 null + 一条 `console.error` 更容易定位。
+ *
+ * @param path 白名单里的路径
+ * @returns 规则 ID；不在白名单里返回 -1
+ */
 function ruleIdForPath(path: string): number {
-  // 用路径长度 + 字符和做稳定散列，落到 [0, PATH_RULE_SPAN)
-  let h = 0;
-  for (let i = 0; i < path.length; i += 1) {
-    h = (h * 31 + path.charCodeAt(i)) % PATH_RULE_SPAN;
-  }
-  return PATH_RULE_BASE + h;
+  const index = ENABLED_ROUTE_PATHS.indexOf(path);
+  if (index < 0) return -1;
+  return PATH_RULE_BASE + index;
 }
 
 // ── 总开关 ──
@@ -73,6 +111,22 @@ function ruleIdForPath(path: string): number {
  * 用户手动关闭后保持关闭，直到再次手动开启。
  */
 const ENABLED_KEY = 'pluma:proxy-enabled';
+
+/**
+ * 总开关在 `storage.local` 里的键名，**对外只读导出**。
+ *
+ * ## 为什么必须导出
+ *
+ * `entrypoints/content.ts` 要监听这个键的变化来同步 `localStorage` 的
+ * 「开关关着」标记（ADR 0028 第一层）。那边原来只能照着注释里写的字面量
+ * 再抄一份 —— 那就成了**第二个真相源**，改一处忘一处就是"门控静默失效"。
+ *
+ * ⚠️ **只读权限**：这里只导出常量，不导出任何写入口。写仍然只走
+ * `enableProxy()` / `disableProxy()`，两者都是 async 且带规则增删的完整语义。
+ * 拿到这个字符串直接 `chrome.storage.local.set` 会绕过 DNR 规则维护，
+ * 造出"开关 true、规则 0 条"的不一致状态 —— **不要那么做**。
+ */
+export const PROXY_ENABLED_KEY = ENABLED_KEY;
 
 export async function isProxyEnabled(): Promise<boolean> {
   const bag = await chrome.storage.local.get(ENABLED_KEY);
@@ -152,8 +206,27 @@ export async function disableProxy(): Promise<void> {
 function buildPathRule(path: string, cookie: string): chrome.declarativeNetRequest.Rule | null {
   if (!isProxyPath(path)) return null;
 
+  /**
+   * `isProxyPath()` 与 `ruleIdForPath()` 的判定**不是同一件事**，两道都要：
+   *   - `isProxyPath()` 用 `===` / `startsWith(path + '/')`，会放行 `/x/player/playurl/xxx`
+   *   - `ruleIdForPath()` 用 `indexOf()`，只认**完全相等**的路径
+   *
+   * 于是存在一种输入两个都"不管"：白名单是 `/x/player/playurl`、
+   * 传进来的是 `/x/player/playurl/extra` —— 第一道放行，第二道返回 -1。
+   * 此时它的名字是 `buildPathRule(path)`，拼出来的 `urlFilter` 会是一条**没被授权**的路径，
+   * 所以这里直接丢弃（返回 null），而不是造一条 ID 为 -1 的规则。
+   *
+   * 当前唯一调用方 `defaultProxyPaths()` 直接取 `ENABLED_ROUTE_PATHS`，走不到这条路；
+   * 这个守卫是给 `enableProxy(cookie, paths)` 的显式传参留的 —— 那是公开 API。
+   */
+  const id = ruleIdForPath(path);
+  if (id < 0) {
+    console.error(`[dnr] 路径不在白名单里，无法分配规则 ID：${path}（已忽略）`);
+    return null;
+  }
+
   return {
-    id: ruleIdForPath(path),
+    id,
     priority: 1,
     action: {
       type: 'modifyHeaders',
