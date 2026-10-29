@@ -13,8 +13,9 @@
 
 ```bash
 export PATH="/c/Users/<你的用户名>/.local/bin:$PATH"
-export BSK_HOME="C:\\Users\\<你的用户名>\\.bsk-agent"   # 必须换 home，见坑 1
 export BSK_AUTO_START=0
+# 2026-10-29 复核：活动 home 是默认 C:\\Users\\<你的用户名>\\.bsk（daemon pid 2044 / 52800）。
+# 旧文写的 .bsk-agent 已过时，那个 home 下的 daemon 已不在监听；除非需要隔离，不要再换 home。
 
 # 必须 run_in_background: true，用默认端口 52800
 bsk daemon start --foreground
@@ -23,6 +24,8 @@ bsk daemon start --foreground
 **每个客户端调用都要重复这两行 export**——上一次 shell 的 export 不会带到下一次 tool call。
 
 daemon 空闲 10 分钟退出；需要更长窗口加 `--daemon-idle 2h`。
+
+> **2026-10-29 复核**：`bsk doctor` 8/8；活动 home `~/.bsk`；扩展 Edge 156 已连接。下文坑 1/2/3 保留为历史排错记录。
 
 ---
 
@@ -76,11 +79,10 @@ bsk evaluate --session <id> "JSON.stringify({w: document.querySelector('video')?
 
 ## 5. 平台限制：`browser-skill` 只装在这几处
 
-`bsk install-skill --list` 支持 12 个 harness。**本机目前只装了 `workbuddy`**：
-
-```
-C:\Users\<你的用户名>\.workbuddy\skills\browser-skill\
-```
+`bsk install-skill --list` 支持 12 个 harness（Codex / Claude Code / Cursor / CodeBuddy / WorkBuddy / Pi / Hermes / Kimi…），**其中没有 DSH**。
+本机目前：
+- WorkBuddy：`C:\Users\<你的用户名>\.workbuddy\skills\browser-skill\`（`bsk install-skill` 管理）
+- **DSH**：`C:\Users\<你的用户名>\.dsh\skills\browser-skill\`（手工副本；`skill-filesystem` 会自动扫描 `$DSH_HOME/skills`）
 
 换 Agent 平台（Cursor / Claude Code / Codex…）要重跑：
 
@@ -89,6 +91,7 @@ bsk install-skill --harness cursor
 ```
 
 **但 CLI 与 daemon 是共用的**——换平台只需重装 skill 文件，daemon 配置不用动。
+DSH 副本的更新方式：bsk 升级后重新复制 `SKILL.md` + `references/` 到 `~/.dsh/skills/browser-skill/`。
 
 ---
 

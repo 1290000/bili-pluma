@@ -83,6 +83,11 @@
 | [0021](./decisions/0021-patch-pgc-preview-flags.md) | **改写 PGC 试看标记**：只换流不够，播放器会在 361 秒处主动停 |
 | [0022](./decisions/0022-hide-pgc-preview-toast.md) | **隐藏「试看中」提示条**：只藏含 `PromptBar` 的，不误伤跳过片头/续播 |
 | [0023](./decisions/0023-intercept-playview-durl-swap.md) | **SPA 切集拦 `playview` 换完整集 dash**：切集时 `__playinfo__` 不赋值，注入无效；换 durl 会把画质锁在 720P |
+| [0024](./decisions/0024-pgc-no-primary-baseline.md) | **PGC 页不做主账号基线对比**：番剧页的 §2.3 只陈述事实 |
+| [0025](./decisions/0025-cache-primary-display-profile.md) | **主账号显示档案缓存**：非播放页也能显示昵称（7 天，不含 mid/凭据） |
+| [0026](./decisions/0026-quality-badge-by-id.md) | **画质徽章改用 `quality id`**，并修订 ADR 0014 的「HDR 不出徽章」 |
+| [0027](./decisions/0027-proxy-backup-api-host.md) | **代理主机白名单加 `api.biliapi.net`**：限免集切 4K 失败的根因 |
+| [0028](./decisions/0028-proxy-off-signal-for-pgc-injection.md) | **总开关的「关」必须在注入处可判**：`localStorage` 三态门控 |
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 
@@ -97,6 +102,7 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 Release 说明的措辞与结构看 [guides/release-notes-template.md](./guides/release-notes-template.md)。
 分发边界为什么这样划，看 [ADR 0018](./decisions/0018-ship-built-artifacts.md)。
 **1.0.0 这一版的具体范围、里程碑与 bug 清单**看 [plans/1.0.0-release-plan.md](./plans/1.0.0-release-plan.md)。
+**1.0.0 的已知缺口与 1.0.1 / 1.1.0 候选范围**看 [plans/1.1.0-plan.md](./plans/1.1.0-plan.md)。
 
 ### 我要动消息协议
 
