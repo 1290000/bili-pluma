@@ -82,3 +82,76 @@ SSR 的 `__playinfo__` 确实存在且 `quality: 80`（1080P），这是**服务
 | P1 | 整页加载：`dur` 接近整集、`ssHit: true`、`dt` 个位数 ms | ✅ | ep3854820：`dt: 2ms`，切 4K 后 `3840×2160`（ADR 0023 §修正后真机验证） |
 | P2 | SPA 切集：连续切 3 集，全部 4K 且可拖到整集任意位置 | ✅ | `ep3854818/17/16 → dur 1167/1711/1173，均 3840×2160`，`seekable [0, 1173]`，零灰屏 |
 | P3 | 试看提示条被隐藏，且不误伤跳过片头/续播 | ✅ | `.bpx-player-toast-item` 的 `display` 为 `none`（ADR 0022） |
+
+---
+
+## 1.0.0 重验（2026-10-29 · 真机，**在本次构建的产物上**）
+
+> 为什么必须重验：10-27/10-28 那两次验的是**更早的构建**。而 `dist/` 里那个
+> `pluma-0.9.0.zip` 与源码结构性脱节（无图标 / 无 `world:'MAIN'` / 用已废弃的 WAR），
+> 见 `docs/plans/1.0.0-release-plan.md` §1.2。**旧结论不能证明新构建是对的。**
+>
+> 环境：Edge 156（`bsk` 真机，真实双账号）· 扩展从 `.output/chrome-mv3` 加载 · 版本仍为 `0.9.0`（版本号在 M5 才升）
+> 工具：`bsk`（browser-skill），扩展 ID 由 `Secure Preferences` 读得，不是哈希算的
+
+### 核心证据链（这次直接看「主世界到底跑没跑」）
+
+| 判据 | 实测值 | 意义 |
+| --- | --- | --- |
+| `typeof window.__PLUMA_MAIN__` | `"boolean"` | ✅ 主世界脚本**已加载执行**。这是对 B-01（0.9.0 zip 缺 MAIN 注入）的**正面反证** |
+| `window.__PLUMA_HANDSHAKE__` | `{locked:true, matches:true, seen:3, rejected:0}` | ✅ B-04 埋点真实工作：3 次握手全部匹配，**零拒绝** |
+| `typeof window.__playinfo__` | `"undefined"` | ✅ 主世界成功藏起 SSR 数据（逼播放器走 API） |
+| `__INITIAL_STATE__.user` | `{vipStatus:1, uname:"{{主账号昵称}}", mid:{{主账号mid}}}` | ✅ 会员态伪装生效；`mid` 与 `DedeUserID` 一致 → **页面身份仍是主账号** |
+
+### 六条 v1 验收
+
+| # | 判据 | 结果 | 证据（1.0.0 构建） |
+| --- | --- | --- | --- |
+| 1 | popup §2.3 解锁画质对比 | ⚠️ **未自动化** | `chrome-extension://` 被 bsk 沙箱拒绝读取（`Agent Window sandbox`）。间接证据：角标宿主 `#pluma-badge-host` 存在且渲染为 41×26px / `fixed` / `z-index 2147483000`，说明 `proxying === true` |
+| 2 | 双账号卡片 + 副标题 | ⚠️ **未自动化** | 同上（popup 是扩展页） |
+| 3a/3b/3c/3d | options 三分区 / 16 行自检 / EC-3 / 导出无凭据 | ⚠️ **3d 仍由单测保证**（4 条含反例） | 3a/3b/3c 需人眼看 options 页，沙箱挡死 |
+| 4 | 角标可关闭、刷新后不出现 | ⚠️ **未自动化** | 关闭入口在 options 页；角标本身已确认真实渲染 |
+| 5 | 关总开关 → 刷新 → 画质回落 | ⚠️ **机制已验，端到端未做** | `dnr-disable-clears-tab-rules.cjs` 用真实扩展跑通 6 项（path 段与 tab 段都清零、`enabled=false`）。端到端需点 popup，沙箱不可达 |
+| 6 | `verify` 全绿 | ✅ | **13 项全绿**（含新增 `artifact`），666 tests |
+
+### 普通视频（BV）—— 用「只有播放账号能给的东西」当判据
+
+| 判据 | 实测值 |
+| --- | --- |
+| `video.videoWidth × videoHeight` | **3840 × 2160** |
+| `duration` / `seekable` | `627s` / `[0, 627]`（完整，可拖到片尾） |
+| `readyState` | `4` |
+
+> **为什么这条比"界面显示 4K"硬**：该视频页的主账号是**非会员**（`vipStatus` 靠改写伪装），
+> 主账号身份下 playurl 拿不到 2160 轨。**画面真实达到 3840×2160，只可能是取流走了播放账号的凭据。**
+> 这是整个方案（请求级身份代理）最直接的端到端证据。
+
+### PGC 三条（重验）
+
+| # | 判据 | 结果 | 1.0.0 构建的实测 |
+| --- | --- | --- | --- |
+| P1 | 整页加载：`ssHit: true`、`dur` 接近整集 | ✅ | `ep3854818`：`patchedAt 682`、`ssHit: true`、`dur 1167`、**3840×2160**；`ep3854820` 切 4K 后 `3840×2160`、`seekable [0,1291]` |
+| P2 | SPA 切集：4K 且可拖到整集任意位置 | ✅ | `ep3854817 → ep3854816`：`swapCount 1`、`swapLastCid 42011328801`、**`swapLastMaxH 2160`**、`swapSkip ""`、`dur 1173`、`seekable [0,1173]`、**3840×2160** |
+| P3 | 试看提示条被隐藏 | ✅ | `__playinfo__.result.play_video_type === "whole"`、`is_preview === false`（`PGC_PREVIEW_FLAGS` 生效） |
+
+**关键新证据（P2）**：`swapLastMaxH: 2160` 直接证明 `playview` 拦截换流时
+**换进去的 dash 最高轨是 2160**，而不是 `swapSkip` 非空（跳过）。这是 ADR 0023 的判据形状。
+
+### 我踩到的一个假信号（记下来，免得下次重复）
+
+切集测试最初用了 `ep4292430` / `ep4292431`，看到 `dur 49`、`48`、画质 1080，
+一度判成「SPA 切集失败」。**实际那两个 ep 本身是 48–49 秒的 PV/预告**——
+整页加载同样的 ep 也是 `dur 49`、`timelength 48766ms`、`accept_quality` 最高只到 `112`（无 4K）。
+
+**教训：判「切集后画质没上去」之前，先确认那一集本来有没有 4K。**
+判据是 `accept_quality`（服务端声明的可选档位），不是"上一个集是 4K 所以这个也该是"。
+
+### 仍需人眼确认的边界（不因自动化而消失）
+
+| 项 | 为什么 |
+| --- | --- |
+| popup / options 的实际渲染 | `chrome-extension://` 被沙箱挡死（`bsk` 明确拒绝），只能人眼看 |
+| 关总开关 → 刷新的端到端 | 需要点 popup 开关，同上 |
+| 角标开关 | 入口在 options 页，同上 |
+| HDR / 杜比视界 | 浏览器 API 不可靠，只能肉眼对比 |
+

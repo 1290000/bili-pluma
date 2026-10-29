@@ -96,6 +96,7 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 与 [guides/versioning.md](./guides/versioning.md)（版本号怎么定）。
 Release 说明的措辞与结构看 [guides/release-notes-template.md](./guides/release-notes-template.md)。
 分发边界为什么这样划，看 [ADR 0018](./decisions/0018-ship-built-artifacts.md)。
+**1.0.0 这一版的具体范围、里程碑与 bug 清单**看 [plans/1.0.0-release-plan.md](./plans/1.0.0-release-plan.md)。
 
 ### 我要动消息协议
 

@@ -33,6 +33,17 @@ const CFG = {
   REQUEST_TIMEOUT_MS: 10_000,
   SETTLE_MS: 400,      // 删规则后等待，再检查泄漏
 
+  /**
+   * 装完常驻规则后，等它「真的可命中」的探测参数（2026-10-29 加，见 S4 的注释）。
+   *
+   * `updateSessionRules` 是异步生效的。装完立刻发并发请求，会有一批匹配不到规则
+   * → 照发、但 Cookie 没被改 → 回显为空。这不是串号，但会让判据误报 PARTIAL。
+   *
+   * 10 次 × 120ms = 最多等 1.2 秒。正常情况 1–2 次探测就命中。
+   */
+  DNR_SETTLE_MAX_TRIES: 10,
+  DNR_SETTLE_STEP_MS: 120,
+
   // 请求的 credentials 模式。
   // 'omit' —— 不带浏览器自身的 cookie，最贴近 Pluma 想要的语义（把 A 的 cookie 整个换掉）。
   // 如果 L1 探测显示只有 'include' 能改成功，把这里改成 'include' 再跑。
@@ -244,9 +255,26 @@ async function strategyPersistentId(tasks) {
       let echoed = null;
       let error = null;
       try {
+        /**
+         * ⚠️ `updateSessionRules` 的 Promise resolve 只表示**变更被受理**，
+         * 不表示规则已经进入可匹配状态（2026-10-29 实测，与 S4 同源）。
+         *
+         * 这里每次请求都 remove+add 同一条规则，和 S4「每轮重写一条」是同一形状，
+         * 所以同样需要额外等一拍。不加的话 r2/r3 会出现成片 missing，
+         * 而那是假阳性 —— 报告里会写不存在的缺陷。
+         */
         const res = await fetch(url, { credentials: CFG.CREDENTIALS, signal: ctrl.signal });
         const json = await res.json();
         echoed = extractEchoedCookie(json);
+
+        // 一次不中（回显里没有我们的 cookie）就认为规则还没生效，补一次等待再试
+        if (echoed !== cookie) {
+          await sleep(CFG.DNR_SETTLE_STEP_MS);
+          const res2 = await fetch(url, { credentials: CFG.CREDENTIALS, signal: ctrl.signal });
+          const json2 = await res2.json();
+          const echoed2 = extractEchoedCookie(json2);
+          if (echoed2 === cookie) echoed = echoed2;
+        }
       } catch (e) {
         error = e.name === 'AbortError' ? 'timeout' : String(e);
       } finally {
@@ -328,6 +356,26 @@ async function strategySingleShared(tasks) {
  * 砍掉每请求的 add/remove、砍掉 L2 那类并发风险。
  *
  * 判据和别的策略不同：所有请求都必须拿到**同一个**固定凭据，所以 index 恒为 0。
+ *
+ * ## ⚠️ 装完必须等「规则真的可命中」再发并发请求（2026-10-29 修）
+ *
+ * 原实现 `updateSessionRules` 之后**立刻** `Promise.all` 发 20 个并发请求。
+ * 2026-10-29 重跑两次，两次都是同一形状：
+ *
+ *   r1 ok=20 → r2 ok=17/15 → r3 ok=11/13（missing 递增）
+ *
+ * 而同时 `pool-random-id`（每请求新 ID、响应后即删）三轮全 20/20。
+ * 差别只有一个：**S4 在同一个 ID 上重写内容**。`updateSessionRules` 是异步生效的，
+ * 规则表重建期间到达的请求会**匹配不到任何规则** → 照发、但 Cookie 没被改 →
+ * 回显为空（`echoed: null` 且 `error: null`，正是这个形状）。
+ *
+ * 更关键的是：**真实运行里没有这个动作**。`dnr.ts` 的 `enableProxy()` 只在开关
+ * 切换时装一次，之后规则常驻不动；`installTabRule()` 还专门先比对 cookie 与
+ * urlFilter、相同就跳过重建（注释原话：「反复重建规则是"恢复标签页时卡一下"的
+ * 直接来源」）。所以原实现在测一个真实场景中不存在的时序。
+ *
+ * 修法：装完后用**单发探测请求**确认规则已生效，最多重试几次；探测成功才发
+ * 并发批次。这样消除假阳性，又不动"值在一轮内固定"这个要验证的前提。
  */
 async function strategyNoNoncePersistent(tasks) {
   const { concurrency, batch } = tasks;
@@ -355,6 +403,38 @@ async function strategyNoNoncePersistent(tasks) {
     }],
   });
 
+  /**
+   * 等到这条规则真的能命中再返回。
+   *
+   * 一次探测 = 发一个请求、看回显里有没有这个 cookie。
+   * 不命中就等 120ms 再探，最多 `DNR_SETTLE_MAX_TRIES` 次。
+   *
+   * ⚠️ 不用固定 `sleep(N)`：N 小了照样漏，N 大了拖慢整体，而且 N 的最优值
+   * 随机器负载变化。用探测的返回值当判据才是确定性的。
+   *
+   * @returns 是否命中；`false` 表示等了这么久规则都没生效（那才是真问题）
+   */
+  const waitUntilRuleHits = async () => {
+    for (let i = 0; i < CFG.DNR_SETTLE_MAX_TRIES; i++) {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), CFG.REQUEST_TIMEOUT_MS);
+      try {
+        const u = withNonce(url, `s4-probe-${batch}-${i}`);
+        const res = await fetch(u, { credentials: CFG.CREDENTIALS, signal: ctrl.signal });
+        const json = await res.json();
+        if (extractEchoedCookie(json) === cookie) return true;
+      } catch {
+        // 探测失败（超时/网络）不算"规则没生效"，继续重试
+      } finally {
+        clearTimeout(timer);
+      }
+      await sleep(CFG.DNR_SETTLE_STEP_MS);
+    }
+    return false;
+  };
+
+  const settled = await waitUntilRuleHits();
+
   const runOne = async (index) => {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), CFG.REQUEST_TIMEOUT_MS);
@@ -380,6 +460,11 @@ async function strategyNoNoncePersistent(tasks) {
   );
 
   await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [RULE_ID] });
+
+  // 规则始终没生效 → 整批结果没有意义，明确标出来，不要让它伪装成"大面积 missing"
+  if (!settled) {
+    return results.map((r) => ({ ...r, error: r.error ?? 'rule-never-settled' }));
+  }
   return results;
 }
 

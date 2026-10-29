@@ -176,9 +176,15 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 | `PATCH_PATHS` | 会员字段伪装；字段限 `status`/`type`/`due_date`，**禁改 `mid`/`rights`** | [ADR 0013](./docs/decisions/0013-patch-player-info-response.md) |
 | `PROGRESS_PATCH_PATHS` | 只改 `last_play_time`/`last_play_cid`，把被换成"播放账号的 0"的进度还原成主账号自己的 | [ADR 0017](./docs/decisions/0017-restore-primary-progress-in-playurl.md) |
 | `PGC_PREVIEW_FLAGS` | PGC 试看标记（3 个字段），不改它播放器会在 361 秒处主动停 | [ADR 0021](./docs/decisions/0021-patch-pgc-preview-flags.md) |
-| `PGC_TOAST_SELECTOR` | 只隐藏含 `PromptBar` 的提示条，不误伤跳过片头/续播 | [ADR 0022](./docs/decisions/0022-hide-pgc-preview-toast.md) |
+| `PGC_TOAST_ITEM` + `PGC_TOAST_MARK` | 只隐藏含 `PromptBar` 的提示条，不误伤跳过片头/续播 | [ADR 0022](./docs/decisions/0022-hide-pgc-preview-toast.md) |
 
 ⚠️ 本节曾写"两类"——ADR 0021/0022 落地后没同步，等于**漏登记了两类改写授权**。加改写时先看 `check-patch-scope.mjs` 里认了哪些常量。
+⚠️ 本节曾把最后一行的常量写成 `PGC_TOAST_SELECTOR`——**代码里从没有这个名字**（2026-10-29 更正，B-10）。
+实际是 `main-world.js` 里的 `PGC_TOAST_ITEM`（容器，`.bpx-player-toast-item`）与 `PGC_TOAST_MARK`
+（筛选标记，`[class*="PromptBar"]`）两个变量，校验脚本侧对应 `AUTHORIZED_PGC_TOAST` 与
+`AUTHORIZED_PGC_TOAST_MARK`。**两个都要有**：只有容器会把跳过片头/续播一起藏掉。
+同理 `PATCH_HOSTS`（本文件裸 JS）与 `routes.ts` 的 `BILI_API_HOSTS` 是**手写两份**，
+已由 `check-patch-scope.mjs` 断言"集合完全一致"（B-06，2026-10-29 加）。
 
 ---
 
