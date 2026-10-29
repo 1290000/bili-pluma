@@ -13,6 +13,27 @@ git config core.hooksPath .githooks
 **没有自动化的办法**，这是 git 的设计 —— 钩子若能被仓库自动启用，
 任何人 clone 一个仓库就等于让代码在自己机器上执行，风险更大。
 
+## node 找不到怎么办（2026-10-29）
+
+Git 在 Windows 上通过 Git Bash 跑钩子，这个 shell 的 PATH **不一定包含 node**。
+DSH / WorkBuddy 等 Agent 运行时自带 node，但只在它自己的进程环境里——于是钩子里的
+裸 `node` 会报 `node: command not found`，以前还会被误报成「暂存区含敏感信息」。
+
+现在两个钩子都通过 `.githooks/lib/find-node.sh` 自动解析 node，顺序：
+
+1. `NODE_BIN` 环境变量（显式覆盖，最可靠）
+2. PATH 里的 `node` / `node.exe`
+3. 常见安装位置（Program Files / nvm / volta / fnm / `~/.local/bin`）
+4. 本机 Agent 运行时（DSH / WorkBuddy）
+
+仍找不到时，钩子会**明确报「找不到 node」**并给出修法，而不是假装发现了敏感信息。临时指定：
+
+```bash
+NODE_BIN=/c/Users/你的用户名/.dsh/dsh-runtimes/.../node/bin/node git commit ...
+```
+
+或把 node 所在目录加进用户 PATH。**不要因为找不到 node 就用 `--no-verify` 跳过检查**——那等于关掉了这道闸。
+
 ## 两个钩子各管什么
 
 | 钩子 | 检查 | 拦什么 |

@@ -24,7 +24,25 @@
 # 允许绕过，但要自己承担后果 —— 发布前跑 `node scripts/check-secrets.mjs --history`
 # 仍会查出来（那也是 CI 与提 tag 之前该做的事）。
 
-node scripts/check-secrets.mjs --staged
+HOOK_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$HOOK_DIR/lib/find-node.sh"
+
+NODE_EXE=$(find_node) || {
+  echo ''
+  echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+  echo '  提交已阻止：找不到 node（敏感信息检查需要 node）'
+  echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+  echo ''
+  echo '  把 node 加进 PATH，或临时指定（最可靠）：'
+  echo '      NODE_BIN=/path/to/node git commit ...'
+  echo ''
+  echo '  确实要跳过检查（不建议）：'
+  echo '      git commit --no-verify'
+  echo ''
+  exit 1
+}
+
+"$NODE_EXE" scripts/check-secrets.mjs --staged
 status=$?
 
 if [ $status -ne 0 ]; then
