@@ -19,7 +19,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Capability, PageTracksView } from '@shared/types/playinfo';
-import { buildPageSnapshot } from '@shared/utils/page-snapshot';
+import { buildPageSnapshot } from '@core/ui/page-snapshot';
 
 function cap(over: Partial<Capability> = {}): Capability {
   return {

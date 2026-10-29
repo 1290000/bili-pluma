@@ -69,7 +69,7 @@ import { PROXY_ENABLED_KEY } from '@platform/http/dnr';
 import { writePgcCache } from '@platform/storage/pgc-cache-store';
 import { readPrimaryProfile, savePrimaryProfile } from '@platform/storage/primary-profile-store';
 import { BADGE_ENABLED_KEY, readBadgeEnabled } from '@platform/storage/ui-prefs-store';
-import { buildPageSnapshot } from '@shared/utils/page-snapshot';
+import { buildPageSnapshot } from '@core/ui/page-snapshot';
 import {
   parsePlayPage,
   readDeviceCookies,
@@ -428,7 +428,7 @@ async function takeSnapshot(): Promise<{
         : null;
 
     /**
-     * 组装逻辑全在 `shared/utils/page-snapshot.ts`（纯函数 + 单测）。
+     * 组装逻辑全在 `core/ui/page-snapshot.ts`（纯函数 + 单测）。
      * 这里只取数。
      *
      * ## `cached` 必须真的读（2026-10-29 修）
@@ -1927,7 +1927,7 @@ export default defineContentScript({
      *   **不改任何状态**。页面脚本伪造这条消息最多让**自己**多看到一份数据。
      * - **不含凭据**：`buildPageSnapshot` 的输出已经过 `AGENTS.md §5.2` 的约束
      *   （只有 uname / mid / vipLabel / expireAt / healthy 五个字段），
-     *   `tests/unit/shared/page-snapshot.test.ts` 有序列化后 grep 的断言。
+     *   `tests/unit/core/ui/page-snapshot.test.ts` 有序列化后 grep 的断言。
      *   但**主账号昵称与 mid 仍属账号标识** —— 页面脚本本来就能从
      *   `__INITIAL_STATE__` / cookie 读到同等的值，所以这里没有增加暴露面。
      * - **不回环**：只应答、不主动重发，且 `snapshot-reply` 的 `type` 与

@@ -123,6 +123,48 @@ export default tseslint.config(
     },
   },
 
+  /**
+   * ── ★ 分层规则：shared/ 不许依赖 core/（2026-10-30 加，O2）──
+   *
+   * `AGENTS.md` §5.1 写着「反向一律禁止」，`docs/04-project-structure.md` 原则 1
+   * 也规定依赖只能 `entry → features → core → shared` 单向流动。
+   *
+   * 但 2026-10-30 排查发现**两道闸都没管这条**：
+   *   - ESLint（上面那组）只禁 `@platform/*` 与上层，**没禁 `@core/*`**
+   *   - `scripts/check-boundaries.ts` 只查浏览器符号，**不解析 import**
+   *
+   * 现存实例是 `src/shared/utils/page-snapshot.ts` 引 `@core/*`。
+   * 它把「core 可以被 shared 依赖」这个事实固化了，而 core 一旦被 shared 反向绑住，
+   * `core/` 就不再能独立单测 —— 那正是分层存在的理由。
+   *
+   * 修法：该文件搬到 `src/core/ui/`（它本来就是纯组装函数），
+   * 并在这里补上闸门，让同类违规以后会红而不是靠人记住。
+   *
+   * ⚠️ 相对路径穿越（`from '../../core/x'`）也一并拦 —— 只用 `paths`/`patterns`
+   * 匹配模块名的话，相对路径从旁边绕过去，等于没设防。
+   */
+  {
+    files: ['src/shared/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['@core/*', '@core'],
+              message: 'shared 不许依赖 core（依赖只能从外往里流：entry → core → shared）',
+            },
+            {
+              // 相对路径穿越：shared 里的 ../core/... 或 ../../core/...
+              group: ['../core/*', '../../core/*', '../../../core/*', '../src/core/*'],
+              message: 'shared 不许依赖 core —— 相对路径也不行，请把它移到 core',
+            },
+          ],
+        },
+      ],
+    },
+  },
+
   // ── platform/ 允许 chrome，但不许依赖上层 ──
   {
     files: ['src/platform/**/*.ts'],
