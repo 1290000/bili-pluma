@@ -159,22 +159,24 @@ export function installCleanObserver(
   };
 }
 
-/** 供调试：当前已标记的卡片数 */
+/** 供调试：当前已标记的卡片数（在页面控制台手动调用，无生产调用方） */
 export function countMarkedCategories(doc: Document = document): number {
   return doc.querySelectorAll(`[${CATEGORY_MARK_ATTR}]`).length;
 }
 
 /**
- * 读取当前页面上**实际存在**的分类 —— 供设置页展示用。
+ * ## 已删除：`listPresentCategories()`（2026-10-31）
  *
- * 设置页不应该列出"可能不存在的分类"让用户勾：那样勾了没效果，
- * 用户会以为功能坏了。只展示此刻真实存在的。
+ * 它曾返回"当前页面上实际存在的分类"，注释写着"供设置页展示用"。
+ * 但那个注释是**假的** —— 全项目零调用，经 `git grep` 确认（verifier 指出）。
+ *
+ * 而且**正确的做法恰恰不是它**：
+ *
+ * | 做法 | 后果 |
+ * | --- | --- |
+ * | 只列当前页存在的分类 | 首页默认只出现 7 类，**用户永远勾不到纪录片 / 漫画** —— 它们要滚很久才出现 |
+ * | **列全量 `OBSERVED_CATEGORIES`（现做法）** | 9 项都在，勾了之后滚到时生效 |
+ *
+ * 所以设置页直接用 `OBSERVED_CATEGORIES`（`home-selectors.ts`），
+ * 不依赖"此刻页面上有什么"。**别再把它加回来。**
  */
-export function listPresentCategories(doc: Document = document): string[] {
-  const seen = new Set<string>();
-  for (const card of doc.querySelectorAll(FLOOR_CARD_SELECTOR)) {
-    const badge = card.querySelector('.badge')?.textContent?.trim();
-    if (isObservedCategory(badge)) seen.add(badge);
-  }
-  return [...seen];
-}

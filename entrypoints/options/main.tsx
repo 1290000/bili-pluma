@@ -24,6 +24,7 @@ import '@/src/design/tokens.css';
 import './style.css';
 
 import { AccountSection } from './sections/account';
+import { CleanSection } from './sections/clean';
 import { DiagnosticsSection } from './sections/diagnostics';
 import { DisplaySection } from './sections/display';
 
@@ -35,6 +36,7 @@ interface Section {
 
 const SECTIONS: Section[] = [
   { id: 'account', label: '账号', render: AccountSection },
+  { id: 'clean', label: '净化', render: CleanSection },
   { id: 'diagnostics', label: '诊断', render: DiagnosticsSection },
   { id: 'display', label: '显示', render: DisplaySection },
 ];
