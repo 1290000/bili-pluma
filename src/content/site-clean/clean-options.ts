@@ -19,7 +19,13 @@
  * 除特别注明外，全部取自 Bilibili-Evolved `utils/remove-promotions/index.ts`
  * 的 `options`（MIT，见仓库根 `NOTICE`）。`displayName` 保持上游原措辞，
  * 因为用户已经熟悉那套说法。
+ *
+ * **首页分类不来自上游**：上游那份 37 项清单在当前 B站 没有实测依据
+ * （独立验证者指出分母本身不可信）。分类清单见 `home-selectors.ts`，
+ * 来源是滚动 80 步的实测结果。
  */
+
+import { isObservedCategory } from './home-selectors';
 
 /** 所有清理选项的键 —— 用于类型安全地遍历 */
 export const CLEAN_OPTION_KEYS = [
@@ -28,10 +34,19 @@ export const CLEAN_OPTION_KEYS = [
   'adShowPlaceholder',
   'adHideContainer',
   'adDebug',
+  /** 隐藏顶部大图推荐位（首页净化） */
+  'homeHideSwipe',
 ] as const;
 
 export type CleanOptionKey = (typeof CLEAN_OPTION_KEYS)[number];
 
+/**
+ * 布尔选项集合。
+ *
+ * ⚠️ **分类隐藏不在这里** —— 它是个多选集合，不是布尔。
+ * 分类放在 `CleanPreferences.hideCategories`（见文件后半部分），
+ * 因为把"集合"硬塞进 `Record<string, boolean>` 会让 UI 与存储都变形。
+ */
 export type CleanOptions = Record<CleanOptionKey, boolean>;
 
 /**
@@ -50,6 +65,13 @@ export const DEFAULT_CLEAN_OPTIONS: CleanOptions = {
   adHideContainer: true,
   /** 调试：不隐藏、加红框高亮。用于确认选择器命中情况 */
   adDebug: false,
+  /**
+   * 隐藏首页顶部大图推荐位 —— **默认 `false`**。
+   *
+   * 它占 473px 高，是首页最显眼的位置之一，但**那是内容推荐不是广告**。
+   * 默认隐藏会改变用户的信息流，属于"用户没要求却被改"——本项目的原则是不做这种事。
+   */
+  homeHideSwipe: false,
 };
 
 /** 每个选项的展示信息 —— 设置页直接消费，不要在 UI 里另写一份文案 */
@@ -87,6 +109,11 @@ export const CLEAN_OPTION_META: readonly CleanOptionMeta[] = [
     label: '调试模式',
     hint: '不隐藏广告，改为红框标出命中的元素。排查选择器是否失效时用',
   },
+  {
+    key: 'homeHideSwipe',
+    label: '隐藏顶部大图推荐',
+    hint: '首页顶部那块大图（约 473px 高）。默认不隐藏——它是内容推荐不是广告',
+  },
 ];
 
 /**
@@ -104,4 +131,51 @@ export function normalizeCleanOptions(raw: unknown): CleanOptions {
     if (typeof v === 'boolean') out[key] = v;
   }
   return out;
+}
+
+// ─────────────────────────── 首页分类（多选） ───────────────────────────
+
+/**
+ * 首页净化偏好 —— 布尔选项 + 分类集合。
+ *
+ * ## 为什么分类单独一个字段
+ *
+ * 分类是**多选集合**（用户可能想隐藏"番剧+电影+电视剧"），
+ * 塞进 `Record<string, boolean>` 会让"有哪些分类"和"哪些被选中"混成一件事，
+ * UI 端要从键名反推分类，必然出错。
+ *
+ * 所以：布尔项走 `CleanOptions`，分类走 `hideCategories: string[]`。
+ */
+export interface CleanPreferences {
+  options: CleanOptions;
+  /** 要隐藏的首页分类（来自 `OBSERVED_CATEGORIES`，白名单过滤） */
+  hideCategories: string[];
+}
+
+export const DEFAULT_CLEAN_PREFERENCES: CleanPreferences = {
+  options: { ...DEFAULT_CLEAN_OPTIONS },
+  /** 默认**全不隐藏** —— 上游默认全开，等于替用户砍掉 9 类内容，本项目不做这事 */
+  hideCategories: [],
+};
+
+/**
+ * 收敛整份偏好（布尔项 + 分类集合）。
+ *
+ * 分类**必须**经 `isObservedCategory` 白名单：
+ * - 防止 storage 被塞入任意字符串后拼进 CSS 选择器
+ * - 防止 B站 已经不存在的分类残留在设置里，让用户以为它还在起作用
+ */
+export function normalizeCleanPreferences(raw: unknown): CleanPreferences {
+  if (!raw || typeof raw !== 'object') {
+    return { options: { ...DEFAULT_CLEAN_OPTIONS }, hideCategories: [] };
+  }
+  const bag = raw as Record<string, unknown>;
+  const options = normalizeCleanOptions(bag.options ?? bag);
+  const rawCats = Array.isArray(bag.hideCategories) ? bag.hideCategories : [];
+  const hideCategories = [
+    ...new Set(
+      rawCats.filter((c): c is string => typeof c === 'string').filter(isObservedCategory),
+    ),
+  ];
+  return { options, hideCategories };
 }

@@ -32,7 +32,11 @@ import {
   installAdObserver,
   markAdElements,
 } from '@/src/content/site-clean/ads';
-import { normalizeCleanOptions, type CleanOptions } from '@/src/content/site-clean/clean-options';
+import {
+  normalizeCleanPreferences,
+  type CleanPreferences,
+} from '@/src/content/site-clean/clean-options';
+import { applyHomeClean, installCleanObserver } from '@/src/content/site-clean/home-clean';
 import { CLEAN_OPTIONS_CHANGED_KEY, readRawCleanOptions } from '@platform/storage/ui-prefs-store';
 
 /** 本页要做什么 */
@@ -88,36 +92,58 @@ export default defineContentScript({
     // 不认识的页面：什么都不做（ADR 0031 硬约束 1）
     if (kind === 'other') return;
 
-    /** 最新选项（供 observer 的回调读取） */
-    let options: CleanOptions = normalizeCleanOptions(await readRawCleanOptions());
+    /**
+     * 最新偏好。
+     *
+     * ⚠️ 用 `normalizeCleanPreferences` 而不是只读布尔项：
+     * 首页净化要的是完整的 `{ options, hideCategories }`。
+     */
+    let prefs: CleanPreferences = normalizeCleanPreferences(await readRawCleanOptions());
 
     // 样式与 body 类名先就位（早于卡片渲染）
     ensureAdStyle();
-    applyAdClean(options, document);
+    applyAdClean(prefs.options, document);
 
     /**
      * 动态监听：推荐流无限滚动、视频页右栏异步渲染，
      * 都需要持续补标记。
      */
-    const { stop } = installAdObserver(
-      () => options,
+    const { stop: stopAds } = installAdObserver(
+      () => prefs.options,
       document,
       () => {
         console.warn('[pluma] 未找到已知内容容器 —— 广告清理可能已因 B站 改版失效');
       },
     );
-    ctx.onInvalidated(stop);
+    ctx.onInvalidated(stopAds);
 
-    // 设置页改选项 → 立即生效（与角标开关同一模式，见 02-ui-spec §4.3）
+    /**
+     * 首页净化（仅首页）—— 视频页没有 `.floor-single-card` 分类推荐位。
+     */
+    let stopHome: (() => void) | null = null;
+    if (kind === 'home') {
+      applyHomeClean(prefs, document);
+      const { stop } = installCleanObserver(
+        () => prefs,
+        document,
+        () => {
+          console.warn('[pluma] 首页推荐流容器 15 秒内未出现 —— 净化规则可能已因 B站 改版失效');
+        },
+      );
+      stopHome = stop;
+      ctx.onInvalidated(stop);
+    }
+
+    // 设置页改偏好 → 立即生效（与角标开关同一模式，见 02-ui-spec §4.3）
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local' || !changes[CLEAN_OPTIONS_CHANGED_KEY]) return;
-      options = normalizeCleanOptions(changes[CLEAN_OPTIONS_CHANGED_KEY].newValue);
-      applyAdClean(options, document);
+      prefs = normalizeCleanPreferences(changes[CLEAN_OPTIONS_CHANGED_KEY].newValue);
+      applyAdClean(prefs.options, document);
       // 从调试态切回正常态时，之前漏掉的元素要补标
-      if (!options.adDebug) markAdElements(document, window);
+      if (!prefs.options.adDebug) markAdElements(document, window);
+      if (kind === 'home') applyHomeClean(prefs, document);
     });
 
-    // 视频页只做广告清理；首页净化（M4）后续接在这里
-    if (kind === 'video') return;
+    void stopHome;
   },
 });
