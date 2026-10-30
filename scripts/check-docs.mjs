@@ -34,21 +34,28 @@
  */
 
 import { execSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const ROOT = process.cwd();
 
-/** 参与检查的 Markdown 文件（相对仓库根，glob 在代码里手写以保持零依赖） */
-const SCAN_TARGETS = [
-  'README.md',
-  'AGENTS.md',
-  'AGENTS-TOOLS.md',
-  'AGENTS-RULES.md',
-  'ADDITIONAL-TERMS.md',
-  'docs',
-];
+/**
+ * 参与检查的 Markdown 文件。
+ *
+ * ## 2026-10-30 改为**自动发现**根目录的 `*.md`
+ *
+ * 原先是手工枚举 `['README.md', 'AGENTS.md', 'ADDITIONAL-TERMS.md', 'docs']`。
+ * 后果是**每加一个根目录 md 都要改这段代码**，而忘了改不会有人发现 ——
+ * 新文件就此**完全不受检查**（死链、篇幅、引用一概不管）。
+ *
+ * 实测：这一年里加了 `AGENTS-TOOLS.md` / `AGENTS-RULES.md` 两个文件，
+ * 都是我**想起来**才补进列表的。靠人记得=迟早漏。
+ *
+ * 现在：根目录扫全部 `*.md`（只看文件，不递归），`docs/` 照旧递归。
+ * 新加一个根目录 md **自动**纳入检查，无需改代码。
+ */
+const SCAN_TARGETS = [...readdirSync(ROOT).filter((f) => f.endsWith('.md')), 'docs'];
 
 /** 章节编号检查只针对这几份主文档 —— 子目录文件（ADR/guides）不按 `## N` 编号 */
 const NUMBERED_DOCS = [
@@ -103,6 +110,22 @@ const FILE_LIMITS = {
    * **若将来还要加：先删过期的教训（教训的保质期到了就该走），不要继续放宽这个数字。**
    */
   'AGENTS.md': 260,
+  /**
+   * 2026-10-30 新增：220 行。
+   *
+   * `docs/README.md` 是**文档索引**（17 类职责、一张 30 行 ADR 表），
+   * 此前**完全没有上限** —— 所以它涨到 199 行也没人发现。
+   *
+   * 为什么不设更小（比如 120）：
+   * - 它的价值就是"一个入口找到所有文档"，压缩会迫使读者去翻别处
+   * - 拆成"索引 + 子索引"会让"找文档"这件事本身需要先找文档
+   *
+   * 为什么不设更大：199 行已经接近"没人从头读"的阈值。
+   * 超过 220 说明它又开始承担不该承担的职责（比如把 ADR 内容抄进来）。
+   *
+   * **若将来还要加：优先把某一类职责拆成独立 guide 并在本文件留指针。**
+   */
+  'docs/README.md': 220,
 };
 
 /** 单节上限。超出只提示，不判失败 —— §6.4 用的是"考虑拆分" */
@@ -320,6 +343,42 @@ function checkRepoPaths(src, tracked, rel) {
     }
   }
   return missing;
+}
+
+/**
+ * `docs/README.md` 的 ADR 索引表必须与 `docs/decisions/` **双向对账**（2026-10-30 加）
+ *
+ * ## 为什么需要它
+ *
+ * `docs/README.md` 有一张「ADR → 一句话决策」的表，是**读者找决策理由的第一入口**。
+ * 2026-10-30 实测：它列到 0028 为止，**漏了刚加的 0029 / 0030** ——
+ * 因为"新增 ADR 时记得更新这张表"完全靠人记。
+ *
+ * 这与 `AGENTS-TOOLS.md` 漏登记 `reload-extension.mjs`、`docs/README.md` 漏 3 篇
+ * guides 是**同一类失败**：清单不会自己更新。
+ *
+ * ## 判据（双向）
+ *
+ * 1. `docs/decisions/` 里每份 ADR 都必须在索引表里出现（漏登记 → 失败）
+ * 2. 索引表里引用的每个 `NNNN-*.md` 必须真实存在（死链，由 `checkLinks` 兜，这里只查编号）
+ *
+ * @param {string} src `docs/README.md` 的内容
+ * @returns {{missing: string[], extra: string[]}}
+ */
+function checkAdrIndex(src) {
+  const actual = readdirSync(join(ROOT, 'docs', 'decisions'))
+    .filter((f) => /^\d{4}-.+\.md$/.test(f))
+    .map((f) => f.slice(0, 4))
+    .sort();
+
+  // 只从 `docs/README.md` 里抓「decisions/NNNN-」形态的链接编号
+  const listed = new Set([...src.matchAll(/decisions\/(\d{4})-/g)].map((m) => m[1]));
+
+  const missing = actual.filter((n) => !listed.has(n));
+  const actualSet = new Set(actual);
+  const extra = [...listed].filter((n) => !actualSet.has(n)).sort();
+
+  return { missing, extra };
 }
 
 /**
@@ -566,6 +625,10 @@ async function main() {
   const missingToolNames = [];
   /** `docs/plans/` 下没标注生命周期状态的计划文档 */
   const plansWithoutStatus = [];
+  /** `docs/README.md` 的 ADR 索引表漏列的 ADR */
+  const missingAdrIndex = [];
+  /** 索引表里列了但目录里不存在的 ADR */
+  const staleAdrIndex = [];
 
   /**
    * 仓库里所有脚本的 basename —— 供 `checkToolNames()` 判「这个名字有没有对应文件」。
@@ -619,6 +682,13 @@ async function main() {
       plansWithoutStatus.push(rel);
     }
 
+    // ADR 索引表必须与实际目录对账（漏登记新 ADR 是高频失误）
+    if (rel === 'docs/README.md') {
+      const adr = checkAdrIndex(src);
+      if (adr.missing.length > 0) missingAdrIndex.push({ file: rel, missing: adr.missing });
+      if (adr.extra.length > 0) staleAdrIndex.push({ file: rel, extra: adr.extra });
+    }
+
     const len = checkLength(rel, src);
     for (const h of len.hard) lengthViolations.push({ file: rel, ...h });
     if (!SECTION_LIMIT_WAIVED[rel]) {
@@ -662,6 +732,8 @@ async function main() {
     missingPaths.length === 0 &&
     missingToolNames.length === 0 &&
     plansWithoutStatus.length === 0 &&
+    missingAdrIndex.length === 0 &&
+    staleAdrIndex.length === 0 &&
     lengthViolations.length === 0 &&
     crlfFiles.length === 0 &&
     changelogIssues.length === 0;
@@ -670,8 +742,27 @@ async function main() {
     console.log('[docs] ✅ 无死链、无失效路径引用、篇幅达标、换行符全 LF、章节编号连号');
     console.log('[docs] ✅ AGENTS-TOOLS.md 里每个脚本名都真实存在');
     console.log('[docs] ✅ docs/plans/ 下每份计划都标注了生命周期状态');
+    console.log('[docs] ✅ docs/README.md 的 ADR 索引表与实际目录双向对账通过');
     console.log('[docs] ✅ CHANGELOG 版本节格式合规');
     return;
+  }
+
+  if (missingAdrIndex.length > 0 || staleAdrIndex.length > 0) {
+    console.error('');
+    for (const m of missingAdrIndex) {
+      console.error(
+        `[docs] ❌ docs/README.md 的 ADR 索引表漏列了 ${String(m.missing.length)} 份 ADR\n`,
+      );
+      console.error(`  缺：${m.missing.join(', ')}`);
+      console.error('');
+      console.error('  这张表是读者找决策理由的第一入口，漏一个就少一条路。');
+      console.error('  新增 ADR 时请同步在 docs/README.md 的索引表里加一行。\n');
+    }
+    for (const s of staleAdrIndex) {
+      console.error(`[docs] ❌ docs/README.md 的 ADR 索引表引用了不存在的 ADR\n`);
+      console.error(`  多：${s.extra.join(', ')}`);
+      console.error('  文件被删/改名了就把表里那行也删掉。\n');
+    }
   }
 
   if (plansWithoutStatus.length > 0) {

@@ -91,6 +91,11 @@
 | [0026](./decisions/0026-quality-badge-by-id.md) | **画质徽章改用 `quality id`**，并修订 ADR 0014 的「HDR 不出徽章」 |
 | [0027](./decisions/0027-proxy-backup-api-host.md) | **代理主机白名单加 `api.biliapi.net`**：限免集切 4K 失败的根因 |
 | [0028](./decisions/0028-proxy-off-signal-for-pgc-injection.md) | **总开关的「关」必须在注入处可判**：`localStorage` 三态门控 |
+| [0029](./decisions/0029-updatesessionrules-atomic-combined-call.md) | **`updateSessionRules` 组合形式是原子的**（实测）：可以收敛成一次调用 |
+| [0030](./decisions/0030-pgc-reload-guard-semantics.md) | **刷新护栏改记「刷之后成了没有」**：成功即清，上限 1→2 |
+
+> ⚠️ **这张表必须与实际 `docs/decisions/` 对账** —— 2026-10-30 发现它漏了 0029/0030
+> （新增 ADR 时忘了登记）。现在由 `check-adr-index` 自动断言，漏登记会红。
 
 ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"决策记录"表格。
 
