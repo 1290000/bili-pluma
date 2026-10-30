@@ -330,15 +330,20 @@ document.querySelector('video').duration
 ### 6. 打 Tag 并发布
 
 ```bash
-git tag -a v0.9.0 -m "v0.9.0"
-git push origin v0.9.0          # 只推这个 tag，不要 --tags（会连历史 tag 一起推）
+V=1.0.1        # ← 改成当前版本号（与 package.json / wxt.config.ts 一致）
 
-gh release create v0.9.0 \
-  dist/pluma-0.9.0.zip \
-  dist/pluma-0.9.0-with-source.zip \
-  --title "Pluma 0.9.0" \
+git tag -a "v$V" -m "v$V"
+git push origin "v$V"          # 只推这个 tag，不要 --tags（会连历史 tag 一起推）
+
+gh release create "v$V" \
+  "dist/pluma-$V.zip" \
+  "dist/pluma-$V-with-source.zip" \
+  --title "Pluma $V" \
   --notes-file dist/release-notes.md
 ```
+
+**Release 标题是 `Pluma <版本>`，不带 `v`**；**tag 是 `v<版本>`，带 `v`** ——
+两者不同是有意的，见 `releasing.md`「产物命名」与 `versioning.md`。
 
 **Release 说明由 `package.mjs` 生成**（CHANGELOG 的「本版内容」+ 固定的下载/用法/边界）。
 
@@ -350,19 +355,19 @@ gh release create v0.9.0 \
 
 ```bash
 # 1. 附件对不对
-gh release view v0.9.0 --json assets --jq '.assets[].name'
+gh release view v1.0.1 --json assets --jq '.assets[].name'
 
 # 2. 正文与本地生成物是否一致（差一个尾部空行属正常）
-gh release view v0.9.0 --json body --jq '.body' | diff - dist/release-notes.md
+gh release view v1.0.1 --json body --jq '.body' | diff - dist/release-notes.md
 
 # 3. tag 是否指向预期的提交
-git ls-remote --tags origin | grep v0.9.0
-
-# 4. 附件 sha256 与 release notes 的「校验和」一致
-sha256sum dist/pluma-0.9.0.zip dist/pluma-0.9.0-with-source.zip
-# Windows PowerShell：
-# Get-FileHash dist/pluma-0.9.0.zip,dist/pluma-0.9.0-with-source.zip -Algorithm SHA256
+git ls-remote --tags origin | grep v1.0.1
 ```
+
+> ⚠️ **2026-10-30 删掉了原来的第 4 项**（「附件 sha256 与 release notes 的校验和一致」）——
+> Release 正文已不再有「校验和」一节（见 `release-notes-template.md`）。
+> 产物一致性由 `BUILD.md` + `verify` 的 `artifact` 项保证，发布后无需再手工比对。
+> 若确实想核验下载到的文件，用 `Get-FileHash -Algorithm SHA256` 与**本地 `dist/` 里的同名文件**比对即可。
 
 ### 8. 自动转发到 Telegram 群
 
