@@ -279,7 +279,17 @@ function build() {
  * 好让调用方能区分"扩展没生效"和"根本没检查成"。
  */
 async function verifyViaBsk() {
-  const bskHome = join(process.env.USERPROFILE ?? '', '.bsk-agent');
+  /**
+   * ⚠️ **活动 BSK_HOME 是 `~/.bsk`，不是 `~/.bsk-agent`**（2026-10-30 修正）。
+   *
+   * 这里原来写死 `.bsk-agent` —— 那是更早的目录名。两个目录在本机**都还存在**，
+   * 但 daemon 只在 `~/.bsk` 里跑，于是校验会报 `no-bsk`，
+   * 表现为"扩展没生效"（退出码 3），而真实原因是**指错了 home**。
+   *
+   * 现在优先读环境变量：调用方显式设了 `BSK_HOME` 就用它，
+   * 否则回落到 `~/.bsk`（当前活动目录）。见 `docs/guides/browser-skill-setup.md`。
+   */
+  const bskHome = process.env.BSK_HOME?.trim() || join(process.env.USERPROFILE ?? '', '.bsk');
   const env = {
     ...process.env,
     PATH: `${join(process.env.USERPROFILE ?? '', '.local', 'bin')};${process.env.PATH ?? ''}`,
