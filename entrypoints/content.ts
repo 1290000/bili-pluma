@@ -71,6 +71,7 @@ import {
 } from '@/src/content/isolated/badge-state';
 import { handleHello } from '@/src/content/isolated/hello-timing';
 import { describeSsrGate, gateSsrPlayinfo } from '@/src/content/isolated/ssr-gate';
+import { describeDiagnostic } from '@/src/content/isolated/diagnostic-routes';
 import { mergeVideoInfo } from '@core/playinfo/pgc-merge';
 import { expectedDurationMs, readSsrVideoInfo } from '@core/playinfo/pgc-duration';
 import { PROXY_ENABLED_KEY } from '@platform/http/dnr';
@@ -705,29 +706,8 @@ function listenMainWorld(): void {
       return;
     }
 
-    // 会员状态响应已被改写 —— 切换画质不再弹「开通大会员」的前提
-    if (d.type === 'patch') {
-      const p = d as { path?: string };
-      reportQuality({
-        height: 0,
-        note: `已改写会员状态响应: ${p.path ?? '?'}`,
-      });
-      return;
-    }
-
-    // SourceBuffer 装载成功（有数据写入）
-    if (d.type === 'sb-ok' || d.type === 'sb-error') {
-      const s = d as { mime?: string; kind?: string; buffered?: number };
-      const label = s.kind === 'video' ? '视频轨' : '音轨';
-      reportQuality({
-        height: 0,
-        note:
-          d.type === 'sb-ok'
-            ? `${label}装载成功: ${s.mime ?? '?'} (缓冲 ${Math.round(s.buffered ?? 0)}s)`
-            : `${label}装载失败: ${s.mime ?? '?'}`,
-      });
-      return;
-    }
+    // `patch` / `sb-ok` / `sb-error` 是**纯诊断**（只上报日志、不写状态），
+    // 已收进 `diagnostic-routes.ts` 的路由表，由本函数末尾统一处理。
 
     // playurl 响应里的音频轨道清单 —— 确认 Hi-Res / 杜比轨有没有下发
     if (d.type === 'playurl-tracks') {
@@ -802,35 +782,23 @@ function listenMainWorld(): void {
       return;
     }
 
-    // 播放器实际创建的 SourceBuffer 编码
-    if (d.type === 'codec') {
-      const c = d as { mime?: string; from?: string; kind?: string };
-      reportQuality({
-        height: 0,
-        note: `${c.kind === 'audio' ? '音频' : '视频'}编码(${c.from ?? '?'}): ${c.mime ?? '?'}`,
-      });
-      return;
-    }
-
-    // 页面真的发出了 playurl 请求 —— 这是 DNR 能不能生效的前提
-    if (d.type === 'req') {
-      reportQuality({
-        height: 0,
-        note: `playurl 请求出现: ${d.method ?? 'GET'} ${(d.url ?? '').split('?')[0]}`,
-      });
-      return;
-    }
+    // `codec` / `req` / `pgc` 也是纯诊断，同样交给末尾的路由表。
 
     /**
-     * PGC 主世界分支的状态（ADR 0020）。
+     * ── 纯诊断消息路由（S3.4）──
      *
-     * 阶段：`cfg`（收到缓存）/ `patch`（已注入）/ `error`（放弃注入）。
-     * **必须每条都落日志**——注入失效时用户看到的是"还是试看"，不说就完全无法排查。
+     * `patch` / `sb-ok` / `sb-error` / `codec` / `req` / `pgc` 六条
+     * **只上报日志、不写任何状态**，统一在 `diagnostic-routes.ts` 里按 `type` 查表。
+     *
+     * ⚠️ 放在**最后**是刻意的：有状态写入的分支必须有机会先命中。
+     * 若把它挪到前面，`ssr-playinfo` 等分支就不会被执行。
+     *
+     * ⚠️ 有状态写入的分支（ssr-playinfo / playurl-tracks / hdr）**不在表里** ——
+     * 一旦混进去，"纯诊断"这个前提就破了。
      */
-    if (d.type === 'pgc') {
-      const p = d as unknown as { stage?: string; detail?: string };
-      reportQuality({ height: 0, note: `[PGC] ${p.stage ?? '?'} ${p.detail ?? ''}`.trim() });
-      return;
+    const diagnosticNote = describeDiagnostic(d as { type?: string } & Record<string, unknown>);
+    if (diagnosticNote !== null) {
+      reportQuality({ height: 0, note: diagnosticNote });
     }
   });
 }
