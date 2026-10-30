@@ -2799,10 +2799,33 @@
         }
       }
       if (totalDurl > 0) return totalDurl < timelength - PGC_TRUNCATION_SLACK_MS;
-      // 段长全无效 → 继续看 durls（与 ISOLATED 的 streamDurationMs 一致）
+      // 段长全无效 → 继续看 dash / durls（与 ISOLATED 的 streamDurationMs 一致）
     }
 
-    // ② durls：**同一组内**全段相加（不是每组首段相加）
+    /**
+     * ② dash：顶层 `duration`（**单位是秒**）。
+     *
+     * ⚠️ 2026-10-30 补。**这个分支原先不存在** —— 本函数只判了 `durl` 与 `durls`，
+     * 于是 playview 响应只要不是 durl 形态，就一路落到末尾 `return false`，
+     * **永远判不出截断**。
+     *
+     * 而 playview 在 ADR 0023 改用 `fnval=4048` 之后，**dash 才是主形态**
+     * （`main-world.js` 上方那段长注释：`fnval=0` 只给 720P durl，所以改取 dash）。
+     * 也就是说：最该判的那条路径恰好是唯一漏判的。
+     *
+     * 后果不是立刻坏，而是**走保守分支**：`pgcSwapPlayviewBody` 的
+     * `truncated` 为 false 时会去比较画质（`:2898` 之后），
+     * 会员试看集若命中这条路，会被当成"画质可能更高"去补取，
+     * 而不是当作截断无条件换流 —— 漏掉一种该换的情形。
+     *
+     * 判据与 `pgcVideoInfoTruncated`（本文件 :362-365）完全一致，
+     * 也与 ISOLATED 的 `streamDurationMs` 的 dash 分支一致。
+     */
+    var dash = vi.dash;
+    var dashSec = dash && typeof dash.duration === 'number' ? dash.duration : 0;
+    if (dashSec > 0) return dashSec * 1000 < timelength - PGC_TRUNCATION_SLACK_MS;
+
+    // ③ durls：**同一组内**全段相加（不是每组首段相加）
     if (Array.isArray(vi.durls) && vi.durls.length > 0) {
       var firstGroup = vi.durls[0];
       var segs = firstGroup && firstGroup.durl;
