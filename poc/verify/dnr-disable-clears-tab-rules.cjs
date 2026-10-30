@@ -321,6 +321,25 @@ async function main() {
   }
   if (FAIL.length === 0) {
     console.log(`[dnr-disable] ✅ ${String(PASS.length)} 项全过`);
+    /**
+     * 写「跑过了」的凭据 —— 让 verify 能验证这条义务被履行了（2026-10-30）。
+     *
+     * 为什么必须有：`AGENTS.md` §4.3 要求改 dnr.ts 就跑本脚本，
+     * 但 verify 只能提醒（代跑会变成"看起来验过了"）。凭据把提醒变成**可检查**。
+     *
+     * ⚠️ 必须 `await`：本函数返回后 main() 就结束了，
+     * 不 await 的话凭据可能**来不及写**（进程已退出）—— 那会造成假的"没跑过"。
+     */
+    try {
+      const m = await import('./dnr-stamp.mjs');
+      m.writeStamp('dnr-disable-clears-tab-rules', {
+        passed: PASS.length,
+        skipped: SKIPPED.length,
+      });
+      console.log(`[dnr-disable] 📝 已记录回归凭据（verify 会据此判定 dnr.ts 改动已验）`);
+    } catch (e) {
+      console.log(`[dnr-disable] ⚠️  凭据写入失败（不影响本次结论）：${String(e && e.message)}`);
+    }
     return;
   }
   console.error(`[dnr-disable] ❌ ${String(FAIL.length)} 项未过`);

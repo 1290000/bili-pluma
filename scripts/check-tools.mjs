@@ -55,6 +55,12 @@ const TOOLS_DOC = join(ROOT, 'AGENTS-TOOLS.md');
  * 每条都要写理由，不许只写文件名。
  */
 const WAIVED = new Map([
+  // 2026-10-30 加：DNR 回归凭据的读写模块，被两个 DNR 脚本 import，
+  // 不是给人直接跑的。它的作用见 scripts/check-dnr-regression.mjs。
+  [
+    'poc/verify/dnr-stamp.mjs',
+    '被 run-q2-auto / dnr-disable-clears-tab-rules import 的凭据模块，不单独跑',
+  ],
   // 2026-10-30 建档：这些是早期 Q3 / e2e 阶段的一次性脚本，结论已写进 docs/ 与 ADR。
   // 保留文件是为了可追溯，但不需要日常使用指引。
   ['poc/probe/probe-cdp.mjs', '早期 CDP 探针；已确认 CDP 拿不到登录态，改走 bsk'],

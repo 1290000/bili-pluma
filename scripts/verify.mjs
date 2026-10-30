@@ -102,6 +102,35 @@ const STEPS = [
     first: true,
   },
   {
+    // 2026-10-30 加：AGENTS-RULES.md §3 有一张「规则 → 机械保障」对照表，
+    // 声称"某条规则有自动检查兜着"。**声称错了比没有表更糟** ——
+    // 下一个人会以为有检查保障，于是放心违反。本项断言表里提到的检查名真实存在。
+    name: 'rule-map',
+    cmd: process.execPath,
+    args: ['scripts/check-rule-map.mjs'],
+    first: true,
+  },
+  {
+    // 2026-10-30 加：AGENTS.md §4.1 有一份带 `[ ]` 复选框的「四个必读文件」清单，
+    // 但**没有任何东西在勾它**。更糟的是：文件"存在"不代表"内容还对" ——
+    // 例如 dnr.ts 的 rebuildRulesIfEnabled 被删了，只要没人 import，tsc 一声不吭，
+    // 而 SW 启动自愈就静默失效了。本项查两级：文件存在 + 关键内容仍在。
+    name: 'required-files',
+    cmd: process.execPath,
+    args: ['scripts/check-required-files.mjs'],
+    first: true,
+  },
+  {
+    // 2026-10-30 加：AGENTS.md §4.3 要求改 dnr.ts 就跑两个 DNR 脚本，
+    // 但本脚本此前**只能打印提醒**（代跑会变成"看起来验过了"）→ 提醒容易被忽略，
+    // 这条规则等于没有保障。现在 DNR 脚本跑完写凭据（脚本名+时间+dnr.ts 指纹），
+    // 本项检查凭据是否覆盖当前改动：缺失或过期（改完又没重跑）都会红。
+    name: 'dnr-regression',
+    cmd: process.execPath,
+    args: ['scripts/check-dnr-regression.mjs'],
+    first: true,
+  },
+  {
     // 2026-10-29 加：审查发现 popup 与 tabs.handler 各自写着 /video/ 正则，
     // 而项目早有 parsePlayPage()（同时认 /video/ 与 /bangumi/play/）。
     // 后果是番剧页 popup 谎报「未生效」、§2.3 画质对比永不显示 ——
@@ -149,6 +178,9 @@ const STEP_DOC = {
   tools: 'AGENTS-TOOLS.md 与 scripts//poc/ 下每个脚本对账（防"工具没人记得"）',
   'adr-refs': '代码注释里的 ADR 编号必须指向真实存在的 ADR（知识索引不许断）',
   'doc-sections': '文档里「AGENTS.md §N」的章节与条目引用必须真实存在',
+  'required-files': '§4.1 的四个必读文件存在，且关键导出/结构仍在',
+  'dnr-regression': '改 dnr.ts 后两个 DNR 脚本的回归凭据齐全且未过期',
+  'rule-map': '规则-保障对照表里提到的检查名必须真实存在（防止"假保障"）',
   'page-gate': '「是不是播放页」只许走 parsePlayPage()，路径字面量不许越界',
   'workflow-logs': 'Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）',
   artifact: 'dist/*.zip 与源码一致：含图标、world:MAIN 入口、无 WAR、main-world.js 字节一致',

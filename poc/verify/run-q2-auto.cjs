@@ -89,6 +89,29 @@ const SHOT = path.join(__dirname, 'q2-lab.png');
     fs.writeFileSync(OUT, JSON.stringify(report, null, 2), 'utf8');
     await ctx.close().catch(() => {});
     console.log(JSON.stringify(report, null, 1).slice(0, 4000));
+
+    /**
+     * 写「跑过了」的凭据 —— 让 verify 能验证 AGENTS.md §4.3 的义务被履行（2026-10-30）。
+     *
+     * ⚠️ **只有 report.error 不存在时才写**：本脚本历史上无条件 `process.exit(0)`，
+     * 所以"退出码 0"并不代表"跑成功了"。凭据必须比退出码更严格 ——
+     * 否则会变成"假绿"的第二个来源（这正是这次治理要消灭的东西）。
+     *
+     * 不修改本脚本既有的退出码语义（改它会破坏别人既有的使用习惯），
+     * 只在凭据这一层加严格性。
+     */
+    if (!report.error) {
+      try {
+        const m = await import('./dnr-stamp.mjs');
+        m.writeStamp('run-q2-auto', { passed: 1 });
+        console.log('[q2-auto] 📝 已记录回归凭据');
+      } catch (e) {
+        console.log(`[q2-auto] ⚠️  凭据写入失败：${String(e && e.message)}`);
+      }
+    } else {
+      console.log(`[q2-auto] ⚠️  本次有 error，**不写凭据**（退出码 0 不代表成功，见报告 ${path.basename(OUT)}）`);
+    }
+
     process.exit(0);
   }
 })();
