@@ -369,6 +369,37 @@ function checkToolNames(src, scriptBasenames) {
 }
 
 /**
+ * `docs/plans/` 下的计划文档**必须在开头标注生命周期状态**（2026-10-30 加）
+ *
+ * ## 为什么需要它
+ *
+ * `docs/plans/` 放的是**有时效**的计划：发版方案、重构方案。
+ * 它们写完就过时，但人会一直把 `docs/` 当权威读。
+ *
+ * 2026-10-30 实测：`1.0.0-release-plan.md`（641 行）早已过期，而
+ * `docs/README.md` 仍把它和当前有效的 `1.1.0-plan.md` **并列**，不区分。
+ * 好在文件头本来就写了「已发布 / 保留为历史方案」—— 问题出在**指引没提**。
+ *
+ * 两处都已修。本检查守第三处：**新写的 plan 别忘了标**。
+ *
+ * ## 判据
+ *
+ * 文件**前 20 行内**必须出现下列任一关键词（说明它讲清了自己在什么阶段）：
+ * `已发布` / `已完成` / `进行中` / `草案` / `当前有效` / `历史` / `待拍板`
+ *
+ * 只查 `docs/plans/`，不查 ADR（ADR 本身就记录"已采纳/已推翻"，语义不同）。
+ *
+ * ⚠️ 反例验证：新建一个开头没有状态词的 plan → 本检查必须失败。
+ *
+ * @param {string} src
+ * @returns {boolean} 是否已标注状态
+ */
+function hasPlanStatus(src) {
+  const head = src.split('\n').slice(0, 20).join('\n');
+  return /已发布|已完成|进行中|草案|当前有效|历史|待拍板/.test(head);
+}
+
+/**
  * 篇幅上限检查。
  *
  * @param {string} rel 相对仓库根的路径
@@ -526,6 +557,8 @@ async function main() {
   const missingPaths = [];
   /** `AGENTS-TOOLS.md` 里写错名字的脚本（裸文件名，`checkRepoPaths` 覆盖不到） */
   const missingToolNames = [];
+  /** `docs/plans/` 下没标注生命周期状态的计划文档 */
+  const plansWithoutStatus = [];
 
   /**
    * 仓库里所有脚本的 basename —— 供 `checkToolNames()` 判「这个名字有没有对应文件」。
@@ -574,6 +607,11 @@ async function main() {
       }
     }
 
+    // 计划文档必须标注生命周期状态（它们有时效，过时了要能被认出来）
+    if (rel.startsWith('docs/plans/') && !hasPlanStatus(src)) {
+      plansWithoutStatus.push(rel);
+    }
+
     const len = checkLength(rel, src);
     for (const h of len.hard) lengthViolations.push({ file: rel, ...h });
     if (!SECTION_LIMIT_WAIVED[rel]) {
@@ -616,6 +654,7 @@ async function main() {
     numberingIssues.length === 0 &&
     missingPaths.length === 0 &&
     missingToolNames.length === 0 &&
+    plansWithoutStatus.length === 0 &&
     lengthViolations.length === 0 &&
     crlfFiles.length === 0 &&
     changelogIssues.length === 0;
@@ -623,8 +662,20 @@ async function main() {
   if (clean) {
     console.log('[docs] ✅ 无死链、无失效路径引用、篇幅达标、换行符全 LF、章节编号连号');
     console.log('[docs] ✅ AGENTS-TOOLS.md 里每个脚本名都真实存在');
+    console.log('[docs] ✅ docs/plans/ 下每份计划都标注了生命周期状态');
     console.log('[docs] ✅ CHANGELOG 版本节格式合规');
     return;
+  }
+
+  if (plansWithoutStatus.length > 0) {
+    console.error(`\n[docs] ❌ ${plansWithoutStatus.length} 份计划文档开头没标生命周期状态\n`);
+    for (const f of plansWithoutStatus) console.error(`  ${f}`);
+    console.error('');
+    console.error('  docs/plans/ 里的文档**有时效**：写完就过时，而人会一直把 docs/ 当权威读。');
+    console.error('  在前 20 行内加一句状态，例如：');
+    console.error('    > ✅ **已发布**（日期）—— 本文保留为历史方案');
+    console.error('    > 📝 **草案** —— 待用户拍板');
+    console.error('    > 🔧 **当前有效** —— 记录 x.y.z 的已知缺口\n');
   }
 
   if (missingToolNames.length > 0) {

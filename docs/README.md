@@ -104,8 +104,12 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 与 [guides/versioning.md](./guides/versioning.md)（版本号怎么定）。
 Release 说明的措辞与结构看 [guides/release-notes-template.md](./guides/release-notes-template.md)。
 分发边界为什么这样划，看 [ADR 0018](./decisions/0018-ship-built-artifacts.md)。
-**1.0.0 这一版的具体范围、里程碑与 bug 清单**看 [plans/1.0.0-release-plan.md](./plans/1.0.0-release-plan.md)。
-**1.0.0 的已知缺口与下一版（1.1.0）范围**看 [plans/1.1.0-plan.md](./plans/1.1.0-plan.md)。
+
+> ⚠️ **下面是历史方案，不是当前指引。**
+> - [plans/1.0.0-release-plan.md](./plans/1.0.0-release-plan.md) —— **v1.0.0 已发布（2026-10-29）**，这份是当时的过程记录。
+>   §10「交付物清单」里的「待实现 / 待产出」是**当时**的状态，实际均已落地。
+>   **要发下一个版本，别照它抄流程** —— 用上面的 `releasing.md` + `versioning.md`。
+> - [plans/1.1.0-plan.md](./plans/1.1.0-plan.md) —— **当前有效**，记 1.0.0 的已知缺口与 1.1.0 范围。
 
 ### 我要动消息协议
 
