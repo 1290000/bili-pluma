@@ -73,6 +73,8 @@ API 语义不确定 → 写最小复现脚本（✗ 按名字猜，如 `(dynamic
 
 **没在表里的情况**：先用 [AGENTS-TOOLS.md](./AGENTS-TOOLS.md) 找工具，再回本表找场景；两处都没有就先报告，不要自己发明。§3 决策的理由在 [docs/decisions/](./docs/decisions/)，选型与目录在 [docs/04-project-structure.md](./docs/04-project-structure.md)。
 
+**关于 [03-open-questions](./docs/03-open-questions.md)**：16 条里 **15 条已定**，只有 Q9/Q14 降级待定。**不要通读**（838 行），查开头摘要或 §0 总览表；已定的结论按其指针去 `docs/decisions/`，不要在这里重新论证。
+
 ---
 
 ## 3. 不可翻案的决策（12 条）

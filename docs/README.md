@@ -47,7 +47,7 @@
 | --- | --- | --- |
 | 1 | [01-architecture.md](./01-architecture.md) | **为什么这么设计**。取流链路、代码复用风险、关键难点 |
 | 2 | [02-ui-spec.md](./02-ui-spec.md) | **界面长什么样**。popup 各状态、options 三个分区、页内角标、视觉令牌 |
-| 3 | [03-open-questions.md](./03-open-questions.md) | **还差什么**。16 条待确认问题，含状态标记，末尾有决策变更日志 |
+| 3 | [03-open-questions.md](./03-open-questions.md) | **还差什么**。16 条问题里 **15 条已定**、只有 Q9/Q14 两条降级待定 —— **不要通读**，看开头摘要或 §0 总览表即可 |
 | 4 | [04-project-structure.md](./04-project-structure.md) | **代码放哪**。技术选型、目录结构（WXT 约定）、分层职责、依赖禁令、解耦手段 |
 
 > ⚠️ **本节不写"popup 几种状态""verify 几项"这类数字**——它们已经漂移过三次
