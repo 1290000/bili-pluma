@@ -57,12 +57,15 @@ import {
 } from '@/src/content/isolated/pgc-proxy-off';
 import {
   GUARD_KEY_PREFIX,
+  MAX_RELOAD_ATTEMPTS,
   buildPlayurlUrl,
+  guardActionForOutcome,
   isAlreadyTried,
-  makeGuard,
+  makeGuardAttempts,
   parseGuard,
   shouldReload,
   shouldResetGuardForBadCache,
+  type PgcRoundOutcome,
 } from '@/src/content/isolated/pgc-reload-plan';
 import { restoreResumeTime, saveResumeTime } from '@/src/content/isolated/pgc-resume';
 import { watchPlaybackQuality } from '@/src/content/isolated/quality-watch';
@@ -188,6 +191,17 @@ const pgcReloadTrace = {
   reloadIssued: 0,
   /** 最后一次没刷 / 没取流的原因 */
   lastReason: '',
+  /** 最近一轮加载观测到的结果（ADR 0030 方案 c 的输入，2026-10-30） */
+  lastGuardOutcome: null as PgcRoundOutcome | null,
+  /** 由 `lastGuardOutcome` 得出的护栏动作（`clear` / `keep` / `retry`） */
+  lastGuardAction: null as 'clear' | 'keep' | 'retry' | null,
+  /**
+   * 因「本轮已达目标」而清掉护栏的累计次数。
+   *
+   * 排查时看它：它应当随**成功注入后的下一次加载**而增长。
+   * 恒为 0 = c 的判定点没生效（要么 `pgcPatchedByUs` 永远 false，要么护栏本来就不存在）。
+   */
+  guardClearedByOutcome: 0,
 };
 
 try {
@@ -998,6 +1012,41 @@ async function orchestratePgc(
   pgcReloadTrace.ssrPatchedByUs = ssrWasPatchedByUs;
   pgcReloadTrace.ssrTruncated = ssrData !== undefined ? ssrTruncated : null;
 
+  /**
+   * ## 按**这一轮观测到的结果**更新刷新护栏（ADR 0030 方案 c，2026-10-30）
+   *
+   * 这是方案 c 的全部落点：护栏不再只记"刷了几次"，而是在每轮加载时
+   * 先问一句「**上一轮那次刷新，到底成了没有**」，再决定护栏怎么变。
+   *
+   * | 观测 | `outcome` | 护栏 |
+   * | --- | --- | --- |
+   * | 流是我们注入的 | `injected` | **清掉**（成了，护栏无意义） |
+   * | 本来就完整（免费集/已到顶） | `native-complete` | **清掉** |
+   * | 仍截断 | `still-truncated` | 保留，允许再刷（上限 2） |
+   * | `ssrData` 没到 / 判不了 | `unknown` | **维持原样**（不清也不消耗） |
+   *
+   * ### 为什么放在 `canSkipPgcInjection` **之前**
+   *
+   * 清护栏必须在下面所有分支之前完成 —— 包括那个早退分支。
+   * 否则「刷了且成功」的集数会因为早退而永远轮不到清护栏，
+   * 下一次 F5 又被一条本该消失的护栏挡住（这就是 ADR 0030 表里第 2/3/4 条）。
+   *
+   * ### 为什么 `unknown` 不清
+   *
+   * `ssrData === undefined` 意味着这个信号没到（主世界没上报 / 页面形态不同）。
+   * 那时「清掉」= 在没有任何证据的情况下放开重试；ADR 0020 的口径是
+   * **判不了就放行注入**，而不是"判不了就清护栏"。两者方向不同，别混。
+   */
+  const roundOutcome: PgcRoundOutcome =
+    ssrData === undefined
+      ? 'unknown'
+      : ssrWasPatchedByUs
+        ? 'injected'
+        : ssrTruncated
+          ? 'still-truncated'
+          : 'native-complete';
+  applyGuardDecisionForRound(cid, roundOutcome);
+
   if (
     ssrData !== undefined &&
     canSkipPgcInjection({ pgcPatchedByUs: ssrWasPatchedByUs, truncated: ssrTruncated })
@@ -1144,8 +1193,12 @@ async function orchestratePgc(
      *
      * ### 为什么要清
      *
-     * 护栏（`pluma:pgc-reload:<cid>`，`MAX_RELOAD_ATTEMPTS = 1`）的语义是
-     * 「同一集本会话刷过一次就够」，它**隐含假设"刷过一次就应该好了"**。
+     * 护栏（`pluma:pgc-reload:<cid>`）的语义在 2026-10-30 由 ADR 0030 方案 c 改写为
+     * 「记刷之后成了没有」：上限 `MAX_RELOAD_ATTEMPTS = 2`，且**一旦观测到已达目标
+     * 就清掉**。下面这段话记录的是改造**之前**（上限 1、只记次数）的场景，
+     * 保留它是为了说明「坏缓存自愈」这个补丁为什么存在 ——
+     * 它在 c 之内仍然有效（c 的清护栏是"按结果"，这里的是"按坏数据被丢弃"，
+     * 两条互补，都会让护栏不再挡住一次合法重试）。
      *
      * 坏缓存打破了这个假设：
      *
@@ -1334,6 +1387,53 @@ async function orchestratePgc(
 }
 
 /**
+ * 把 `guardActionForOutcome()` 的决策落到 `sessionStorage`（ADR 0030 方案 c）。
+ *
+ * ## 为什么需要一个"执行器"
+ *
+ * `pgc-reload-plan.ts` 里只有**纯函数**（决策），真正动存储的必须留在入口 ——
+ * 那是既有分层（判断在 isolated/core，副作用在 entrypoints）。
+ * 这个函数就是两者之间唯一的桥。
+ *
+ * ## 三个分支各自的动作
+ *
+ * | `guardActionForOutcome()` | 这里做什么 |
+ * | --- | --- |
+ * | `'clear'` | `removeItem` —— 已达目标，本集本会话不再需要护栏 |
+ * | `'retry'` | **什么都不做**：保留现有 attempts，让 `isAlreadyTried` 自己判 |
+ * | `'keep'` | **什么都不做**：判不了就不改变状态 |
+ *
+ * ⚠️ `'retry'` 不在这里 +1。次数只在**真的要刷**的那一刻（`reloadWithGuard`）增长 ——
+ * 那才是"这一次尝试发生了"。在这里 +1 会把"观测到还没成"当成"又刷了一次"，
+ * 观测次数与尝试次数就混了。
+ *
+ * ## 永不抛错
+ *
+ * `sessionStorage` 在隐私模式 / 配额满时会抛。这个函数跑在页面加载的关键路径上，
+ * 抛出去会让整条 PGC 编排中断 —— 比"护栏没清掉"严重得多。
+ * 清不掉的最坏后果只是下次多等一个 TTL，不是功能消失。
+ */
+function applyGuardDecisionForRound(cid: string, outcome: PgcRoundOutcome): void {
+  const action = guardActionForOutcome(outcome);
+  pgcReloadTrace.lastGuardOutcome = outcome;
+  pgcReloadTrace.lastGuardAction = action;
+
+  if (action !== 'clear') return;
+
+  const guardKey = GUARD_KEY_PREFIX + cid;
+  try {
+    const had = sessionStorage.getItem(guardKey) !== null;
+    sessionStorage.removeItem(guardKey);
+    if (had) {
+      pgcReloadTrace.guardClearedByOutcome += 1;
+      reportQuality({ height: 0, note: `[PGC] 本轮已达目标（${outcome}），清除刷新护栏` });
+    }
+  } catch {
+    // 清不掉不影响本轮结论，只是那条护栏会多留一个 TTL
+  }
+}
+
+/**
  * 记进度 → 写护栏 → reload。
  *
  * 抽出来是因为"取流后刷"永远要做同样三件事，
@@ -1347,8 +1447,33 @@ function reloadWithGuard(cid: string, why: string): void {
   pgcReloadTrace.reloadWithGuardCalls += 1;
   const v = document.querySelector('video');
   if (v && Number.isFinite(v.currentTime)) saveResumeTime(cid, v.currentTime);
+
+  /**
+   * ## 次数要**累加**，不能每次都写 1（ADR 0030 方案 c，2026-10-30）
+   *
+   * 原来是 `makeGuard()` —— 无条件 `attempts: 1`。在 `MAX_RELOAD_ATTEMPTS = 1`
+   * 的时代这没问题（一次就满额）。但上限提到 **2** 之后就不行了：
+   * 永远写 1 = 永远不满额 = **护栏永不生效**，退回无限刷新的老路。
+   *
+   * 所以这里读现值再加一，并**封顶**在上限 —— 封顶是为了让标记里的
+   * `attempts` 语义稳定（"刷了几次，最多记到上限"），不会因为某条路径
+   * 重复调用而无限增长。
+   *
+   * ⚠️ 读失败/`sessionStorage` 里的畸形数据一律当 0 重来：宁可多给一次机会，
+   * 也不要因为一份坏标记把用户永久卡在试看。
+   */
+  let nextAttempts = MAX_RELOAD_ATTEMPTS;
   try {
-    sessionStorage.setItem(guardKey, JSON.stringify(makeGuard(Date.now())));
+    const prev = parseGuard(sessionStorage.getItem(guardKey));
+    const prevAttempts = prev && Number.isFinite(prev.attempts) ? prev.attempts : 0;
+    nextAttempts = Math.min(prevAttempts + 1, MAX_RELOAD_ATTEMPTS);
+  } catch {
+    // 读不出来就按"这一刷是第一次"处理
+    nextAttempts = 1;
+  }
+
+  try {
+    sessionStorage.setItem(guardKey, JSON.stringify(makeGuardAttempts(nextAttempts, Date.now())));
   } catch {
     // 写不进去就不刷 —— 没有标记会变成循环
     pgcReloadTrace.lastReason = 'reloadWithGuard: sessionStorage 写不进护栏，放弃刷新';
@@ -1356,7 +1481,7 @@ function reloadWithGuard(cid: string, why: string): void {
     return;
   }
   pgcReloadTrace.reloadIssued += 1;
-  reportQuality({ height: 0, note: `[PGC] ${why}，刷新一次` });
+  reportQuality({ height: 0, note: `[PGC] ${why}，刷新一次（第 ${String(nextAttempts)} 次）` });
   location.reload();
 }
 

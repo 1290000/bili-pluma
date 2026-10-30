@@ -8,6 +8,7 @@ import {
   isAlreadyTried,
   isGuardFresh,
   makeGuard,
+  makeGuardAttempts,
   parseGuard,
   resumeTarget,
   shouldReload,
@@ -108,8 +109,21 @@ describe('isGuardFresh / isAlreadyTried', () => {
     expect(isGuardFresh(makeGuard(T), T + GUARD_TTL_MS)).toBe(true);
   });
 
-  it('已刷过 → isAlreadyTried 为 true', () => {
-    expect(isAlreadyTried(makeGuard(T), T)).toBe(true);
+  it('已刷满上限 → isAlreadyTried 为 true', () => {
+    /**
+     * ADR 0030 方案 c：上限从 1 提到 2，所以「刷过一次」**不再**等于"已试过"——
+     * 那正是方案 c 要的：刷了没成还允许再试一次。
+     *
+     * 这里用 `MAX_RELOAD_ATTEMPTS` 而不是字面量，是为了让上限再变时
+     * 这条断言跟着走，而不是变成一个新的"恰好没过"。
+     */
+    expect(isAlreadyTried(makeGuardAttempts(MAX_RELOAD_ATTEMPTS, T), T)).toBe(true);
+  });
+
+  it('只刷过 1 次但上限是 2 → 不算已试过（这才是 c 的核心行为变化）', () => {
+    // 反例：把 MAX_RELOAD_ATTEMPTS 改回 1 → 本条必红
+    expect(MAX_RELOAD_ATTEMPTS).toBeGreaterThan(1);
+    expect(isAlreadyTried(makeGuardAttempts(1, T), T)).toBe(false);
   });
 
   it('标记过期 → 不算"已试过"（允许再试）', () => {
@@ -241,8 +255,19 @@ describe('shouldResetGuardForBadCache：作废护栏的唯一条件', () => {
 describe('端到端：坏缓存作废护栏后，刷新得以发生', () => {
   const NOW = 1_793_277_792_545; // 真机 guard 的时间戳
 
-  it('作废前：护栏有效 → shouldReload 拒绝（这就是真机卡住的状态）', () => {
-    const guard = makeGuard(NOW - 2.4 * 60 * 1000);
+  /**
+   * ⚠️ 2026-10-30（ADR 0030 方案 c）：这里必须构造**刷满上限**的护栏，
+   * 不能再写 `makeGuard()`。
+   *
+   * `makeGuard()` 是 `attempts: 1`，在上限从 1 提到 2 之后它**不再**表示
+   * "已试过" —— 继续用它会变成"测了一个本来就没被挡的状态"，
+   * 断言虽然改成期望 false 也能过，但**这个测试就失去意义了**。
+   * 它本意守的是"满额 → 挡住 → 清掉 → 放行"这条链，所以要用满额构造。
+   */
+  const fullGuard = () => makeGuardAttempts(MAX_RELOAD_ATTEMPTS, NOW - 2.4 * 60 * 1000);
+
+  it('作废前：护栏满额 → shouldReload 拒绝（这就是真机卡住的状态）', () => {
+    const guard = fullGuard();
     const alreadyTried = isAlreadyTried(parseGuard(JSON.stringify(guard)), NOW);
 
     expect(alreadyTried).toBe(true);
@@ -259,7 +284,7 @@ describe('端到端：坏缓存作废护栏后，刷新得以发生', () => {
   });
 
   it('三步串起来：坏缓存 → 决定作废 → 刷新放行', () => {
-    const guard = makeGuard(NOW - 2.4 * 60 * 1000);
+    const guard = fullGuard();
     const droppedBadCache = true;
 
     // 1. 先看作废前的判定（真机卡在这里）
@@ -281,11 +306,11 @@ describe('端到端：坏缓存作废护栏后，刷新得以发生', () => {
      * 防过度修复的反面：正常路径（首访第二趟）不该因为"想做自愈"而放宽。
      * 护栏过期后本来就允许再试一次，那是既有语义，不由这个改动提供。
      */
-    const guard = makeGuard(NOW - 2.4 * 60 * 1000);
+    const guard = fullGuard();
     const reset = shouldResetGuardForBadCache(false);
     expect(reset).toBe(false);
 
-    // 不作废 → 仍按原逻辑判定（护栏有效 → 拒绝）
+    // 不作废 → 仍按原逻辑判定（护栏满额 → 拒绝）
     const alreadyTried = isAlreadyTried(parseGuard(JSON.stringify(guard)), NOW);
     expect(shouldReload({ alreadyTried, hasStream: true })).toBe(false);
   });

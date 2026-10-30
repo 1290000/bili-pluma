@@ -34,8 +34,26 @@ export interface ReloadGuard {
   at: number;
 }
 
-/** 同一集在同一会话里最多刷一次 */
-export const MAX_RELOAD_ATTEMPTS = 1;
+/**
+ * 同一集在同一会话里最多刷几次（ADR 0030 方案 c：**2**）。
+ *
+ * ## 为什么从 1 提到 2
+ *
+ * 记 1 的语义是「刷过一次就够」，隐含假设「刷一次就会好」。但真机上存在
+ * 「刷了但没成」的情况（第二趟注入失败 / 播放器没采用缓存），那时一次
+ * 根本不够 —— 用户就静默卡在试看，最长等满 `GUARD_TTL_MS`。
+ *
+ * ## ⚠️ 它是**上限**，不是主判据
+ *
+ * 主判据是 `guardActionForOutcome()` 的**结果**：一旦观测到「已达目标」
+ * （`injected` / `native-complete`），护栏立即清空，**与这个上限无关** ——
+ * 成功的集数永远不会用到第 2 次。
+ *
+ * 这个上限只兜住「一直没成」的那条线：允许再试一次，然后停手。
+ * 提到 2 而不更高，是因为每次重试都要用户看一次 1~2 秒的闪屏
+ * （ADR 0030 §「c 的代价」，2026-10-30 用户拍板接受两次闪屏）。
+ */
+export const MAX_RELOAD_ATTEMPTS = 2;
 
 /** 标记的存活时间：10 分钟。超过就算"新的一次尝试"（用户可能换了网络 / 权益续上了） */
 export const GUARD_TTL_MS = 10 * 60 * 1000;
@@ -121,6 +139,90 @@ export function parseGuard(raw: string | null): ReloadGuard | null {
 /** 构造"已刷过一次"的标记，供写入 `sessionStorage` */
 export function makeGuard(now: number): ReloadGuard {
   return { attempts: 1, at: now };
+}
+
+/**
+ * 构造「已刷过第 n 次」的标记。
+ *
+ * ⚠️ `at` 每次刷新都更新：TTL 的含义是「距**最后一次**刷新多久」，不是「距第一次」。
+ * 若沿用首次的 `at`，连刷两次也可能在第三次前刚好跨过 TTL，等于护栏自己松手。
+ *
+ * @param attempts 已经刷过几次（写入时 = 这一轮即将发生的刷新次数）
+ * @param now 当前时刻
+ */
+export function makeGuardAttempts(attempts: number, now: number): ReloadGuard {
+  return { attempts, at: now };
+}
+
+/**
+ * 一轮页面加载**观测到的结果**（ADR 0030 方案 c 的输入）。
+ *
+ * ## 为什么把"结果"做成显式枚举而不是几个布尔
+ *
+ * 方案 c 的全部主张是「护栏该记结果，不该记次数」。若这里也传一堆
+ * `boolean` 组合（`patched` / `truncated` / `cached`…），组合爆炸之后
+ * 各种非法组合就只能靠调用方纪律保证 —— 那正是 a 方案的老毛病。
+ * 收成 4 个**互斥**状态，每一态在表里有一行，缺一态编译不过。
+ */
+export type PgcRoundOutcome =
+  /** 注入成功：这一轮的流**是我们注入的**（`pgcPatchedByUs === true`） */
+  | 'injected'
+  /** 本来就完整：SSR 自己就是完整流，不是我们注入的（免费集 / 已有权益 / 已到顶） */
+  | 'native-complete'
+  /** 仍是试看：SSR 截断，且没有可用缓存（这一轮没成功） */
+  | 'still-truncated'
+  /** 判不了：缺判据（`truncated` 未知 / 没有缓存信息）—— 不许当成失败 */
+  | 'unknown';
+
+/**
+ * 这一轮观测结果下，护栏该怎么变（ADR 0030 方案 c）。
+ *
+ * ## 语义（一张表说完）
+ *
+ * | `outcome` | 含义 | 护栏动作 | 理由 |
+ * | --- | --- | --- | --- |
+ * | `injected` | 刷了且成功了 | **清掉** | 本集本会话已达目标，护栏再无意义 |
+ * | `native-complete` | 本来就完整 | **清掉** | 同上（没有"达目标"的必要，也就不需要拦） |
+ * | `still-truncated` | 刷了但没成功 | **保留**，允许再刷一次 | 这才是护栏该拦的：同一原因反复刷 |
+ * | `unknown` | 判不了 | **保留**，但**不消耗**新的尝试 | 「判不了就放行」≠「判不了就清」 |
+ *
+ * ## `unknown` 为什么不清也不加
+ *
+ * 清掉 = 在判不了的情况下放开无限刷新（ADR 0020 的反面）。
+ * 加一次 = 把"没观测到"当成"尝试过"，会让一次缺数据的加载白吃掉重试机会。
+ * 所以维持原样：**没证据就不改变状态**。
+ *
+ * ## 与 `shouldReload()` 的关系
+ *
+ * 本函数只回答「护栏该怎么变」，**不回答「该不该刷」**。要不要刷仍看
+ * `shouldReload({ alreadyTried })`，由调用方在本轮**开始**时问；
+ * 本函数在**结束时**用观测结果更新护栏，供**下一轮**判断。
+ * 两者分开是刻意的：a 方案的病根就是把"这次刷不刷"和"上次成没成"混在一个计数里。
+ *
+ * @param outcome 这一轮观测到的结果
+ * @returns `'clear'` = 删掉护栏；`'keep'` = 不动；`'retry'` = 次数 +1（允许再刷一次）
+ */
+export function guardActionForOutcome(outcome: PgcRoundOutcome): 'clear' | 'keep' | 'retry' {
+  switch (outcome) {
+    case 'injected':
+    case 'native-complete':
+      return 'clear';
+    case 'still-truncated':
+      return 'retry';
+    case 'unknown':
+      return 'keep';
+  }
+}
+
+/**
+ * 这一轮观测结果是否已经「达到目标」（ADR 0030 方案 c 的判据）。
+ *
+ * 单独导出而不是让调用方自己判 `outcome === 'injected'`：
+ * 「达目标」与「护栏怎么变」是两个概念，将来前者可能加状态（比如
+ * 用户手动切到最高画质也算达成），而后者不该跟着变。
+ */
+export function isRoundSatisfied(outcome: PgcRoundOutcome): boolean {
+  return outcome === 'injected' || outcome === 'native-complete';
 }
 
 /**
