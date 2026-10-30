@@ -63,6 +63,7 @@
  * 退出码：0 通过或跳过｜1 有产物不合格｜2 脚本自身出错
  */
 
+import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
@@ -406,6 +407,41 @@ function checkSourceZip(buf) {
     } catch (err) {
       problems.push(
         `extension/manifest.json 不是合法 JSON：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * BUILD.md 记录的 commit 必须**就是当前 HEAD**（2026-10-30 加）
+   *
+   * ## 为什么必须查
+   *
+   * 实测踩到：打完包后忘了把打包**之后**的提交算进去，直接 `git tag` 打在新 commit 上 ——
+   * 于是 `-with-source.zip` 里的 BUILD.md 写着 `d6f245b`，而 tag 指向 `a6cf861`。
+   * **源码版无法对应当前 tag 重建**，而这正是 G6「构建凭证」的全部价值。
+   *
+   * 原来的本文件只断言了「有 40 位 commit 行」，不检查它是否等于 HEAD ——
+   * 等于只验了格式，没验内容。
+   *
+   * ⚠️ 判据用 `git rev-parse HEAD`。在非 git 环境（解压后的源码包）拿不到 HEAD 时跳过，
+   * 不判失败 —— 那是"无法验证"，不是"验证不通过"。
+   */
+  if (commit) {
+    const head = (() => {
+      try {
+        return execSync('git rev-parse HEAD', { cwd: ROOT, encoding: 'utf8' }).trim();
+      } catch {
+        return null;
+      }
+    })();
+
+    if (head === null) {
+      notes.push('拿不到当前 HEAD（非 git 环境），跳过 BUILD.md 提交一致性检查');
+    } else if (commit !== head) {
+      problems.push(
+        `BUILD.md 记录的提交 ${commit.slice(0, 7)} ≠ 当前 HEAD ${head.slice(0, 7)}` +
+          ' —— 产物不是在当前提交上打的。' +
+          '打 tag 前必须先 `node scripts/package.mjs` 重打包（否则源码版对不上 tag）',
       );
     }
   }
