@@ -41,7 +41,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 const ROOT = process.cwd();
 
 /** 参与检查的 Markdown 文件（相对仓库根，glob 在代码里手写以保持零依赖） */
-const SCAN_TARGETS = ['README.md', 'AGENTS.md', 'ADDITIONAL-TERMS.md', 'docs'];
+const SCAN_TARGETS = ['README.md', 'AGENTS.md', 'AGENTS-TOOLS.md', 'ADDITIONAL-TERMS.md', 'docs'];
 
 /** 章节编号检查只针对这几份主文档 —— 子目录文件（ADR/guides）不按 `## N` 编号 */
 const NUMBERED_DOCS = [
@@ -316,6 +316,59 @@ function checkRepoPaths(src, tracked, rel) {
 }
 
 /**
+ * `AGENTS-TOOLS.md` 里的**裸脚本名**必须真实存在（2026-10-30 加）
+ *
+ * ## 为什么 `checkRepoPaths` 抓不到这一类
+ *
+ * 它要求路径带根目录前缀（`scripts/…`、`poc/…`），而工具清单里写的是
+ * **裸文件名**：`reload-extension.mjs`、`run-q2-auto.cjs`。
+ * 实测（2026-10-30）：把清单里的 `reload-extension.mjs` 改成
+ * `reload-extension-RENAMED.mjs`，`check-docs` 报「无死链」、
+ * `check-tools` 也 exit 0 ——**两个都没有发现**。
+ *
+ * ## 为什么这个缺口危险
+ *
+ * 工具清单的全部价值就是"照着它敲命令"。清单里的名字错了，
+ * 比没有清单更糟：人会以为工具坏了，而不是名字错了。
+ * 这与 2026-10-30 那次「没人知道 reload-extension.mjs 存在」是同一类失败——
+ * 那次是漏登记，这次是登记了但名字漂了。
+ *
+ * ## 判据
+ *
+ * 只查 `AGENTS-TOOLS.md`（它是脚本清单的唯一权威位置）。
+ * 逐行找 `xxx.mjs` / `xxx.cjs` 形态的裸文件名（前后不是 `/`，否则由
+ * `checkRepoPaths` 管），要求在以下目录任一找到同名文件：
+ * `scripts/`、`poc/probe/`、`poc/verify/`、`poc/`（含子目录一层）。
+ *
+ * ⚠️ 代码块内的行也查 —— 清单里的命令大多写在代码块或反引号里，
+ * 跳过它们等于这条检查不存在。
+ *
+ * @param {string} src
+ * @param {Set<string>} scriptBasenames 仓库里所有脚本的 basename
+ * @returns {Array<{line:number, name:string}>}
+ */
+function checkToolNames(src, scriptBasenames) {
+  const lines = src.split('\n');
+  const missing = [];
+  /** 裸脚本名：前面不能是 / 或字母数字（排除 `poc/probe/x.mjs` 这类带路径的） */
+  const RE = /(?<![A-Za-z0-9_/.-])([A-Za-z0-9_][A-Za-z0-9_.-]*\.(?:mjs|cjs))/g;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? '';
+    if (COUNTERFACTUAL_HINTS.some((h) => line.includes(h))) continue;
+
+    for (const m of line.matchAll(RE)) {
+      const name = m[1];
+      if (scriptBasenames.has(name)) continue;
+      // 允许写占位（如 `xxx.mjs`）—— 清单里的模板行
+      if (/^(xxx|xxx-xxx|foo|bar)\.(mjs|cjs)$/.test(name)) continue;
+      missing.push({ line: i + 1, name });
+    }
+  }
+  return missing;
+}
+
+/**
  * 篇幅上限检查。
  *
  * @param {string} rel 相对仓库根的路径
@@ -471,6 +524,21 @@ async function main() {
   const deadLinks = [];
   const numberingIssues = [];
   const missingPaths = [];
+  /** `AGENTS-TOOLS.md` 里写错名字的脚本（裸文件名，`checkRepoPaths` 覆盖不到） */
+  const missingToolNames = [];
+
+  /**
+   * 仓库里所有脚本的 basename —— 供 `checkToolNames()` 判「这个名字有没有对应文件」。
+   *
+   * 从 `tracked` 里取，不读文件系统：这样「脚本被删了但清单没改」也会红
+   * （git 里没有了，而工作区可能还留着未跟踪的旧文件）。
+   */
+  const scriptBasenames = new Set(
+    [...tracked]
+      .filter((f) => /^(scripts|poc)\/.+\.(mjs|cjs)$/.test(f))
+      .map((f) => f.split('/').pop()),
+  );
+
   const lengthViolations = [];
   const lengthWarnings = [];
   /** 含 CRLF 的文件。`.editorconfig` 写的是 `end_of_line = lf`，但没有任何东西在强制它 */
@@ -497,6 +565,13 @@ async function main() {
 
     for (const s of checkRepoPaths(src, tracked, rel)) {
       missingPaths.push({ file: rel, ...s });
+    }
+
+    // 裸脚本名只有工具清单需要查（它是脚本清单的唯一权威位置）
+    if (rel === 'AGENTS-TOOLS.md') {
+      for (const s of checkToolNames(src, scriptBasenames)) {
+        missingToolNames.push({ file: rel, ...s });
+      }
     }
 
     const len = checkLength(rel, src);
@@ -526,7 +601,7 @@ async function main() {
 
   console.log(`[docs] 扫描 ${uniqueFiles.length} 个 Markdown`);
   console.log(
-    `[docs] 死链 + scripts/ 引用 + 篇幅上限 + 换行符 + ${NUMBERED_DOCS.length} 份主文档的章节连号`,
+    `[docs] 死链 + scripts/ 引用 + 工具清单脚本名 + 篇幅上限 + 换行符 + ${NUMBERED_DOCS.length} 份主文档的章节连号`,
   );
 
   if (lengthWarnings.length > 0) {
@@ -540,14 +615,28 @@ async function main() {
     deadLinks.length === 0 &&
     numberingIssues.length === 0 &&
     missingPaths.length === 0 &&
+    missingToolNames.length === 0 &&
     lengthViolations.length === 0 &&
     crlfFiles.length === 0 &&
     changelogIssues.length === 0;
 
   if (clean) {
     console.log('[docs] ✅ 无死链、无失效路径引用、篇幅达标、换行符全 LF、章节编号连号');
+    console.log('[docs] ✅ AGENTS-TOOLS.md 里每个脚本名都真实存在');
     console.log('[docs] ✅ CHANGELOG 版本节格式合规');
     return;
+  }
+
+  if (missingToolNames.length > 0) {
+    console.error(
+      `\n[docs] ❌ AGENTS-TOOLS.md 里 ${missingToolNames.length} 处脚本名找不到对应文件\n`,
+    );
+    for (const s of missingToolNames) {
+      console.error(`  ${s.file}:${s.line}  → ${s.name}`);
+    }
+    console.error('');
+    console.error('  工具清单的全部价值就是"照着它敲命令"。名字错了比没有清单更糟 ——');
+    console.error('  人会以为工具坏了，而不是名字错了。改清单，或确认脚本是否已改名/删除。\n');
   }
 
   if (changelogIssues.length > 0) {
