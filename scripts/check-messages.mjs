@@ -45,6 +45,56 @@ const MESSAGES_FILE = 'src/shared/types/messages.ts';
 const ROUTER_FILE = 'entrypoints/background.ts';
 
 /**
+ * content 侧的**直连**消息处理（不走 background 分发）。
+ *
+ * ## 为什么需要单独对账（2026-10-30 加，O6）
+ *
+ * `messages.ts` 里有 4 个类型**刻意不走 background**：
+ *
+ * | 类型 | 去向 |
+ * | --- | --- |
+ * | `PageQueryMsg` / `PageQueryReply` | 扩展页 → content 直连（`page/summary:get`） |
+ * | `PageSnapshotMsg` / `PageSnapshotReply` | 页面 → content 直连（`page/snapshot:get`） |
+ *
+ * 理由写在 `messages.ts:162-166`：这份数据只对"当前这个标签页"有意义，
+ * 而 content 本来就在那个页面里，绕到 SW 再回来只是多一份要维护的缓存。
+ *
+ * **但它们不在本脚本原来的扫描范围里**（`MESSAGES_FILE` + `ROUTER_FILE` 两个文件），
+ * 于是"改了类型名却忘了改 content 的字符串判断"**不会有任何检查变红** ——
+ * 而这正是本脚本存在的理由（见文件头"漏处理不会编译报错"）。
+ *
+ * 所以补这第三组对账：`messages.ts` 声明的直连类型 ↔ `content.ts` 实际处理的字面量。
+ */
+const CONTENT_FILE = 'entrypoints/content.ts';
+
+/**
+ * 直连消息的类型 ↔ 期望在 content 侧出现的字面量。
+ *
+ * ⚠️ 加条目时必须确认 `content.ts` 真的处理它；没处理的要写明为什么。
+ *
+ * @type {Record<string, string>}
+ */
+const DIRECT_TYPES = {
+  PageQueryMsg: 'page/summary:get',
+  PageSnapshotMsg: 'page/snapshot:get',
+  PageQueryReply: 'page/summary:ok',
+  // `PageQueryReply` 是判别联合，有两个应答分支，都要对账
+  PageQueryReplyNone: 'page/summary:none',
+  PageSnapshotReply: 'page/snapshot:ok',
+};
+
+/**
+ * 出现但**不需要**纳入直连对账的字面量。
+ *
+ * ⚠️ 加任何一条必须写明为什么 —— 只写"不需要"等于把检查关掉。
+ */
+const DIRECT_LITERALS_IGNORED = {
+  // 这是 `page/activate` 的应答，走 background 分发（messages.ts 的 ResponseMsg 联合），
+  // 已被第一组对账（声明 ↔ background.ts 路由）覆盖，不属于"直连"。
+  'page/activate:ok': '走 background 分发，非直连；由第一组对账覆盖',
+};
+
+/**
  * 已知的"只有类型、没有 handler"的请求。
  *
  * ⚠️ **加任何一条都必须写明：为什么现在不加、什么时候加。**
@@ -107,6 +157,56 @@ function extractRoutedTypes(src) {
   return found;
 }
 
+/**
+ * 核验「直连消息」类型与 content 侧处理是否对齐。
+ *
+ * 三类问题都要报：
+ *   1. `messages.ts` 里声明的字面量，content.ts 里找不到
+ *      → 改了类型名却忘了改 content 的字符串判断（**静默失效**）
+ *   2. content.ts 里出现了直连前缀的字面量，但 `DIRECT_TYPES` 没登记
+ *      → 新增直连消息却没纳入对账
+ *   3. `DIRECT_TYPES` 登记的类型在 messages.ts 里已不存在
+ *      → 类型被删/改名，对账表过期
+ *
+ * @param {string} messagesSrc
+ * @param {string} contentSrc
+ * @returns {{ok: boolean, problems: string[]}}
+ */
+function checkDirectMessages(messagesSrc, contentSrc) {
+  /** @type {string[]} */
+  const problems = [];
+
+  // 1) 声明的类型必须真的存在于 messages.ts
+  for (const [typeName, literal] of Object.entries(DIRECT_TYPES)) {
+    const declRe = new RegExp(`type\\s*:\\s*'${literal.replace(/[/:]/g, '.')}'`);
+    if (!declRe.test(messagesSrc)) {
+      problems.push(
+        `DIRECT_TYPES 里登记的 ${typeName} → '${literal}'，但 ${MESSAGES_FILE} 里已没有这个类型（表过期了）`,
+      );
+      continue;
+    }
+    // 2) content.ts 必须真的处理这个字面量
+    if (!contentSrc.includes(literal)) {
+      problems.push(
+        `${typeName} 声明的 '${literal}' 在 ${CONTENT_FILE} 里找不到 —— 改了类型名却忘了改 content 的字符串判断，消息会静默失效`,
+      );
+    }
+  }
+
+  // 3) content.ts 里的直连字面量都要在表里登记过
+  const declaredLiterals = new Set(Object.values(DIRECT_TYPES));
+  for (const m of contentSrc.matchAll(/'(page\/[a-z]+:(?:get|ok|err|none))'/g)) {
+    const lit = m[1];
+    if (declaredLiterals.has(lit)) continue;
+    if (lit in DIRECT_LITERALS_IGNORED) continue;
+    problems.push(
+      `'${lit}' 出现在 ${CONTENT_FILE} 里，但既没登记进 DIRECT_TYPES 也没在 DIRECT_LITERALS_IGNORED 写明理由 —— 它不受对账保护`,
+    );
+  }
+
+  return { ok: problems.length === 0, problems };
+}
+
 function sortByKey(a, b) {
   return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
 }
@@ -114,9 +214,10 @@ function sortByKey(a, b) {
 async function main() {
   const verbose = process.argv.includes('--verbose');
 
-  const [messagesSrc, routerSrc] = await Promise.all([
+  const [messagesSrc, routerSrc, contentSrc] = await Promise.all([
     readFile(join(ROOT, MESSAGES_FILE), 'utf8'),
     readFile(join(ROOT, ROUTER_FILE), 'utf8'),
+    readFile(join(ROOT, CONTENT_FILE), 'utf8'),
   ]);
 
   const declared = extractDeclaredRequests(messagesSrc);
@@ -155,6 +256,17 @@ async function main() {
       }
     }
     console.log('[messages] ✅ 无孤儿、无幽灵分支');
+    // 直连消息（不走 background 的那 4 个类型）单独对账
+    const direct = checkDirectMessages(messagesSrc, contentSrc);
+    if (direct.ok) {
+      console.log(
+        `[messages] ✅ 直连消息已对齐（${Object.keys(DIRECT_TYPES).length} 个类型 ↔ ${CONTENT_FILE}）`,
+      );
+    } else {
+      console.error(`\n[messages] ❌ 直连消息（content 侧 ${CONTENT_FILE}）与实际处理不一致：\n`);
+      for (const p of direct.problems) console.error(`  ${p}\n`);
+      process.exitCode = 1;
+    }
     return;
   }
 
