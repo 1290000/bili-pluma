@@ -139,14 +139,20 @@ export const PROXY_ROUTES = [
     method: 'GET',
     label: '直播取流（当前）',
     enabled: false,
-    note: 'v1 不支持直播 —— 这是决定，不是遗漏（ADR 0007 / Q8）。别顺手改 true',
+    note:
+      'v1 不支持直播 —— 这是决定，不是遗漏（ADR 0007 / Q8）。**别顺手改 true**。' +
+      '⚠️ 1.1.0 起扩展会注入直播间（host_permissions 加了 live.bilibili.com），' +
+      '但那**只做样式层清理**（隐藏水印，ADR 0031）——不换 Cookie、不发取流请求。' +
+      '「支持直播页」不等于「支持直播取流」，这两件事必须分开看',
   },
   {
     path: '/room/v1/Room/playUrl',
     method: 'GET',
     label: '直播取流（旧版）',
     enabled: false,
-    note: 'v1 不支持直播 —— 这是决定，不是遗漏（ADR 0007 / Q8）。别顺手改 true',
+    note:
+      'v1 不支持直播 —— 这是决定，不是遗漏（ADR 0007 / Q8）。**别顺手改 true**。' +
+      '⚠️ 同 `getRoomPlayInfo`：注入直播间只为隐藏水印（ADR 0031），不取流',
   },
 ] as const satisfies readonly ProxyRoute[];
 

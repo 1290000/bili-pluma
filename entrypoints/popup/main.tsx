@@ -28,6 +28,7 @@ import {
 } from '@core/ui/popup-state';
 import { readPrimaryProfile } from '@platform/storage/primary-profile-store';
 import type { PageTracksView } from '@shared/types/playinfo';
+import { classifyBiliPage } from '@shared/utils/bili-page-kind';
 import { primaryPlaceholder, resolvePrimaryCard } from '@shared/utils/primary-card';
 import { parsePlayPage } from '@shared/utils/video-page';
 import { render } from 'preact';
@@ -35,6 +36,13 @@ import { useCallback, useEffect, useState } from 'preact/hooks';
 
 import '@/src/design/tokens.css';
 import './style.css';
+
+import {
+  normalizeCleanPreferences,
+  type CleanPreferences,
+} from '@/src/content/site-clean/clean-options';
+import { readRawCleanOptions } from '@platform/storage/ui-prefs-store';
+import { CleanView, buildCleanRows } from './clean-view';
 
 type LoadState =
   { kind: 'loading' } | { kind: 'ok'; snap: PopupSnapshot } | { kind: 'error'; detail: string };
@@ -92,7 +100,6 @@ async function readPageView(): Promise<PageView> {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (typeof tab?.id !== 'number' || !parsePlayPage(tab.url ?? '')) return { kind: 'other' };
-
     try {
       const reply = (await chrome.tabs.sendMessage(tab.id, { type: 'page/summary:get' })) as
         { type?: string; view?: PageTracksView } | undefined;
@@ -157,6 +164,17 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   /** 退出是两步：点一次变成"确认退出"，再点一次才执行（不用 confirm，见 02 §7） */
   const [confirmRemove, setConfirmRemove] = useState(false);
+  /**
+   * 当前 Tab —— **默认必须是画质**。
+   *
+   * `docs/02-ui-spec.md` §0：popup 服务的是"我现在该担心吗"这个唯一问题。
+   * 偏好（净化）不能抢走首屏，所以它只能是被点开的第二屏。
+   */
+  const [tab, setTab] = useState<'quality' | 'clean'>('quality');
+  /** 净化偏好（只用于 popup 显示状态，改动一律去设置页） */
+  const [cleanPrefs, setCleanPrefs] = useState<CleanPreferences | null>(null);
+  /** 当前活动标签页的 URL —— 供「净化」Tab 判断适用性，也用于展示 */
+  const [currentUrl, setCurrentUrl] = useState('');
   /** 当前页的取流数据（主账号基线 + 播放账号实际拿到的） */
   const [page, setPage] = useState<PageView>({ kind: 'other' });
   /** 主账号卡片原料：播放页读实时，其他页读缓存（ADR 0025） */
@@ -193,6 +211,14 @@ function App() {
       setPage(pageView);
       // 依赖 pageView，所以不能放进上面的 Promise.all（那会自己引用自己）
       setPrimary(await readPrimaryCard(pageView));
+
+      // 顺便记下当前活动标签的 URL（供「净化」Tab 判断适用性）
+      try {
+        const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+        setCurrentUrl(t?.url ?? '');
+      } catch {
+        setCurrentUrl('');
+      }
 
       if (proxyRes?.type !== 'proxy/status:ok') {
         setLoad({ kind: 'error', detail: '状态读取失败' });
@@ -238,6 +264,16 @@ function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  /**
+   * 读净化偏好 —— 只用于「净化」Tab 的**状态显示**。
+   *
+   * popup 里**不提供任何修改入口**：改偏好一律去设置页（§3.2 第 3 层）。
+   * 这与 §0「popup 是查看器」一致：能在这里做决定的只有"要不要接管取流"一项。
+   */
+  useEffect(() => {
+    void readRawCleanOptions().then((raw) => setCleanPrefs(normalizeCleanPreferences(raw)));
+  }, []);
 
   /**
    * 切换总开关。
@@ -381,6 +417,17 @@ function App() {
   const pillCls = load.kind === 'loading' ? 'pill-idle' : `pill-${view?.tone ?? 'danger'}`;
   const pillText = load.kind === 'loading' ? '读取中' : (view?.pill ?? '异常');
 
+  /**
+   * 当前页属于哪一类 —— 供「净化」Tab 判断"适不适用"。
+   *
+   * ⚠️ **必须走 `classifyBiliPage()`**（`shared/utils/bili-page-kind.ts`）。
+   *
+   * 首版在这里手写了 `pathname.startsWith('/video/')`，
+   * 被 `check-page-gate` 当场拦下 —— 那正是它防的事：
+   * 2026-10-28 番剧页就是因为 popup 里一份手写正则被判成「未生效」。
+   */
+  const pageKind = classifyBiliPage(currentUrl);
+
   return (
     <div class="popup">
       <header class="bar">
@@ -389,14 +436,48 @@ function App() {
           Pluma
         </span>
         <span class={`pill ${pillCls}`}>{pillText}</span>
+        <button class="gear" title="设置" aria-label="设置" onClick={() => openOptions()}>
+          ⚙
+        </button>
       </header>
 
+      {/* ── Tab 栏 ──
+          两个 Tab 互斥；**默认停在画质**（§0：偏好不能抢首屏）。 */}
+      <nav class="tabs" role="tablist">
+        <button
+          class={`tab ${tab === 'quality' ? 'active' : ''}`}
+          role="tab"
+          aria-selected={tab === 'quality'}
+          onClick={() => setTab('quality')}
+        >
+          画质
+        </button>
+        <button
+          class={`tab ${tab === 'clean' ? 'active' : ''}`}
+          role="tab"
+          aria-selected={tab === 'clean'}
+          onClick={() => setTab('clean')}
+        >
+          净化
+        </button>
+      </nav>
+
       <main class="body">
-        {load.kind === 'loading' && <p class="placeholder">正在读取状态…</p>}
+        {/* ── 净化 Tab：偏好视图，与状态无关，所以放在 load 分支之外 ── */}
+        {tab === 'clean' && (
+          <CleanView
+            rows={buildCleanRows(cleanPrefs ?? normalizeCleanPreferences(null), pageKind)}
+            onManage={() => openOptions('#/clean')}
+          />
+        )}
 
-        {load.kind === 'error' && <p class="placeholder error">读取失败：{load.detail}</p>}
+        {tab === 'quality' && load.kind === 'loading' && <p class="placeholder">正在读取状态…</p>}
 
-        {load.kind === 'ok' && snap && view && (
+        {tab === 'quality' && load.kind === 'error' && (
+          <p class="placeholder error">读取失败：{load.detail}</p>
+        )}
+
+        {tab === 'quality' && load.kind === 'ok' && snap && view && (
           <div class="content">
             {/* 「已解锁」已经说明结果时不再重复一句话，避免 popup 变啰嗦 */}
             {/* 「已解锁」已经说明结果时不再重复一句话，避免 popup 变啰嗦。

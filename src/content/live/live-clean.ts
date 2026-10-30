@@ -5,7 +5,7 @@
  *
  * 只隐藏直播播放器上的水印 logo。三个选择器**逐字取自 Bilibili-Evolved**
  * （`registry/lib/components/live/remove-watermark/remove-watermark.scss`，MIT 许可）。
- * 署名见仓库根 `NOTICE`。
+ * 署名见仓库根 `NOTICE.md`。
  *
  * ## 为什么不放进 Shadow DOM
  *

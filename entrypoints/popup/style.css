@@ -22,7 +22,9 @@ body {
 }
 
 body {
-  width: 360px;
+  /* 380px：为双 Tab 与 ⚙ 入口留出空间（方案 §3.1）。上线前 360px。
+     高度上限仍是 600px，见 docs/02-ui-spec.md §1。 */
+  width: 380px;
 }
 
 .popup {
@@ -574,4 +576,113 @@ button:disabled {
   font-size: var(--pluma-font-caption);
   color: var(--pluma-text-muted);
   line-height: 1.4;
+}
+
+/* ── ⚙ 设置入口（方案 §3.1 顶部状态条）──
+   与状态胶囊同行、靠右。不加边框，避免抢状态胶囊的注意力。 */
+.gear {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--pluma-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.gear:hover {
+  color: var(--pluma-accent);
+  background: var(--pluma-accent-bg);
+}
+
+/* ── 双 Tab（方案 §3.1）──
+   Fluent TabList 形态：下划线表示选中，不用背景色块。
+   ⚠️ 默认停在「画质」—— 偏好不能抢首屏（02 §0）。 */
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding-top: 8px;
+  border-bottom: 0.5px solid var(--pluma-border);
+}
+
+.tab {
+  flex: 1;
+  padding: 6px 0 7px;
+  font-size: var(--pluma-font-body);
+  color: var(--pluma-text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--pluma-text);
+}
+
+.tab.active {
+  color: var(--pluma-accent);
+  border-bottom-color: var(--pluma-accent);
+  font-weight: 500;
+}
+
+/* ── 净化视图（偏好视图，非状态）──
+   ⚠️ 这里**不放开关**：改偏好一律去设置页（02 §0 popup 是查看器）。 */
+.clean {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.clean-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-control);
+}
+
+/* 当前页不适用：灰显但**不隐藏** —— 用户需要知道"有这个功能，只是这里用不上" */
+.clean-row.na {
+  opacity: 0.55;
+}
+
+.clean-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.clean-name {
+  font-size: var(--pluma-font-body);
+}
+
+.clean-scope {
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+.clean-state {
+  flex: none;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+.clean-state.on {
+  color: var(--pluma-accent);
+  font-weight: 500;
+}
+
+.manage {
+  align-self: center;
+  margin-top: 2px;
 }

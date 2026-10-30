@@ -83,7 +83,8 @@ popup 里应显示「已接管」——这是生效的标志。
 
 ## 致谢
 
-设计思路受益于 **Bili Dual Account Helper**（请求级身份代理）、**BiliPai**（多账号设计）。**均未使用其源代码。** 如有异议请联系删除致谢。
+思路受益于 **Bili Dual Account Helper**、**BiliPai**、**Ghost-Downloader-3**（界面形态），**均未使用其源代码**。
+页内视觉清理的选择器与分类判据来自 **Bilibili-Evolved**（MIT，作者 the1812 与 RieN7），**使用了其源码中的选择器清单**，版权与许可原文见 [NOTICE.md](./NOTICE.md)。
 
 ## 许可证
 

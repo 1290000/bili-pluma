@@ -17,7 +17,7 @@
  * ## 选项来源
  *
  * 除特别注明外，全部取自 Bilibili-Evolved `utils/remove-promotions/index.ts`
- * 的 `options`（MIT，见仓库根 `NOTICE`）。`displayName` 保持上游原措辞，
+ * 的 `options`（MIT，见仓库根 `NOTICE.md`）。`displayName` 保持上游原措辞，
  * 因为用户已经熟悉那套说法。
  *
  * **首页分类不来自上游**：上游那份 37 项清单在当前 B站 没有实测依据
