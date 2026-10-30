@@ -71,6 +71,16 @@ const STEPS = [
   },
   { name: 'patch', cmd: process.execPath, args: ['scripts/check-patch-scope.mjs'], first: true },
   {
+    // 2026-10-30 加：代码里有 200+ 处注释写着「见 ADR 0020」——它们是**知识索引**，
+    // 而 ADR 会被重新编号/合并/作废，**没有任何东西在检查这些编号还在不在**。
+    // 失效的后果比"没有引用"更糟：编号被复用后会指向**另一份** ADR，
+    // 读者读到的是错的理由。（同类失败已发生：ADR 0030 初稿把 pgcPatched 归错了模块。）
+    name: 'adr-refs',
+    cmd: process.execPath,
+    args: ['scripts/check-adr-refs.mjs'],
+    first: true,
+  },
+  {
     // 2026-10-30 加：`reload-extension.mjs`（能自动重载扩展）在 AGENTS.md 里一次都没被提到，
     // 结果团队里没人记得它存在，每次改完 src/ 都手工点「重新加载」。
     // 根因不是文档太长，是**清单不完整**，而且没有任何机制会提示"你漏登记了一个工具"。
@@ -126,6 +136,7 @@ const STEP_DOC = {
   patch:
     '响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）',
   tools: 'AGENTS-TOOLS.md 与 scripts//poc/ 下每个脚本对账（防"工具没人记得"）',
+  'adr-refs': '代码注释里的 ADR 编号必须指向真实存在的 ADR（知识索引不许断）',
   'page-gate': '「是不是播放页」只许走 parsePlayPage()，路径字面量不许越界',
   'workflow-logs': 'Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）',
   artifact: 'dist/*.zip 与源码一致：含图标、world:MAIN 入口、无 WAR、main-world.js 字节一致',

@@ -45,6 +45,7 @@
 | `node scripts/check-workflow-logs.mjs` | CI 日志泄露（只抓 `set -x` / `printenv` 这类必泄露写法） | 改 `.github/workflows/**`，**仍须人工过每个打印点**（§4.3） |
 | `node scripts/check-design-imports.mjs` | `core`/`shared` 不许引用 `@design/*` | 改视觉令牌或 `tokens.css` |
 | `node scripts/check-tools.mjs` | **本文件自身的完整性**（每个脚本都要有登记处） | 新增/删除任何 `scripts/`、`poc/` 脚本 |
+| `node scripts/check-adr-refs.mjs` | 代码注释里的 ADR 编号必须真实存在 | 新增 ADR、改 ADR 编号、或大量改注释 |
 | `node scripts/loc.mjs` | **行数统一口径**（见 §5） | 想知道文件多长时 |
 
 ---
