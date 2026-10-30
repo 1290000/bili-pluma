@@ -122,4 +122,55 @@ describe('content.ts 特征测试（拆分安全网）', () => {
       expect(CONTENT).toContain('res.activated === true');
     });
   });
+
+  describe('消息分支顺序：诊断路由表必须在有状态分支之后', () => {
+    /**
+     * ## 这条测试是怎么来的
+     *
+     * S3.4 把 6 条纯诊断消息（patch / sb-* / codec / req / pgc）收进了
+     * `diagnostic-routes.ts`，并在 `listenMainWorld` **末尾**统一查表。
+     *
+     * 我把路由表挪到 `playurl-tracks` 之前做反例实验时，**29 条测试全绿** ——
+     * 因为路由表对未知 type 返回 null、会自然往下走，`playurl-tracks` 本来
+     * 就不在表里，所以挪位置**碰巧**没坏事。
+     *
+     * 但这个"碰巧"靠不住：只要将来有人往表里加了一个有状态的消息类型，
+     * 放在前面就会把它**静默吃掉**（返回拒绝，后面的分支不再执行）。
+     *
+     * 所以这里从**源码结构**上锁死：诊断路由表的调用必须在
+     * 所有 `if (d.type === ...)` 之后。
+     */
+    it('describeDiagnostic 出现在所有 if (d.type === ...) 之后', () => {
+      const diagAt = CONTENT.indexOf('const diagnosticNote = describeDiagnostic(');
+      expect(diagAt).toBeGreaterThan(0);
+
+      /** `listenMainWorld` 里所有分支的位置 */
+      const listenStart = CONTENT.indexOf('function listenMainWorld');
+      const listenEnd = CONTENT.indexOf('\n}', listenStart);
+      const body = CONTENT.slice(listenStart, listenEnd);
+
+      const branchPositions = [...body.matchAll(/if \(d\.type (?:===|!==) '/g)].map(
+        (m) => m.index ?? 0,
+      );
+      expect(branchPositions.length).toBeGreaterThan(0);
+
+      const diagInBody = body.indexOf('const diagnosticNote = describeDiagnostic(');
+      expect(diagInBody).toBeGreaterThan(0);
+
+      const lastBranch = Math.max(...branchPositions);
+      expect(diagInBody, '诊断路由表必须排在所有消息分支之后').toBeGreaterThan(lastBranch);
+    });
+
+    it('诊断路由表只处理纯诊断（有状态分支不在表里）', () => {
+      /**
+       * 这条与 `diagnostic-routes.test.ts` 互为双保险：
+       * 那边测表的内容，这里测**调用处**没有把有状态分支也一起交出去。
+       */
+      expect(CONTENT).toContain('describeDiagnostic(');
+      // 有状态的三条仍然各自独立判断
+      expect(CONTENT).toContain("if (d.type === 'ssr-playinfo')");
+      expect(CONTENT).toContain("if (d.type === 'playurl-tracks')");
+      expect(CONTENT).toContain("if (d.type === 'hdr')");
+    });
+  });
 });
