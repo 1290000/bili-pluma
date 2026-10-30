@@ -82,7 +82,18 @@ export default defineConfig({
     // cookies：只在扫码登录那一刻读一次播放账号的 SESSDATA / bili_jct / DedeUserID
     // 原因见 ADR 0008——凭据只通过 Set-Cookie 下发（httpOnly），fetch 读不到
     permissions: ['storage', 'cookies', 'tabs', 'declarativeNetRequestWithHostAccess'],
-    host_permissions: ['*://*.bilibili.com/*'],
+    /**
+     * ⚠️ **`live.bilibili.com` 是独立条目，不能靠 `*.bilibili.com` 覆盖**（ADR 0031）。
+     *
+     * 直播间的 URL 是 `live.bilibili.com/<房间号>`，加它之后
+     * **安装时用户看到的权限提示会变**（"bilibili.com 和 live.bilibili.com"）。
+     * 这是 ADR 0031 明示接受的代价，换来直播间的水印清理能力。
+     *
+     * ⚠️ 加这个域**不等于**支持直播取流：
+     * `routes.ts` 里两条直播路径**必须保持 `enabled: false`**。
+     * 直播间只做样式层清理（隐藏水印 logo），不换 Cookie、不发取流请求。
+     */
+    host_permissions: ['*://*.bilibili.com/*', '*://live.bilibili.com/*'],
     /**
      * ⚠️ 这里**没有** `web_accessible_resources`。
      *

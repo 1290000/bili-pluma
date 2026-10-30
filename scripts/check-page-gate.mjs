@@ -74,6 +74,31 @@ const MUST_USE_GATE = [
  */
 const MANIFEST_MATCHES = ['entrypoints/content.ts', 'entrypoints/main-hook.content.ts'];
 
+/**
+ * **不是播放页**的 content 入口 —— 只需要存在性检查，不参与播放页模式断言。
+ *
+ * ## 为什么单独一张表（2026-10-31，ADR 0031）
+ *
+ * `entrypoints/content-live.content.ts` 只注入 `live.bilibili.com`，做样式层的水印隐藏，
+ * **不判断"是不是播放页"**（`parsePlayPage()` 本来就明确不认直播，见 `video-page.ts`）。
+ *
+ * ⚠️ **文件名的 `.content.` 不是随便取的**：WXT 靠文件名判定入口类型
+ * （`PATH_GLOB_TO_TYPE_MAP`：`*.content.[jt]s` → `content-script`，而兜底的 `*.[jt]s`
+ * → `unlisted-script`）。叫 `content-live.ts` 时它会**正常构建出一个 js 文件，
+ * 但不进 manifest 的 `content_scripts`** —— 直播页永远不会注入，且**构建不报任何错**。
+ * 2026-10-31 实测踩到过。改这个名字等于让功能静默失效。
+ *
+ * 若把它并进 `MANIFEST_MATCHES`，规则 2 会要求它也含 `video/*` 与 `bangumi/play/*` ——
+ * 那等于逼着直播入口去注入视频页，反向扩大暴露面。
+ *
+ * 若完全不登记，规则 1/3 都不知道它存在，将来谁把它删了或改成注入全站，这里也发现不了。
+ *
+ * 所以它单独一张表：**存在性 + `matches` 必须是直播域**。
+ */
+const NON_PLAY_PAGE_ENTRIES = [
+  { file: 'entrypoints/content-live.content.ts', match: '*://live.bilibili.com/*' },
+];
+
 /** 每个 content 入口都必须同时出现的两个模式 */
 const REQUIRED_MATCH_PATTERNS = ['*://*.bilibili.com/video/*', '*://*.bilibili.com/bangumi/play/*'];
 
@@ -82,6 +107,7 @@ const PATH_LITERAL_ALLOWED = new Set([
   'src/shared/utils/video-page.ts',
   'src/shared/constants/routes.ts',
   ...MANIFEST_MATCHES,
+  ...NON_PLAY_PAGE_ENTRIES.map((e) => e.file),
 ]);
 
 /**
@@ -284,6 +310,39 @@ async function main() {
     }
   }
 
+  // 规则 2c：非播放页入口必须存在，且 matches 只指向它自己的站点
+  for (const { file, match } of NON_PLAY_PAGE_ENTRIES) {
+    const masked = maskedByFile.get(file);
+    if (masked === undefined) {
+      problems.push({
+        what: `${file} 不存在或不在扫描范围内`,
+        why:
+          '这是直播间样式清理的入口（ADR 0031）。删掉它本身不会报错，' +
+          '但直播水印就永远不隐藏了 —— 而且没有任何其它检查会发现这件事',
+      });
+      continue;
+    }
+    if (!masked.includes(match)) {
+      problems.push({
+        what: `${file} 的 matches 里缺 \`${match}\``,
+        why:
+          '该入口只允许注入直播域。若它被改成覆盖全站（例如 `*://*/*`），' +
+          '等于把扩展的注入面扩大到所有网站 —— 那是 ADR 0031 明确的越权',
+      });
+    }
+    // 反向断言：不许它同时含播放页模式，否则就变成了"又一个播放页入口"
+    for (const p of REQUIRED_MATCH_PATTERNS) {
+      if (masked.includes(p)) {
+        problems.push({
+          what: `${file} 的 matches 里出现了播放页模式 \`${p}\``,
+          why:
+            '直播入口不该注入视频页 / 番剧页。需要在那两个页面上做事，' +
+            '改 `content.ts`，不要把这个入口变成第二个播放页入口（ADR 0031）',
+        });
+      }
+    }
+  }
+
   // 规则 2b：共享常量必须同时含两个模式（否则引用它的地方静默漏掉一类页面）
   {
     const masked = maskedByFile.get(PATTERN_SOURCE);
@@ -324,6 +383,7 @@ async function main() {
     console.log(
       `[page-gate] ✅ ${MUST_USE_GATE.length} 个入口走统一判据 · ` +
         `${MANIFEST_MATCHES.length} 个 content 入口覆盖两种播放页 · ` +
+        `${NON_PLAY_PAGE_ENTRIES.length} 个非播放页入口只注入本站 · ` +
         `${files.length} 个文件里无越界路径字面量`,
     );
     return;
