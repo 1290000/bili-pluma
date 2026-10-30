@@ -71,6 +71,16 @@ const STEPS = [
   },
   { name: 'patch', cmd: process.execPath, args: ['scripts/check-patch-scope.mjs'], first: true },
   {
+    // 2026-10-30 加：`reload-extension.mjs`（能自动重载扩展）在 AGENTS.md 里一次都没被提到，
+    // 结果团队里没人记得它存在，每次改完 src/ 都手工点「重新加载」。
+    // 根因不是文档太长，是**清单不完整**，而且没有任何机制会提示"你漏登记了一个工具"。
+    // 现在 AGENTS-TOOLS.md 是脚本清单的唯一权威位置，本项断言两者一致。
+    name: 'tools',
+    cmd: process.execPath,
+    args: ['scripts/check-tools.mjs'],
+    first: true,
+  },
+  {
     // 2026-10-29 加：审查发现 popup 与 tabs.handler 各自写着 /video/ 正则，
     // 而项目早有 parsePlayPage()（同时认 /video/ 与 /bangumi/play/）。
     // 后果是番剧页 popup 谎报「未生效」、§2.3 画质对比永不显示 ——
@@ -115,6 +125,7 @@ const STEP_DOC = {
   secrets: '测试账号标识 / 凭据形态 / 本机路径',
   patch:
     '响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）',
+  tools: 'AGENTS-TOOLS.md 与 scripts//poc/ 下每个脚本对账（防"工具没人记得"）',
   'page-gate': '「是不是播放页」只许走 parsePlayPage()，路径字面量不许越界',
   'workflow-logs': 'Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）',
   artifact: 'dist/*.zip 与源码一致：含图标、world:MAIN 入口、无 WAR、main-world.js 字节一致',

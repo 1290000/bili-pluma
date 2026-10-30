@@ -44,12 +44,7 @@ API 语义不确定 → 写最小复现脚本（✗ 按名字猜，如 `(dynamic
 **任何"修好了"的结论，必须附一条能复现旧 bug 的验证**：把关键判断反向改回去，测试必须变红，
 否则那个测试等于没写。穷举法四步与"会不会翻车"七问 → [docs/guides/methodology.md](docs/guides/methodology.md)。
 
-现成的实测工具（`poc/probe/`，不接入 WXT、零构建）：
-
-```bash
-node poc/probe/probe-logged-in.mjs   # 用日常 Chrome profile 抓 4 个分 P 的真实轨道
-bash poc/probe/run-all.sh            # 启动带端口的 Edge → 等就绪 → 实测 → 收尾
-```
+现成的实测工具与全部脚本命令见 [AGENTS-TOOLS.md](./AGENTS-TOOLS.md)（**脚本清单的唯一权威位置**，不在此重复）。
 
 ### ⚠️ 浏览器自动化：CDP 走不通，走扩展
 
@@ -62,17 +57,21 @@ bash poc/probe/run-all.sh            # 启动带端口的 Edge → 等就绪 →
 
 ---
 
-## 2. 先读什么（按此顺序，不要跳）
+## 2. 先读什么
 
-1. [README.md](./README.md) —— 这是什么、边界在哪、怎么装
-2. **本文件** —— 硬约束
-3. [docs/03-open-questions.md](./docs/03-open-questions.md) §0 总览表 —— **还剩几件事没定**，哪些已定不要翻案
-4. [docs/04-project-structure.md](./docs/04-project-structure.md) §〇 + §1 + §2 —— 技术选型、目录、分层禁令
-5. [docs/decisions/](./docs/decisions/) —— 已定决策的理由
-6. [docs/01-architecture.md](./docs/01-architecture.md) —— 需要理解原理时再读
-7. [docs/02-ui-spec.md](./docs/02-ui-spec.md) —— 只在做 UI 时读
+**不要按顺序读完 `docs/`（七千多行）。按你要做的事查下表。**
 
-**不需要一次读完 `docs/`**，按需查；但**决策清单（第 3 步）必须读**。
+| 我要做什么 | 必读（按序） | 可跳过 |
+| --- | --- | --- |
+| **任何事**（公共前缀） | 本文件 §0 → §1.5 → **§3** → §7 → §8 | —— |
+| 组队 / 新会话开局 | 公共前缀 + [team-workflow.md](./docs/guides/team-workflow.md) | 01 / 02 |
+| 改 PGC 注入 / 番剧页 | 公共前缀 + §4.3 + [01-architecture](./docs/01-architecture.md) §4 | 02-ui-spec |
+| 改 UI / popup | 公共前缀 + §5.3 + [02-ui-spec](./docs/02-ui-spec.md) | 01-architecture |
+| 改 DNR / 换 Cookie | 公共前缀 + §4.1 + §4.3 + [ADR 0006](./docs/decisions/0006-no-per-request-nonce.md) + [0029](./docs/decisions/0029-updatesessionrules-atomic-combined-call.md) | 02-ui-spec |
+| 只改文档 | 公共前缀 + §6 | 其余全部 |
+| 找某个工具怎么用 | [AGENTS-TOOLS.md](./AGENTS-TOOLS.md) —— **脚本清单的唯一权威位置** | —— |
+
+**没在表里的情况**：先用 [AGENTS-TOOLS.md](./AGENTS-TOOLS.md) 找工具，再回本表找场景；两处都没有就先报告，不要自己发明。§3 决策的理由在 [docs/decisions/](./docs/decisions/)，选型与目录在 [docs/04-project-structure.md](./docs/04-project-structure.md)。
 
 ---
 

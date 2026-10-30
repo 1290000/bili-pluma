@@ -15,7 +15,7 @@
 
 ## 先读这三份（约 30 分钟，读完就能开工）
 
-> **不要从 01 开始按顺序读。** 四份主文档 + 28 个 ADR + 8 篇 guides 合计七千多行，
+> **不要从 01 开始按顺序读。** 四份主文档 + 30 个 ADR + 10 篇 guides 合计一万多行，
 > 通读一遍的成本远高于"先动手、按需查"。真实路径是：
 
 | 顺序 | 文档 | 行数 | 读完你会知道 |
@@ -34,7 +34,10 @@
 | 还有什么事没定 | [03](./03-open-questions.md) §0 总览表 |
 | 取流链路是怎么走通的 | [01](./01-architecture.md) §4 |
 | 这个 bug 怎么查 | [guides/methodology.md](./guides/methodology.md) |
-| 某个命令怎么跑 | `node scripts/verify.mjs --help`（命令的唯一权威位置） |
+| 某个命令/脚本怎么跑 | **[AGENTS-TOOLS.md](../AGENTS-TOOLS.md)**（脚本清单的唯一权威位置） |
+| 组队怎么组、怎么干 | [guides/team-workflow.md](./guides/team-workflow.md) |
+| 怎么读扩展状态 / 拨总开关 | [guides/bsk-page-bridges.md](./guides/bsk-page-bridges.md) |
+| 发版前要过哪些验收 | [guides/v1-acceptance-checklist.md](./guides/v1-acceptance-checklist.md) |
 
 ---
 
