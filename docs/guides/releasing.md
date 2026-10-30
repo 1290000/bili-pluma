@@ -211,11 +211,72 @@ node scripts/package.mjs
 
 这是唯一无法自动化的环节 —— 它验的是"用户拿到 zip 之后能不能装上"。
 
-**必须用 zip 本身验，不能直接加载 `.output/`**：
+**必须用 zip 本身验，不能直接加载 `.output/`**。
+
+---
+
+#### 分工（2026-10-30 定，**别再自己想办法自动化前两步**）
+
+| 步骤 | 谁做 | 为什么 |
+| --- | --- | --- |
+| ① 解压 zip 到一个**正式目录** | **Agent** | 纯文件操作 |
+| ② 在 `edge://extensions` **手工加载解压缩的扩展** | **人** | 只有 UI 能做，见下 |
+| ③ **扫码登录播放账号** | **人** | 凭据换 ID 后必然失效，见下 |
+| ④ 跑下面的自动化验收清单 | **Agent** | 用 `bsk` 读真实状态 |
+
+> ⚠️ **`edge://extensions` 必须人来做。** 三条自动化路径都试过、全部失败：
+>
+> | 办法 | 结果 |
+> | --- | --- |
+> | `bsk` 操作 `edge://extensions/` | ❌ 沙箱按 URL 白名单挡掉，连截图都拿不到 |
+> | 直接改 `Secure Preferences` 的 `path` | ❌ **2026-10-30 实测：扩展注册项被 Edge 整个丢弃** —— 该文件有 `protection.macs` 覆盖 `extensions` 字段，手改后 MAC 校验失败，Edge 判定被篡改 |
+> | 复用 `reload-extension.mjs` | ❌ 它的目标目录**写死 `.output/chrome-mv3`**，不能指向 zip 解压目录；且它只重启浏览器，**不负责新增注册项** |
+
+> ⚠️ **凭据搬运不可靠，默认按"要重扫"安排。** 切换加载目录 → 扩展 ID 变 →
+> `Local Extension Settings/<id>/` 换目录。虽然 AES 密钥是随机生成、**不绑定扩展 ID**
+> （`src/core/vault/vault.ts` 的 `saveCredential`），理论上整目录复制即可解密，
+> 但 2026-10-30 实测**复制后扩展仍读不到**（`hasCredential: false`）——
+> Edge 在扩展加载时就绑定了存储路径，复制到已打开目录不生效。
+> 所以**不要指望搬运**，直接让用户扫码，最省事也最可靠。
+
+---
+
+#### ① Agent 准备（解压到正式目录）
+
+解压到 `dist/smoke-<版本>/`，**不要解压到 `.tmp/`**（隐藏目录，且是临时语义）：
 
 ```bash
-# 解压到临时目录（模拟用户操作）
+# 目录必须在 zip 里 manifest.json 的同一层（平铺）
+mkdir -p dist/smoke-<版本>
+# 用你手边的解压工具解到该目录，确认 dist/smoke-<版本>/manifest.json 存在
+node -e "console.log(require('./dist/smoke-<版本>/manifest.json').version)"   # 必须等于发布版本
 ```
+
+#### ② 人：手工加载
+
+1. 打开 `edge://extensions`，确认「开发人员模式」已开
+2. 点「加载解压缩的扩展」→ 选 **`dist/smoke-<版本>`**（不是 `.output/chrome-mv3`）
+3. 记下新扩展 ID（页面上能看到）
+
+#### ③ 人：扫码登录播放账号
+
+点扩展图标 → 「扫码登录播放账号」→ 用大会员账号扫。
+
+> 加载路径变了 → 扩展 ID 变了 → 旧凭据一定读不到（这是设计，不是 bug）。
+> **不要试图从旧 ID 目录搬 storage**，见上面的实测记录。
+
+#### ④ Agent：自动化验收
+
+装好并登录后，用 `bsk` 跑下面清单。**判据必须看播放器的 `video.duration`，不要看 UI 总时长**：
+
+```js
+// ✅ 正确判据：播放器真实时长（试看 = 360 秒左右，完整集 = 片长）
+document.querySelector('video').duration
+```
+
+> ⚠️ **2026-10-30 实测踩过**：`poc/probe/verify-pgc-by-snapshot.mjs` 读的是**进度条上显示的总时长**
+> （B站 UI 值，可能是 `24:01`），而 `video.duration` 可能仍是 `360.109`（试看）。
+> **两者不一致时，以 `video.duration` 为准** —— 那才是"实际能播多长"。
 
 - [ ] 解压 `pluma-<版本>.zip` → 打开 `edge://extensions` → 加载解压缩的扩展 → **能装上**
 - [ ] 装完 badge 出现小圆点 → popup 显示"未配置"
@@ -225,6 +286,32 @@ node scripts/package.mjs
 - [ ] 播放 30 秒 → 历史出现在主账号
 - [ ] 关掉总开关 → 刷新 → 画质回落到 1080P（判据见验收清单 §5）
 - [ ] 打开非视频页 → popup 显示"未生效"
+
+#### ⑤ 收尾：切回开发目录
+
+冒烟完把扩展切回 `.output/chrome-mv3`（同样要人手工做：`edge://extensions` 里移除 smoke 版，
+再加载 `.output/chrome-mv3`）。否则下次开发时改代码不生效。
+
+---
+
+#### 实测记录（2026-10-30 · 1.0.1）
+
+第一次按上面的分工跑通，留档供下次对照：
+
+| # | 项 | 原始读数 |
+| --- | --- | --- |
+| 1 | 扩展加载且已接管 | `state=active` `credential=true` `rules=3` |
+| 2 | 播放账号已登录且健康 | `vip=annual` `healthy=true` |
+| 3 | **播的是完整集** | **`video.duration=1441`** |
+| 4 | 解锁档位已取得 | `已取得 HDR` `badges=[HDR,1080P+]` |
+| 5 | **关开关 → 刷新 → 回落** | `duration=360.109`（试看） |
+| 6 | 开关恢复后重新接管 | `duration=1441` |
+| 7 | 非视频页不注入 | `hasMainHook=false`（`matches` 只含 `/video/*` 与 `/bangumi/play/*`） |
+
+**两项未验**（如实留档，不要写成通过）：
+- 点赞 / 播放历史记在主账号 —— 自动化读不到，需人为主账号侧确认
+- 4K/2160p 实际播放 —— 该样本最高 1080P，4K 场景由 1.0.0 验收覆盖
+
 
 ### 5. 更新 CHANGELOG.md（**必须在 §3 打包之前完成**）
 
