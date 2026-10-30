@@ -56,7 +56,9 @@ bash poc/probe/run-all.sh            # 启动带端口的 Edge → 等就绪 →
 **Playwright/CDP 无法同时拿到「用户登录态」和「调试端口」**（新 profile 没 cookie，带端口又与日常浏览器冲突），
 所以它**只用于不带登录态的验证**（DNR 规则、扩展加载、SW 生命周期）。
 **需要真实登录态时用 `bsk`（browser-skill）**：扩展 + 本地 IPC，不占调试端口，直接复用当前 profile。
-本机配置与三个坑见 [docs/guides/browser-skill-setup.md](docs/guides/browser-skill-setup.md)。
+
+- 本机配置、版本锁定（**0.3.3，不要升 0.4.x**）与能力边界：[docs/guides/browser-skill-setup.md](docs/guides/browser-skill-setup.md)
+- **读扩展状态 / 拨总开关**：见 [docs/guides/bsk-page-bridges.md](docs/guides/bsk-page-bridges.md)。⚠️ **必须 `async IIFE` + 内部 `await` 再 stringify** —— 直接 stringify 一个 Promise 会得到 `{}` 且看起来"成功"（实测踩过）。判播完完整性用 `poc/probe/verify-pgc-by-snapshot.mjs`。
 
 ---
 
