@@ -34,7 +34,7 @@ cookieOverwritten: true
 | 决策 | 原文 | 现状 |
 | --- | --- | --- |
 | [ADR 0004](./0004-request-level-identity-proxy.md) | 浏览器全程 A，只对取流接口换 B 的凭据 | **前提不成立**：登录 B 的那一刻浏览器就变成 B |
-| `AGENTS.md` §2 第 2 条 | "请求级代理，不切 cookie" | 同上 |
+| `AGENTS.md` §3 决策 2 | "请求级代理，不切 cookie" | 同上 |
 | 根 `README.md` 首屏 | "浏览器全程保持主账号登录" | **当前实现下不成立** |
 
 ## 影响面

@@ -46,6 +46,7 @@
 | `node scripts/check-design-imports.mjs` | `core`/`shared` 不许引用 `@design/*` | 改视觉令牌或 `tokens.css` |
 | `node scripts/check-tools.mjs` | **本文件自身的完整性**（每个脚本都要有登记处） | 新增/删除任何 `scripts/`、`poc/` 脚本 |
 | `node scripts/check-adr-refs.mjs` | 代码注释里的 ADR 编号必须真实存在 | 新增 ADR、改 ADR 编号、或大量改注释 |
+| `node scripts/check-doc-sections.mjs` | 文档里「AGENTS.md §N」的章节与**条目**引用必须真实存在 | 改 `AGENTS.md` 的章节结构、或改文档里的跨章引用 |
 | `node scripts/loc.mjs` | **行数统一口径**（见 §5） | 想知道文件多长时 |
 
 ---

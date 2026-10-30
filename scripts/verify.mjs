@@ -71,6 +71,17 @@ const STEPS = [
   },
   { name: 'patch', cmd: process.execPath, args: ['scripts/check-patch-scope.mjs'], first: true },
   {
+    // 2026-10-30 加：A 阶段先修"对 AGENTS.md 的引用指错位置"。
+    // 实测抓到真实错误：docs/decisions/0011 与 0012 都写「§2 第 2 条 = 请求级代理，不切 cookie」，
+    // 而 §2 是「先读什么」**没有编号条目**，那句实际在 §3 决策 2。
+    // 之所以一直没发现：章节号 §2 是存在的，所以"章节存在性"检查会放行 ——
+    // 错的是「第 2 条」这个条目级指向。本检查两级都查。
+    name: 'doc-sections',
+    cmd: process.execPath,
+    args: ['scripts/check-doc-sections.mjs'],
+    first: true,
+  },
+  {
     // 2026-10-30 加：代码里有 200+ 处注释写着「见 ADR 0020」——它们是**知识索引**，
     // 而 ADR 会被重新编号/合并/作废，**没有任何东西在检查这些编号还在不在**。
     // 失效的后果比"没有引用"更糟：编号被复用后会指向**另一份** ADR，
@@ -137,6 +148,7 @@ const STEP_DOC = {
     '响应体改写范围：PATCH_PATHS↔ADR 0013（会员字段）、PROGRESS_PATCH_PATHS↔ADR 0017（观看进度）',
   tools: 'AGENTS-TOOLS.md 与 scripts//poc/ 下每个脚本对账（防"工具没人记得"）',
   'adr-refs': '代码注释里的 ADR 编号必须指向真实存在的 ADR（知识索引不许断）',
+  'doc-sections': '文档里「AGENTS.md §N」的章节与条目引用必须真实存在',
   'page-gate': '「是不是播放页」只许走 parsePlayPage()，路径字面量不许越界',
   'workflow-logs': 'Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）',
   artifact: 'dist/*.zip 与源码一致：含图标、world:MAIN 入口、无 WAR、main-world.js 字节一致',
