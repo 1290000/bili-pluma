@@ -229,12 +229,36 @@ export function renderBadge(tokensCss: string, input: BadgeInput): void {
   }
 
   if (!host) {
+    /**
+     * ## ⚠️ `document.body` 可能是 `null`（2026-10-31 修）
+     *
+     * content script 是 `runAt: 'document_start'` —— 它在 `<body>` 被解析出来**之前**
+     * 就执行了。而角标是**事件驱动**绘制的（收到 `tracks` / `hdr` 消息就画），
+     * 那几条消息可能在 body 就绪前到达。
+     *
+     * 真机现场（1.0.1，ep341217）：
+     * ```
+     * Uncaught (in promise) TypeError: Cannot read properties of null (reading 'appendChild')
+     *   at content.js (y):1:2817
+     * ```
+     * 后果：那一次绘制整个失败（角标不出现），而 `renderBadge` 是幂等的，
+     * **后续消息到了仍会重画**，所以用户看到的只是「角标晚一点出现」——
+     * 但它是个**未捕获的 TypeError**，会污染控制台，也让排查者以为出了大事。
+     *
+     * 修法：body 还没有就挂到 `documentElement`（`<html>`，`document_start` 时**一定存在**）。
+     * `position: fixed` 挂在 `<html>` 上效果相同（fixed 相对视口定位，与父元素无关），
+     * 所以**视觉无差异**，只是不再抛错。
+     *
+     * 为什么不"等 DOMContentLoaded 再画"：那会把角标推迟到页面加载完，
+     * 与「尽早告知用户已接管」的目标相反；而且要多存一份待绘状态，增加复杂度。
+     */
+    const mount = document.body ?? document.documentElement;
     host = document.createElement('div');
     host.id = HOST_ID;
     // 宿主本身不参与布局影响：fixed 定位，不占文档流
     host.style.cssText =
       'position:fixed;right:16px;bottom:96px;z-index:2147483000;pointer-events:auto;';
-    document.body.appendChild(host);
+    mount.appendChild(host);
 
     const shadow = host.attachShadow({ mode: 'closed' });
     shadowRef = shadow;
