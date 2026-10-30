@@ -93,6 +93,8 @@
 | [0028](./decisions/0028-proxy-off-signal-for-pgc-injection.md) | **总开关的「关」必须在注入处可判**：`localStorage` 三态门控 |
 | [0029](./decisions/0029-updatesessionrules-atomic-combined-call.md) | **`updateSessionRules` 组合形式是原子的**（实测）：可以收敛成一次调用 |
 | [0030](./decisions/0030-pgc-reload-guard-semantics.md) | **刷新护栏改记「刷之后成了没有」**：成功即清，上限 1→2 |
+| [0031](./decisions/0031-page-level-visual-cleanup-boundary.md) | **页内视觉改造是第三类能力**：不碰请求/响应/账号，边界按站点划；`host_permissions` 加 `live.bilibili.com` |
+| [0032](./decisions/0032-subtitle-broaden-to-multitool.md) | **副标题改为「B站双账号助手 · 画质与净化」**：保留「双账号」，让副标题不再只说画质 |
 
 > ⚠️ **这张表必须与实际 `docs/decisions/` 对账** —— 2026-10-30 发现它漏了 0029/0030
 > （新增 ADR 时忘了登记）。现在由 `check-adr-index` 自动断言，漏登记会红。
