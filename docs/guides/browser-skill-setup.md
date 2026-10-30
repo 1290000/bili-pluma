@@ -25,7 +25,18 @@ bsk daemon start --foreground
 
 daemon 空闲 10 分钟退出；需要更长窗口加 `--daemon-idle 2h`。
 
-> **2026-10-29 复核**：`bsk doctor` 8/8；活动 home `~/.bsk`；扩展 Edge 156 已连接。下文坑 1/2/3 保留为历史排错记录。
+> **2026-10-30 复核（bsk 0.4.0）**：`bsk doctor` 8/8；活动 home `~/.bsk`；daemon 0.4.0 / 协议 1.7；
+> 扩展 Edge 156 同步升到 0.4.0。**0.4.0 引入了协作上下文模型，操作页面的流程变了**，见 §4/§4a。
+> ⚠️ 升级后**必须手工同步 DSH 的 skill 文档**，否则 agent 会拿旧规则操作新 CLI —— 见 §5。
+
+### 升级 bsk 本身
+
+```bash
+bsk update -y --no-restart-daemon   # -y 跳过交互（非终端环境下必须带，否则报 not a terminal）
+```
+
+升级前**先停掉 foreground daemon**（它会占用二进制文件），升级后重新 `bsk daemon start --foreground`。
+实测 GitHub 下载偶发 `tls handshake eof`，**重试一次即可**（`bsk update --check` 能先探连通性）。
 
 ---
 
@@ -60,20 +71,87 @@ ok  browser protocol compatible
 
 ---
 
-## 4. 一次最小任务
+## 4. 一次最小任务（**bsk 0.4.0 起流程变了**）
+
+> ⚠️ 0.3.x 时代是 `session start → navigate → observe`。
+> **0.4.0 引入了协作上下文（cooperate），任何"操作页面"的调用都要先 `cooperate sync` 拿 `context_id`**，
+> 一个 context **只能用于一次操作**，用完必须重新 sync。见 §4a。
 
 ```bash
 bsk session start --no-focus --json          # 记下 session_id
-bsk navigate https://example.com --session <id>
-bsk observe --session <id>                   # 语义树，不是截图
+bsk navigate --session <id> https://example.com
+bsk cooperate sync --session <id> --settle --json   # 拿 context_id
+bsk evaluate --session <id> --context <ctx> "..."   # 一个 context 只能用一次
 bsk session stop <id>                        # 完成或失败都必须停
 ```
 
-`evaluate` 的表达式是**位置参数**，不是 `--expression`：
+`evaluate` 的表达式是**位置参数**，不是 `--expression`。
 
-```bash
-bsk evaluate --session <id> "JSON.stringify({w: document.querySelector('video')?.videoWidth})"
-```
+---
+
+## 4a. bsk 0.4.0 的协作上下文模型（2026-10-30 实测）
+
+### 规则
+
+`cooperation.md`（官方 skill 文档）原文要点：
+
+| 规则 | 含义 |
+| --- | --- |
+| `cooperate sync` 返回 `context_id` | 这个 ID **只能用于一次操作**，用完必须再 sync |
+| 不能把新 context 套到旧操作上 | 也不能盲目重放被拒的操作 |
+| 报 `cooperation_sync_required` | 是**协作结果**，不是浏览器故障 —— 用 `cooperate wait` 然后 sync 再重规划 |
+| `ready: false` 时 | 保持等待，**不要发页面操作** |
+| `user_aborted` | 明确停止：结束任务，不要自动恢复 |
+
+### 为什么 B站番剧页**过不去**（2026-10-30 实测结论）
+
+**方法是对的，是页面变化太快。** 对比实验：
+
+| 页面 | 结果 |
+| --- | --- |
+| `https://example.com`（静态） | ✅ `cooperate sync` → `evaluate` **exit 0**，读到 `{"title":"Example Domain",...}` |
+| B站番剧页（视频播放 + 弹幕滚动 + 时钟） | ❌ 每次都在 sync 与操作之间被判 `The action's observed content changed` |
+
+已排除的其他原因（逐个试过）：
+- `--settle`：能让 **sync 本身**成功（`kind: baseline`、`mode: ready`），但**救不了之后的 action**
+- `--depends-on "@e19"`（播放/暂停按钮的实测 ref）：无效
+- 新建标签页立刻读：无效
+- 先暂停视频：暂停本身也是一次操作，同样进不去
+
+**官方文档对这种情况的说法**（`cooperation.md` 第 56-67 行）：
+> 在持续更新的页面上，应声明观察到的决策区域，而不是反复重试整页操作。
+> 带明确媒体关联的播放控件（播放/暂停 + 时间线）之间的推进**允许**。
+
+但实测在 B站这个页面上，`--depends-on` 仍不足以让操作通过 —— 页面变化的面太广（弹幕列表每秒新增、评论区、时间线、推荐位）。
+
+### 可行做法（按优先级）
+
+| 做法 | 说明 |
+| --- | --- |
+| **人先暂停播放，页面静止后再 sync** | 最可靠。暂停后弹幕仍在滚，但主内容稳定 |
+| **换用不滚动的页面做验证** | 例如在 `video` 页而不是 `bangumi` 页；或关掉弹幕 |
+| **用 `--save-full` 存快照，`bsk view` 离线读** | `view` **零浏览器调用**，不需要 context。适合"读一次性数据"（但拿不到 `window.__PLUMA_PGC__` 这类运行时对象） |
+| 接受"单测 + 构建产物核对"作为验证 | 运行时行为验证确实需要人配合时，如实记录未验证 |
+
+### `--params` 的引号坑（PowerShell）
+
+`bsk step --params '{"ref":"e19"}'` 在 PowerShell 里**双引号会被剥掉**，报
+`parse --params JSON: key must be a string`。
+
+绕法都不行：单引号包裹、写进文件再 `Get-Content -Raw`、`cmd /c` 转义。
+
+**唯一可靠的做法**：用 Node `spawnSync(..., { shell: false })` 调用（与 §7b 坑 4 同源）。
+`shell: false` 时参数原样传给进程，不经过任何 shell 解析。
+
+### 0.4.0 新增的命令（与本项目相关的）
+
+| 命令 | 用途 |
+| --- | --- |
+| `cooperate` | 协作上下文：`sync` / `wait` / `status` |
+| `step` | 一次操作 + 等待条件 + 再同步（打包成一条） |
+| `view` | **本地**读已保存的观测，零浏览器调用 |
+| `dialog` / `operation` | 处理 alert/confirm/prompt，以及被对话框挂起的操作 |
+| `record` / `video` | 录制操作轨迹 / 任务标签页 MP4 |
 
 ---
 
@@ -92,6 +170,40 @@ bsk install-skill --harness cursor
 
 **但 CLI 与 daemon 是共用的**——换平台只需重装 skill 文件，daemon 配置不用动。
 DSH 副本的更新方式：bsk 升级后重新复制 `SKILL.md` + `references/` 到 `~/.dsh/skills/browser-skill/`。
+
+### ⚠️ 升级 bsk 后必须同步 DSH 副本，否则 agent 读的是旧规则
+
+**2026-10-30 实测**：`bsk update` 从 0.3.3 到 0.4.0 时，**WorkBuddy 的 skill 自动更新了**
+（17:41，`SKILL.md` + 3 个新文件），而 **DSH 副本停在 2026-10-26 的 0.3.x 版本**——
+
+| 项 | 版本 |
+| --- | --- |
+| CLI 二进制 `~/.local/bin/bsk.exe` | ✅ 0.4.0 |
+| WorkBuddy skill 文档 | ✅ 0.4.0（14 个文件） |
+| **DSH skill 文档（升级前）** | ❌ **0.3.x（10 个文件）** |
+
+缺的正是 0.4.0 的核心：`references/cooperation.md`（协作上下文）、
+`references/step-and-cache.md`（`step` 命令 + `view` 缓存）、`references/native-dialogs.md`。
+
+**后果**：agent 有新版 CLI，却按旧规则操作 —— 表现为"`evaluate` 突然都要 `--context` 了"
+以及"一直报 `cooperation_sync_required` 却不知道该怎么办"。
+**这不是 CLI 坏了，是文档版本落后于二进制。**
+
+**同步方法**（源用 WorkBuddy 那份，它由 `bsk install-skill` 维护并带官方校验和）：
+
+```powershell
+$wb  = "$env:USERPROFILE\.workbuddy\skills\browser-skill"
+$dsh = "$env:USERPROFILE\.dsh\skills\browser-skill"
+Copy-Item $dsh "$dsh.bak-$(Get-Date -f yyyyMMdd)" -Recurse   # 先备份
+Copy-Item "$wb\SKILL.md" "$dsh\SKILL.md" -Force
+Copy-Item "$wb\references\*" "$dsh\references\" -Force
+```
+
+**校验**：`$wb\.bsk-source` 里有每个文件的 sha256，逐条比对即可确认副本与官方一致
+（不能用 `bsk install-skill` 覆盖 DSH —— 12 个 harness 里没有它）。
+
+> **教训**：`bsk doctor` 的 `agent skill matches bundled CLI` 这一项**只检查它自己管理的那个 harness**。
+> DSH 是手工副本，**不在它的检查范围内**——8/8 全绿也可能意味着 DSH 的文档是旧的。
 
 ---
 
@@ -227,7 +339,7 @@ node poc/probe/reload-extension.mjs --dry-run    # 只打印判断，不动任�
 
 **它会强制结束浏览器再重新拉起**（`--dry-run` 除外）。登录态不受影响 —— cookie 早就落盘了。
 
-### 四个坑（都是实测，改之前先看）
+### 五个坑（都是实测，改之前先看）
 
 | # | 现象 | 真因 |
 | --- | --- | --- |
@@ -235,6 +347,7 @@ node poc/probe/reload-extension.mjs --dry-run    # 只打印判断，不动任�
 | 2 | "浏览器还在跑"恒为真，永远走强杀分支 | `tasklist /FI IMAGENAME eq msedge.exe` **会匹配 `msedgewebview2.exe`**（WebView2 宿主，永不退出）。正确判据是 CSV 第一列**精确等于**进程名 |
 | 3 | `taskkill` 不带 `/F` 杀不掉 | Edge 渲染进程拒绝"请求关闭"，回的是"只能强制终止该进程 /F" |
 | 4 | `evaluate` 的表达式被截断，报 `unexpected argument` | spawn 带了 `shell: true`，`!` 触发历史展开、`"` 被剥掉。**必须 `shell: false`** |
+| 5 | 校验步骤报 `no-bsk`（退出码 3），但 daemon 明明在跑 | 脚本把 `BSK_HOME` 写死成 `~/.bsk-agent`，而**活动 home 是 `~/.bsk`**。2026-10-30 已改为「优先读环境变量，回落到 `~/.bsk`」 |
 
 ### 校验用哪个标签页
 
