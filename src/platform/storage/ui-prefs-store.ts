@@ -29,3 +29,33 @@ export async function readBadgeEnabled(): Promise<boolean> {
 export async function writeBadgeEnabled(enabled: boolean): Promise<void> {
   await chrome.storage.local.set({ [BADGE_KEY]: enabled });
 }
+
+/**
+ * 视觉清理选项（ADR 0031 / 0032）。
+ *
+ * ## 为什么这里只做"存取"，不做校验
+ *
+ * 选项的**合法形状**定义在 `src/content/site-clean/clean-options.ts`
+ * （`DEFAULT_CLEAN_OPTIONS` / `normalizeCleanOptions`）。
+ * 本文件若再写一份默认值，两处必然漂移 —— `AGENTS.md` §6.1 的教训。
+ *
+ * 但 `platform/` 不能 import `content/`（依赖方向：content → platform 才合法）。
+ * 所以这里**只返回原始对象**，收敛交给消费方调用 `normalizeCleanOptions()`。
+ */
+const CLEAN_OPTIONS_KEY = 'pluma:clean-options';
+
+/** 供 content script 监听 `storage.onChanged` 时比对键名 */
+export const CLEAN_OPTIONS_CHANGED_KEY = CLEAN_OPTIONS_KEY;
+
+/** 读原始值（**未收敛**，消费方必须过一次 `normalizeCleanOptions`） */
+export async function readRawCleanOptions(): Promise<unknown> {
+  const bag = await chrome.storage.local
+    .get(CLEAN_OPTIONS_KEY)
+    .catch(() => ({}) as Record<string, unknown>);
+  return bag[CLEAN_OPTIONS_KEY];
+}
+
+/** 写整份选项 */
+export async function writeCleanOptions(options: Record<string, boolean>): Promise<void> {
+  await chrome.storage.local.set({ [CLEAN_OPTIONS_KEY]: options });
+}

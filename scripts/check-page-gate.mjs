@@ -97,6 +97,18 @@ const MANIFEST_MATCHES = ['entrypoints/content.ts', 'entrypoints/main-hook.conte
  */
 const NON_PLAY_PAGE_ENTRIES = [
   { file: 'entrypoints/content-live.content.ts', match: '*://live.bilibili.com/*' },
+  /**
+   * 视觉清理入口（ADR 0031 决定二：边界按**能力**划，不按站点划）。
+   *
+   * 它注入 `www.bilibili.com` 全站，**但不是"第二个播放页入口"**：
+   * 不做取流、不调 `parsePlayPage()`、不碰播放器节点，
+   * 内部按 URL 分支只对首页 / 视频页动作。
+   *
+   * ⚠️ 它**会**注入视频页（为了清广告），这是 ADR 0031 明确批准的。
+   * 下面规则 2c 的反向断言仍要求它**不准含 `bangumi/play/*`** ——
+   * 番剧页不在视觉清理范围内，多注入一类页面就是无谓扩大暴露面。
+   */
+  { file: 'entrypoints/content-home.content.ts', match: '*://www.bilibili.com/*' },
 ];
 
 /** 每个 content 入口都必须同时出现的两个模式 */
