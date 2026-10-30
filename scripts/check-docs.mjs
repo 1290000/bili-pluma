@@ -41,7 +41,14 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 const ROOT = process.cwd();
 
 /** 参与检查的 Markdown 文件（相对仓库根，glob 在代码里手写以保持零依赖） */
-const SCAN_TARGETS = ['README.md', 'AGENTS.md', 'AGENTS-TOOLS.md', 'ADDITIONAL-TERMS.md', 'docs'];
+const SCAN_TARGETS = [
+  'README.md',
+  'AGENTS.md',
+  'AGENTS-TOOLS.md',
+  'AGENTS-RULES.md',
+  'ADDITIONAL-TERMS.md',
+  'docs',
+];
 
 /** 章节编号检查只针对这几份主文档 —— 子目录文件（ADR/guides）不按 `## N` 编号 */
 const NUMBERED_DOCS = [

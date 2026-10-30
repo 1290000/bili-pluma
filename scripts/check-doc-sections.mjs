@@ -52,7 +52,7 @@ const AGENTS = join(ROOT, 'AGENTS.md');
 
 /** 扫描哪些目录/文件里的引用 */
 const SCAN_DIRS = ['docs'];
-const SCAN_FILES = ['AGENTS-TOOLS.md', 'README.md'];
+const SCAN_FILES = ['AGENTS-TOOLS.md', 'AGENTS-RULES.md', 'README.md'];
 
 function walk(dir, out = []) {
   let entries;
@@ -137,29 +137,46 @@ for (const abs of files) {
     }
     if (inFence) continue;
 
-    // 只查「AGENTS.md §N」形态（不查裸 §N —— 那可能是别的文档自己的章节）
-    for (const m of line.matchAll(/AGENTS\.md`?\s*§\s*(\d+(?:\.\d+)?)/g)) {
-      total += 1;
-      const sec = m[1];
-      if (!sections.has(sec)) {
-        badSection.push({ file: rel, line: i + 1, sec, text: line.trim().slice(0, 90) });
-        continue;
-      }
-      // 同行还说了「第 M 条 / 决策 M」吗？
-      const tail = line.slice(m.index);
-      const im = /§\s*\d+(?:\.\d+)?\s*(?:第\s*(\d+)\s*条|决策\s*(\d+))/.exec(tail);
-      if (im) {
-        const num = im[1] ?? im[2];
-        const set = items.get(sec) ?? new Set();
-        if (!set.has(num)) {
-          badItem.push({
-            file: rel,
-            line: i + 1,
-            sec,
-            num,
-            available: [...set].sort((a, b) => Number(a) - Number(b)),
-            text: line.trim().slice(0, 90),
-          });
+    /**
+     * 识别两种引用形态：
+     *   1. `AGENTS.md §N`  —— 散文里的写法
+     *   2. `[§N](./AGENTS.md)` —— **表格里的链接写法**（AGENTS-RULES.md 全用这种）
+     *
+     * ⚠️ 第 2 种是 2026-10-30 补的：AGENTS-RULES.md 有 29 个 `[§N](./AGENTS.md)` 链接，
+     * 而旧正则只认第 1 种 → **索引表本身完全不受检查**，章节号写错也不会红。
+     * 索引文件恰恰是最需要检查的地方（它的全部价值就是"指向对的地方"）。
+     *
+     * 不查裸 `§N`（不带 AGENTS.md 的）—— 那可能是别的文档自己的章节号。
+     */
+    const refPatterns = [
+      /AGENTS\.md`?\s*§\s*(\d+(?:\.\d+)?)/g,
+      /\[\s*§\s*(\d+(?:\.\d+)?)\s*\]\(\s*\.?\/?AGENTS\.md\s*\)/g,
+    ];
+
+    for (const re of refPatterns) {
+      for (const m of line.matchAll(re)) {
+        total += 1;
+        const sec = m[1];
+        if (!sections.has(sec)) {
+          badSection.push({ file: rel, line: i + 1, sec, text: line.trim().slice(0, 90) });
+          continue;
+        }
+        // 同行还说了「第 M 条 / 决策 M」吗？
+        const tail = line.slice(m.index);
+        const im = /§\s*\d+(?:\.\d+)?\s*(?:第\s*(\d+)\s*条|决策\s*(\d+))/.exec(tail);
+        if (im) {
+          const num = im[1] ?? im[2];
+          const set = items.get(sec) ?? new Set();
+          if (!set.has(num)) {
+            badItem.push({
+              file: rel,
+              line: i + 1,
+              sec,
+              num,
+              available: [...set].sort((a, b) => Number(a) - Number(b)),
+              text: line.trim().slice(0, 90),
+            });
+          }
         }
       }
     }

@@ -69,7 +69,7 @@ API 语义不确定 → 写最小复现脚本（✗ 按名字猜，如 `(dynamic
 | 改 UI / popup | 公共前缀 + §5.3 + [02-ui-spec](./docs/02-ui-spec.md) | 01-architecture |
 | 改 DNR / 换 Cookie | 公共前缀 + §4.1 + §4.3 + [ADR 0006](./docs/decisions/0006-no-per-request-nonce.md) + [0029](./docs/decisions/0029-updatesessionrules-atomic-combined-call.md) | 02-ui-spec |
 | 只改文档 | 公共前缀 + §6 | 其余全部 |
-| 找某个工具怎么用 | [AGENTS-TOOLS.md](./AGENTS-TOOLS.md) —— **脚本清单的唯一权威位置** | —— |
+| 找某个工具怎么用 / 找某条规则在哪 | [AGENTS-TOOLS.md](./AGENTS-TOOLS.md)（脚本）、[AGENTS-RULES.md](./AGENTS-RULES.md)（规则速查） | —— |
 
 **没在表里的情况**：先用 [AGENTS-TOOLS.md](./AGENTS-TOOLS.md) 找工具，再回本表找场景；两处都没有就先报告，不要自己发明。§3 决策的理由在 [docs/decisions/](./docs/decisions/)，选型与目录在 [docs/04-project-structure.md](./docs/04-project-structure.md)。
 
