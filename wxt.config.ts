@@ -26,7 +26,7 @@ export default defineConfig({
 
   manifest: {
     name: 'Pluma',
-    description: 'B站双账号画质助手',
+    description: 'B站双账号助手 · 画质与净化',
     /**
      * ⚠️ **每段上限 65535**（Chrome 扩展版本号规范）。
      * 别把日期往里塞（`20261026` 超限，装不上）。

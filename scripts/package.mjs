@@ -264,7 +264,7 @@ async function releaseNotes(version) {
 
   return `## Pluma ${version}
 
-B站双账号画质助手。用主账号浏览、点赞、收藏，让一个大会员账号专门负责取流。
+B站双账号助手 · 画质与净化。用主账号浏览、点赞、收藏，让一个大会员账号专门负责取流。
 
 ### 本版内容
 

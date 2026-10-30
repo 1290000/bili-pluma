@@ -1,6 +1,6 @@
 # 文档索引
 
-> **Pluma**（`bili-pluma`）— B站双账号画质助手
+> **Pluma**（`bili-pluma`）— B站双账号助手 · 画质与净化
 > 许可证：GPL-3.0-only + [附加条款](../ADDITIONAL-TERMS.md)
 >
 > ⚠️ 使用前请先读 [README](../README.md) 首屏的免责声明与合规提示
