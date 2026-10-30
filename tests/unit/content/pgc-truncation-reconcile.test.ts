@@ -142,10 +142,14 @@ describe('PGC 截断判据对账（O4）', () => {
      * 这些输入的差异**与职责无关**，三份必须给出相同结论。
      * 任一条不一致都说明判据已经漂移。
      *
-     * ⚠️ **dash 形态不在这个清单里** —— `pgcPlayviewIsTruncated` 没有 dash 分支
-     * （见下面「实测发现的真实缺陷」那组）。修好之后应把 dash 场景加回来。
+     * ⚠️ dash 场景原本**不在**这个清单里 —— 当时 `pgcPlayviewIsTruncated`
+     * 没有 dash 分支（见下面「dash 形态」那组）。2026-10-30 修复后已加回。
      */
     const SHARED_CASES: Array<[string, unknown]> = [
+      ['完整 dash', { timelength: 600000, dash: { duration: 600 } }],
+      ['试看 dash', { timelength: 600000, dash: { duration: 120 } }],
+      ['dash 容差边界内', { timelength: 600000, dash: { duration: 595 } }],
+      ['dash 容差边界外', { timelength: 600000, dash: { duration: 594 } }],
       ['多段 durl 完整', { timelength: 600000, durl: [{ length: 300000 }, { length: 300000 }] }],
       ['多段 durl 截断', { timelength: 600000, durl: [{ length: 180000 }] }],
       ['无时长信息', { timelength: 0 }],
@@ -162,49 +166,88 @@ describe('PGC 截断判据对账（O4）', () => {
     });
   });
 
-  describe('⚠️ 实测发现的真实缺陷：playview 判据完全不看 dash', () => {
+  describe('dash 形态：三份必须一致（2026-10-30 已修，缺陷曾在此）', () => {
     /**
-     * ## 2026-10-30 对账测试抓到的
+     * ## 缺陷与修复记录
      *
-     * | 实现 | durl | durls | **dash** |
+     * | 实现 | durl | durls | dash |
      * | --- | --- | --- | --- |
-     * | `isTruncatedVideoInfo`（ISOLATED） | ✅ 全段求和 | ✅ 首组求和 | ✅ |
-     * | `pgcVideoInfoTruncated`（主世界 :345） | ✅ | ✅ | ✅（:362-365） |
-     * | **`pgcPlayviewIsTruncated`（主世界 :2787）** | ✅ | ✅ | ❌ **没有这个分支** |
+     * | `isTruncatedVideoInfo`（ISOLATED） | ✅ | ✅ | ✅ |
+     * | `pgcVideoInfoTruncated`（主世界 :345） | ✅ | ✅ | ✅ |
+     * | **`pgcPlayviewIsTruncated`（修复前）** | ✅ | ✅ | ❌ **没有这个分支** |
      *
-     * 后果：playview 响应若是 **dash 形态**（`fnval=4048` 之后的主形态），
-     * `pgcPlayviewIsTruncated` 走完 durl/durls 两个分支都命中不了，
-     * 最后 `return false` —— **永远判不出截断**。
+     * 修复前：playview 响应只要是 dash 形态，走完 durl/durls 都命中不了，
+     * 末尾 `return false` → **永远判不出截断**。
      *
-     * 而 `pgcSwapPlayviewBody` 正是靠它决定"要不要换流"（:2898）。
-     * 判不出截断 → 走"画质可能更高"那条更保守的路径，
-     * 所以不会立刻坏，但**会员试看集如果走了这条分支就会被漏掉**。
+     * 而 playview 在 ADR 0023 改用 `fnval=4048` 后，**dash 才是主形态** ——
+     * 最该判的那条路径恰好是唯一漏判的。
      *
-     * 这三条测试**钉住当前（有缺陷的）行为**，不是期望行为。
-     * 修好之后它们会红，那时改成期望值。
+     * 修复：`main-world.js` 的 `pgcPlayviewIsTruncated` 补上 dash 分支
+     * （判据与 `pgcVideoInfoTruncated` :362-365 完全一致）。
+     *
+     * ⚠️ 下面三条在**修复前是红的**（当时写的是"钉住缺陷行为"）。
+     * 现在它们断言**修复后的期望行为**。
      */
-    it('dash 形态的试看流：ISOLATED 判截断，playview 判不出', () => {
+    it('dash 形态的试看流：三份都判截断', () => {
       const input = { timelength: 600000, dash: { duration: 120 } };
       const mw = mainWorldPredicates();
 
       expect(isVideoInfoTruncated(input)).toBe(true);
-      expect(mw.pgcPlayviewIsTruncated(input)).toBe(false); // ← 缺陷
+      expect(mw.pgcPlayviewIsTruncated(input)).toBe(true);
+      expect(mw.pgcVideoInfoTruncated(input)).toBe(true);
     });
 
-    it('dash 形态的容差边界外：同样判不出', () => {
+    it('dash 形态的容差边界外：三份都判截断', () => {
       const input = { timelength: 600000, dash: { duration: 594 } };
       const mw = mainWorldPredicates();
 
       expect(isVideoInfoTruncated(input)).toBe(true);
-      expect(mw.pgcPlayviewIsTruncated(input)).toBe(false); // ← 缺陷
+      expect(mw.pgcPlayviewIsTruncated(input)).toBe(true);
+      expect(mw.pgcVideoInfoTruncated(input)).toBe(true);
     });
 
-    it('对照：durl 形态下三份一致（说明缺陷只在 dash 分支）', () => {
+    it('dash 时长 = 秒，不是毫秒（120 表示 120 秒）', () => {
+      // 若误把 dash.duration 当毫秒，120ms 远小于 600000 → 也会判截断，
+      // 看不出错。用"刚好及格"的值区分：595 秒 → 595000ms，不应判截断。
+      const okInput = { timelength: 600000, dash: { duration: 595 } };
+      const mw = mainWorldPredicates();
+
+      expect(isVideoInfoTruncated(okInput)).toBe(false);
+      expect(mw.pgcPlayviewIsTruncated(okInput)).toBe(false);
+      expect(mw.pgcVideoInfoTruncated(okInput)).toBe(false);
+    });
+
+    it('dash 形态的完整流：三份都不判截断', () => {
+      const input = { timelength: 600000, dash: { duration: 600 } };
+      const mw = mainWorldPredicates();
+
+      expect(isVideoInfoTruncated(input)).toBe(false);
+      expect(mw.pgcPlayviewIsTruncated(input)).toBe(false);
+      expect(mw.pgcVideoInfoTruncated(input)).toBe(false);
+    });
+
+    it('对照：durl 形态下三份一致', () => {
       const input = { timelength: 600000, durl: [{ length: 180000 }] };
       const mw = mainWorldPredicates();
 
       expect(isVideoInfoTruncated(input)).toBe(true);
       expect(mw.pgcPlayviewIsTruncated(input)).toBe(true);
+    });
+
+    it('优先级：durl 存在时先看 durl，不被 dash 覆盖', () => {
+      /**
+       * 分支顺序是 durl → dash → durls。durl 全段有效就直接按它判，
+       * 不会因为 dash 存在而改判 —— 这与 ISOLATED 的 streamDurationMs 顺序一致。
+       */
+      const input = {
+        timelength: 600000,
+        durl: [{ length: 300000 }, { length: 300000 }], // 合计 600000 → 完整
+        dash: { duration: 120 }, // 若被判成这条 → 截断
+      };
+      const mw = mainWorldPredicates();
+
+      expect(isVideoInfoTruncated(input)).toBe(false);
+      expect(mw.pgcPlayviewIsTruncated(input)).toBe(false);
     });
   });
 
