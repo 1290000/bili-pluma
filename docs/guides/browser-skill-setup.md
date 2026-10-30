@@ -7,18 +7,16 @@
 
 ---
 
-## 1. 唯一可用配置（照抄）
+## 1. 环境配置（→ 见 AGENTS-TOOLS.md）
 
-```bash
-export PATH="/c/Users/<你的用户名>/.local/bin:$PATH"
-export BSK_AUTO_START=0
-
-# 必须 run_in_background: true，用默认端口 52800
-bsk daemon start --foreground
-```
-
-**每个客户端调用都要重复这两行 export**——上一次 shell 的 export 不会带到下一次 tool call。
-daemon 空闲 10 分钟退出；需要更长窗口加 `--daemon-idle 2h`。
+> **环境前置条件（`BSK_HOME` / `BSK_AUTO_START` / `PATH`）的唯一权威位置是
+> [AGENTS-TOOLS.md](../../AGENTS-TOOLS.md) §4**，本文不再重复 ——
+> 按 `AGENTS.md` §6.1「每件事只有一个权威位置」，两处都写必然漂移。
+>
+> **2026-10-30 修**：本节原先写的是 `export PATH="/c/Users/<你的用户名>/.local/bin:$PATH"`。
+> 那是 **bash 语法**，而本机**没有 bash / Git Bash**（只有 PowerShell 5.1，实测确认），
+> 且缺了实际必需的 `BSK_HOME`。文档标着"照抄"，**但照抄会失败** ——
+> 下一个人会以为 bsk 环境坏了，而不是文档错了。
 
 ### ⚠️ 锁定 bsk 0.3.3，**不要升级到 0.4.x**
 

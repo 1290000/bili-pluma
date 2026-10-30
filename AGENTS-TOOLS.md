@@ -103,6 +103,8 @@ $env:PATH = "C:\Users\i1290\.local\bin;" + $env:PATH
 - daemon 用 `run_in_background` 起，**不要起第二个**（会撞 `daemon.lock`；进程名不叫 bsk，`Get-Process *bsk*` 看不到）
 - 活动 home 是 `~/.bsk`，不是 `.bsk-agent`
 - `bsk doctor` / `bsk status` 会一直提示「可升级 0.4.0」—— **忽略它，别跑 `bsk update`**
+- ⚠️ **本机没有 bash / Git Bash**（只有 PowerShell 5.1）。所以一切命令都写成 PowerShell 语法。
+  `export PATH=...`、`/c/Users/...` 这类写法在这台机器上**跑不了** —— 2026-10-30 实测确认。
 
 ---
 
