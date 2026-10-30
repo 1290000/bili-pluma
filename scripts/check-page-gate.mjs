@@ -97,6 +97,7 @@ const MANIFEST_MATCHES = ['entrypoints/content.ts', 'entrypoints/main-hook.conte
  */
 const NON_PLAY_PAGE_ENTRIES = [
   { file: 'entrypoints/content-live.content.ts', match: '*://live.bilibili.com/*' },
+  { file: 'entrypoints/content-home.content.ts', match: '*://www.bilibili.com/' },
 ];
 
 /** 每个 content 入口都必须同时出现的两个模式 */
