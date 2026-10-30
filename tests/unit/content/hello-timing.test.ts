@@ -41,6 +41,12 @@ function makeDeps(status: { enabled: boolean } | null = null): {
     tellMainWorld: (enabled) => {
       calls.push(`tellMainWorld:${String(enabled)}`);
     },
+    /**
+     * 默认"判不了"（`null` = 放行）—— 与本文件所有既有断言的口径一致：
+     * 它们守的是**时序**，不是开关值。首发值相关的断言在
+     * `hello-timing-sync-value.test.ts` 里。
+     */
+    readProxyOffSync: () => null,
     queryProxyStatus: () => {
       // 用可控 promise，避免测试里真的等一个微任务批次
       if (status !== null) return Promise.resolve(status);
@@ -113,6 +119,7 @@ describe('handleHello 时序（S3.4 前置）', () => {
     const deps: HelloDeps = {
       reportQuality: (p) => notes.push(String(p.note)),
       tellMainWorld: () => {},
+      readProxyOffSync: () => null,
       queryProxyStatus: () => Promise.resolve(null),
     };
 
@@ -129,6 +136,7 @@ describe('handleHello 时序（S3.4 前置）', () => {
     const deps: HelloDeps = {
       reportQuality: (p) => notes.push(String(p.note)),
       tellMainWorld: () => {},
+      readProxyOffSync: () => null,
       queryProxyStatus: () => Promise.resolve(null),
     };
 
@@ -141,6 +149,7 @@ describe('handleHello 时序（S3.4 前置）', () => {
     const deps: HelloDeps = {
       reportQuality: () => {},
       tellMainWorld: (e) => calls.push(`tellMainWorld:${String(e)}`),
+      readProxyOffSync: () => null,
       queryProxyStatus: () => Promise.reject(new Error('SW 休眠')),
     };
 
@@ -181,6 +190,7 @@ describe('handleReady 禁止回 cfg（OOM 事故防线）', () => {
     const deps: HelloDeps = {
       reportQuality: () => {},
       tellMainWorld: (e) => calls.push(`tellMainWorld:${String(e)}`),
+      readProxyOffSync: () => null,
       queryProxyStatus: () => Promise.resolve(null),
     };
 

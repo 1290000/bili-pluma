@@ -298,20 +298,40 @@ export function isVideoInfoTruncated(videoInfo: unknown, expectedMs = 0): boolea
  *
  * 现在：**内容可用才算有**。坏缓存等同没有 → 走"写完同步缓存再刷一次"。
  *
- * @param raw `sessionStorage.getItem()` 的原文；`null` = 键不存在
- * @returns 能否当作"已有可用同步缓存"
- *
  * ⚠️ 判据用**长度**（`isVideoInfoTruncated`），不是"有没有 dash" ——
  * 完整集也可能是纯 `durl`（`fnval=0` 老路），拿 dash 判会误杀。
+ *
+ * ## ⚠️ `expectedMs` 必须传进来（2026-10-30 补）
+ *
+ * 上面的坏数据里**还有 `timelength`**，所以长度判据够用。但真机上存在另一种形态：
+ *
+ * ```
+ * 接口缺 timelength（某些 OGV 集数 / playview 响应）
+ *   → 缓存里 vi 也没有 timelength
+ *   → isTruncatedVideoInfo 里 refMs = max(0, 0) = 0 → **直接判"不截断"**
+ *   → 一份 180 秒的试看流被当成可用缓存 → hadSync=true → 不刷新 → 永远 180 秒
+ * ```
+ *
+ * **判不出来的方向在这里是错的**：写入侧（`shouldWritePgcCache`）早就接了
+ * `expectedMs` 兜底，读取侧没接 —— 同一份数据在写入口被判"截断"拒写，
+ * 却在读取口被判"可用"放行，两侧判据不一致，正是上面 2026-10-29 那个 bug 的同构形态。
+ *
+ * `expectedMs` 来自 SSR 的 `timelength`（`expectedDurationMs(ssrVideoInfo)`），
+ * 它比缓存里的 `timelength` **可信**：缓存可能是缺字段的旧数据，SSR 是页面这次的。
+ *
+ * @param raw `sessionStorage.getItem()` 的原文；`null` = 键不存在
+ * @param expectedMs 第二参照时长（SSR 的 `timelength`）；`0` = 没有第二参照，
+ *   此时行为与修复前完全一致（只靠缓存自己的 `timelength`）
+ * @returns 能否当作"已有可用同步缓存"
  */
-export function isSyncCacheUsable(raw: string | null): boolean {
+export function isSyncCacheUsable(raw: string | null, expectedMs = 0): boolean {
   if (!raw) return false;
   try {
     const parsed = JSON.parse(raw) as { vi?: unknown } | null;
     if (!parsed || typeof parsed !== 'object') return false;
     const vi = parsed.vi;
     if (!vi || typeof vi !== 'object') return false;
-    return !isVideoInfoTruncated(vi);
+    return !isVideoInfoTruncated(vi, expectedMs);
   } catch {
     // 解析失败 = 不可用（宁可多刷一次，也不要拿一坨坏数据去注入）
     return false;

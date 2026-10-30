@@ -83,6 +83,65 @@ export function writeProxyOffMark(off: boolean): boolean {
 }
 
 /**
+ * 同步读「总开关关着」的标记 —— **三态**（ADR 0028 第一层的读取端，2026-10-30 加）。
+ *
+ * ## 为什么需要它（G5）
+ *
+ * `handleHello` 的首发 `cfg` 必须在 `window.postMessage` 监听器里**同步**发出
+ * （异步化 → 主世界已经进下一步，2026-10-29 真机事故）。而真实的开关值只有
+ * 异步的 `proxy/status` 能给 —— 于是原来只能先写死发 `true`，再异步补 `false`。
+ * 那个窗口里主世界的 `cfgEnabled` 被污染成 `true`，真机排查时会把人引向
+ * "消息通道报的是开"（2026-10-29 修 R1 那条注释记录了同一个坑）。
+ *
+ * `localStorage` 标记是**唯一同步可得**的开关证据，所以拿它当首发的值。
+ *
+ * ## ⚠️ 为什么用 `null` 表示"判不了"，而不是 `false`
+ *
+ * 标记只能证明**关**，不能证明**开**：
+ *
+ * | 返回 | 依据 | 含义 |
+ * | --- | --- | --- |
+ * | `true` | 标记存在且新鲜 | 明确关着 |
+ * | `null` | 没有标记 / 已过期 / 读不出来 | **判不了**（不等于开着） |
+ *
+ * 永远**不返回 `false`**。ADR 0020 的硬约束是「判不了就放行」：
+ * 把"没有标记"当成 `false` 会把注入绑死在"标记必须存在"上，而标记写入
+ * 本来就可能失败（配额满 / 隐私模式 / SW 没醒），那等于不注入 ——
+ * **不放行比多注入危险得多**。
+ *
+ * ## 与主世界那份的关系
+ *
+ * 判据（TTL、`at` 类型、未来时间戳也算）与 `main-world.js` 的 `pgcReadProxyOff()`
+ * **完全一致，但不共用代码** —— 那边是裸 JS。两边任一改动都要同步；
+ * 不一致的后果是"ISOLATED 说开着、主世界说关着"，主世界按自己的判，
+ * 也就是这段代码静默失效。
+ *
+ * ## 永不抛错
+ *
+ * 隐私模式 / 配额满时 `localStorage` 会抛。抛在 `hello` 里会让整条消息分支挂掉，
+ * 比"没有标记"严重得多 —— 所以一律吞掉返回 `null`（= 放行）。
+ *
+ * @param now 当前时间；注入进来是为了测试能控时
+ * @returns `true` = 明确关着；`null` = 判不了
+ */
+export function readProxyOffMarkSync(now: number = Date.now()): boolean | null {
+  try {
+    const raw = localStorage.getItem(PROXY_OFF_KEY);
+    if (!raw) return null;
+    const o = JSON.parse(raw) as unknown;
+    if (!o || typeof o !== 'object') return null;
+    const at = (o as Record<string, unknown>).at;
+    if (typeof at !== 'number') return null;
+    // 未来时间戳（用户改过系统时钟）也算数，但同样受上界约束
+    if (!(now - at < PROXY_OFF_TTL_MS)) return null;
+    return true;
+  } catch {
+    /* 隐私模式 / 坏 JSON：判不了 = 放行 */
+    return null;
+  }
+}
+
+/**
  * 收集 `sessionStorage` 里所有以 `prefix` 开头的键。
  *
  * ## 为什么要先收集再删

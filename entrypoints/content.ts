@@ -52,6 +52,7 @@ import {
   clearPgcReloadGuards,
   clearPgcSessionCache,
   isProxyReenabled,
+  readProxyOffMarkSync,
   writeProxyOffMark,
 } from '@/src/content/isolated/pgc-proxy-off';
 import {
@@ -514,14 +515,25 @@ function listenMainWorld(): void {
        * 时序逻辑已下沉到 `src/content/isolated/hello-timing.ts`（S3.4 前置）。
        *
        * 那里把两条硬约束变成了可测的代码：
-       *   1. `tellMainWorld(true)` 必须**同步**发出，不能等异步（2026-10-29 事故）
+       *   1. 首发的 `cfg` 必须**同步**发出，不能等异步（2026-10-29 事故）
        *   2. `ready` 绝不回 `cfg`，否则无限回环 → Out of Memory（2026-10-26 事故）
+       *
+       * ## 首发值为什么不是写死的 `true`（2026-10-30，G5）
+       *
+       * 写死 `true` + 异步补 `false` 会留下一个窗口：开关其实关着时，
+       * 主世界在这段窗口里的 `cfgEnabled` 是 `true`（诊断值说谎）。
+       * 现在把**同步**的关闭标记读进来当首发值。
+       *
+       * ⚠️ 读标记本身也包在 try 里（`readProxyOffMarkSync` 内部已吞异常）；
+       * 它在 `postMessage` 监听器的**同步路径**上，任何抛出都会让整条消息分支失效。
+       * 判不了 → `null` → 放行（ADR 0020：不许把注入绑在异步通道上）。
        *
        * ⚠️ 不 await 返回的 promise —— 那正是第 1 条要避免的事。
        */
       void handleHello(d.flags, {
         reportQuality,
         tellMainWorld,
+        readProxyOffSync: readProxyOffMarkSync,
         queryProxyStatus: () =>
           sendToBackground({ type: 'proxy/status' }).then((r) => {
             const st = r as { type?: string; enabled?: boolean } | null;
@@ -1071,6 +1083,30 @@ async function orchestratePgc(
   const cached = await loadCachedVideoInfo(cid);
 
   /**
+   * 第二参照：这一集的预期总时长（SSR 的 `timelength`）。
+   *
+   * ## ⚠️ 必须和写入侧用**同一个** `expectedMs`（2026-10-30 补）
+   *
+   * `shouldWritePgcCache(merged, expectedMs)` 早就用 `expectedDurationMs(ssrVideoInfo)`
+   * 兜底了，但下面两处读取判据（本函数的 `cachedUsable` 与 `isSyncCacheUsable` 调用）
+   * 当时都没传 —— 同一份数据在**写入口**被判"截断"拒写，
+   * 在**读取口**却被判"可用"放行。
+   *
+   * 触发条件：接口缺 `timelength` → `isTruncatedVideoInfo` 的 `refMs` 两边都是 0
+   * → 直接 `return false`（判不截断）→ 一份 180 秒的试看流被当成可用缓存
+   * → `hadSync = true` → 不刷新 → **永远 180 秒**。
+   *
+   * ## 为什么直接从 `ssrData` 取，而不是沿用上面那个 `ssrInfo`
+   *
+   * 上面 `const ssrInfo = readSsrVideoInfo(ssrData)` 在 `if (...)` 块里（早退分支），
+   * 走到这里的只有一种情况：`ssrData === undefined`。而 `expectedDurationMs(null) === 0`
+   * —— 即"没有第二参照"，行为与修复前一致。为了不把那个变量提到块外（会在
+   * 「undefined 时 `ssrInfo` 是 null」这件事上制造歧义），这里重取一次。
+   * 两者**逐字同一个表达式**，口径不会漂。
+   */
+  const cachedExpectedMs = expectedDurationMs(readSsrVideoInfo(ssrData));
+
+  /**
    * ## 读取侧校验：丢弃已被污染的旧缓存（2026-10-29 加，问题 5 的「治存量」）
    *
    * ### 为什么光修写入侧不够
@@ -1088,8 +1124,14 @@ async function orchestratePgc(
    * 完整集也可能是**纯 durl**（`fnval=0` 的老路，单段 durl 且长度 = timelength）。
    * 拿"有没有 dash"当判据会把那种合法缓存误杀，导致每次都重新取流。
    * 长度判据对两种形态都成立。
+   *
+   * ### ⚠️ 必须带 `expectedMs`（2026-10-30）
+   *
+   * 不带的话，接口缺 `timelength` 时 `isTruncatedVideoInfo` 判不出截断
+   * （`refMs === 0` 直接放行），旧版本写进去的 180 秒试看流会被当可用缓存。
+   * 用法与写入侧 `shouldWritePgcCache(merged, expectedMs)` 对齐。
    */
-  const cachedUsable = cached !== null && !isVideoInfoTruncated(cached);
+  const cachedUsable = cached !== null && !isVideoInfoTruncated(cached, cachedExpectedMs);
   if (cached !== null && !cachedUsable) {
     reportQuality({
       height: 0,
@@ -1178,12 +1220,17 @@ async function orchestratePgc(
      * 现在改成**内容校验**：键在但内容是截断流 → 等同没有 → 走"写完同步缓存再刷一次"。
      * 判据与 `cachedUsable` 用同一个（长度，不是"有没有 dash"）。
      *
+     * ⚠️ **必须与 `cachedUsable` 传同一个 `cachedExpectedMs`**（2026-10-30）。
+     * 两处判据一旦漂开，就会出现"上面判可用、下面判不可用"的中间态：
+     * 缓存被下发进 `cfg`，但同时 `hadSync=false` 触发一次多余刷新 ——
+     * 最坏情况是刷完进第二趟、判据又翻转，用户看到的是无谓的闪屏。
+     *
      * 校验逻辑抽在 `isSyncCacheUsable()` 里（纯函数，有单测）——
      * 这个文件是 WXT 入口，**零单测覆盖**，写在这里等于没有守卫。
      */
     let hadSync = false;
     try {
-      hadSync = isSyncCacheUsable(sessionStorage.getItem('pluma:pgc-vi:' + cid));
+      hadSync = isSyncCacheUsable(sessionStorage.getItem('pluma:pgc-vi:' + cid), cachedExpectedMs);
     } catch {
       /* sessionStorage 被禁用 → 当作没有 */
     }
