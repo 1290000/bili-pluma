@@ -238,8 +238,13 @@ function extractChangelogSection(changelog, version) {
  * `releasing.md` 写明这类东西的权威位置是根 README —— 两处各写一份必然漂移，
  * 而且同样的内容在 `安装说明.txt` 里已经有第三份了。
  * 规范说明见 `docs/guides/release-notes-template.md`。
+ *
+ * ⚠️ **也不要有「校验和」一节**（2026-10-30 删掉的）。sha256 每次重打包都会变
+ * （`BUILD.md` 记录 commit → `-with-source.zip` 必变），写进 Release 正文只会
+ * 让"发了又改"变得尴尬。校验和的价值在**可独立核对**，而那件事由
+ * `BUILD.md` 与 `check-artifact` 保证，不需要在 Release 页展示。
  */
-async function releaseNotes(version, checksums) {
+async function releaseNotes(version) {
   const changelog = await readFile(join(ROOT, 'CHANGELOG.md'), 'utf8');
   const section = extractChangelogSection(changelog, version);
 
@@ -271,13 +276,6 @@ ${section}
 | --- | --- |
 | \`pluma-${version}.zip\` | 构建产物，解压后在 \`edge://extensions\`（Chrome 用 \`chrome://extensions\`）加载 |
 | \`pluma-${version}-with-source.zip\` | 同上 + 完整源码（含 \`BUILD.md\` 构建凭证） |
-
-### 校验和
-
-| 文件 | sha256 |
-| --- | --- |
-| \`pluma-${version}.zip\` | \`${checksums.light}\` |
-| \`pluma-${version}-with-source.zip\` | \`${checksums.src}\` |
 
 也可以自己从源码构建：\`pnpm install && pnpm build\`，加载 \`.output/chrome-mv3\`。
 
@@ -776,13 +774,7 @@ async function main() {
   await rm(stagingSrc, { recursive: true, force: true });
 
   // ── 7. Release 说明 ──
-  const lightSha = await sha256(join(DIST_DIR, lightName));
-  const srcSha = await sha256(join(DIST_DIR, srcName));
-  await writeFile(
-    join(DIST_DIR, 'release-notes.md'),
-    await releaseNotes(version, { light: lightSha, src: srcSha }),
-    'utf8',
-  );
+  await writeFile(join(DIST_DIR, 'release-notes.md'), await releaseNotes(version), 'utf8');
 
   // ── 8. 报告 ──
   const light = join(DIST_DIR, lightName);
