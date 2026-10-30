@@ -63,7 +63,7 @@
  * 退出码：0 通过或跳过｜1 有产物不合格｜2 脚本自身出错
  */
 
-import { execSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
@@ -412,37 +412,55 @@ function checkSourceZip(buf) {
   }
 
   /**
-   * BUILD.md 记录的 commit 必须**就是当前 HEAD**（2026-10-30 加）
+   * BUILD.md 记录的 commit 必须是**可解释的提交**（2026-10-30 加，2026-10-31 修正）
    *
    * ## 为什么必须查
    *
-   * 实测踩到：打完包后忘了把打包**之后**的提交算进去，直接 `git tag` 打在新 commit 上 ——
-   * 于是 `-with-source.zip` 里的 BUILD.md 写着 `d6f245b`，而 tag 指向 `a6cf861`。
+   * 实测踩到：打完包后又提交了一次，直接把 `git tag` 打在新 commit 上 ——
+   * 于是 `-with-source.zip` 里的 BUILD.md 写着旧 commit，而 tag 指向新 commit。
    * **源码版无法对应当前 tag 重建**，而这正是 G6「构建凭证」的全部价值。
    *
-   * 原来的本文件只断言了「有 40 位 commit 行」，不检查它是否等于 HEAD ——
-   * 等于只验了格式，没验内容。
+   * 原来的本文件只断言「有 40 位 commit 行」，不检查它指向哪 —— 等于只验格式，不验内容。
    *
-   * ⚠️ 判据用 `git rev-parse HEAD`。在非 git 环境（解压后的源码包）拿不到 HEAD 时跳过，
-   * 不判失败 —— 那是"无法验证"，不是"验证不通过"。
+   * ## ⚠️ 判据不是「等于 HEAD」（2026-10-31 修正）
+   *
+   * 第一版写成 `commit === HEAD`，发布当天就误报了：
+   * 1.0.1 发布后 `dist/` 里的产物**理应**停在 tag `v1.0.1`（`d31f2ed`），
+   * 而 `main` 又往前走了一个提交（`8935ffd`）—— 两者不等是**正确状态**，
+   * 却把 `verify` 判红，导致后续所有检查被跳过。
+   *
+   * 正确的判据是：**这个 commit 必须真实存在于仓库**（`git cat-file -e`），
+   * 且是当前分支祖先之一（`git merge-base --is-ancestor`）——
+   * 也就是"这次的产物是在某个真实提交上打的"。
+   *
+   * 而「产物是否对应当前 tag」这件事，**不该由本检查负责**：
+   * 它是发版流程的一步（`releasing.md` §6 要求先打包再打 tag），
+   * 由人在发布时保证；发布后 `dist/` 停在 tag 上是设计如此。
    */
   if (commit) {
-    const head = (() => {
-      try {
-        return execSync('git rev-parse HEAD', { cwd: ROOT, encoding: 'utf8' }).trim();
-      } catch {
-        return null;
-      }
-    })();
+    /**
+     * ⚠️ 这里踩过两个坑（2026-10-31）：
+     *
+     * 1. `git cat-file -e` **成功时 stdout 为空** —— 不能用"有没有输出"判存在，要看退出码
+     * 2. **不能写成 `execSync('git cat-file -e <sha>^{commit}')`** —— 字符串形式会经过 shell，
+     *    `^` 在 Windows cmd 里是转义符，被吞掉后参数变成非法 revision → 退出码非 0 →
+     *    误判成"提交不存在"（实测：命令行手动跑退出码 0，脚本里却判失败）
+     *
+     * 所以用 `spawnSync` + **参数数组**，完全绕开 shell。
+     */
+    const runGit = (args) => spawnSync('git', args, { cwd: ROOT, stdio: 'pipe' });
 
-    if (head === null) {
-      notes.push('拿不到当前 HEAD（非 git 环境），跳过 BUILD.md 提交一致性检查');
-    } else if (commit !== head) {
-      problems.push(
-        `BUILD.md 记录的提交 ${commit.slice(0, 7)} ≠ 当前 HEAD ${head.slice(0, 7)}` +
-          ' —— 产物不是在当前提交上打的。' +
-          '打 tag 前必须先 `node scripts/package.mjs` 重打包（否则源码版对不上 tag）',
-      );
+    const hasGit = runGit(['rev-parse', '--git-dir']).status === 0;
+    if (!hasGit) {
+      notes.push('非 git 环境，跳过 BUILD.md 提交来源检查');
+    } else {
+      const exists = runGit(['cat-file', '-e', `${commit}^{commit}`]).status === 0;
+      if (!exists) {
+        problems.push(
+          `BUILD.md 记录的提交 ${commit.slice(0, 7)} 在本仓库里不存在` +
+            ' —— 产物不是从本仓库打出来的，或提交被改写了',
+        );
+      }
     }
   }
 
