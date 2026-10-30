@@ -33,7 +33,7 @@
 
 | 命令 | 查什么 | 何时必须跑 |
 | --- | --- | --- |
-| `node scripts/verify.mjs` | **全部 13 项** | 任何改动交付前（`--help` 看清单） |
+| `node scripts/verify.mjs` | **全部 19 项** | 任何改动交付前（`--help` 看清单） |
 | `node scripts/verify.mjs --fast` | 只跑文档与静态项 | 只改 `docs/**`、`*.md` |
 | `node scripts/check-messages.mjs` | 消息类型白名单（**漏处理不会编译报错**） | 改 `src/shared/types/messages.ts` |
 | `node scripts/check-patch-scope.mjs` | 四类响应体改写的授权与常量对账 | 改 `main-world.js` 的改写常量 |

@@ -44,7 +44,7 @@
 git rev-parse --show-toplevel      # 必须是 Pluma 仓库
 git status --short                 # 必须干净；不干净先问用户
 git log --oneline -5
-node scripts/verify.mjs            # 13 项全绿才开局
+node scripts/verify.mjs            # 19 项全绿才开局
 node --check src/content/main-world.js
 ```
 
@@ -109,7 +109,7 @@ description:
 
 ## 5. 验收门（每个实现任务收尾都跑）
 
-- [ ] `node scripts/verify.mjs` 13 项全绿
+- [ ] `node scripts/verify.mjs` 19 项全绿
 - [ ] 改 `dnr.ts` → `poc/verify/run-q2-auto.cjs` + `dnr-disable-clears-tab-rules.cjs`
 - [ ] 改 `main-world.js` → `node --check` + 真机日志
 - [ ] 反例验证：关键判据改回去，相关测试必须红

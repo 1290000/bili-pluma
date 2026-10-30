@@ -112,7 +112,7 @@ SSR 的 `__playinfo__` 确实存在且 `quality: 80`（1080P），这是**服务
 | 3a/3b/3c/3d | options 三分区 / 16 行自检 / EC-3 / 导出无凭据 | ⚠️ **3d 仍由单测保证**（4 条含反例） | 3a/3b/3c 需人眼看 options 页，沙箱挡死 |
 | 4 | 角标可关闭、刷新后不出现 | ⚠️ **未自动化** | 关闭入口在 options 页；角标本身已确认真实渲染 |
 | 5 | 关总开关 → 刷新 → 画质回落 | ⚠️ **机制已验，端到端未做** | `dnr-disable-clears-tab-rules.cjs` 用真实扩展跑通 6 项（path 段与 tab 段都清零、`enabled=false`）。端到端需点 popup，沙箱不可达 |
-| 6 | `verify` 全绿 | ✅ | **13 项全绿**（含新增 `artifact`），666 tests |
+| 6 | `verify` 全绿 | ✅ | **13 项全绿**（含新增 `artifact`），666 tests（1.0.0 构建当时的口径；现为 19 项，见 `node scripts/verify.mjs --help`） |
 
 ### 普通视频（BV）—— 用「只有播放账号能给的东西」当判据
 
