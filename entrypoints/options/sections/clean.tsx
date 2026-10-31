@@ -120,7 +120,7 @@ export function CleanSection(): JSX.Element {
           <label class="pref" key={meta.key}>
             <span class="pref-label">
               {meta.label}
-              <span class="pref-hint">{meta.hint}</span>
+              {meta.hint && <span class="pref-hint">{meta.hint}</span>}
             </span>
             <span class={`switch ${options?.[meta.key] ? 'on' : ''} ${busy ? 'busy' : ''}`}>
               <input
@@ -138,7 +138,7 @@ export function CleanSection(): JSX.Element {
           <label class={`pref ${subDisabled ? 'dim' : ''}`} key={meta.key}>
             <span class="pref-label">
               {meta.label}
-              <span class="pref-hint">{meta.hint}</span>
+              {meta.hint && <span class="pref-hint">{meta.hint}</span>}
             </span>
             <span class={`switch ${options?.[meta.key] ? 'on' : ''} ${busy ? 'busy' : ''}`}>
               <input
@@ -154,9 +154,6 @@ export function CleanSection(): JSX.Element {
       </Card>
 
       <Card title="首页净化">
-        <p class="pref-hint block">
-          勾选的分类会在首页专题推荐位里隐藏。默认全不隐藏——这些是内容推荐，不是广告。
-        </p>
         {OBSERVED_CATEGORIES.map((cat) => (
           <label class="pref" key={cat}>
             <span class="pref-label">{cat}</span>

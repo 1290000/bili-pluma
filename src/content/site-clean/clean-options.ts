@@ -185,17 +185,17 @@ export const CLEAN_OPTION_META: readonly CleanOptionMeta[] = [
   {
     key: 'adEnabled',
     label: '删除广告',
-    hint: '总开关。关闭后首页与视频页的广告都会恢复显示',
+    hint: '',
   },
   {
     key: 'adPreserveEventBanner',
     label: '保留活动横幅',
-    hint: '关闭时活动横幅会被隐藏。想保留促销活动入口就打开',
+    hint: '',
   },
   {
     key: 'adPreserveFeedGoods',
     label: '保留动态商品推荐',
-    hint: '关闭时动态里的商品推荐卡会被隐藏',
+    hint: '',
   },
   {
     key: 'adHideContainer',
@@ -210,7 +210,7 @@ export const CLEAN_OPTION_META: readonly CleanOptionMeta[] = [
   {
     key: 'homeHideSwipe',
     label: '隐藏顶部大图推荐',
-    hint: '首页顶部那块大图（约 473px 高）。默认不隐藏——它是内容推荐不是广告',
+    hint: '',
   },
 ];
 
