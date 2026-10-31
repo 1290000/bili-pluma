@@ -58,8 +58,14 @@ export type CleanOptions = Record<CleanOptionKey, boolean>;
  * 反过来（默认保留）会让"删除广告"这个功能名不副实。
  */
 export const DEFAULT_CLEAN_OPTIONS: CleanOptions = {
-  /** 删除广告总开关：默认开（用户 2026-10-31 确认） */
-  adEnabled: true,
+  /**
+   * 删除广告总开关：**默认关**（2026-10-31 用户要求）。
+   *
+   * 早期默认开，后来用户明确改为默认关 ——
+   * 理由与「首页净化默认全不隐藏」一致：**扩展不该在用户没要求时改变页面**。
+   * 想用的人自己去设置页打开。
+   */
+  adEnabled: false,
   adPreserveEventBanner: false,
   adPreserveFeedGoods: false,
   /**
@@ -68,12 +74,14 @@ export const DEFAULT_CLEAN_OPTIONS: CleanOptions = {
    * ⚠️ **「显示占位文本」已不再是独立选项**（2026-10-31 用户要求去掉）：
    * 它与"完全隐藏"是同一件事的两面，拆成两个开关只会让用户组合出
    * "既不完全隐藏、又不显示占位"的空洞状态。现在的联动见 `resolveAdRenderMode()`。
+   *
+   * 与 `adDebug` **双向互斥**，最后操作的那个生效（见 `applyAdOptionCoupling`）。
    */
   adHideContainer: true,
   /**
    * 调试：不隐藏、加红框高亮。用于确认选择器命中情况。
    *
-   * ⚠️ 与 `adHideContainer` **互斥**，优先级见 `resolveAdRenderMode()`。
+   * ⚠️ 与 `adHideContainer` **双向互斥**。
    */
   adDebug: false,
   /**
@@ -123,14 +131,44 @@ export function resolveAdRenderMode(opts: CleanOptions): AdRenderMode {
  * 存储里会留下 `adDebug=true, adHideContainer=true` 这种**互相矛盾**的组合。
  * 一旦用户关掉调试，广告会突然变成"完全隐藏"而不是回到他上次选的状态 —— 行为诡异。
  *
- * 所以在**写入时**就把互斥关系落定：开调试 → 顺手关掉完全隐藏。
+ * 所以在**写入时**就把互斥关系落定。
  *
+ * ## 双向互斥（2026-10-31 用户补充）
+ *
+ * 两个开关**同时只能开一个**，且**最后操作的那个生效**：
+ *
+ * | 用户动作 | 结果 |
+ * | --- | --- |
+ * | 打开「调试模式」 | 自动关掉「完全隐藏」 |
+ * | 打开「完全隐藏」 | 自动关掉「调试模式」 |
+ *
+ * 实现要点：入参里两个都为 `true` 时无法判断"谁是刚点的那一个"，
+ * 因此调用方需要先表达意图 —— 见 `applyAdOptionCoupling` 的 `changedKey` 参数。
+ *
+ * @param opts 待写入的选项
+ * @param changedKey 本次用户实际拨动的那个键（用于在两者冲突时决定谁赢）
  * @returns 规范化后的选项（不修改入参）
  */
-export function applyAdOptionCoupling(opts: CleanOptions): CleanOptions {
+export function applyAdOptionCoupling(
+  opts: CleanOptions,
+  changedKey?: CleanOptionKey,
+): CleanOptions {
   const next = { ...opts };
-  /** 互斥：调试模式开启时，「完全隐藏」必须为 false */
-  if (next.adDebug && next.adHideContainer) next.adHideContainer = false;
+
+  if (next.adDebug && next.adHideContainer) {
+    /**
+     * 两个都开着 —— 必须根据"谁被刚打开"来裁决。
+     *
+     * 没有 `changedKey` 时（例如从存储读入），按**调试优先**处理：
+     * 调试模式的用途是"看到真实元素"，若被完全隐藏压住就失去意义。
+     */
+    if (changedKey === 'adHideContainer') {
+      next.adDebug = false;
+    } else {
+      next.adHideContainer = false;
+    }
+  }
+
   return next;
 }
 

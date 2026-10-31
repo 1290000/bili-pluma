@@ -347,12 +347,6 @@ button:disabled {
   line-height: 1.45;
 }
 
-/* 互斥提示（如「调试模式开启时不可用」）—— 用警示色，但**不用红色**：
-   红色在本项目里只表示失败，这里只是规则说明。 */
-.pref-mutex {
-  color: var(--pluma-warning);
-}
-
 .pref-value {
   font-size: var(--pluma-font-caption);
   color: var(--pluma-text-muted);
