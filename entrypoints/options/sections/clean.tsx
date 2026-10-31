@@ -28,7 +28,6 @@
 import {
   CLEAN_OPTION_META,
   DEFAULT_CLEAN_OPTIONS,
-  applyAdOptionCoupling,
   normalizeCleanPreferences,
   type CleanOptions,
 } from '@/src/content/site-clean/clean-options';
@@ -61,21 +60,20 @@ export function CleanSection(): JSX.Element {
   /**
    * 切换一个布尔开关。
    *
-   * ⚠️ **必须过 `applyAdOptionCoupling()`**：`adDebug` 与 `adHideContainer` 双向互斥，
-   * **最后操作的那个生效** —— 所以要把 `key` 传进去，否则无法判断谁该被关掉。
-   *
-   * 若只在渲染时推导，存储里会留下矛盾组合，用户关掉一个后行为会跳变。
+   * 2026-10-31：`adHideContainer` 已删除（用户要求去掉「完全隐藏」与占位块），
+   * 所以**不再需要任何互斥联动** —— 剩下的选项彼此独立。
+   * 广告的最终表现由 `resolveAdRenderMode()` 按 `adEnabled` / `adDebug` 推导。
    */
   const toggle = useCallback(
     async (key: keyof CleanOptions, next: boolean) => {
       if (!options) return;
       const prev = options;
-      const coupled = applyAdOptionCoupling({ ...options, [key]: next }, key);
+      const updated = { ...options, [key]: next };
       setBusy(true);
       setError(null);
-      setOptions(coupled); // 乐观更新：开关要跟手（含联动的那个）
+      setOptions(updated); // 乐观更新：开关要跟手
       try {
-        await writeCleanOptionFlags(coupled);
+        await writeCleanOptionFlags(updated);
       } catch (e) {
         setOptions(prev);
         setError(e instanceof Error ? e.message.slice(0, 60) : '保存失败');

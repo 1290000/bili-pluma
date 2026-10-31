@@ -108,13 +108,9 @@ export default defineContentScript({
      * 动态监听：推荐流无限滚动、视频页右栏异步渲染，
      * 都需要持续补标记。
      */
-    const { stop: stopAds } = installAdObserver(
-      () => prefs.options,
-      document,
-      () => {
-        console.warn('[pluma] 未找到已知内容容器 —— 广告清理可能已因 B站 改版失效');
-      },
-    );
+    const { stop: stopAds } = installAdObserver(document, () => {
+      console.warn('[pluma] 未找到已知内容容器 —— 广告清理可能已因 B站 改版失效');
+    });
     ctx.onInvalidated(stopAds);
 
     /**

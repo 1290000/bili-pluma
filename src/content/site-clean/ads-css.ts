@@ -68,11 +68,31 @@ body:not(.${BODY_CLASS.preserveFeedGoods}) .bili-dyn-content__orig__additional:h
  * **模式之间互斥不是靠书写顺序，而是靠"body 上只有其中一个类"。**
  */
 const APPLY = `
-/* ── 模式：调试 —— 不隐藏，红框标出命中元素 ──
-   优先级最高：关掉「完全隐藏」后打开调试，用户要看到真实广告。 */
+/*
+ * ── 模式：调试 —— 只加红框，**完全不碰 display / visibility** ──
+ *
+ * ## 2026-10-31 第二次修正（verifier 实测发现两个副作用）
+ *
+ * 首版写的是：
+ *
+ * <pre>
+ * display: revert !important;      → 把 vcd 从 flex 还原成 block，高度 +59px
+ * visibility: visible !important;  → 把 B站 自己 display:none 的卡强行显示
+ * </pre>
+ *
+ * 两条都是**没必要**的：
+ *
+ * - debug 模式下我们本就不隐藏元素（mode-hide 的规则根本不会命中），
+ *   所以不需要"还原显示"——广告本来就是可见的
+ * - 强制 display: revert 反而会**破坏 B站 自己的布局**（flex → block）
+ *   和**显示不该出现的内容**（B站 自己藏起来的卡）
+ *
+ * 现在只做一件事：画红框。**其余一律不干预。**
+ *
+ * 这也让 debug 模式成为真正"零侵入"的观察工具 ——
+ * 打开它页面不该有任何变化，除了命中元素多一圈红边。
+ */
 body.${BODY_CLASS.modeDebug} [data-pluma-ad="1"] {
-  display: revert !important;
-  visibility: visible !important;
   outline: 2px solid red !important;
   outline-offset: -2px !important;
 }
@@ -80,72 +100,6 @@ body.${BODY_CLASS.modeDebug} [data-pluma-ad="1"] {
 /* ── 模式：完全隐藏 —— 卡片不占位 ── */
 body.${BODY_CLASS.modeHide} [data-pluma-ad="1"] {
   display: none !important;
-}
-
-/*
- * ── 模式：保留空位 + 占位文本 ──
- *
- * ## 设计目标：**版面一点都不能动**
- *
- * 这一节改过两轮，两次错因都记在这里，别再犯。
- *
- * ### 第一版错误（用户第一次反馈"排版明显不对"）
- *
- * | 做法 | 为什么错 |
- * | --- | --- |
- * | display: block !important | 首页广告卡是**网格项**，强制改成 block 直接破坏网格布局 |
- * | 子元素 visibility: hidden | 卡片高度仍由被隐藏内容决定，占位块又加 min-height，两者打架 |
- * | ::after height: 100% | 卡片高度是 auto 时百分比高度无效 |
- *
- * ### 第二版错误（verifier 逐元素比对抓出：视频页 +21.99px）
- *
- * 第二版给**所有**被标记元素都加 position: relative。
- * 但广告是**嵌套**的：.gg-pic 在 .ad-report 内部，**两个都带标记**。
- * .gg-pic 原生 position: absolute —— 被改成 relative 后
- * **重新参与父元素高度计算**：
- *
- * <pre>
- * 原生          : .ad-report-inner 高 0     → 卡片 668x55.65
- * 强制 relative : .ad-report-inner 高 21.99 → 卡片 668x77.64
- * </pre>
- *
- * **聚合指标完全看不出来**（行间距仍 20px、>100px 空隙仍 0），
- * 只有"逐元素比尺寸与原生差值"才能发现。
- *
- * ### 第三版（现在）
- *
- * 只让**最外层**被标记元素当占位容器，嵌套的**完全不碰** —— 保持原生定位与尺寸。
- * 判据：该元素**没有**带标记的祖先（即不是"标记元素里的标记元素"）。
- *
- * 占位块也只画在最外层 —— 语义上更对：用户看到的"这里有个广告位"是一整块，
- * 不是内部每个零件各贴一张标签。
- */
-body.${BODY_CLASS.modePlaceholder} [data-pluma-ad="1"]:not([data-pluma-ad] [data-pluma-ad]) {
-  position: relative !important;
-  pointer-events: none !important;
-}
-
-/* 最外层的内容透明但**保留占位** —— 这是"尺寸不变"的关键 */
-body.${BODY_CLASS.modePlaceholder}
-  [data-pluma-ad="1"]:not([data-pluma-ad] [data-pluma-ad])
-  > * {
-  opacity: 0 !important;
-}
-
-/* 占位块：绝对定位铺满，不参与布局计算 */
-body.${BODY_CLASS.modePlaceholder} [data-pluma-ad="1"]:not([data-pluma-ad] [data-pluma-ad])::after {
-  content: '🚫已屏蔽广告';
-  position: absolute !important;
-  inset: 0 !important;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #888;
-  background-color: rgba(136, 136, 136, 0.13);
-  font-size: 14px;
-  border-radius: 6px;
-  overflow: hidden;
-  z-index: 1;
 }
 `;
 
@@ -155,7 +109,6 @@ body.${BODY_CLASS.modePlaceholder} [data-pluma-ad="1"]:not([data-pluma-ad] [data
  * 这是 M3 完全漏掉、导致用户看到排版错位的部分。**一条都不许删。**
  *
  * 只在**完全隐藏**模式下生效 —— 那是唯一会让卡片从网格消失的模式。
- * 占位模式下卡片仍在网格里，不需要补位，且补位反而会额外加载一批卡片。
  *
  * 逐条说明理由：
  *

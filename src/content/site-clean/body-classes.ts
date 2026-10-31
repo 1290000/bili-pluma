@@ -12,9 +12,8 @@
  *
  * ## 2026-10-31 重构：从「布尔直驱」改为「模式驱动」
  *
- * 用户要求把「显示占位文本」并进「完全隐藏」的联动里，并让「调试模式」优先。
- * 若继续让 CSS 直接消费 `hideContainer` / `adShowPlaceholder` 两个布尔，
- * 就会出现"两个类同时存在、靠特异性决胜"的脆弱结构（本项目已踩过两次）。
+ * 若让 CSS 直接消费多个布尔类名，就会出现"两个类同时存在、靠特异性决胜"的
+ * 脆弱结构（本项目已踩过两次）。
  *
  * 现在改为：**`resolveAdRenderMode()` 先收敛成唯一模式**，
  * 再把**恰好一个**模式类名挂到 body 上。CSS 只需匹配模式类，不再组合布尔。
@@ -23,8 +22,7 @@
  * | --- | --- | --- |
  * | `disabled` | （无） | 广告照常显示，一条规则都不生效 |
  * | `debug` | `pluma-clean-mode-debug` | 不隐藏，红框标出 |
- * | `hide` | `pluma-clean-mode-hide` | 完全隐藏，不占位 |
- * | `placeholder` | `pluma-clean-mode-placeholder` | 保留空位 + 占位文本 |
+ * | `hide` | `pluma-clean-mode-hide` | 完全隐藏 |
  *
  * ## 命名前缀
  *
@@ -44,17 +42,20 @@ export const BODY_CLASS = {
   homeHideSwipe: 'pluma-clean-home-hide-swipe',
   /** 渲染模式：完全隐藏 */
   modeHide: 'pluma-clean-mode-hide',
-  /** 渲染模式：保留空位 + 占位文本 */
-  modePlaceholder: 'pluma-clean-mode-placeholder',
   /** 渲染模式：调试（不隐藏 + 红框） */
   modeDebug: 'pluma-clean-mode-debug',
 } as const;
 
-/** 三个模式类名 —— 用于"先全清再挂一个" */
+/**
+ * 模式 → 类名。
+ *
+ * ⚠️ `placeholder`（保留空位 + 占位块）已于 2026-10-31 按用户要求**删除**。
+ * 不要再加回来 —— 那套实现为了"版面不动"改过两轮，
+ * 还出过嵌套元素被 `position: relative` 撑高 22px 的 bug。
+ */
 const MODE_CLASSES: Record<AdRenderMode, string | null> = {
   disabled: null,
   hide: BODY_CLASS.modeHide,
-  placeholder: BODY_CLASS.modePlaceholder,
   debug: BODY_CLASS.modeDebug,
 };
 
@@ -103,6 +104,5 @@ export function readRenderMode(body: Element | null = document.body): AdRenderMo
   if (!body) return 'disabled';
   if (body.classList.contains(BODY_CLASS.modeDebug)) return 'debug';
   if (body.classList.contains(BODY_CLASS.modeHide)) return 'hide';
-  if (body.classList.contains(BODY_CLASS.modePlaceholder)) return 'placeholder';
   return 'disabled';
 }

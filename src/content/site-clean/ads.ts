@@ -159,10 +159,15 @@ export function applyAdClean(options: CleanOptions, doc: Document = document): b
  * ⚠️ 容器可能还没渲染（`document_start` 时必然没有），所以两段式：
  * 先尝试直接挂到已知容器，无论成功与否都再挂一个 body 级兜底。
  *
+ * ## 为什么不再接 `getOptions` 参数（2026-10-31）
+ *
+ * 它原来只被一处用到：`if (getOptions().adDebug) return;` —— 而那一行是**错误的**
+ * （见 `schedule()` 里的长注释：调试模式恰恰最需要标记）。
+ * 删掉那行后参数就没人用了，留着只会误导后来人以为"重扫还要看选项"。
+ *
  * @param onGiveUp 15 秒仍找不到任何已知容器时回调（ADR 0031：失效不许静默）
  */
 export function installAdObserver(
-  getOptions: () => CleanOptions,
   doc: Document = document,
   onGiveUp?: () => void,
 ): { stop: () => void } {
@@ -175,7 +180,28 @@ export function installAdObserver(
     pending = true;
     queueMicrotask(() => {
       pending = false;
-      if (getOptions().adDebug) return; // 调试态不需要标记变化
+      /**
+       * ## ⚠️ 这里**绝不能**因为 `adDebug` 而跳过（2026-10-31 verifier 抓出的严重 bug）
+       *
+       * 曾有一行：
+       *
+       * ```ts
+       * if (getOptions().adDebug) return; // "调试态不需要标记变化"
+       * ```
+       *
+       * **完全错了。** 调试模式的整个用途是"把命中的元素用红框标出来"，
+       * 而红框的选择器就是 `body.mode-debug [data-pluma-ad="1"]` ——
+       * **没有标记就没有红框**。
+       *
+       * 更糟的是：`applyAdClean()` 的首扫发生在 `document_start`，
+       * 那时广告元素还没渲染，标记数为 0；
+       * 之后每次 DOM 变化的重扫都被这行跳过 → **标记永远是 0**。
+       *
+       * 后果：用户一开调试模式，**广告清理和调试模式同时失效** ——
+       * 表现为"开了删除广告但广告还在"（用户报的正是这个）。
+       *
+       * 性能考虑若确实需要，只能跳过**撤销分支**，不能跳过整个函数。
+       */
       markAdElements(doc, win);
     });
   };
