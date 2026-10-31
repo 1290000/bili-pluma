@@ -50,8 +50,8 @@ export function buildCleanRows(
       label: '删除广告',
       applicable: page === 'home' || page === 'video',
       scope: '首页 / 视频页',
-      // 广告清理无总开关，只要扩展在这个页面上就是"生效中"
-      on: true,
+      /** 2026-10-31 起广告清理有总开关，这里如实反映 */
+      on: prefs.options.adEnabled,
     },
     {
       key: 'home',
@@ -65,7 +65,10 @@ export function buildCleanRows(
       label: '删除直播水印',
       applicable: page === 'live',
       scope: '直播间',
-      // 水印清理也无开关（见 live-clean.ts 文件头），在直播间即生效
+      /**
+       * 水印清理**无开关**（见 live-clean.ts 文件头：没有"看情况才想要"的中间态）。
+       * 所以这里恒为"生效中"，仅在直播间显示。
+       */
       on: true,
     },
   ];

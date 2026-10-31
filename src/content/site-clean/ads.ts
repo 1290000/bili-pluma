@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 删除广告 —— 编排层（第 2/3 层的接线）。
  *
  * ## 分工
@@ -65,11 +65,9 @@ export function ensureAdStyle(doc: Document = document): void {
  *
  * 现在这里**没有任何手写选择器**，加判据只需改 `ad-selectors.ts`。
  *
- * @returns 本次新标记的元素数
+ * @returns 本次发生变化的元素数（新增标记 + 撤销标记）
  */
 export function markAdElements(doc: Document = document, win: Window = window): number {
-  let marked = 0;
-
   /**
    * 预筛：只看可能命中判据的元素。
    *
@@ -77,14 +75,43 @@ export function markAdElements(doc: Document = document, win: Window = window): 
    */
   const candidates = doc.querySelectorAll<HTMLElement>(`body ${PRESCREEN}`);
 
+  /**
+   * ## ⚠️ 标记必须能**撤销**（2026-10-31 verifier 实测抓出的真 bug）
+   *
+   * 首版是：
+   *
+   * ```ts
+   * if (el.getAttribute(AD_MARK_ATTR) === '1') continue;  // 已有标记直接跳过
+   * ```
+   *
+   * **只加不减**。后果：元素一旦被打过标记，之后即使开关让判据不再命中
+   * （例如用户打开「保留活动横幅」，`.ad-report.ad-floor-exp` 不再匹配），
+   * `data-pluma-ad="1"` 仍留在元素上 → 继续被 `body.pluma-clean-mode-hide`
+   * 隐藏 → **用户必须刷新页面才恢复**。
+   *
+   * 这正是用户报的「视频页关掉活动横幅不生效」的真根因 ——
+   * 我当时以为改 CSS 判据（`:not(.ad-floor-exp)`）就够了，
+   * 但 verifier 实测该元素 `matches` 已返回 false，是**旧标记没撤销**。
+   *
+   * 现在两个方向都处理：
+   *   - 命中 → 打标记
+   *   - 不再命中 → **摘掉标记**
+   */
+  let changed = 0;
   for (const el of candidates) {
-    if (el.getAttribute(AD_MARK_ATTR) === '1') continue;
     const probe = win.getComputedStyle(el).getPropertyValue('--pluma-ad-card').trim();
-    if (probe !== '1') continue;
-    el.setAttribute(AD_MARK_ATTR, '1');
-    marked += 1;
+    const shouldMark = probe === '1';
+    const isMarked = el.getAttribute(AD_MARK_ATTR) === '1';
+
+    if (shouldMark && !isMarked) {
+      el.setAttribute(AD_MARK_ATTR, '1');
+      changed += 1;
+    } else if (!shouldMark && isMarked) {
+      el.removeAttribute(AD_MARK_ATTR);
+      changed += 1;
+    }
   }
-  return marked;
+  return changed;
 }
 
 /**

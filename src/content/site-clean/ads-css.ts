@@ -23,13 +23,18 @@ import { buildJudgementCss } from './ad-selectors';
 /**
  * 受开关控制的判据 —— 不在 `AD_SELECTORS` 里，因为它们依赖 body 类名。
  *
- * 结构与通用判据不带条件；这两条**是否算广告**由用户开关决定。
+ * 结构与通用判据不带条件；这几条**是否算广告**由用户开关决定。
  */
 function buildToggleControlledJudgement(): string {
   return `
-/* ── 活动横幅：受「保留活动横幅」开关控制（上游 preserveEventBanner）── */
+/* ── 活动横幅：受「保留活动横幅」开关控制（上游 preserveEventBanner）──
+   ⚠️ 2026-10-31 补：视频详情页的活动推广位**不在** .activity-m 里，
+   而是 .ad-report.ad-floor-exp（实测内容「来分享你的兴趣人生经营日志吧！」）。
+   首版只写了首页那两条，所以用户在视频页关掉此开关**看不出任何变化**。
+   现在把视频页的活动推广位也纳入同一开关。 */
 body:not(.${BODY_CLASS.preserveEventBanner}) .activity-m,
-body:not(.${BODY_CLASS.preserveEventBanner}) .activity-m-v1 {
+body:not(.${BODY_CLASS.preserveEventBanner}) .activity-m-v1,
+body:not(.${BODY_CLASS.preserveEventBanner}) .ad-report.ad-floor-exp {
   --pluma-ad-card: 1;
 }
 
@@ -42,67 +47,73 @@ body:not(.${BODY_CLASS.preserveFeedGoods}) .bili-dyn-content__orig__additional:h
 }
 
 /**
- * 应用层 —— 由 body 类名决定"怎么隐藏"。
+ * 应用层 —— 由**模式类名**驱动（2026-10-31 重构）。
  *
- * 三种结局：
- *   - 默认（hideContainer 开）：`display:none`，卡片不占位
- *   - hideContainer 关（keepSpace 类）：保留空位，只隐藏内容（版面最稳定）
- *   - debug 开：不隐藏，加红框
+ * ## 为什么改成模式驱动
+ *
+ * 用户要求把「显示占位文本」并进「完全隐藏」的联动，并让「调试模式」优先。
+ * 若继续让 CSS 组合两个布尔类名，就会出现"两个类同时存在、靠特异性决胜"
+ * 的脆弱结构（本项目在这一点上已经踩过两次）。
+ *
+ * 现在 `resolveAdRenderMode()` 先收敛成**唯一模式**，
+ * body 上**恰好挂一个**模式类，CSS 只需匹配它：
+ *
+ * | 模式 | 效果 |
+ * | --- | --- |
+ * | `disabled` | 不挂任何模式类 → 一条规则都不命中，广告照常显示 |
+ * | `debug` | 不隐藏 + 红框 |
+ * | `hide` | 完全隐藏，不占位 |
+ * | `placeholder` | 保留空位 + 占位文本 |
+ *
+ * **模式之间互斥不是靠书写顺序，而是靠"body 上只有其中一个类"。**
  */
 const APPLY = `
-/* 调试模式：全部显示并加红框，用于确认选择器命中情况 */
-body.${BODY_CLASS.debug} [data-pluma-ad="1"] {
+/* ── 模式：调试 —— 不隐藏，红框标出命中元素 ──
+   优先级最高：关掉「完全隐藏」后打开调试，用户要看到真实广告。 */
+body.${BODY_CLASS.modeDebug} [data-pluma-ad="1"] {
   display: revert !important;
   visibility: visible !important;
   outline: 2px solid red !important;
   outline-offset: -2px !important;
 }
 
-/*
- * 默认隐藏。
- *
- * ## 为什么写成「不是 debug 也不是 keep-space」
- *
- * 这样它与下面「保留空位」那条**在条件上互斥**，
- * 不需要依赖书写顺序或特异性大小 —— 两条规则永远不会同时命中同一元素。
- *
- * 2026-10-31 两次踩到同一类问题：
- *   1. 首版用 :not(.debug):not(.hideContainer)，特异性比默认隐藏高，
- *      在 body 缺该类时反过来压过 display:none → 元素照样显示。
- *   2. 改成正向类名后特异性与默认隐藏相同，改由书写顺序决胜 ——
- *      verifier 独立指出这是脆弱的，且当时 keep-space 命中 0，无法靠实测排除。
- *
- * 现在用条件互斥替代这两种做法：默认隐藏排除 keep-space，
- * 两条规则的作用域不重叠，顺序与特异性都不再是正确性的前提。
- */
-body:not(.${BODY_CLASS.debug}):not(.${BODY_CLASS.keepSpace}) [data-pluma-ad="1"] {
+/* ── 模式：完全隐藏 —— 卡片不占位 ── */
+body.${BODY_CLASS.modeHide} [data-pluma-ad="1"] {
   display: none !important;
 }
 
-/*
- * 「完全隐藏」关闭时：卡片保留占位，只清空内容。
- *
- * 条件与上一条互斥（上一条已排除 keep-space），所以这里不需要更高特异性。
- */
-body.${BODY_CLASS.keepSpace} [data-pluma-ad="1"] {
+/* ── 模式：保留空位 + 占位文本 ──
+   卡片保留在网格里（版面无空洞），内容清空，由 ::after 画占位块。 */
+body.${BODY_CLASS.modePlaceholder} [data-pluma-ad="1"] {
   display: block !important;
-  visibility: hidden !important;
+  visibility: visible !important;
   pointer-events: none !important;
+  min-height: 60px;
 }
 
-/* 占位文本：被屏蔽的广告位显示「已屏蔽广告」（上游 showPlaceholder） */
-body.${BODY_CLASS.showPlaceholder}:not(.${BODY_CLASS.debug}) [data-pluma-ad="1"]::after {
+/*
+ * 占位块本身。
+ *
+ * 注意：首版用 visibility:hidden 隐藏整张卡再让 ::after 可见 —— 那样
+ * 卡片内容仍占位却不可见，尺寸忽大忽小。现在改为内容透明、占位块可见，
+ * 版面尺寸由卡片自身高度决定，更稳定。
+ */
+body.${BODY_CLASS.modePlaceholder} [data-pluma-ad="1"] > * {
+  visibility: hidden !important;
+}
+
+body.${BODY_CLASS.modePlaceholder} [data-pluma-ad="1"]::after {
   content: '🚫已屏蔽广告';
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 100%;
   min-height: 60px;
+  height: 100%;
   color: #888;
   background-color: rgba(136, 136, 136, 0.13);
   font-size: 14px;
-  visibility: visible;
+  visibility: visible !important;
 }
 `;
 
@@ -110,6 +121,9 @@ body.${BODY_CLASS.showPlaceholder}:not(.${BODY_CLASS.debug}) [data-pluma-ad="1"]
  * ## 第 4 层：布局补偿
  *
  * 这是 M3 完全漏掉、导致用户看到排版错位的部分。**一条都不许删。**
+ *
+ * 只在**完全隐藏**模式下生效 —— 那是唯一会让卡片从网格消失的模式。
+ * 占位模式下卡片仍在网格里，不需要补位，且补位反而会额外加载一批卡片。
  *
  * 逐条说明理由：
  *
@@ -126,26 +140,26 @@ body.${BODY_CLASS.showPlaceholder}:not(.${BODY_CLASS.debug}) [data-pluma-ad="1"]
  *    —— 首页推荐流里有一种透明业务卡，隐藏后仍占位。
  */
 const COMPENSATION = `
-/* ① 提前加载下一批卡片，补上因隐藏广告空出来的位置 */
-body.${BODY_CLASS.hideContainer} .container > .load-more-anchor {
+/* ① 提前加载下一批卡片，补上因隐藏广告空出来的位置（仅 hide 模式） */
+body.${BODY_CLASS.modeHide} .container > .load-more-anchor {
   position: fixed !important;
   top: -9999px !important;
 }
 
-/* ② 消除隐藏后残留的行间距 */
-.recommended-container_floor-aside .container > * {
+/* ② 消除隐藏后残留的行间距（仅 hide 模式 —— 占位模式要保持原间距） */
+body.${BODY_CLASS.modeHide} .recommended-container_floor-aside .container > * {
   margin: 0 !important;
 }
 
 /* ③ 透明业务卡不得占位 */
-.recommended-container .business-card {
+body.${BODY_CLASS.modeHide} .recommended-container .business-card {
   position: absolute !important;
   pointer-events: none !important;
   opacity: 0 !important;
 }
 
-/* ④ 被隐藏的横幅不应留下高度 */
-.ad-report.strip-ad.left-banner:empty {
+/* ④ 被隐藏的横幅不应留下高度（仅 hide 模式） */
+body.${BODY_CLASS.modeHide} .ad-report.strip-ad.left-banner:empty {
   height: 0 !important;
 }
 `;

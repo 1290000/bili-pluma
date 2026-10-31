@@ -49,20 +49,21 @@ export const STRUCTURAL_RULES: readonly AdSelectorRule[] = [
     note: '同上，嵌套在 feed-card 内的卡片',
   },
   {
-    selector: '.ad-report',
-    note: '视频详情页广告单元（实测 350×104 / 350×175 两个可见）',
-  },
-  {
-    selector: '.ad-floor-exp',
-    note: '视频页右下方楼层推广（实测 350×175）',
+    selector: '.ad-report:not(.ad-floor-exp)',
+    note:
+      '视频详情页广告单元（实测 350×104 / 350×56）。' +
+      '⚠️ **排除 .ad-floor-exp**：那个是活动推广位，受「保留活动横幅」开关控制（见 ads-css.ts）。' +
+      '若不排除，通用判据会无条件标记它，开关就形同虚设',
   },
   {
     selector: '.strip-ad.left-banner',
     note: '视频页左栏横幅（实测 668×56）',
   },
   {
-    selector: '.right-bottom-banner',
-    note: '视频页右下角横幅',
+    selector: '.right-bottom-banner:not(.ad-floor-exp)',
+    note:
+      '视频页右下角横幅。' +
+      '⚠️ 同样排除活动推广位（`.ad-report.ad-floor-exp.right-bottom-banner` 同时带这两个类）',
   },
 ];
 

@@ -324,6 +324,12 @@ button:disabled {
   cursor: default;
 }
 
+/* 被上级开关禁用（如「删除广告」关掉时，子项全部置灰） */
+.pref.dim {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .pref + .pref {
   margin-top: 8px;
 }
@@ -339,6 +345,12 @@ button:disabled {
   font-size: var(--pluma-font-caption);
   color: var(--pluma-text-muted);
   line-height: 1.45;
+}
+
+/* 互斥提示（如「调试模式开启时不可用」）—— 用警示色，但**不用红色**：
+   红色在本项目里只表示失败，这里只是规则说明。 */
+.pref-mutex {
+  color: var(--pluma-warning);
 }
 
 .pref-value {

@@ -28,6 +28,7 @@
 import {
   CLEAN_OPTION_META,
   DEFAULT_CLEAN_OPTIONS,
+  applyAdOptionCoupling,
   normalizeCleanPreferences,
   type CleanOptions,
 } from '@/src/content/site-clean/clean-options';
@@ -57,16 +58,23 @@ export function CleanSection(): JSX.Element {
     });
   }, []);
 
-  /** 切换一个布尔开关 */
+  /**
+   * 切换一个布尔开关。
+   *
+   * ⚠️ **必须过 `applyAdOptionCoupling()`**：`adDebug` 与 `adHideContainer` 互斥，
+   * 开调试要顺手关掉完全隐藏。若只在渲染时推导，存储里会留下矛盾组合，
+   * 用户关掉调试后广告会突然变成"完全隐藏"而不是回到他上次选的状态。
+   */
   const toggle = useCallback(
     async (key: keyof CleanOptions, next: boolean) => {
       if (!options) return;
       const prev = options;
+      const coupled = applyAdOptionCoupling({ ...options, [key]: next });
       setBusy(true);
       setError(null);
-      setOptions({ ...options, [key]: next }); // 乐观更新：开关要跟手
+      setOptions(coupled); // 乐观更新：开关要跟手（含联动的那个）
       try {
-        await writeCleanOptionFlags({ ...prev, [key]: next });
+        await writeCleanOptionFlags(coupled);
       } catch (e) {
         setOptions(prev);
         setError(e instanceof Error ? e.message.slice(0, 60) : '保存失败');
@@ -100,10 +108,24 @@ export function CleanSection(): JSX.Element {
 
   const disabled = busy || options === null || cats === null;
 
+  /** 总开关（adEnabled）本身永远可点；其余广告子项在总开关关闭时置灰 */
+  const isSubAdOption = (key: string): boolean => key !== 'adEnabled';
+  const subDisabled = disabled || options?.adEnabled !== true;
+  /**
+   * 调试与完全隐藏互斥 —— 当前开着的那个，另一个在视觉上不可再点。
+   * 联动本身由 `applyAdOptionCoupling()` 在写入时落定，这里只做提示。
+   */
+  const mutexHint = (key: string): string | null => {
+    if (!options) return null;
+    if (key === 'adHideContainer' && options.adDebug) return '调试模式开启时不可用';
+    if (key === 'adDebug' && options.adHideContainer) return '会先关闭「完全隐藏」';
+    return null;
+  };
+
   return (
     <>
       <Card title="删除广告">
-        {CLEAN_OPTION_META.map((meta) => (
+        {CLEAN_OPTION_META.filter((m) => m.key === 'adEnabled').map((meta) => (
           <label class="pref" key={meta.key}>
             <span class="pref-label">
               {meta.label}
@@ -120,6 +142,30 @@ export function CleanSection(): JSX.Element {
             </span>
           </label>
         ))}
+
+        {CLEAN_OPTION_META.filter((m) => isSubAdOption(m.key)).map((meta) => {
+          const hint = mutexHint(meta.key);
+          return (
+            <label class={`pref ${subDisabled ? 'dim' : ''}`} key={meta.key}>
+              <span class="pref-label">
+                {meta.label}
+                <span class="pref-hint">
+                  {meta.hint}
+                  {hint && <span class="pref-mutex">（{hint}）</span>}
+                </span>
+              </span>
+              <span class={`switch ${options?.[meta.key] ? 'on' : ''} ${busy ? 'busy' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={options?.[meta.key] === true}
+                  disabled={subDisabled}
+                  onChange={(e) => void toggle(meta.key, (e.target as HTMLInputElement).checked)}
+                />
+                <span class="knob" />
+              </span>
+            </label>
+          );
+        })}
       </Card>
 
       <Card title="首页净化">

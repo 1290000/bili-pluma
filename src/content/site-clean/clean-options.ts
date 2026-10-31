@@ -29,9 +29,10 @@ import { isObservedCategory } from './home-selectors';
 
 /** 所有清理选项的键 —— 用于类型安全地遍历 */
 export const CLEAN_OPTION_KEYS = [
+  /** 删除广告**总开关**（2026-10-31 用户要求补上；此前广告清理没有开关） */
+  'adEnabled',
   'adPreserveEventBanner',
   'adPreserveFeedGoods',
-  'adShowPlaceholder',
   'adHideContainer',
   'adDebug',
   /** 隐藏顶部大图推荐位（首页净化） */
@@ -57,13 +58,23 @@ export type CleanOptions = Record<CleanOptionKey, boolean>;
  * 反过来（默认保留）会让"删除广告"这个功能名不副实。
  */
 export const DEFAULT_CLEAN_OPTIONS: CleanOptions = {
+  /** 删除广告总开关：默认开（用户 2026-10-31 确认） */
+  adEnabled: true,
   adPreserveEventBanner: false,
   adPreserveFeedGoods: false,
-  /** 占位文本：显示「🚫已屏蔽广告」，让用户知道这里原本有广告、是被插件挡掉的 */
-  adShowPlaceholder: true,
-  /** 完全隐藏：true = 卡片不占位；false = 保留空位（上游的"自定义"态） */
+  /**
+   * 完全隐藏：`true` = 卡片不占位；`false` = 保留空位并**自动**显示占位文本。
+   *
+   * ⚠️ **「显示占位文本」已不再是独立选项**（2026-10-31 用户要求去掉）：
+   * 它与"完全隐藏"是同一件事的两面，拆成两个开关只会让用户组合出
+   * "既不完全隐藏、又不显示占位"的空洞状态。现在的联动见 `resolveAdRenderMode()`。
+   */
   adHideContainer: true,
-  /** 调试：不隐藏、加红框高亮。用于确认选择器命中情况 */
+  /**
+   * 调试：不隐藏、加红框高亮。用于确认选择器命中情况。
+   *
+   * ⚠️ 与 `adHideContainer` **互斥**，优先级见 `resolveAdRenderMode()`。
+   */
   adDebug: false,
   /**
    * 隐藏首页顶部大图推荐位 —— **默认 `false`**。
@@ -73,6 +84,55 @@ export const DEFAULT_CLEAN_OPTIONS: CleanOptions = {
    */
   homeHideSwipe: false,
 };
+
+/**
+ * 广告卡片的**渲染模式** —— 由选项推导出的唯一结局。
+ *
+ * ## 为什么要有这个函数（2026-10-31 用户要求）
+ *
+ * 用户要去掉「显示占位文本」这个独立选项，改为**自动联动**：
+ *
+ * | `adDebug` | `adHideContainer` | 模式 | 效果 |
+ * | --- | --- | --- | --- |
+ * | `true` | 任意 | `debug` | **不隐藏**，红框标出命中元素（**优先级最高**） |
+ * | `false` | `true` | `hide` | 完全隐藏，不占位 |
+ * | `false` | `false` | `placeholder` | 保留空位，显示「已屏蔽广告」 |
+ *
+ * **调试模式优先级最高**：用户关掉「完全隐藏」后再打开调试，
+ * 期望的是"让广告显示出来并标红"——若此时仍按 placeholder 处理，
+ * 广告就被占位块盖住了，调试毫无意义。
+ *
+ * 把三种结局**收敛到一个纯函数**，是为了让 CSS 与校验脚本只认一个判据，
+ * 而不是各自去组合两个布尔值（那必然是两份逻辑，迟早漂移）。
+ */
+export type AdRenderMode = 'disabled' | 'debug' | 'hide' | 'placeholder';
+
+export function resolveAdRenderMode(opts: CleanOptions): AdRenderMode {
+  if (!opts.adEnabled) return 'disabled';
+  /** 调试优先于一切 —— 它要看到真实元素 */
+  if (opts.adDebug) return 'debug';
+  return opts.adHideContainer ? 'hide' : 'placeholder';
+}
+
+/**
+ * 设置页开关联动 —— **写回前必调用**。
+ *
+ * ## 为什么联动放在写入口而不是渲染时
+ *
+ * 若只在渲染时推导（例如"调试开就忽略 hideContainer"），
+ * 存储里会留下 `adDebug=true, adHideContainer=true` 这种**互相矛盾**的组合。
+ * 一旦用户关掉调试，广告会突然变成"完全隐藏"而不是回到他上次选的状态 —— 行为诡异。
+ *
+ * 所以在**写入时**就把互斥关系落定：开调试 → 顺手关掉完全隐藏。
+ *
+ * @returns 规范化后的选项（不修改入参）
+ */
+export function applyAdOptionCoupling(opts: CleanOptions): CleanOptions {
+  const next = { ...opts };
+  /** 互斥：调试模式开启时，「完全隐藏」必须为 false */
+  if (next.adDebug && next.adHideContainer) next.adHideContainer = false;
+  return next;
+}
 
 /** 每个选项的展示信息 —— 设置页直接消费，不要在 UI 里另写一份文案 */
 export interface CleanOptionMeta {
@@ -85,6 +145,11 @@ export interface CleanOptionMeta {
 
 export const CLEAN_OPTION_META: readonly CleanOptionMeta[] = [
   {
+    key: 'adEnabled',
+    label: '删除广告',
+    hint: '总开关。关闭后首页与视频页的广告都会恢复显示',
+  },
+  {
     key: 'adPreserveEventBanner',
     label: '保留活动横幅',
     hint: '关闭时活动横幅会被隐藏。想保留促销活动入口就打开',
@@ -95,14 +160,9 @@ export const CLEAN_OPTION_META: readonly CleanOptionMeta[] = [
     hint: '关闭时动态里的商品推荐卡会被隐藏',
   },
   {
-    key: 'adShowPlaceholder',
-    label: '显示占位文本',
-    hint: '被屏蔽的广告位显示「🚫已屏蔽广告」，而不是留一片空白',
-  },
-  {
     key: 'adHideContainer',
     label: '完全隐藏',
-    hint: '打开则整块广告位不占位；关闭则保留空位（版面变化最小）',
+    hint: '打开则广告位不占位；关闭则保留空位并显示「已屏蔽广告」占位块',
   },
   {
     key: 'adDebug',
@@ -130,7 +190,13 @@ export function normalizeCleanOptions(raw: unknown): CleanOptions {
     const v = bag[key];
     if (typeof v === 'boolean') out[key] = v;
   }
-  return out;
+  /**
+   * ⚠️ 读入时也要过一遍互斥联动。
+   *
+   * 存储里可能躺着旧版本写下的矛盾组合（`adDebug=true, adHideContainer=true`），
+   * 或被人为改坏。**读入即收敛**，保证下游永远拿到自洽的选项。
+   */
+  return applyAdOptionCoupling(out);
 }
 
 // ─────────────────────────── 首页分类（多选） ───────────────────────────
