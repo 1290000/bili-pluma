@@ -21,30 +21,23 @@ import { BODY_CLASS } from './body-classes';
 import { buildJudgementCss } from './ad-selectors';
 
 /**
- * 受开关控制的判据 —— 不在 `AD_SELECTORS` 里，因为它们依赖 body 类名。
+ * ## 受开关控制的判据：**现已移回 `ad-selectors.ts`**（2026-11-01 修真 bug）
  *
- * 结构与通用判据不带条件；这几条**是否算广告**由用户开关决定。
+ * 这段判据曾写在本文件里（硬编码 `body:not(...)` + 选择器）。
+ * 后果很隐蔽：
+ *
+ * - **CSS 正确**、判据也确实命中（`--pluma-ad-card` = `"1"`）
+ * - 但 JS 预筛来自 `prescreenSelector(ALL_AD_RULES)`，那份数据**只含
+ *   STRUCTURAL + GENERIC 两组** → `.activity-m-v1` 不在预筛里 → **元素从不被扫描**
+ * - 于是「保留活动横幅」开关**完全无效**，而两边代码各自看都"对"
+ *
+ * verifier 实测证据：`elementInPrescreen: false`、
+ * 判据命中但 `marked: null`、四条链路分离验证证明只有预筛这一环断了。
+ *
+ * 现在选择器叶子在 `ad-selectors.ts` 的 `TOGGLE_RULES` 里，
+ * 由 `buildJudgementCss(toggleCondition)` 与 `prescreenSelector()` **同源生成**。
+ * **不要再把判据选择器写回本文件。**
  */
-function buildToggleControlledJudgement(): string {
-  return `
-/* ── 活动横幅：受「保留活动横幅」开关控制（上游 preserveEventBanner）──
-   ⚠️ 2026-10-31 补：视频详情页的活动推广位**不在** .activity-m 里，
-   而是 .ad-report.ad-floor-exp（实测内容「来分享你的兴趣人生经营日志吧！」）。
-   首版只写了首页那两条，所以用户在视频页关掉此开关**看不出任何变化**。
-   现在把视频页的活动推广位也纳入同一开关。 */
-body:not(.${BODY_CLASS.preserveEventBanner}) .activity-m,
-body:not(.${BODY_CLASS.preserveEventBanner}) .activity-m-v1,
-body:not(.${BODY_CLASS.preserveEventBanner}) .ad-report.ad-floor-exp {
-  --pluma-ad-card: 1;
-}
-
-/* ── 动态商品推荐：受「保留动态商品推荐」开关控制（上游 preserveFeedGoods）── */
-body:not(.${BODY_CLASS.preserveFeedGoods}) .dyn-goods,
-body:not(.${BODY_CLASS.preserveFeedGoods}) .bili-dyn-content__orig__additional:has(.dyn-goods) {
-  --pluma-ad-card: 1;
-}
-`;
-}
 
 /**
  * 应用层 —— 由**模式类名**驱动（2026-10-31 重构）。
@@ -158,9 +151,16 @@ body.${BODY_CLASS.modeHide} .ad-report.strip-ad.left-banner:empty {
  * 纯 CSS 无法可靠地"撤销自己"。
  */
 export const AD_CLEAN_CSS = [
-  '/* ── 判据（由 ad-selectors.ts 生成）── */',
-  buildJudgementCss(),
-  buildToggleControlledJudgement(),
+  '/* ── 判据（由 ad-selectors.ts 生成，含受开关控制的部分）── */',
+  /**
+   * `body:not(.preserve-event-banner)` —— 反向语义：
+   * body 上**没有**这个类时才把活动横幅算作要删除的广告。
+   *
+   * 这个前置条件由本文件提供（它持有 `BODY_CLASS` 常量），
+   * 但**选择器叶子来自 `ad-selectors.ts` 的 `TOGGLE_RULES`**，
+   * 这样 `prescreenSelector()` 才能自动包含它们。
+   */
+  buildJudgementCss(`body:not(.${BODY_CLASS.preserveEventBanner}) `),
   '/* ── 应用层（由 body 类名驱动）── */',
   APPLY,
   '/* ── 布局补偿（第 4 层，删除即导致版面错位）── */',

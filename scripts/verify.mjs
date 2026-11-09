@@ -160,6 +160,22 @@ const STEPS = [
     args: ['scripts/check-artifact.mjs'],
     first: true,
   },
+  {
+    // 2026-11-01 加：广告判据与 JS 预筛必须同源。
+    //
+    // 当时「保留活动横幅」**完全无效**，而三层代码各自看都"对"：
+    //   1. CSS 判据 `.activity-m-v1 { --pluma-ad-card: 1 }` 语法正确 ✅
+    //   2. 判据命中元素（`--pluma-ad-card` = "1"）✅
+    //   3. 但元素**不在 JS 预筛里** → 从不被扫描 → 永不标记 → 永不隐藏 ❌
+    //
+    // 只有第三层断了，而 `tsc`、单测、当时的 `verify` 全都发现不了。
+    // 根因是判据写在 `ads-css.ts`、预筛数据却在 `ad-selectors.ts` —— 两份独立来源。
+    // 本项做**构造性断言**（每条判据的叶子都必须在预筛中），不是抽样。
+    name: 'ad-selectors',
+    cmd: process.execPath,
+    args: ['scripts/check-ad-selectors.mjs'],
+    first: true,
+  },
   { name: 'test', cmd: binPath('vitest'), args: ['run'], first: false, slow: true },
 ];
 
@@ -184,6 +200,7 @@ const STEP_DOC = {
   'page-gate': '「是不是播放页」只许走 parsePlayPage()，路径字面量不许越界',
   'workflow-logs': 'Actions 日志：抓 set -x / printenv，其余靠人工审（AGENTS.md §4.3）',
   artifact: 'dist/*.zip 与源码一致：含图标、world:MAIN 入口、无 WAR、main-world.js 字节一致',
+  'ad-selectors': '广告判据的叶子必须全部在 JS 预筛里（防"判据命中但元素从不被扫描"）',
   test: 'vitest run',
 };
 

@@ -104,8 +104,59 @@ export const GENERIC_RULES: readonly AdSelectorRule[] = [
   { selector: '.video-card-ad-small', note: '小广告卡' },
 ];
 
-/** 全部判据（两组拼接，供检查与调试用） */
-export const ALL_AD_RULES: readonly AdSelectorRule[] = [...STRUCTURAL_RULES, ...GENERIC_RULES];
+/**
+ * ## 第三组：**受开关控制**的判据（2026-11-01 补）
+ *
+ * ⚠️ 这一组是本轮修的真 bug 的产物，**必须放在这里**，不能再写回 `ads-css.ts`。
+ *
+ * ### 之前错在哪
+ *
+ * 「保留活动横幅」的判据一开始直接写在 `ads-css.ts` 的模板字符串里：
+ *
+ * ```css
+ * body:not(.pluma-clean-preserve-event-banner) .activity-m-v1 { --pluma-ad-card: 1; }
+ * ```
+ *
+ * 而 JS 侧的 `markAdElements()` 用 **`prescreenSelector(ALL_AD_RULES)`** 生成预筛，
+ * `ALL_AD_RULES` 只含上面两组 —— **`.activity-m-v1` 不在预筛里，根本不会被扫描**。
+ *
+ * 后果（verifier 实测）：
+ * - 判据命中了（`--pluma-ad-card` = `"1"`）
+ * - 但元素**从未被标记** → 永远不会隐藏 → **开关完全无效**，而 CSS 看起来完全正确
+ *
+ * 这恰好违反本文件头自己写的约定：
+ * **「加选择器的正确姿势：只改 `AD_SELECTORS` 一个数组，CSS 与预筛自动跟上」**
+ * —— toggle 规则绕过了这个约定。
+ *
+ * ### 现在怎么保证
+ *
+ * `selector` 里的 `body:not(.xxx)` 前缀由 `buildJudgementCss()` 按 body 类名生成，
+ * 而"叶子"（`.activity-m-v1` 等）由 `prescreenSelector()` 自动提取进预筛。
+ * **两份数据同源，构造上不会再漂移。**
+ */
+export const TOGGLE_RULES: readonly AdSelectorRule[] = [
+  {
+    selector: '.activity-m',
+    note: '首页活动横幅（受「保留活动横幅」控制）',
+  },
+  {
+    selector: '.activity-m-v1',
+    note:
+      '视频页**简介下方**的活动横幅（受「保留活动横幅」控制）。' +
+      '实测 668×102，top≈858，样本「20万奖金激励…动画短片群星计划」',
+  },
+  {
+    selector: '.ad-report.ad-floor-exp',
+    note: '视频页右栏楼层推广（受「保留活动横幅」控制），实测 350×175',
+  },
+];
+
+/** 全部判据（三组拼接，供 CSS 生成、预筛生成与检查脚本共用） */
+export const ALL_AD_RULES: readonly AdSelectorRule[] = [
+  ...STRUCTURAL_RULES,
+  ...GENERIC_RULES,
+  ...TOGGLE_RULES,
+];
 
 /**
  * 生成 JS 侧预筛选择器。
@@ -134,10 +185,15 @@ export function prescreenSelector(rules: readonly AdSelectorRule[] = ALL_AD_RULE
 
 /**
  * 生成 CSS 判据段。
+ *
+ * @param toggleBodyClasses 受开关控制的判据要加在 body 上的**前置类名**
+ *   （例如 `body:not(.pluma-clean-preserve-event-banner)`）。
+ *   由调用方传入而不是本文件硬编码，是因为 body 类名常量在 `body-classes.ts`，
+ *   而本文件不该依赖它的具体值 —— 但**选择器叶子必须留在本文件**，否则预筛会漏。
  */
-export function buildJudgementCss(): string {
-  const block = (rules: readonly AdSelectorRule[]): string =>
-    rules.map((r) => `${r.selector} { --pluma-ad-card: 1; }`).join('\n');
+export function buildJudgementCss(toggleCondition: string): string {
+  const block = (rules: readonly AdSelectorRule[], prefix = ''): string =>
+    rules.map((r) => `${prefix}${r.selector} { --pluma-ad-card: 1; }`).join('\n');
 
   return `
 /* ── 结构判据（实测有效）── */
@@ -145,5 +201,10 @@ ${block(STRUCTURAL_RULES)}
 
 /* ── 通用广告位（上游选择器表，MIT）── */
 ${block(GENERIC_RULES)}
+
+/* ── 受开关控制的判据（「保留活动横幅」）──
+   ⚠️ 选择器叶子来自本文件的 TOGGLE_RULES，**所以预筛自动包含它们**。
+   2026-11-01 之前这段写在 ads-css.ts，导致预筛漏掉、开关完全无效。 */
+${block(TOGGLE_RULES, toggleCondition)}
 `;
 }

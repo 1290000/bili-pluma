@@ -29,10 +29,9 @@ import { isObservedCategory } from './home-selectors';
 
 /** 所有清理选项的键 —— 用于类型安全地遍历 */
 export const CLEAN_OPTION_KEYS = [
-  /** 删除广告**总开关**（2026-10-31 用户要求补上；此前广告清理没有开关） */
+  /** 删除广告**总开关** */
   'adEnabled',
   'adPreserveEventBanner',
-  'adPreserveFeedGoods',
   'adDebug',
   /** 隐藏顶部大图推荐位（首页净化） */
   'homeHideSwipe',
@@ -52,20 +51,29 @@ export type CleanOptions = Record<CleanOptionKey, boolean>;
 /**
  * 默认值。
  *
- * ⚠️ **`adPreserveEventBanner` / `adPreserveFeedGoods` 默认 `false`** ——
- * 与上游一致：默认是"删掉"。用户想保留才去勾。
- * 反过来（默认保留）会让"删除广告"这个功能名不副实。
+ * ## 2026-11-01 删除：`adPreserveFeedGoods`（保留动态商品推荐）
+ *
+ * verifier 三轮独立实测，`.dyn-goods` 命中**全部为 0**：
+ * 视频详情页 0 / 首页 0 / 动态页滚 12 轮 41 条动态 0 / 全文扫所有类名含 dyn-goods 的元素 0。
+ *
+ * **一个用户永远看不出效果的开关，比没有更糟** —— 它让人以为功能坏了。
+ * 旧值会被白名单收敛自动忽略（`CLEAN_OPTION_KEYS` 里已无此键），不需要迁移代码。
  */
 export const DEFAULT_CLEAN_OPTIONS: CleanOptions = {
   /**
-   * 删除广告总开关：**默认关**（2026-10-31 用户要求）。
+   * 删除广告总开关：**默认关**。
    *
    * 理由与「首页净化默认全不隐藏」一致：**扩展不该在用户没要求时改变页面**。
    * 想用的人自己去设置页打开。
    */
   adEnabled: false,
+  /**
+   * **保留**活动横幅：默认 `false` = 删掉。
+   *
+   * 与上游一致。打开它则活动横幅（如视频页简介下方的
+   * 「20万奖金激励…本作品参加过 [动画短片群星计划] 活动」）会被保留。
+   */
   adPreserveEventBanner: false,
-  adPreserveFeedGoods: false,
   /**
    * 调试：不隐藏、加红框高亮。用于确认选择器命中情况。
    *
@@ -135,11 +143,6 @@ export const CLEAN_OPTION_META: readonly CleanOptionMeta[] = [
   {
     key: 'adPreserveEventBanner',
     label: '保留活动横幅',
-    hint: '',
-  },
-  {
-    key: 'adPreserveFeedGoods',
-    label: '保留动态商品推荐',
     hint: '',
   },
   {

@@ -33,7 +33,7 @@
 
 | 命令 | 查什么 | 何时必须跑 |
 | --- | --- | --- |
-| `node scripts/verify.mjs` | **全部 19 项** | 任何改动交付前（`--help` 看清单） |
+| `node scripts/verify.mjs` | **全部 20 项** | 任何改动交付前（`--help` 看清单） |
 | `node scripts/verify.mjs --fast` | 只跑文档与静态项 | 只改 `docs/**`、`*.md` |
 | `node scripts/check-messages.mjs` | 消息类型白名单（**漏处理不会编译报错**） | 改 `src/shared/types/messages.ts` |
 | `node scripts/check-patch-scope.mjs` | 四类响应体改写的授权与常量对账 | 改 `main-world.js` 的改写常量 |
@@ -50,6 +50,7 @@
 | `node scripts/check-required-files.mjs` | §4.1 四个必读文件存在，且关键导出/结构仍在 | 改 `routes.ts` / `messages.ts` / `tokens.css` / `dnr.ts` |
 | `node scripts/check-dnr-regression.mjs` | 改 `dnr.ts` 后两个 DNR 脚本的回归凭据齐全且未过期 | 改 `dnr.ts`（跑完两个 DNR 脚本后自动通过） |
 | `node scripts/check-rule-map.mjs` | 规则-保障对照表里提到的检查名真实存在 | 改 `AGENTS-RULES.md` §3 的对照表 |
+| `node scripts/check-ad-selectors.mjs` | **广告判据与 JS 预筛是否同源**（每条判据的叶子都必须在预筛里） | 改 `src/content/site-clean/ad-selectors.ts` 或任何 `--pluma-ad-card` 判据 |
 | `node scripts/loc.mjs` | **行数统一口径**（见 §5） | 想知道文件多长时 |
 
 ---

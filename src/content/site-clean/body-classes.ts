@@ -34,10 +34,8 @@ import { resolveAdRenderMode, type CleanOptions, type AdRenderMode } from './cle
 
 /** body 上的类名常量 —— CSS 与 JS 共用，改这里即可 */
 export const BODY_CLASS = {
-  /** 保留活动横幅（独立于模式，只影响"哪些算广告"） */
+  /** 保留活动横幅（反向语义：有该类 = 保留，没有 = 删） */
   preserveEventBanner: 'pluma-clean-preserve-event-banner',
-  /** 保留动态商品推荐（同上） */
-  preserveFeedGoods: 'pluma-clean-preserve-feed-goods',
   /** 隐藏首页顶部大图（首页净化） */
   homeHideSwipe: 'pluma-clean-home-hide-swipe',
   /** 渲染模式：完全隐藏 */
@@ -76,7 +74,6 @@ export function applyBodyClasses(opts: CleanOptions, body: Element | null = docu
 
   const want: Array<[string, boolean]> = [
     [BODY_CLASS.preserveEventBanner, opts.adPreserveEventBanner],
-    [BODY_CLASS.preserveFeedGoods, opts.adPreserveFeedGoods],
     [BODY_CLASS.homeHideSwipe, opts.homeHideSwipe],
   ];
   /** 三个模式类都参与"是否变化"的比较，保证先清后挂 */
