@@ -272,7 +272,7 @@ ${section}
 
 ### 安装
 
-下载 `pluma-${version}.zip`，解压到固定文件夹。在 `edge://extensions`（Chrome 用 `chrome://extensions`）
+下载 \`pluma-${version}.zip\`，解压到固定文件夹。在 \`edge://extensions\`（Chrome 用 \`chrome://extensions\`）
 打开「开发者模式」，点「加载解压缩的扩展」，选中解压出的文件夹。
 
 装好后，把鼠标贴到 B站 页面最左边（约 8px 的细条），面板会滑出来 —— 登录和设置都在那里。
