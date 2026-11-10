@@ -73,19 +73,17 @@ var t = globalThis.browser?.runtime?.id ? globalThis.browser : globalThis.chrome
 需要用户真实 HDR 环境的数据时，**不要试图自动化** —— 用扩展自己的诊断日志
 （`entrypoints/content.ts` 的 `[角标输入]` 行），让用户在正常浏览器里看一次视频即可。
 
-### WXT 会覆盖 `options_ui.open_in_tab`（2026-10-26 实测）
+### ⚠️ `wxt.config.ts` 里写的不一定会原样进 manifest
 
-`wxt.config.ts` 的 `manifest.options_ui` 里写 `open_in_tab: true`，构建出来的 manifest 却是 **`false`**。
+**改任何 manifest 字段后，都要读一遍 `.output/chrome-mv3/manifest.json` 确认。**
 
-原因：WXT 生成 manifest 时会用**入口自己的** `openInTab` 覆盖这一段
-（`node_modules/wxt/dist/core/utils/manifest.mjs`：`openInTab: options.options.openInTab ?? false`），
-而 HTML 入口没有地方声明这个选项。
+实测过的例子：`manifest.options_ui` 写 `open_in_tab: true`，构建出来却是 `false` —— WXT 会用
+**入口自己的** `openInTab` 覆盖（`node_modules/wxt/dist/core/utils/manifest.mjs`：
+`openInTab: options.options.openInTab ?? false`），而 HTML 入口没地方声明这个选项。
+当时的修法是用 `build:manifestGenerated` 钩子在生成后改回来。
 
-**症状**：设置页被塞进浏览器的小弹窗里，侧栏布局直接挤爆（不报错，纯视觉）。
-**修法**：用 `build:manifestGenerated` 钩子在生成之后改回来（见 `wxt.config.ts`）。
-
-**教训**：`wxt.config.ts` 里写的东西**不一定**会原样进 manifest。
-改任何 manifest 字段后，都要读一遍 `.output/chrome-mv3/manifest.json` 确认。
+> 设置页已于 1.1.0 废除（[ADR 0033](../decisions/0033-panel-first-interface.md)），
+> `options_ui` 本身不再存在；这里保留的是那条**通用教训**。
 
 ### 二维码渲染必须整数倍缩放
 
@@ -336,172 +334,71 @@ const log = (...a) => console.log('%c[ISO]', 'color:#1D9E75', ...a);
 
 ---
 
-## 7. 视频页挂后台后回来白屏 / 播放器无响应（2026-10-25 已修）
+## 7. 已修问题索引（2026-10 系列）
 
-### 症状
+> 这些都是**已关闭**的问题，保留根因与防复发约束 —— 它们的约束仍然有效，不是历史故事。
+> 各自的具体验证命令见 `tests/unit/content/main-world-real.test.ts`（`node scripts/verify.mjs` 已含）。
 
-视频详情页在后台放一段时间（几十分钟），切回去时：白屏、卡顿、播放器不响应点击。
-用同类工具（Bili Dual Account Helper）不会出现，所以是本扩展引入的。
+### 7a. 视频页挂后台后回来白屏 / 播放器无响应
 
-### 三个根因，都已修掉
+**症状**：视频页后台放几十分钟，切回时白屏、卡顿、不响应。同类工具不复现 → 本扩展引入。
 
-| # | 根因 | 为什么只在"后台挂久"后暴露 | 修法 |
+| # | 根因 | 为什么只在后台暴露 | 修法 |
 | --- | --- | --- | --- |
-| 1 | `setInterval(patchSsUser, 100)` 永不停止 | 前台时用户感觉不到；后台时它变成唯一持续消耗 CPU 的东西，且每次都在动 `__INITIAL_STATE__` 这棵被播放器依赖的大对象树 | 改成 `Object.defineProperty(window, '__INITIAL_STATE__')` 的 setter 拦截，**赋值那一刻改一次**，之后零开销 |
-| 2 | 设备 Cookie 缺失 | `document_start` 时 `document.cookie` 是空的，规则里没有 `buvid3` → 风控 `-412`。首次打开靠 `DOMContentLoaded` 补报能救回来，后台恢复/被丢弃后重新加载只走 `document_start`，就救不回来 | 新增 `platform/storage/device-cookies-store.ts`：页面没带 buvid 就回退到缓存 |
-| 3 | 规则被反复重建 | `installTabRule` 每次无条件 `updateSessionRules`。`document_start`、`DOMContentLoaded`、后台恢复各一次 → 规则表重算 + 所有 B站标签页重评估 | 加幂等判断：Cookie 值一致就直接 return |
+| 1 | `setInterval(patchSsUser, 100)` 永不停止 | 前台感觉不到；后台成了唯一持续耗 CPU 的东西，且每轮都动播放器依赖的大对象树 | 改 `Object.defineProperty(window,'__INITIAL_STATE__')` 的 setter 拦截，赋值那一刻改一次 |
+| 2 | 设备 Cookie 缺失 | `document_start` 时 `document.cookie` 是空的 → 无 `buvid3` → 风控 `-412`。后台恢复只走 `document_start`，补不回来 | `platform/storage/device-cookies-store.ts`：页面没带 buvid 就回退缓存 |
+| 3 | 规则被反复重建 | `installTabRule` 每次无条件 `updateSessionRules`，触发规则表重算 + 全标签页重评估 | 幂等判断：Cookie 值一致直接 return |
 
-### 怎么确认修好了
+**防复发**：`main-world-real.test.ts` 有 9 个用例直接对真源码断言，最关键一条是「启用后也不建 setInterval」。
+⚠️ 验证测试本身有效：把 `setInterval(patchSsUser, 100)` 临时加回 `syncHooks()`，必须变红。
+绿的话说明 spy 打在了 `globalThis` 而非 jsdom 的 `window`——打错地方等于没测。
 
-```bash
-node_modules/.bin/vitest run tests/unit/content/main-world-real.test.ts
-```
+### 7b. 视频页停留一会儿就 `Out of Memory`
 
-（`vitest` 在 `node_modules/.bin` 下，不依赖包管理器在 PATH 里。Windows 上也可以写成
-`node node_modules/vitest/vitest.mjs run <file>`。）
+**症状**：停留几十秒到一两分钟，整页变成「此页存在问题 / Out of Memory」。与账号状态无关。
 
-那里有 9 个用例直接对 `src/content/main-world.js` 的真源码断言，其中最关键的是
-**"启用后也不建 setInterval"**。
-
-⚠️ **验证测试本身有效的方法**（踩过）：把 `setInterval(patchSsUser, 100)` 临时加回
-`syncHooks()`，测试必须变红。如果还是绿的，说明 spy 打在了 `globalThis` 而不是
-jsdom 的 `window` 上——脚本在 jsdom 里解析的是 `window.setInterval`，
-spy 打错地方等于没测。
-
-真机上还要手测一遍：开一个视频页 → 切到别的标签 → 等 30 分钟 → 切回来。
-
----
-
-## 8. 视频页停留一会儿就 `Out of Memory`（2026-10-26 已修）
-
-### 症状
-
-视频详情页停留几十秒到一两分钟，整页被替换成错误页：
-
-```
-此页存在问题 请稍后再尝试访问。
-错误代码: Out of Memory
-```
-
-**普通窗口和 InPrivate 都会**，与账号状态无关。
-
-### 根因：`ready ↔ cfg` 无限回环
-
-`MAIN world` 与 `ISOLATED world` 的配置握手写成了互相应答：
+**根因**：`MAIN` 与 `ISOLATED` 的配置握手写成了互相应答：
 
 ```
 content 收到 ready  → 发 cfg
-main-world 收到 cfg → syncHooks() + 发 ready (+ 当时还夹带一份 __playinfo__)
+main-world 收到 cfg → syncHooks() + 发 ready（当时还夹带一份 __playinfo__）
 content 收到 ready  → 发 cfg  → ...
 ```
 
-这个回环**本来就在**（2026-10-26 之前每轮只发两个小消息，表现为空转 CPU、费电，
-不容易被察觉）。后来往 `cfg` 里加了一份完整的 `__playinfo__` 上报
-（`postSsrPlayinfo()`，几十 KB），于是每轮都结构化克隆一次，
-渲染进程内存几十秒内被打爆。
+回环本来就在（每轮只发两个小消息，表现为空转耗电，不易察觉）。后来往 `cfg` 里加了完整
+`__playinfo__`（`postSsrPlayinfo()`，几十 KB），每轮结构化克隆一次 → 内存被迅速打爆。
 
-**教训**：**握手消息里不许放大对象**。握手有回程，数据没有。
-基线数据现在只走 `hello` + 两次延迟补报，不搭 `cfg` 的车。
+**教训：握手消息里不许放大对象。握手有回程，数据没有。** 基线数据只走 `hello` + 两次延迟补报。
 
-### 修法（两道保险，缺一不可）
-
-| 位置 | 做法 |
-| --- | --- |
-| `src/content/main-world.js` | `cfgApplied` 闸门：`ready` 只回一次（`enabled` 变化仍然生效） |
-| `entrypoints/content.ts` | 收到 `ready` 后**不再回 `cfg`** |
-
+**修法（两道保险，缺一不可）**：`main-world.js` 用 `cfgApplied` 闸门让 `ready` 只回一次
+（`enabled` 变化仍生效）；`entrypoints/content.ts` 收到 `ready` 后不再回 `cfg`。
 只留一道也能断环，但**任何一道被后人"优化"掉都会立刻复发**。
 
-### 怎么确认修好了
+**反例**：把 `if (cfgApplied) return;` 改成 `if (cfgApplied && false) return;`，对应用例必须变红。
 
-```bash
-node_modules/.bin/vitest run tests/unit/content/main-world-real.test.ts
-```
+### 7c. popup 播放账号卡片不显示
 
-（`vitest` 在 `node_modules/.bin` 下，不依赖包管理器在 PATH 里。也可以直接 `node scripts/verify.mjs`。）
-`main-world-real.test.ts` 末尾有一组用例专门守这个：
+**根因**：`account/summary` 的 `account` 取自缓存 `pluma:account-summary`，而缓存只在
+`checkCredential` 返回 `healthy`/`not-vip` 时写。`probeNav()` 用 `credentials:'include'` 带**当前分区**
+cookie，但播放账号 cookie 只在登录窗口的无痕分区里，窗口一关就销毁 → 普通分区再探测带的是
+**主账号** cookie → 判定"分区不对"返回 `unknown` → 缓存永写不进 → `account` 恒 `null`。
 
-- 连发 3 次 `cfg` 只回 1 次 `ready`
-- `cfg` 不再产生额外的 `ssr-playinfo`
-- `enabled` 变化仍然生效（回执只发一次，但配置不僵死）
+**修法**：`account.handler.ts` 新增 `probeAndCacheSummary()`，在**登录成功那一刻**于登录分区探测一次
+（唯一能读到播放账号资料的时刻）；`popup/main.tsx` 改为**只要凭据在就渲染**该行，资料缺失时显示
+「读不出账号资料 · 点开可重新登录」，不再整行消失。
 
-⚠️ **反例验证**：把 `if (cfgApplied) return;` 改成 `if (cfgApplied && false) return;`，
-第一条必须变红。绿的话说明用例没真正测到回环。
+**老用户**：缓存是空的，重新登录一次即可补上；不重登也能用，只是卡片显示「已配置 / 读不出账号资料」。
 
----
+### 7d. 到期日显示成「698197 个月后到期」
 
-## 9. popup 里播放账号那张卡片不显示（2026-10-26 已修）
+**根因**：`nav` 返回的 `vipDueDate` 是**毫秒**，而 `summarizeNav` 按"Unix 秒"处理又 `* 1000`。
+反推判据：界面显示 698197 个月 ⇒ `expireAt ≈ 1.81e15` ⇒ 原始值 ≈ 1.81e12。
+按秒是 2084 年（不可能），按毫秒是 2027-05（合理）。
 
-### 症状
-
-popup 只显示主账号一行，播放账号整行**消失**。
-但自检页显示「播放账号凭据 已配置」，视频也确实能播 4K —— 功能是好的，只是界面不说。
-
-### 根因：账号资料缓存从来没被写进去
-
-`account/summary` 的 `account` 字段来自缓存 `pluma:account-summary`，
-而缓存只在 `checkCredential` 返回 `healthy` / `not-vip` 时写。
-
-问题在 `probeNav()`：它用 `credentials: 'include'` 带**当前分区**的 cookie。
-播放账号的 cookie 只存在于**登录窗口所在的无痕分区**，窗口一关就销毁 ——
-之后普通分区再探测，带的是**主账号** cookie，`checkCredential` 判定"分区不对"
-返回 `unknown`，于是：
-
-- 缓存永远写不进去
-- `account` 恒为 `null`
-- popup 的播放账号卡片**恒不显示**
-
-老版本 popup 只有一行摘要、且同样判 `snap.account`，所以这个 bug 一直没被发现；
-加了 §2.4 双卡片之后，"少了一行"才看得见。
-
-### 修法（两处）
-
-| 位置 | 做法 |
-| --- | --- |
-| `background/handlers/account.handler.ts` | 新增 `probeAndCacheSummary()`：**登录成功那一刻**在登录分区探测一次并写缓存 —— 这是唯一能读到播放账号资料的时刻 |
-| `entrypoints/popup/main.tsx` | 播放账号那一行改为**只要凭据在就渲染**；资料缺失时显示"读不出账号资料 · 点开可重新登录"，不再整行消失 |
-
-### 已经配好账号的用户怎么办
-
-缓存是空的，**重新登录一次**即可补上（会走新的 `probeAndCacheSummary`）。
-不重登也能用，只是那张卡片显示"已配置 / 读不出账号资料"。
-
-### 怎么确认
-
-自检页日志里搜 `账号资料缓存`：
-
-```
-20:xx:xx [xxxx] qr/poll   账号资料缓存成功
-```
-
-看到"失败（探测不确定）"说明探测那一刻分区或网络有问题，重扫一次。
-
----
-
-## 10. 到期日显示成「698197 个月后到期」（2026-10-26 已修）
-
-### 症状
-
-popup 的播放账号那行写着「仅取流 · 698197 个月后到期」。
-
-### 根因：`vipDueDate` 的单位
-
-`nav` 返回的 `vipDueDate` **很可能是毫秒**，而 `summarizeNav` 一直按"Unix 秒"处理、
-固定 `* 1000`，于是把毫秒又乘了一次。
-
-反推过程（这就是判据，不是猜）：界面显示 698197 个月 ⇒ `expireAt ≈ 1.81e15`
-⇒ nav 给的原始值 ≈ 1.81e12。按秒解释是 **2084 年**（不可能），
-按毫秒是 **2027-05**（合理）。
-
-### 修法
-
-`dueDateToMs()` 做**单位自适应**：`>= 1e11` 视为毫秒，否则按秒换算。
-阈值稳定，不依赖猜测 —— 任何合理的秒级时间戳都 < 1e10（1e10 秒 = 2286 年），
-任何 2000 年之后的毫秒时间戳都 > 1e11（1e11 ms = 1973 年），两者不重叠。
-
-顺带给 `describeExpiry` 加了"年"档：超过 365 天显示"N 年后到期"。
-**这一档也是防呆** —— 单位再错时会显示"575 年后到期"，一眼就知道不对；
-显示"69 万个月"则没人读得懂，也就没人发现是 bug。
+**修法**：`dueDateToMs()` 单位自适应 —— `>= 1e11` 视为毫秒。阈值稳定不靠猜：
+秒级时间戳必 < 1e10（2286 年），2000 年后的毫秒必 > 1e11（1973 年），两者不重叠。
+顺带给 `describeExpiry` 加「年」档（超 365 天显示「N 年后到期」）——**这也是防呆**：
+单位再错会显示「575 年后到期」，一眼看出；显示「69 万个月」则没人读得懂，也就没人发现是 bug。
 
 ---
 

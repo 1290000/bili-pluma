@@ -329,7 +329,7 @@ document.querySelector('video').duration
 ### 6. 打 Tag 并发布
 
 ```bash
-V=1.0.1        # ← 改成当前版本号（与 package.json / wxt.config.ts 一致）
+V=<版本号>     # ← 与 package.json / wxt.config.ts 一致
 
 git tag -a "v$V" -m "v$V"
 git push origin "v$V"          # 只推这个 tag，不要 --tags（会连历史 tag 一起推）

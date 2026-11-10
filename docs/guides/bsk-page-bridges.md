@@ -10,7 +10,7 @@
 
 ## 0. 为什么需要这两条桥
 
-Pluma 的 popup / options 是 `chrome-extension://` 页面，**bsk 沙箱读不到**
+Pluma 的 popup 是 `chrome-extension://` 页面，**bsk 沙箱读不到**
 （见 `browser-skill-setup.md` §7b）。而主世界又没有 `chrome.storage`。
 
 所以 content script 开了两条 **页面 → content** 的 `postMessage` 桥：

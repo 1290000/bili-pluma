@@ -114,11 +114,12 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 Release 说明的措辞与结构看 [guides/release-notes-template.md](./guides/release-notes-template.md)。
 分发边界为什么这样划，看 [ADR 0018](./decisions/0018-ship-built-artifacts.md)。
 
-> ⚠️ **下面是历史方案，不是当前指引。**
-> - [plans/1.0.0-release-plan.md](./plans/1.0.0-release-plan.md) —— **v1.0.0 已发布（2026-10-29）**，这份是当时的过程记录。
->   §10「交付物清单」里的「待实现 / 待产出」是**当时**的状态，实际均已落地。
->   **要发下一个版本，别照它抄流程** —— 用上面的 `releasing.md` + `versioning.md`。
-> - [plans/1.1.0-plan.md](./plans/1.1.0-plan.md) —— **当前有效**，记 1.0.0 的已知缺口与 1.1.0 范围。
+> ⚠️ **下面全是历史方案，没有一份"当前有效"。**
+> - [plans/1.0.0-release-plan.md](./plans/1.0.0-release-plan.md) —— **已发布（2026-10-29）**，历史记录（2026-11-10 精简至 130 行，只留决策与被引用的判据）。
+> - [plans/1.1.0-completed.md](./plans/1.1.0-completed.md) —— **已发布（2026-11-10）**，历史记录。由原 `1.1.0-plan.md` + `1.1.0-multitool-plan.md` 合并而成；
+>   那两份原件只保留为**引用锚点**（多份 ADR 按路径链接它们，删了会死链），内容已全部并入本文件。
+>
+> **要发下一个版本，别照它们抄流程** —— 用上面的 `releasing.md` + `versioning.md`。
 
 ### 我要动消息协议
 
