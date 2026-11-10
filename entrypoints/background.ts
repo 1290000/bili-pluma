@@ -20,6 +20,7 @@ import { handleProxySet, handleProxyStatus } from '@/src/background/handlers/pro
 import { handleQrGenerate, handleQrPoll } from '@/src/background/handlers/qr.handler';
 import { handleAffectedTabs, handleTabsReload } from '@/src/background/handlers/tabs.handler';
 import { handleStatsRecent } from '@/src/background/handlers/stats.handler';
+import { handleDiagFacts } from '@/src/background/handlers/diag.handler';
 import { reconcileTabRules, rebuildRulesIfEnabled } from '@/src/platform/http/dnr';
 import { recordStat } from '@/src/platform/storage/stats-store';
 import { parsePlayPage } from '@/src/shared/utils/video-page';
@@ -136,6 +137,26 @@ export default defineBackground(() => {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const type = (message as { type?: string } | undefined)?.type;
 
+    /**
+     * ## ⚠️ 这里**不再**调 `trace()` / `diag()`（2026-11-10 第九轮实验）
+     *
+     * 曾经在这里写 `trace('onMessage', type)` 来定位"消息到了没有"。
+     * 但 `trace()` 与 `diag()` **共用同一个模块级 Promise 队列** `pending`
+     * （`diag-store.ts:75`）—— 链上任何一次写入卡住，整条链就永久悬挂，
+     * 之后所有 `diag()` / `trace()` 都返回那个卡住的 Promise。
+     *
+     * smoke 观察到的现象全部吻合：
+     *   - `proxy/set` / `page/quality` 有日志 → **早期**写的，链还没卡
+     *   - `trace()` 一次都没成功 → **后期**写的，链已卡住
+     *   - `diag/facts` 应答 resolve 成 `undefined`
+     *
+     * 而且**每收一条消息就写一次**，等于让卡住的概率随消息量线性增长。
+     * 删掉它是纯收益：这个监听器现在完全不碰那个队列。
+     *
+     * 真正的修复是让 `diag()` / `trace()` 不共享队列（或给队列加超时），
+     * 那属于 `diag-store.ts` 的改动，不在本轮范围。
+     */
+
     if (type === 'qr/generate') {
       handleQrGenerate()
         .then(sendResponse)
@@ -192,6 +213,42 @@ export default defineBackground(() => {
           sendResponse({
             type: 'stats/recent:err',
             detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
+    /**
+     * 诊断环境事实（2026-11-09 加）。
+     *
+     * 面板是 content script，`chrome.windows` / `chrome.cookies` /
+     * `chrome.declarativeNetRequest` / `chrome.extension.isAllowedIncognitoAccess`
+     * 在那个环境里**整个是 `undefined`**（真机实测），所以由这里代查。
+     */
+    if (type === 'diag/facts') {
+      /**
+       * ## ⚠️ 这里**不要**调 `trace()`（2026-11-10 第九轮实验）
+       *
+       * `trace()` 与 `diag()` **共用同一个模块级 Promise 队列** `pending`
+       * （`diag-store.ts:75`）。只要链上有**任何一次**写入卡住
+       * （`chrome.storage.local.get` 在 SW 挂起时不 resolve），
+       * 整条链就永久悬挂，之后所有 `diag()` / `trace()` 都返回那个卡住的 Promise。
+       *
+       * 这能解释 smoke 观察到的全部现象：
+       *   - `proxy/set` / `page/quality` 有日志（**早期**写的，那时链还没卡）
+       *   - `trace()` 一次都没成功（**后期**写的，链已卡住）
+       *   - `diag/facts` 的应答 `resolve` 成 `undefined`
+       *
+       * 所以这里只保留 `handleDiagFacts()` 本身，**不碰那个队列**。
+       * 真正的修复应当是让 `diag()` / `trace()` 各自**不共享**队列
+       * （或给队列加超时），那属于 `diag-store.ts` 的改动，不在本轮范围。
+       */
+      handleDiagFacts()
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'diag/facts:err',
+            detail: e instanceof Error ? e.message.slice(0, 80) : 'unknown',
           }),
         );
       return true;
