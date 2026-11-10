@@ -9,17 +9,41 @@
     <div class="wrap">
       <h1 class="title">还差一步：开启无痕窗口权限</h1>
 
-      <p class="steps-title">按下面三步操作（只用做一次）：</p>
+      <!--
+        优化 2（2026-11-10）：把「为什么」从 <details> 折叠里提到主体。
+
+        原来这段解释藏在折叠里，用户默认看不到 —— 但**知道原因才愿意做**。
+        这里写的不是「为了安全」这种空话，而是实测得出的事实：
+        Set-Cookie 是 forbidden response header，JS 读不到，凭据只能靠浏览器真正落地；
+        而 bilibili.com 在同一浏览器里只能有一份 Cookie。
+      -->
+      <p class="lead">
+        B站 的登录状态存在 Cookie 里，而
+        <b>同一个浏览器里 bilibili.com 只能有一份</b>
+        。 在普通窗口登录播放账号会把你的主账号顶掉 —— 所以必须用无痕窗口隔开两套登录态。
+      </p>
+
+      <p class="steps-title">按下面两步操作（只用做一次）：</p>
+
+      <!--
+        优化 1（2026-11-10）：一键直达。
+        主路径是 chrome.tabs.create('chrome://extensions/?id=<扩展ID>')。
+        实测（Edge 157）：Edge 会自动重写成 edge:// 且保留 ?id=，**不用按浏览器分支**。
+        Chrome 侧未实测（按原生 scheme 推断）。「复制地址」按钮是理论保险，实测未触发。
+      -->
+      <div class="actions">
+        <button type="button" class="btn-primary" id="open-ext-page">打开扩展详情页</button>
+        <button type="button" class="btn-ghost" id="copy-ext-url">复制地址</button>
+      </div>
+
+      <p class="hint" id="open-hint">
+        打开后会直接定位到本扩展。若没反应，手动打开
+        <code id="ext-url-code">edge://extensions</code>
+      </p>
+
       <ol class="steps">
         <li>
-          地址栏输入
-          <code>edge://extensions</code>
-          （Chrome 用
-          <code>chrome://extensions</code>
-          ）
-        </li>
-        <li>
-          找到
+          点击上面的按钮，找到
           <strong>Pluma</strong>
           ，点「详细信息」
         </li>
@@ -28,22 +52,25 @@
           <strong>在 InPrivate 中允许</strong>
           」（Chrome 叫「
           <strong>在无痕模式下启用</strong>
-          」），然后回到这里刷新或重新点图标
+          」）—— 开好后这一步会自动变绿
         </li>
       </ol>
 
       <p class="footnote" id="auto-tip">设置一次即可，之后点图标会直接打开登录窗口。</p>
 
       <details class="why">
-        <summary class="why-title">为什么要开这个权限？</summary>
+        <summary class="why-title">为什么不能用普通窗口登录？</summary>
         <p class="why-body">
           播放账号要登录在
           <strong>无痕窗口</strong>
           里，才能和你主账号的登录状态互相隔离。浏览器默认不允许扩展打开这个窗口，所以需要你手动开一次。
         </p>
         <p class="why-body">
-          B站的登录态存在 Cookie 里，而同一个浏览器里 bilibili.com 只能有一份
-          Cookie。在普通窗口登录播放账号会把主账号顶掉，所以必须用无痕窗口隔开两套登录态。
+          B站 的登录凭据只通过
+          <code>Set-Cookie</code>
+          响应头下发 —— 那是浏览器禁止 JS
+          读取的头。所以扩展无法「拦截」凭据，只能让浏览器真正把它写进 Cookie 库。
+          而写入就会覆盖同一份 Cookie，因此必须换一个隔离的无痕分区来写。
         </p>
       </details>
     </div>

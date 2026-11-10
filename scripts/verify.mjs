@@ -61,6 +61,18 @@ const STEPS = [
     args: ['scripts/check-design-imports.mjs'],
     first: true,
   },
+  {
+    // 2026-11-10 加：CSS 自定义属性写错名字**不会有任何运行时错误** ——
+    // 浏览器安静地用 `var(--x, 兜底值)` 的兜底值，代码"看起来能用"，
+    // 但日后改主题不会跟着变，而且没人会发现。
+    // 真实踩过：`entrypoints/need-incognito/style.css` 用了 `--pluma-success` 与
+    // `--pluma-warning-bg`，两个 token 在 tokens.css 里根本不存在。
+    // `design` 那项只管"谁能 import @design/*"，管不到变量名。
+    name: 'css-tokens',
+    cmd: process.execPath,
+    args: ['scripts/check-css-tokens.mjs'],
+    first: true,
+  },
   { name: 'docs', cmd: process.execPath, args: ['scripts/check-docs.mjs'], first: true },
   {
     // 2026-10-27 加：发布前才发现测试账号 mid 散在 11 个文件里。
@@ -250,6 +262,7 @@ const STEP_DOC = {
   boundaries: 'core/shared 不许碰 chrome/window/document/fetch',
   messages: 'messages.ts ↔ background.ts 路由对齐（抓孤儿消息）',
   design: '只有 entrypoints/* 可以引用 @design/*',
+  'css-tokens': 'var(--xxx) 引用的 CSS 变量必须在 tokens.css 或本文件里定义（防静默退回兜底值）',
   docs: '死链 + scripts/ 引用 + 篇幅上限 + 主文档章节连号',
   secrets: '测试账号标识 / 凭据形态 / 本机路径',
   patch:

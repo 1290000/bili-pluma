@@ -109,3 +109,65 @@ code {
   color: var(--pluma-warning);
   font-weight: 500;
 }
+
+/* 权限已开启（轮询 detected true）—— 用信息色，与"没开成"的警告色区分。
+   注意：tokens.css 里没有 --pluma-success，所以不用虚构的绿色变量。 */
+.footnote.show.ok {
+  color: var(--pluma-accent);
+}
+
+/* ── 优化 1：一键直达按钮（2026-11-10） ─────────────────────────── */
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 6px;
+}
+
+.btn-primary,
+.btn-ghost {
+  font-family: inherit;
+  font-size: var(--pluma-font-caption);
+  border-radius: var(--pluma-radius-control);
+  cursor: pointer;
+  padding: 7px 14px;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.btn-primary {
+  border: 1px solid var(--pluma-accent);
+  background: var(--pluma-accent);
+  color: #fff;
+  font-weight: 500;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.08);
+}
+
+.btn-ghost {
+  border: 1px solid var(--pluma-border);
+  background: transparent;
+  color: var(--pluma-text);
+}
+
+.btn-ghost:hover {
+  background: var(--pluma-accent-bg);
+}
+
+.hint {
+  margin: 0 0 16px;
+  font-size: var(--pluma-font-caption);
+  color: var(--pluma-text-muted);
+}
+
+/* 降级到"手动复制"时，把地址高亮出来让用户一眼看到。
+   用已有的 warning 色 + accent 底色，不引入不存在的 token。 */
+code.emph {
+  background: var(--pluma-accent-bg);
+  color: var(--pluma-warning);
+  font-weight: 500;
+  outline: 1px solid var(--pluma-warning);
+}
