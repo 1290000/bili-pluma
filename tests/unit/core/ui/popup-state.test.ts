@@ -362,6 +362,11 @@ describe('ruleCount = -1 表示"读不到"而不是"没有规则"', () => {
    * 而诊断页自己调 `getSessionRules()` 能正常看到 2 条。
    *
    * 修法：读不到时用 -1 表示"未知"，UI 不能把未知当成 0。
+   *
+   * ⚠️ 上面两行是**当时日志的原文**，保留作历史记录，不代表现在的行为：
+   * 2026-11-10 起 `collect.ts` 第 6 项已改为「`enabled` 是唯一判据」，
+   * 文案改成了「…条路径规则（本实例视角，不等于全局）」，不再出现「⚠️ 不一致」。
+   * 详见 ADR 0012 补充三。
    */
   it('ruleCount=-1 + 开关开 → 不报不一致', () => {
     const v = describePopup(snap({ proxy: { enabled: true, hasCredential: true, ruleCount: -1 } }));
