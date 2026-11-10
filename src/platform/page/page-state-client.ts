@@ -1,9 +1,32 @@
 /**
- * 查询"当前视频页的取流数据" —— 扩展页面（设置页 / 自检页）共用的一个入口。
+ * 查询"当前视频页的取流数据" —— 从**扩展页面**（popup / 设置页等特权脚本）发起。
  *
- * ## 为什么抽出来
+ * ## ⚠️ 2026-11-10 起**没有生产调用方**（请读完再决定要不要删）
  *
- * 这段逻辑有两个使用者（`entrypoints/diagnostics` 与 `entrypoints/options`），
+ * options 页废除后（ADR 0033），`queryPageState()` 的唯一调用点是
+ * `src/platform/diagnostics/collect.ts` 里 `pageTracksRows()` 的
+ * **`injected === undefined` 分支**。而页内面板**总是传 `null` 或一个对象**
+ * （见 `CollectOptions.pageView`），所以真机上**走不到这里**。
+ *
+ * ### 为什么仍然保留
+ *
+ * 1. **`CollectOptions.pageView` 的三态语义依赖它**：
+ *    `undefined` = "我不知道，你去查" / `null` = "查过了，没有" / 对象 = "用这份"。
+ *    删掉 `queryPageState()`，`undefined` 这一态就失去了实现，整个三态设计塌了一半。
+ * 2. **它是"扩展页面查视频标签页"的唯一现成实现**，`PageStateResult` 的
+ *    四态（`ok` / `no-tab` / `no-content-script` / `not-ready`）已经过真机验证。
+ *    将来若加回任何扩展页面（独立设置窗口等），它就是现成的。
+ *
+ * ### 若要删，**不是一个文件的事**
+ *
+ * - 必须同时改 `scripts/check-page-gate.mjs` 规则 2b/3 的注释
+ *   （那两处专门讲这个文件是边界说明，删文件不改注释会让它们指向空气）
+ * - 必须把 `CollectOptions.pageView` 的 `undefined` 态**重新设计**
+ * - 按 `AGENTS.md` §7，改检查脚本前**先问**
+ *
+ * ## 当初为什么抽出来
+ *
+ * 这段逻辑曾有两个使用者（已删除的 `entrypoints/diagnostics` 与 options），
  * 而它里面埋着一个很容易再踩的坑：**不能只看 `active` 标签页**。
  * 设置页与自检页都是 `open_in_tab` 打开的，它们自己就是活动标签页 ——
  * 用 `query({active:true})` 查到的永远是自己，`sendMessage` 必然失败，

@@ -125,7 +125,28 @@ export function summarize(buckets: readonly StatBucket[]): {
  */
 export type BarState = 'ok' | 'partial' | 'fail' | 'empty';
 
-/** 把（可能稀疏的）桶转成固定 12 根柱子的状态，直接喂给图表 */
+/**
+ * 把（可能稀疏的）桶转成固定 12 根柱子的状态，直接喂给图表。
+ *
+ * ## ⚠️ 2026-11-10 起**无生产调用方**
+ *
+ * options 废除 + popup 瘦身后，原本渲染这张条形图的两处都没了
+ * （ADR 0033 阶段 4）。`summarize()` 仍被 background 的 `stats/recent` 用着，
+ * 但 `barStates()` 只在单测和面板之外被调用过。
+ *
+ * ### 为什么保留
+ *
+ * 1. **不是"没人用的死代码"，是"当前入口用不到的能力"** ——
+ *    与 `platform/page/page-state-client.ts` 同一个理由。
+ * 2. `02-ui-spec.md` §3 状态 4「已降级」的判据（尤其「`empty` 必须画灰不能画红」）
+ *    **仍然有效**，而实现就在这个函数里。删了那些判据就只剩文字。
+ * 3. 纯函数 + 有单测，面板将来加「降级详情」视图可直接用。
+ *
+ * ### 若要删
+ *
+ * 必须**一起**处理：`BarState` 类型、它的单测、以及 `02-ui-spec.md` §3 状态 4
+ * 的整段描述（否则文档会指向不存在的实现）。
+ */
 export function barStates(buckets: readonly StatBucket[], now: number): BarState[] {
   return toTimeline(buckets, now).map((b) => {
     if (b.ok === 0 && b.fail === 0) return 'empty';
