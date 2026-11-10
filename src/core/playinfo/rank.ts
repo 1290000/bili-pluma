@@ -115,6 +115,48 @@ export function diffCapability(
   const dolbyAudioGained = playback.hasDolbyAudio && !primary.hasDolbyAudio;
   const dolbyVisionGained = playback.providesDolbyVision && !primary.providesDolbyVision;
 
+  /**
+   * ## 码率档也是真实提升（2026-11-10 真机 bug 修）
+   *
+   * ### 用户看到的现象
+   *
+   * 视频 `BV1h14n6jEGf`：主账号最高 `id=80`（1080P，4.4 Mbps），
+   * 播放账号 `id=112`（**1080P 高码率**，6.5 Mbps）。
+   * 两者 height 都是 **900**、帧率相同、无 Hi-Res、无杜比 —— 于是旧判据算 `improved: false`，
+   * 面板显示「无提升」，**而用户实际拿到了高码率档**。
+   *
+   * ### 判据必须是「最高档变高了」，不是「多了几个 id」
+   *
+   * ⚠️ 第一版写的是 `playback.topQualityIds.some(id => !primaryIds.has(id))` ——
+   * **那是错的**。反例（verifier 场景 D）：
+   *
+   * ```
+   * 主账号 [80]（1080P）  播放账号 [64]（720P，更弱！）
+   * ```
+   * `64` 确实"主账号没有"，于是被判成提升 → 标题说「已解锁」。
+   * **而播放账号实际拿到的比主账号更差。**
+   *
+   * 正确判据：**比较两侧的最高 id**。B站 的 quality id 单调递增代表档次变高
+   * （16 < 32 < 64 < 80 < 112 < 116 < 120 < 125 < 126 < 127），所以
+   * `max(playback) > max(primary)` 就是"拿到了更高的一档"。
+   *
+   * 这样：
+   * - A/B：`max(112) > max(80)` → 提升 ✅
+   * - D：`max(64) < max(80)` → 不提升 ✅
+   * - C：`max(80) === max(80)` → 不提升 ✅
+   *
+   * ⚠️ id 为 0 或空数组时按"没有该侧数据"处理 —— 不能拿 `-Infinity` 去比。
+   */
+  const topIdOf = (c: Capability): number => {
+    let top = -1;
+    for (const id of c.topQualityIds) if (id > top) top = id;
+    return top;
+  };
+  const primaryTop = topIdOf(primary);
+  const playbackTop = topIdOf(playback);
+  /** 播放账号拿到了**更高的一档**。两侧都读不到 id 时不算提升 */
+  const qualityGained = primaryTop >= 0 && playbackTop > primaryTop;
+
   return {
     heightGain,
     frameRateGain,
@@ -122,6 +164,11 @@ export function diffCapability(
     dolbyAudioGained,
     dolbyVisionGained,
     improved:
-      heightGain > 0 || frameRateGain > 0 || hiResGained || dolbyAudioGained || dolbyVisionGained,
+      heightGain > 0 ||
+      qualityGained ||
+      frameRateGain > 0 ||
+      hiResGained ||
+      dolbyAudioGained ||
+      dolbyVisionGained,
   };
 }

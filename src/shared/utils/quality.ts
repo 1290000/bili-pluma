@@ -17,6 +17,35 @@
  *
  * ⚠️ **8K 必须排在 4K 前面**（见文件头注释：写反过一次）。
  * ⚠️ 只接受**实际分辨率**，不接受 `accept_quality` 那类"视频支持的档位"数组。
+ *
+ * ## 🔴 只接受**标称高度**（1080 / 720 / 480 / 2160 …）—— 调用方优先用 quality id
+ *
+ * ### 2026-11-10 真机 bug
+ *
+ * 视频 `BV1h14n6jEGf` 是 1600×900，B站 把它标成 **1080P 档（id=80）**，
+ * 而 `heightLabel(900)` 走 `>=720` 分支返回 **「720P」** —— 差了一整档。
+ *
+ * **这不是个别样本**：竖屏 / 非常规比例视频的 1080P 档 height 可能是
+ * `768 / 816 / 900 / 1024`，**全部**会落进 720P 区间。
+ *
+ * ### 为什么**不改阈值**
+ *
+ * 直觉方案是"改成 `>=900 → 1080P`"，但那只会把错位区间挪个位置：
+ * 850 呢？1024 呢？下一批视频又会出现新的离谱值。
+ *
+ * **B站 的 authority 是 quality id**（`id=80` 就是 1080P，与像素高度无关），
+ * 而 `Capability.topQualityIds` 收的正是 dash 里真实存在的 id。
+ *
+ * 所以：
+ * - **锚点**（`summary-view.ts` 的 `anchorText()`）已改为**优先用 `QUALITY_NAMES[topId]`**，
+ *   本函数只做 id 表查不到时的兜底
+ * - **徽章**（`qualityLabels()`）本来就走 `BADGE_QUALITY_NAMES`，只在无可用 id 时兜底
+ *
+ * ### 本函数的正确用途
+ *
+ * 回答"这个**像素高度**叫什么"，**不是**"这是 B站 的哪一档"。
+ * 当你手上只有 height、没有 id 时（如角标读 `<video>.videoHeight`），用它是对的 ——
+ * 那种场景下像素高度就是唯一可信的量。
  */
 export function heightLabel(height: number): string {
   if (height >= 4320) return '8K';
@@ -96,8 +125,9 @@ export const QUALITY_NAMES: Readonly<Record<number, string>> = {
  *   标出来等于把"人人都有"说成"解锁成果"——正是本表要避免的事。
  *
  * ⚠️ 本节旧注释写着「1080P 在视频页要显示（那是主账号基线的对比锚点）」，
- * **那句话已作废**：对比锚点走的是 `anchorText()` → `heightLabel(cap.maxHeight)`
- * （`core/playinfo/summary-view.ts:182`），**不经过本表**，所以删掉 `80` 不影响锚点。
+ * **那句话已作废**：对比锚点走的是 `anchorText()`，而它自 2026-11-10 起
+ * **优先用 `QUALITY_NAMES[topId]`**（`core/playinfo/summary-view.ts`），
+ * **不经过本表**。所以删掉 `80` 不影响锚点。
  *
  * ## 这张表不区分页面
  *

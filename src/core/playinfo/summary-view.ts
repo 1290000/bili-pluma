@@ -17,7 +17,7 @@
  */
 
 import type { Capability, PageTracksView } from '@shared/types/playinfo';
-import { heightLabel, qualityLabels } from '@shared/utils/quality';
+import { QUALITY_NAMES, heightLabel, qualityLabels } from '@shared/utils/quality';
 
 /** 徽章上限。规范 §2.3：最多 6 个，超出收成 `+N`，不横向滚动 */
 export const MAX_BADGES = 6;
@@ -198,7 +198,32 @@ function anchorText(view: PageTracksView): string {
 
   const cap = view.primary.capability;
   if (view.primary.usable && cap) {
-    const label = heightLabel(cap.maxHeight);
+    /**
+     * ## ⚠️ 必须优先用 **quality id**，不能用 `heightLabel(maxHeight)`（2026-11-10 真机 bug）
+     *
+     * ### 用户看到的现象
+     *
+     * 视频 `BV1h14n6jEGf`（1600×900）：主账号最高 `id=80`（**1080P**），
+     * 而面板显示「主账号仅可用 **720P**」—— 差了一整档。
+     *
+     * ### 根因
+     *
+     * `heightLabel(900)` 走的是 `>=720 → '720P'` 那条分支。
+     * 而 B站 的 1080P 档 **height 不一定是 1080**：
+     * 竖屏 / 非常规比例视频的 `dash.video[].height` 可能是
+     * `768 / 816 / 900 / 1024` —— **verifier 边界扫描确认这些全部被说成 720P**。
+     *
+     * ### 为什么 id 是权威
+     *
+     * `id=80` 是服务端在真实轨道上标注的**档位标识**，与像素高度无关。
+     * `capabilityOf()` 早已算出 `topQualityIds`（按 id 降序），
+     * 这里只是**没用它**。
+     *
+     * `heightLabel` 只留作"id 不在表里"时的兜底 —— 那种情况确实只能按高度猜。
+     */
+    const topId = [...cap.topQualityIds].sort((a, b) => b - a)[0];
+    const byId = topId === undefined ? undefined : QUALITY_NAMES[topId];
+    const label = byId ?? heightLabel(cap.maxHeight);
     return label ? `主账号仅可用 ${label}` : `主账号仅可用 ${String(cap.maxHeight)}p`;
   }
 
@@ -337,12 +362,31 @@ export function describeUnlock(
    * 判据是两侧能力是否完全相同；相同就说"源限制"，不同（播放账号更弱）就是异常。
    *
    * （"未登录主账号"已在函数前段拦掉，不会走到这里。）
+   *
+   * ## ⚠️ 2026-11-10：必须同时比 `topQualityIds` 的**最高档**
+   *
+   * `diffCapability().improved` 现在会因"播放账号拿到了更高的一档"而返回 `true`
+   * （见 `rank.ts`）。如果 `same` 只看 height + hasHiRes，
+   * 就会出现「`improved` 算的是有提升，但 `same` 说两侧一样」的矛盾。
+   *
+   * 两者必须用**同一套"相同"的定义**：高度、Hi-Res、以及**最高档 id**。
+   *
+   * ⚠️ **不能写成"集合完全相等"**：播放账号通常多出低档
+   * （主账号 `[80]` vs 播放账号 `[112,80,64]`）—— 集合不相等但确实"更高"，
+   * 那时不该走这个分支（它是"有提升"，上面已经 return 了）。
+   * 走到这里只说明 `improved === false`，所以只需回答"两侧是不是同一档"。
    */
   const primaryCap = view.primary.capability;
+  const topId = (ids: readonly number[]): number => {
+    let top = -1;
+    for (const id of ids) if (id > top) top = id;
+    return top;
+  };
   const same =
     primaryCap !== null &&
     primaryCap.maxHeight === playback.maxHeight &&
-    primaryCap.hasHiRes === playback.hasHiRes;
+    primaryCap.hasHiRes === playback.hasHiRes &&
+    topId(primaryCap.topQualityIds) === topId(playback.topQualityIds);
 
   return {
     title: same ? '无提升（源限制）' : '没有提升',
