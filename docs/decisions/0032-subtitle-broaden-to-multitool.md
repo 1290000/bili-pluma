@@ -75,7 +75,7 @@ Q13 定副标题时的准则是「**承担全部解释成本。名字不必自�
 | 9 | `docs/03-open-questions.md` | :3 元信息 | `副标题 B站双账号画质助手` |
 | 10 | `docs/04-project-structure.md` | :3 元信息 | `副标题 B站双账号画质助手` |
 | 11 | `docs/README.md` | :3 元信息 | `**Pluma**（\`bili-pluma\`）— B站双账号画质助手` |
-| 12 | `entrypoints/options/main.tsx` | :67 `brand-sub` | `B站双账号画质助手` |
+| 12 | options 设置页头部（已随 options 删除） | `brand-sub` | `B站双账号画质助手` |
 | 13 | `docs/guides/release-notes-template.md` | :175 | `B站双账号画质助手。用主账号浏览…` |
 
 > `README.md` :5 那行**同时是首屏免责声明所在的一则**（`ADDITIONAL-TERMS.md` 第 2 条要求

@@ -433,9 +433,9 @@ Options 曾是全屏标签页，承担全部"复杂操作"。**分三块**，用
 ### 4.1 账号
 
 > 📍 **现在在**：面板「账号」Tab（`src/content/panel/tabs.ts` 的 `accountTab()`）。
-> 双卡 A/B、登录入口、退出两步确认都在那里；`entrypoints/options/sections/account.tsx` 已删除。
+> 双卡 A/B、登录入口、退出两步确认都在那里。原 options 的账号页已随 options 一并删除。
 
-> ✅ **已实现**：`entrypoints/options/sections/account.tsx`。
+> ✅ **曾实现于 options 账号页**（该页已随 options 删除，功能已迁入面板「账号」Tab）。
 >
 > - 主账号卡片（只读）：昵称 + mid，来自**当前视频页**的页面数据
 >   （`__INITIAL_STATE__.user` + `DedeUserID`）。没开视频页时如实说"打开任意视频页后可见"，
@@ -467,7 +467,7 @@ Options 曾是全屏标签页，承担全部"复杂操作"。**分三块**，用
 > ⚠️ 4 项环境信息（InPrivate / 窗口 / cookie 分区 / DNR 规则）有已知读取失败，见
 > [ADR 0033](./decisions/0033-panel-first-interface.md) 的「已知限制」。
 
-> ✅ **已实现**：`entrypoints/options/sections/diagnostics.tsx`，
+> ✅ **曾实现于 options 诊断分区**（该页已随 options 删除，功能已迁入面板诊断浮层），
 > 取数逻辑在 `platform/diagnostics/collect.ts`。
 > 原来的独立自检页（`entrypoints/diagnostics/`）已于同日删除 ——
 > 删之前做过逐行比对（16 行事实全同），不是凭感觉删的。
@@ -500,12 +500,12 @@ Options 曾是全屏标签页，承担全部"复杂操作"。**分三块**，用
 
 > 📍 **现在在**：面板「净化」Tab 底部（`cleanTab()` 里的「页内角标」开关）。
 > 语义不变：存 `storage.local`，`entrypoints/content.ts` 监听 `onChanged` 立即重画角标，**不用刷新页面**。
-> `entrypoints/options/sections/display.tsx` 已删除。
+> 原 options 的显示分区已随 options 一并删除。
 
 > **2026-10-26 新增第五分区**（当时是五分区方案；后来砍到三分区，它保留为「显示」）。
 > 原稿只有四块，角标开关无处安放（`02` §5 只写"设置里可关闭"）。
 >
-> ✅ **已实现**：`entrypoints/options/sections/display.tsx` + `platform/storage/ui-prefs-store.ts`。
+> ✅ **曾实现于 options 显示分区**（该页已随 options 删除）；落盘逻辑仍在 `platform/storage/ui-prefs-store.ts`。
 > 开关存 `storage.local`，content script 监听 `storage.onChanged`，**保存后立刻生效、不用刷新**。
 
 **优先级低**，只有两行，不加任何新组件：
