@@ -27,7 +27,7 @@ grep -q '"name": "bili-pluma"' package.json   # 项目身份（仓库名，不�
 
 ## 1. 三分钟认知
 
-**Pluma**（`bili-pluma`）= B站双账号助手 · 画质与净化，纯 MV3 扩展。
+**Pluma**（`bili-pluma`）= B站助手 · 画质与净化，纯 MV3 扩展。
 **原理**：浏览器全程保持主账号登录；扩展只在**白名单内的取流接口**上，用另一个（大会员）账号的凭据重发该请求。
 **不是**破解，不是切 cookie，不是冒充会员。**当前状态**见 [README.md](./README.md) 首屏那一行，不要在此维护第二份。
 
@@ -41,16 +41,13 @@ grep -q '"name": "bili-pluma"' package.json   # 项目身份（仓库名，不�
 API 语义不确定 → 写最小复现脚本（✗ 按名字猜，如 `(dynamic-range)` vs `(video-dynamic-range)`）；
 某条数据是否存在 → 抓**当前这个场景**的真实响应（✗ 从别的分 P / 别的样本推断）。
 
-**任何"修好了"的结论，必须附一条能复现旧 bug 的验证**：把关键判断反向改回去，测试必须变红，
-否则那个测试等于没写。穷举法四步与"会不会翻车"七问 → [docs/guides/methodology.md](docs/guides/methodology.md)。
+**任何"修好了"的结论，必须附一条能复现旧 bug 的验证**：把关键判断反向改回去，测试必须变红，否则那个测试等于没写。穷举法四步与"会不会翻车"七问 → [docs/guides/methodology.md](docs/guides/methodology.md)。
 
 现成的实测工具与全部脚本命令见 [AGENTS-TOOLS.md](./AGENTS-TOOLS.md)（**脚本清单的唯一权威位置**，不在此重复）。
 
 ### ⚠️ 浏览器自动化：CDP 走不通，走扩展
 
-**Playwright/CDP 无法同时拿到「用户登录态」和「调试端口」**（新 profile 没 cookie，带端口又与日常浏览器冲突），
-所以它**只用于不带登录态的验证**（DNR 规则、扩展加载、SW 生命周期）。
-**需要真实登录态时用 `bsk`（browser-skill）**：扩展 + 本地 IPC，不占调试端口，直接复用当前 profile。
+**Playwright/CDP 无法同时拿到「用户登录态」和「调试端口」**（新 profile 没 cookie，带端口又与日常浏览器冲突），所以它**只用于不带登录态的验证**（DNR 规则、扩展加载、SW 生命周期）。**需要真实登录态时用 `bsk`（browser-skill）**：扩展 + 本地 IPC，不占调试端口，直接复用当前 profile。
 
 - 本机配置、版本锁定（**0.3.3，不要升 0.4.x**）与能力边界：[docs/guides/browser-skill-setup.md](docs/guides/browser-skill-setup.md)
 - **读扩展状态 / 拨总开关**：见 [docs/guides/bsk-page-bridges.md](docs/guides/bsk-page-bridges.md)。⚠️ **必须 `async IIFE` + 内部 `await` 再 stringify** —— 直接 stringify 一个 Promise 会得到 `{}` 且看起来"成功"（实测踩过）。判播完完整性用 `poc/probe/verify-pgc-by-snapshot.mjs`。
@@ -105,9 +102,7 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 
 ### 4.1 Q2 已实测通过 + 四个必读文件
 
-**2026-10-25 实测 DNR 并发安全（180 并发串号 0、残留 0）→ 不需要 per-request nonce。**
-规则写法见 §5.4，理由见 [ADR 0006](./docs/decisions/0006-no-per-request-nonce.md)。**不要重新论证。**
-目录结构见 `docs/04-project-structure.md` §1；**判断某文件是否存在用 `git ls-files`，不要照那棵树。**
+**2026-10-25 实测 DNR 并发安全（180 并发串号 0、残留 0）→ 不需要 per-request nonce。** 规则写法见 §5.4，理由见 [ADR 0006](./docs/decisions/0006-no-per-request-nonce.md)。**不要重新论证。** 目录结构见 `docs/04-project-structure.md` §1；**判断某文件是否存在用 `git ls-files`，不要照那棵树。**
 
 动手前确认这四个文件：
 
@@ -130,10 +125,15 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 | `entrypoints/content-panel.content.ts`、`src/background/handlers/tabs.handler.ts` | 这两个文件都在回答"这是不是播放页"。**判据只许走 `parsePlayPage()`**，路径字面量只许留在 `video-page.ts` / `routes.ts` / 两个 content 入口的 `matches`；`page-gate` 会红（2026-10-29 加，因番剧页曾被三处正则漏掉）<br>⚠️ 2026-11-10 起 popup **不再判页面**（废除 options + 瘦身为纯开关后它只管一个 storage 开关），守卫从 popup **搬到面板入口** —— 面板是真正决定画质 Tab 行为的地方 |
 | `.github/workflows/**` | `verify` 只抓 `set -x` / `printenv` 这类必泄露写法。**`echo "$RESP"` / `cat x.json` / `curl \| jq` 它抓不到** —— 必须**人工过一遍每个打印点**，判据只有一句：「这个响应里有没有属于别人的字段？」（`getUpdates` 有，`getMe` 没有） |
 | `docs/**`、`*.md` | `node scripts/verify.mjs --fast` |
-| `package.json` / `eslint.config.mjs` / `scripts/**` | 跑**完整** `node scripts/verify.mjs`（不是 `--fast`） |
+| `package.json` 的 `dependencies`/`devDependencies`/`scripts`/`engines`、`eslint.config.mjs`、`wxt.config.ts`，以及其余配置文件（`tsconfig`/`vitest.config`/`vite.config`/锁文件/`.prettierrc*` 等，**完整清单见 `node scripts/verify.mjs --help`**，本表不复述） | **完整** `node scripts/verify.mjs` |
+| `scripts/**` 的**检查逻辑**（判据、断言、白名单） | **完整** verify |
+| `package.json` 的 `description`/`version` 等**纯元数据**、`scripts/**` 的**用户文案常量** | `--fast` + `node --check` 该文件 |
 | 用户说"不生效 / 闪一下 / 偶尔 / 感觉不对" | **停**：先做能产出真实数据的工具，禁止读代码推理（§1.5） |
 
+⚠️ **判不准就按重的跑（完整 verify）**。这是规则的一部分，不是建议 —— 细节判据由你解释、由文件实际性质决定，**不许为了省时间往轻的那档靠**。同样：一处改动涉及多个文件时，取其中**最重**的那档。
 **表里没有的情况**：不要自己发明检查项，**先报告**（见 §7）。任何改动的最终门是 §8 清单。
+
+**`--changed` 与这张表的关系**：`--changed` 是**工具替你选档**，只按**文件名**分类，比本表**更保守** —— 本表说「`package.json` 纯元数据可 `--fast`」的那条它做不到，在 `package.json` 上一律退化全量。**这不是错误，是工具的安全余量**（工具选重了不算错，人按表选轻了才算错）。三档耗时与分级见 `node scripts/verify.mjs --help`。
 
 ---
 

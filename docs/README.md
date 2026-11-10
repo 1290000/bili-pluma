@@ -1,6 +1,6 @@
 # 文档索引
 
-> **Pluma**（`bili-pluma`）— B站双账号助手 · 画质与净化
+> **Pluma**（`bili-pluma`）— B站助手 · 画质与净化
 > 许可证：GPL-3.0-only + [附加条款](../ADDITIONAL-TERMS.md)
 >
 > ⚠️ 使用前请先读 [README](../README.md) 首屏的免责声明与合规提示
@@ -96,6 +96,7 @@
 | [0031](./decisions/0031-page-level-visual-cleanup-boundary.md) | **页内视觉改造是第三类能力**：不碰请求/响应/账号，边界按站点划；`host_permissions` 加 `live.bilibili.com` |
 | [0032](./decisions/0032-subtitle-broaden-to-multitool.md) | **副标题改为「B站双账号助手 · 画质与净化」**：保留「双账号」，让副标题不再只说画质 |
 | [0033](./decisions/0033-panel-first-interface.md) | **页内侧栏面板成为主操作界面**：推翻"不做悬浮球"，**options 页已废除、popup 瘦身为「悬浮入口开关」**；三 Tab（画质/净化/账号）+ 二级浮层（首页净化/诊断）已真机通过。含**两条已知限制**（诊断 4 项环境信息 / popup 闭环未真机验证），均不阻塞主功能 |
+| [0034](./decisions/0034-dual-account-demoted-from-headline.md) | **双账号从主要卖点降为能力之一**：推翻 ADR 0032「『双账号』不能丢」，副标题去「双账号」。**架构、登录、功能全部不动**，只改它站的位置 |
 
 > ⚠️ **这张表必须与实际 `docs/decisions/` 对账** —— 2026-10-30 发现它漏了 0029/0030
 > （新增 ADR 时忘了登记）。现在由 `check-adr-index` 自动断言，漏登记会红。

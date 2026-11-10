@@ -1,4 +1,4 @@
-# Pluma UI 设计规范（B站双账号助手 · 画质与净化）
+# Pluma UI 设计规范（B站助手 · 画质与净化）
 
 > 项目名 **Pluma** / 仓库名 `bili-pluma`。界面中品牌名统一显示为 **Pluma**。
 > 形态：纯 MV3 扩展（见 [01-architecture.md](./01-architecture.md)）

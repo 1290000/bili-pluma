@@ -30,7 +30,7 @@
 
 | 我要… | 看 | 要点 |
 | --- | --- | --- |
-| 了解项目是什么 | [§1](./AGENTS.md) | 双账号画质助手，不是破解、不是切 cookie |
+| 了解项目是什么 | [§1](./AGENTS.md) | 画质与净化助手，不是破解、不是切 cookie |
 | 知道该读哪些文档 | [§2](./AGENTS.md) | 按场景查表，**不要通读 docs/** |
 | 找某个命令/脚本 | [AGENTS-TOOLS.md](./AGENTS-TOOLS.md) | **脚本清单的唯一权威位置** |
 | 看四个必读文件 | [§4.1](./AGENTS.md) | `routes.ts` / `messages.ts` / `tokens.css` / `dnr.ts` |
