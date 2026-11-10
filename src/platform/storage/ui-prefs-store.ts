@@ -1,10 +1,10 @@
 /**
- * 界面偏好（目前只有一个：页内角标开关）。
+ * 界面偏好（页内角标开关、页内侧栏面板入口开关）。
  *
  * ## 为什么单独一个文件
  *
- * 这个值有**两个读者**：设置页的「显示」分区（写）和 content script（读，
- * 决定要不要渲染角标）。放在 `platform/storage/` 是因为它是"落盘 + 跨环境共享"，
+ * 这些值有**多个读者**：popup / 设置页（写）和 content script（读，
+ * 决定要不要渲染）。放在 `platform/storage/` 是因为它是"落盘 + 跨环境共享"，
  * 和 `stats-store` / `health-store` 同一性质。
  *
  * ## 默认值必须是"开"
@@ -28,6 +28,37 @@ export async function readBadgeEnabled(): Promise<boolean> {
 
 export async function writeBadgeEnabled(enabled: boolean): Promise<void> {
   await chrome.storage.local.set({ [BADGE_KEY]: enabled });
+}
+
+/**
+ * 页内侧栏面板入口（左侧贴边条）的开关 —— ADR 0033 决定三。
+ *
+ * ## 为什么与角标开关分成两个键，而不是共用一个"页内控件"开关
+ *
+ * 两者回答的是不同问题：角标是**状态回显**（"现在画质是多少"），
+ * 面板是**操作入口**（"我要改设置"）。用户完全可能想留面板、讨厌角标，
+ * 或反之。合成一个键就得二选一，那是把两个偏好硬绑在一起。
+ *
+ * ## 默认值同样是"开"
+ *
+ * 理由与角标完全相同：面板是 1.1.0 的主操作界面，第一次安装若被当成关掉的，
+ * 用户会以为功能没做出来。所以仍然是 `!== false` 语义。
+ */
+const PANEL_ENTRY_KEY = 'pluma:panel-entry-enabled';
+
+/** 供 content script 监听 `storage.onChanged` 时比对键名 */
+export const PANEL_ENTRY_ENABLED_KEY = PANEL_ENTRY_KEY;
+
+/** 页内悬浮入口是否显示。默认 `true` */
+export async function readPanelEntryEnabled(): Promise<boolean> {
+  const bag = await chrome.storage.local
+    .get(PANEL_ENTRY_KEY)
+    .catch(() => ({}) as Record<string, unknown>);
+  return bag[PANEL_ENTRY_KEY] !== false;
+}
+
+export async function writePanelEntryEnabled(enabled: boolean): Promise<void> {
+  await chrome.storage.local.set({ [PANEL_ENTRY_KEY]: enabled });
 }
 
 /**

@@ -2093,6 +2093,46 @@ export default defineContentScript({
         });
     });
     /**
+     * **同页面板问取流数据**（2026-11-10 加，ADR 0033 阶段 2）。
+     *
+     * ## 为什么走 `window.postMessage` 而不是 chrome 消息
+     *
+     * `content.ts` 与 `content-panel.content.ts` 是**同一个标签页里的两个 content script**，
+     * 它们共享同一个 `window`，所以 postMessage 是唯一不需要 background 中转的路。
+     *
+     * 两条 chrome 通道都不行，各有明确原因（**都真机踩过**）：
+     *
+     * | 通道 | 为什么不行 |
+     * | --- | --- |
+     * | `chrome.runtime.sendMessage`（面板发） | 只到 background / popup / options，**到不了同页 content script** |
+     * | `chrome.tabs.sendMessage`（面板发） | MDN：发送方必须是 **privileged script**（background / popup / options）。**content script 不是 privileged** |
+     *
+     * 结果是面板拿不到 `PageTracksView`，画质 Tab 只有胶囊、没有解锁卡。
+     *
+     * ## 安全边界（改这里之前先读完）
+     *
+     * - **只读**：只回 `pageState.view()` 的当前快照，**不改任何状态**。
+     * - **不含凭据**：`PageTracksView` 只有轨道数据 + 主账号的 uname/level/mid，
+     *   本来就在页面 DOM / `__INITIAL_STATE__` 里公开。**没有 cookie、没有 token。**
+     * - **没有可写操作**：这条分支不认识任何写指令（写走上面那条 `set-proxy`，边界独立）。
+     * - **不回环**：`page-summary-reply` 与 `page-summary` 不同名，不会自己触发自己。
+     * - **与主世界无关**：`main-world.js` 的监听器只认 `type === 'cfg'`，
+     *   收到 `page-summary` 会直接 return（见该文件 3626-3628 行）。
+     *
+     * 页面脚本伪造 `page-summary` 的最坏效果是**让扩展多做一次只读查询** ——
+     * 不扩大任何权限。
+     */
+    window.addEventListener('message', (ev) => {
+      const d = ev.data as { __ns?: string; type?: string } | null;
+      if (!d || d.__ns !== NS || d.type !== 'page-summary') return;
+
+      window.postMessage(
+        { __ns: NS, type: 'page-summary-reply', view: pageState.view() ?? null },
+        '*',
+      );
+    });
+
+    /**
      * 角标开关（设置页「显示」分区）。
      *
      * 读一次 + 监听变化：设置页保存后**不用刷新页面**角标就消失/出现，

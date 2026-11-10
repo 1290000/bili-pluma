@@ -76,7 +76,12 @@ export type RequestMsg =
       primaryMid: string | null;
     }
   /** 取最近 1 小时的取流成功率时序（popup「已降级」状态的条形图） */
-  | { type: 'stats/recent' };
+  | { type: 'stats/recent' }
+  /**
+   * 诊断用的浏览器环境事实。由 **background** 代查 ——
+   * 相关命名空间在 content script 里不存在（见 `diag/facts:ok` 的长注释）。
+   */
+  | { type: 'diag/facts' };
 /** background → UI / content */
 export type ResponseMsg =
   /**
@@ -155,7 +160,80 @@ export type ResponseMsg =
    * `rate` 为 null 表示样本数为 0——UI 要画灰而不是画红。
    */
   | { type: 'stats/recent:ok'; buckets: StatBucket[]; rate: number | null }
-  | { type: 'stats/recent:err'; detail: string };
+  | { type: 'stats/recent:err'; detail: string }
+  /**
+   * 诊断用的浏览器环境事实（`diag/facts` 的应答）。
+   *
+   * ## 为什么需要这条消息（2026-11-09 真机验收）
+   *
+   * 面板跑在 **content script** 里，而下面这四个命名空间**在 content script 里
+   * 整个是 `undefined`**（真机实测，不是权限不足）：
+   *
+   * ```
+   * chrome.extension.isAllowedIncognitoAccess  is not a function
+   * chrome.windows               undefined
+   * chrome.cookies               undefined
+   * chrome.declarativeNetRequest undefined
+   * ```
+   *
+   * 而诊断浮层要显示它们 —— 所以改由 background 代查，再回传。
+   *
+   * ## 为什么是一条消息、不是四条
+   *
+   * `scripts/check-messages.mjs` 要求每个请求类型都有 handler 分支。
+   * 四条 = 四处分支、四处漏改风险；而这四项只在"打开诊断浮层"这一个场景
+   * **一起**用到，没有独立调用方。一次往返也省三次消息。
+   *
+   * ## ⚠️ 每个字段都可以是 `null`
+   *
+   * `null` = **这一项读失败**，不是"值是 0 / false / 空数组"。
+   * 调用方（`collectFacts()`）必须据此产出一条 3 态行：
+   * 读到了正常 / 读到了异常 / **读不到（未知）** —— 后两者绝不能混，见 `tipFor()`。
+   *
+   * ## ⚠️ DNR 只回 id，不回整条规则
+   *
+   * 整条规则里的 `action.requestHeaders` 是一条**完整 Cookie 头**。
+   * 回它等于把播放账号凭据发给诊断页并随导出流传出去 ——
+   * `tests/unit/platform/diagnostics-export.test.ts` 有源码级断言在防这个。
+   */
+  | {
+      type: 'diag/facts:ok';
+      facts: {
+        /** `chrome.extension.isAllowedIncognitoAccess()`。null = 读失败 */
+        incognitoAllowed: boolean | null;
+        /** 窗口数。null = 读失败 */
+        windows: { total: number; incognito: number } | null;
+        /**
+         * 可见 cookie 分区的 **id 数组**（如 `['0', '1']`）。
+         * `chrome.cookies.CookieStore.id` 的官方类型就是 `string`。null = 读失败
+         */
+        cookieStores: string[] | null;
+        /**
+         * 我们自己的 DNR 规则 id。**只有 id**，见上方注释。
+         * `path` = 全局路径规则（id 10000–10999），`tab` = 标签页规则（20000–29999）
+         */
+        dnrRuleIds: { path: number[]; tab: number[] } | null;
+      };
+      /**
+       * **调试回显**：每一项的执行结果摘要，随应答一起回去。
+       *
+       * ## 为什么要有它（2026-11-10 第八轮，最后一次尝试）
+       *
+       * 前七轮里，所有"把调试信息写进 `storage.local` 再看"的通道都失败了：
+       * `diag()` 的环形缓冲被高频日志挤掉、`trace()` 干脆写不进去
+       * （smoke 实测：同一份导出里既有 background 写的 `page/quality` 26+ 条，
+       * 又有 `diag/facts reply: undefined` —— 消息到了、`diag()` 正常、
+       * **只有 `trace()` 写不进**）。
+       *
+       * 而**消息应答本身从没丢过**。所以把回显塞进应答是最可靠的通道：
+       * 它不经过任何存储、不受任何环形缓冲影响。
+       *
+       * 格式见 `buildDiagEcho()`：`entered | incognito=ok:true windows=null ...`，
+       * 每一项都能区分"成功拿到值" / "成功但返回 null" / "抛错" / "超时"。
+       */
+      echo?: string;
+    }
+  | { type: 'diag/facts:err'; detail: string; echo?: string };
 
 export type Msg = RequestMsg | ResponseMsg;
 
