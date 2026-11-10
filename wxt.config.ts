@@ -2,27 +2,25 @@ import preact from '@preact/preset-vite';
 import { defineConfig } from 'wxt';
 
 export default defineConfig({
-  // Preact 只用于 popup / options / login-window，页内角标仍是原生 DOM
+  // Preact 只用于 popup / login-window，页内角标与面板仍是原生 DOM
   vite: () => ({
     plugins: [preact()],
   }),
 
   /**
-   * `options_ui.open_in_tab` 只能在这里补。
+   * ## `build:manifestGenerated` 钩子已删除（2026-11-10，ADR 0033 阶段 4）
    *
-   * WXT 生成 manifest 时会用**入口自己的** `openInTab` 覆盖 `manifest.options_ui`
-   * （见 `node_modules/wxt/dist/core/utils/manifest.mjs`：`openInTab: options.options.openInTab ?? false`），
-   * 而 HTML 入口没有地方声明这个选项 —— 结果写在 `manifest.options_ui` 里的
-   * `open_in_tab: true` 会被冲成 `false`（2026-10-26 实测：构建产物就是 false）。
+   * 它原来只做一件事：把 `manifest.options_ui.open_in_tab` 补回 `true`。
+   * WXT 生成 manifest 时会用**入口自己的** `openInTab` 覆盖它
+   * （`openInTab: options.options.openInTab ?? false`），而 HTML 入口没地方声明。
    *
-   * 后果不小：`false` 时 Edge 用一个小弹窗打开设置页，五分区侧栏布局直接挤爆。
-   * 所以必须用 `build:manifestGenerated` 钩子在生成之后改回来。
+   * **options 页已废除**（功能全部迁入页内面板），所以：
+   *   - manifest 里不再有 `options_ui`
+   *   - 这个钩子没有作用对象，删掉
+   *
+   * ⚠️ 若将来加回任何 `options_ui`，必须把钩子一起加回来 ——
+   * 否则它会静默变成 `open_in_tab: false`，用一个挤爆布局的小弹窗打开。
    */
-  hooks: {
-    'build:manifestGenerated': (_wxt, manifest) => {
-      if (manifest.options_ui) manifest.options_ui.open_in_tab = true;
-    },
-  },
 
   manifest: {
     name: 'Pluma',
@@ -36,7 +34,7 @@ export default defineConfig({
      * `0.9.0` 曾表示「v1 范围已落地但仍在观察期」。
      * 与白名单修订号（`ROUTES_REVISION`）**是两个号，不同步变化**。
      */
-    version: '1.0.1',
+    version: '1.1.0',
     minimum_chrome_version: '120',
     // ⚠️ 声明 action 是必须的，否则工具栏图标不绑定任何行为、点了毫无反应也不报错。
     // P2 起加了 default_popup：**有 popup 时 `chrome.action.onClicked` 不再触发**，
@@ -68,12 +66,21 @@ export default defineConfig({
       48: 'icon/48.png',
       128: 'icon/128.png',
     },
-    // 设置页（三分区：账号 / 诊断 / 显示）。体检表与音质自检独立页已砍（ADR 0016），
-    // 原独立自检页的内容并入「诊断」分区。
-    // ⚠️ `open_in_tab` 写在这里**不生效**，见上面的 hooks 注释。
-    // ⚠️ 改这一行后必须在 edge://extensions 里实际点一次「扩展选项」，
-    // 因为诊断分区是排查 InPrivate 权限的唯一入口，改错了等于把排障手段弄丢。
-    options_ui: { page: 'options.html', open_in_tab: true },
+    /**
+     * ## `options_ui` 已删除（2026-11-10，ADR 0033 阶段 4）
+     *
+     * 用户明确要求**完全废除 options 页**。原 options 的全部功能已迁入页内面板：
+     *
+     * | 原 options 分区 | 现在在哪 |
+     * | --- | --- |
+     * | 账号（配置 / 重登 / 退出） | 面板「账号」Tab |
+     * | 净化（4 开关 + 9 分类） | 面板「净化」Tab + 二级浮层 |
+     * | 显示（角标开关） | 面板「净化」Tab 底部 |
+     * | 诊断（自检 / 日志 / 导出） | 面板「净化 ▸ 诊断」二级浮层 |
+     *
+     * ⚠️ **诊断不能丢**：它曾是排查 InPrivate 权限的**唯一入口**。
+     * 现在那个入口是面板的「诊断」浮层 —— 改动那里之前先想清楚。
+     */
     // split = 无痕窗口有自己的 background 实例。
     //   必须用 split：只有它允许把扩展自己的页面加载到无痕标签页主 frame
     //   （spanning 模式官方明确禁止这一点，而我们需要在无痕窗口里显示二维码页）。

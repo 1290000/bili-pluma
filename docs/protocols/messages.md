@@ -48,6 +48,24 @@ MV3 的四个执行环境内存不共享：
 > D 不是可有可无的一条：popup 的「当前页解锁画质」（`02-ui-spec.md` §2.3）**只走 D**，
 > SW 里根本没有这份数据。
 
+### ⚠️ 这里**没有**"content script ↔ content script"这条通道（2026-11-10 实测踩坑）
+
+页内面板（`entrypoints/content-panel.content.ts`）与画质链路（`entrypoints/content.ts`）
+是**同一标签页里的两个独立 content script 实例**。想让面板拿到 `PageTracksView`，
+只能走**通道 D 的定向发送**：先 `chrome.tabs.getCurrent()` 取自己的 tabId，
+再 `chrome.tabs.sendMessage(tabId, …)`。
+
+**不能用 `chrome.runtime.sendMessage`** —— 那个从 content script 发出去，
+只送到 background / popup / options，**不会回到同标签页的其他 content script**。
+
+2026-11-10 一次真实事故：Lead 按"runtime.sendMessage 是广播"的直觉给了错误方案，
+engineer 照做，面板的画质 Tab 在真机上**永远只有胶囊、没有解锁卡**，
+而 `.catch(() => null)` 把「对方不在」「对方没数据」「成功」三种情况**全吞成 null**，
+于是单测与 UI 都分不出来 —— 这个 bug 藏了一整轮。
+
+**判据一句话**：要问"这个页面里的 content script"，用 `tabs.sendMessage(tabId, …)`；
+要问"扩展自己的其他上下文"，用 `runtime.sendMessage(…)`。**两者不能互换。**
+
 ---
 
 ## 通道 A：MAIN world ↔ ISOLATED world

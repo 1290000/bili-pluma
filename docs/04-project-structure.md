@@ -134,9 +134,12 @@ bili-pluma/
 │   ├── background.ts       # → Service Worker
 │   ├── content.ts          # → ISOLATED world content script
 │   ├── main-hook.content.ts# → MAIN world content script（document_start 注入）
-│   ├── popup/              # → action.default_popup
-│   ├── options/            # → options_ui（P3）
+│   ├── popup/              # → action.default_popup（**只负责一个开关**，ADR 0033）
+│   ├── content-panel.content.ts  # → 页内面板入口（www + live 全站）
+│   ├── content-home.content.ts   # → 视觉清理入口（www 全站）
+│   ├── content-live.content.ts   # → 直播水印入口（live）
 │   └── login-window/       # 独立扫码窗口（chrome.windows.create 打开）
+│   # ⚠️ options/ 已于 2026-11-10 删除（ADR 0033 阶段 4），功能全部迁入页内面板
 │
 ├── src/                    # 业务代码，WXT 不管
 │   ├── shared/             # 最底层：零依赖、纯函数、纯类型
@@ -675,8 +678,8 @@ window.eval(SOURCE);   // 每个用例新建 jsdom，状态才真隔离
 | `src/platform/runtime/messaging.ts` | 无独立封装，页面直接 `sendMessage` | 只有 3 个 UI 页面，封装收益低于成本 |
 | `src/manifest.json` | `wxt.config.ts` 的 `manifest` 字段 | WXT 约定 |
 | `public/main-world.js` + `web_accessible_resources` | **已删**：脚本移到 `src/content/main-world.js` 并被 `import` | WAR 是死配置（无人按 URL 加载它），留着只是让全站页面能 fetch 到它 |
-| `entrypoints/popup/` | ✅ **完整实现**（P3 补齐 §2.3 解锁画质对比 / §2.4 双账号卡片 / §2.6 底部两按钮） | 此前依赖 options 页与 `core/playinfo` 解析 |
-| `entrypoints/options/` | ✅ **三分区全部完成**：hash 路由导航、账号页（两张卡片 + 扫码/退出）、显示页（角标开关）、诊断页（自检信息 + 音质折叠块 + 日志 + 导出 + 白名单版本） | 体检/音质两页已砍（ADR 0016）；独立自检页已并入诊断分区 |
+| `entrypoints/popup/` | ✅ **只负责一个开关**（2026-11-10 瘦身，ADR 0033）：显示/隐藏页内悬浮入口。原 §2.3 解锁画质 / §2.4 双账号卡 / §2.6 底部按钮**已迁入页内面板** | popup 保留的理由：用户关掉悬浮入口后，这是唯一能重新打开它的地方 |
+| ~~`entrypoints/options/`~~ | ❌ **已删除（2026-11-10，ADR 0033 阶段 4）**：账号 / 净化 / 显示 / 诊断四块全部迁入 `src/content/panel/` 的页内面板 | 原功能：账号页、显示页（角标开关）、诊断页（自检 + 日志 + 导出 + 白名单版本）。诊断曾是排查 InPrivate 权限的唯一入口，现在那个入口是面板的诊断浮层 |
 | `scripts/`（8 个 `check-*` + `verify.mjs` 入口 + `package.mjs`） | ✅ **已实现**（`node scripts/verify.mjs`） | 边界 / 消息路由 / 设计令牌 / 文档 / 敏感信息 / 改写范围 / 播放页判据 / 工作流日志；**检查命令的唯一权威位置是 `scripts/`**，项数以 `--help` 为准（别在文档里写数字，已漂移过三次）。`package.mjs` 是打包，不在 verify 链里 |
 | ESLint 配置 | ✅ **已实现**（`eslint.config.mjs`；跑 `node scripts/verify.mjs`） | `no-restricted-imports` + `no-restricted-globals` 封死 core/shared |
 | Prettier 配置 | ✅ **已实现**（`.prettierrc`；跑 `node scripts/verify.mjs`） | 用 `eslint-config-prettier` 关掉冲突规则；Markdown 不纳入格式化（见 `.prettierignore` 说明） |

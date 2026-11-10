@@ -55,12 +55,31 @@ const ROOT = process.cwd();
  * 这个文件**没有**进过本列表，所以规则 1 从来没管它 —— 它就这么带着一份手写判据
  * 活了一整轮 PGC 开发（B-02）。加进来后规则 1 立刻抓到。
  *
+ * ⚠️ 2026-11-10 变更：**移除 `entrypoints/popup/main.tsx`，加入 `content-panel.content.ts`**
+ *
+ * 原因：options 页废除（ADR 0033 阶段 4）+ popup 瘦身为纯开关后，
+ * popup **不再判断任何页面** —— 它只是一个 `storage.local` 开关，
+ * 不关心当前标签是不是播放页。强行要求它调用 `parsePlayPage()`
+ * 等于让检查项绑架设计：那会诱使下一个人加一段**永远不执行的空调用**
+ * 去喂检查脚本，而死代码下一个接手的人又不敢删。
+ *
+ * **判据没有消失，只是搬家**：页面类型判断搬到了页内面板
+ * （`entrypoints/content-panel.content.ts` 的 `detectPageKind()`），
+ * 所以守卫跟着搬过去。原守卫防的 bug 形态（手写 `/video/` 正则漏判番剧页）
+ * 在 popup 里已经不可能发生 —— 它根本不判断。
+ *
+ * ### 为什么这也是一种**加强**
+ *
+ * 面板覆盖 `www` + `live` 全站，是**比 popup 更靠前**的判据落点：
+ * 判错了会让画质 Tab 在番剧页显示「未生效」。
+ * 守卫从"只显示状态的地方"挪到了"真正决定行为的地方"。
+ *
  * `src/platform/page/page-state-client.ts` 不在 MUST_USE_GATE 里：
  * 它**不判断**播放页，只用 `PLAY_PAGE_URL_PATTERNS` 喂 `tabs.query`，
  * 已被规则 2b（常量必须含两个模式）与规则 3（不许出现字面量）覆盖。
  */
 const MUST_USE_GATE = [
-  'entrypoints/popup/main.tsx',
+  'entrypoints/content-panel.content.ts',
   'src/background/handlers/tabs.handler.ts',
   'entrypoints/background.ts',
 ];
@@ -73,6 +92,41 @@ const MUST_USE_GATE = [
  * 这是"框架的约束"，所以这里退一步，用检查脚本保证两份字面量与解析器覆盖同一批页面。
  */
 const MANIFEST_MATCHES = ['entrypoints/content.ts', 'entrypoints/main-hook.content.ts'];
+
+/**
+ * 「该入口的 matches 缺了登记过的某个域」的**通用**理由。
+ *
+ * ## 为什么这里写中性文案（2026-11-10 verifier 指出）
+ *
+ * 原本文案硬编码了"该入口只允许注入直播域……ADR 0031"。但这条循环现在服务
+ * **三个**入口，其中两个的根本不是直播域 —— 于是出现这种自相矛盾的输出：
+ *
+ * ```
+ * content-panel.content.ts 的 matches 里缺 `*://www.bilibili.com/*`
+ *   该入口只允许注入直播域……是 ADR 0031 的越权     ← 理由指错了入口
+ * ```
+ *
+ * 更糟的是它指向 ADR 0031（视觉清理边界），而多域入口的依据是 ADR 0033（页内面板）。
+ * 读报错的人会去翻一份跟这件事无关的 ADR，然后**照着错的理由改代码**。
+ *
+ * 所以：缺域时只陈述"到底缺了什么、会有什么后果"，**不猜该看哪份 ADR**。
+ * 需要 ADR 指向的入口，用 `why` 字段各自写明（见下面登记表）。
+ */
+const MISSING_DOMAIN_WHY =
+  '这个域已在本脚本登记为该入口负责的范围，源码里却没有 —— ' +
+  '两类后果：① 被删掉 → 那类页面上控件静默不出现（构建不报错、单测不覆盖）；' +
+  '② 被换成更宽的模式（如 `*://*/*`）但少了这一项 → 看起来"覆盖到了"，' +
+  '实际上任何一处改写都可能把它彻底删掉而没人发现';
+
+/**
+ * 「matches 里出现了未登记的多余域」的理由。
+ *
+ * 中性表述：多余项可能是 `*:\/\/*\/*`，也可能别的 —— 统一指向"先改登记表 / 先改 ADR"
+ * 这条动作，不要在这里假定是哪一份 ADR。
+ */
+const EXTRA_DOMAIN_WHY =
+  '每个匹配域都是一份注入面。新增域必须先改对应的 ADR，再改本脚本登记的期望值 —— ' +
+  '只在源码里加一项而这里不知道，等于悄悄扩大了扩展能改哪些网站';
 
 /**
  * **不是播放页**的 content 入口 —— 只需要存在性检查，不参与播放页模式断言。
@@ -93,10 +147,36 @@ const MANIFEST_MATCHES = ['entrypoints/content.ts', 'entrypoints/main-hook.conte
  *
  * 若完全不登记，规则 1/3 都不知道它存在，将来谁把它删了或改成注入全站，这里也发现不了。
  *
- * 所以它单独一张表：**存在性 + `matches` 必须是直播域**。
+ * ## 表格形状（2026-11-10 扩）
+ *
+ * 原来每项只有 `{file, match}` 两个字段，只够"某一条必须含"。页内面板入口
+ * （ADR 0033）要覆盖**两个域**，于是把 `match` 升级成 `requires: string[]`，
+ * 并新增 `onlyMatch`：
+ *
+ * | 字段 | 含义 |
+ * | --- | --- |
+ * | `requires` | `matches` 里**必须出现**的每一项（缺一项就红） |
+ * | `match` | `requires` 单一项时的简写，两者取其一 |
+ * | `onlyMatch` | `true` = `matches` 只许 1 项（只服务一个站点的入口用它） |
+ * | `why` | 缺域时给这个入口专用的理由。**不给就用通用中性文案** |
+ *
+ * `why` 为什么存在（2026-11-10 verifier 指出）：通用文案原来硬编码了
+ * "只允许注入直播域……ADR 0031"，而这条循环同时服务 www 与多域入口 ——
+ * 于是报错会**指错 ADR**，把人引去翻一份无关的决策。理由指错比没有理由更坏。
+ *
+ * 为什么还要管"多出来的项"：`requires` 只回答"必须有什么"，
+ * 谁往数组里**多加**一个 `*:\/\/*\/*` 它一个字都不会说 —— 而多一项正是
+ * "注入面扩大"的唯一形态。所以规则 2c-2 逐项对账。
  */
 const NON_PLAY_PAGE_ENTRIES = [
-  { file: 'entrypoints/content-live.content.ts', match: '*://live.bilibili.com/*' },
+  {
+    file: 'entrypoints/content-live.content.ts',
+    match: '*://live.bilibili.com/*',
+    onlyMatch: true,
+    why:
+      '这个入口只负责直播间。缺它 = 直播水印永远不隐藏；' +
+      '若被改成覆盖全站，等于把注入面扩大到所有网站 —— 那是 ADR 0031 明确的越权',
+  },
   /**
    * 视觉清理入口（ADR 0031 决定二：边界按**能力**划，不按站点划）。
    *
@@ -108,7 +188,34 @@ const NON_PLAY_PAGE_ENTRIES = [
    * 下面规则 2c 的反向断言仍要求它**不准含 `bangumi/play/*`** ——
    * 番剧页不在视觉清理范围内，多注入一类页面就是无谓扩大暴露面。
    */
-  { file: 'entrypoints/content-home.content.ts', match: '*://www.bilibili.com/*' },
+  {
+    file: 'entrypoints/content-home.content.ts',
+    match: '*://www.bilibili.com/*',
+    onlyMatch: true,
+    why:
+      '这个入口只负责 www 站内（首页 + 视频页清广告，ADR 0031）。' +
+      '缺它 = 广告清理整块失效；多一项就是无谓扩大注入面',
+  },
+  /**
+   * 页内侧栏面板入口（ADR 0033 决定二）。
+   *
+   * `requires` 两个域**同时**都要：面板要在首页 / 视频页 / 直播页都能唤起。
+   * 只写一个域时不会报错，只会让另一类页面上的面板**静默不出现** ——
+   * 这正是本脚本存在的理由（漏一个入口，只有人肉看 manifest 才能发现）。
+   *
+   * `onlyMatch: false`：它**故意**覆盖两个域，所以 `matches` 数组里可以有多项。
+   * 另两个入口保持 `onlyMatch: true`（只许一项），它们各自只服务一个站点，
+   * 多一项就等于扩大注入面。
+   */
+  {
+    file: 'entrypoints/content-panel.content.ts',
+    requires: ['*://www.bilibili.com/*', '*://live.bilibili.com/*'],
+    onlyMatch: false,
+    why:
+      '面板要在首页 / 视频页 / 直播页都能唤起（ADR 0033 决定二），所以两个域缺一不可：' +
+      '缺 www → 首页和视频页没有面板；缺 live → 直播页没有面板。' +
+      '两种情况都是**构建不报错、单测不覆盖**的静默失效 —— 只有这条断言会发现',
+  },
 ];
 
 /** 每个 content 入口都必须同时出现的两个模式 */
@@ -323,35 +430,103 @@ async function main() {
   }
 
   // 规则 2c：非播放页入口必须存在，且 matches 只指向它自己的站点
-  for (const { file, match } of NON_PLAY_PAGE_ENTRIES) {
+  for (const entry of NON_PLAY_PAGE_ENTRIES) {
+    const { file } = entry;
+    /** 该入口 `matches` 里**必须出现**的模式 */
+    const required = entry.requires ?? [entry.match];
     const masked = maskedByFile.get(file);
     if (masked === undefined) {
       problems.push({
         what: `${file} 不存在或不在扫描范围内`,
         why:
-          '这是直播间样式清理的入口（ADR 0031）。删掉它本身不会报错，' +
-          '但直播水印就永远不隐藏了 —— 而且没有任何其它检查会发现这件事',
+          '这是页内非播放页入口（ADR 0031 / ADR 0033）。删掉它本身不会报错，' +
+          '但对应的页内控件就永远不出现了 —— 而且没有任何其它检查会发现这件事',
       });
       continue;
     }
-    if (!masked.includes(match)) {
+    /**
+     * 规则 2c-0：先把 `matches` 数组抠出来，**逐项对账**，再决定报什么。
+     *
+     * ## 为什么必须先解析再报（2026-11-10 verifier 指出）
+     *
+     * 原来的顺序是"先按子串查缺哪项，再查多出来的项"。于是 matches 写成
+     * `['*:\/\/*\/*']` 时会报 **3 条**：
+     *
+     * ```
+     * 缺 `*://www.bilibili.com/*`    ← 误报：全站通配逻辑上包含它
+     * 缺 `*://live.bilibili.com/*`   ← 误报
+     * 有未登记的域：全站通配          ← 只有这条是真的
+     * ```
+     *
+     * 判据红对了，但两条噪声把唯一要看的那条埋掉了。更麻烦的是那两条会让人
+     * 往"我明明写了全站，为什么说缺 www"的方向去查 —— 查一个不存在的问题。
+     *
+     * ## 现在的对账方式
+     *
+     * ① **有多余项** → 只报这一条（多一项就是注入面扩大，这是根因；缺什么都不再重复说）
+     * ② **没有多余项** → 再逐项查缺，且**点名缺的是哪一项**
+     *
+     * 两种错误不会同时出现：数组里没有未登记项时"缺少登记项"才是唯一可能的分支。
+     *
+     * 从源码里把 matches 数组整个抠出来（只抠这一句，不解析整个文件）。
+     */
+    const arrayRe = /matches:\s*\[([^\]]*)\]/;
+    const arr = arrayRe.exec(masked);
+    /** `matches` 数组里的每一项；数组都抠不出来时为 `null` */
+    const items = arr === null ? null : [...arr[1].matchAll(/'([^']*)'/g)].map((m) => m[1]);
+
+    if (items === null) {
       problems.push({
-        what: `${file} 的 matches 里缺 \`${match}\``,
+        what: `${file} 里找不到 \`matches: [...]\` 字面量数组`,
         why:
-          '该入口只允许注入直播域。若它被改成覆盖全站（例如 `*://*/*`），' +
-          '等于把扩展的注入面扩大到所有网站 —— 那是 ADR 0031 明确的越权',
+          'WXT 靠静态分析读这个数组生成 manifest。改成变量或拼字符串会让 ' +
+          'manifest 里 `matches` 变空 = 扩展根本不注入（这是框架的约束，不是风格问题）',
       });
+      continue;
     }
+
+    const known = new Set(required);
+    const extra = items.filter((it) => !known.has(it));
+
+    if (extra.length > 0) {
+      // ① 有多余项：只报这一条，不再报"缺 X"（那些是误报，见上面的注释）
+      problems.push({
+        what: `${file} 的 matches 里有未登记的域：${extra.map((e) => `\`${e}\``).join(', ')}`,
+        why: EXTRA_DOMAIN_WHY,
+      });
+      continue;
+    }
+
+    // ② 没有多余项：逐项查缺，点名缺的是哪一项
+    for (const match of required) {
+      if (!items.includes(match)) {
+        problems.push({
+          what: `${file} 的 matches 里缺 \`${match}\``,
+          why: entry.why ?? MISSING_DOMAIN_WHY,
+        });
+      }
+    }
+
     // 反向断言：不许它同时含播放页模式，否则就变成了"又一个播放页入口"
     for (const p of REQUIRED_MATCH_PATTERNS) {
-      if (masked.includes(p)) {
+      if (items.includes(p)) {
         problems.push({
           what: `${file} 的 matches 里出现了播放页模式 \`${p}\``,
           why:
-            '直播入口不该注入视频页 / 番剧页。需要在那两个页面上做事，' +
-            '改 `content.ts`，不要把这个入口变成第二个播放页入口（ADR 0031）',
+            '非播放页入口不该注入视频页 / 番剧页。需要在那两个页面上做事，' +
+            '改 `content.ts`，不要把这个入口变成第二个播放页入口（ADR 0031 / ADR 0033）',
         });
       }
+    }
+
+    if (entry.onlyMatch && items.length !== 1) {
+      problems.push({
+        what: `${file} 的 matches 应有且只有 1 项，实际 ${String(items.length)} 项`,
+        why:
+          '这个入口只服务一个站点。多一项就是无谓扩大注入面 —— ' +
+          '需要覆盖多个域时，把该入口的 `onlyMatch` 改成 false 并在 `requires` 里列全，' +
+          '让这份登记表如实反映权限范围',
+      });
     }
   }
 
@@ -395,7 +570,7 @@ async function main() {
     console.log(
       `[page-gate] ✅ ${MUST_USE_GATE.length} 个入口走统一判据 · ` +
         `${MANIFEST_MATCHES.length} 个 content 入口覆盖两种播放页 · ` +
-        `${NON_PLAY_PAGE_ENTRIES.length} 个非播放页入口只注入本站 · ` +
+        `${NON_PLAY_PAGE_ENTRIES.length} 个非播放页入口的 matches 与登记表一致 · ` +
         `${files.length} 个文件里无越界路径字面量`,
     );
     return;

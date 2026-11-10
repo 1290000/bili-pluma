@@ -142,7 +142,8 @@ const SECTION_LIMIT = 80;
  */
 const SECTION_LIMIT_WAIVED = {
   'docs/01-architecture.md': '§4/§5/§9 是"最重要的一节"或由多个 ### 子节组成，硬拆会割裂阅读',
-  'docs/02-ui-spec.md': '§2 是 popup 规范主体，拆开读者要来回跳',
+  'docs/02-ui-spec.md':
+    '§2 是画质/净化/账号的核心判定规则（徽章、六种标题、PGC 分支），拆开读者要来回跳；§2.3 的 88 行里有一半是"不许谎报"的具体判据表格，压缩会丢内容',
   'docs/04-project-structure.md': '§2 分层禁令是全文最重要一节；§4/§6 同理',
   'docs/guides/debugging.md': '§1 是 DNR 调试主流程，拆开就断',
 };

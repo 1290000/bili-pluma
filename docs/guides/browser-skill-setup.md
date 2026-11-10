@@ -170,8 +170,13 @@ Copy-Item "$wb\references\*" "$dsh\references\" -Force
 
 | 动作 | 结果 |
 | --- | --- |
-| **打开**（`bsk tab create --url chrome-extension://…/options.html`） | ✅ 可以 |
+| **打开**（`bsk tab create --url chrome-extension://…/login-window.html`） | ✅ 可以 |
 | **读取**（evaluate / screenshot / snapshot / observe） | ❌ 一律拒绝 |
+
+> ⚠️ 2026-11-10：**`options.html` 已废除**（ADR 0033 阶段 4），现在只剩
+> `popup.html` / `login-window.html` / `need-incognito.html` 三个扩展页面。
+> popup 也不能用 `tab create` 打开（它靠 `action` 弹出），所以这条实验只能用
+> `login-window.html` 复现 —— 结论不变（`chrome-extension://` 一律读不到）。
 
 判定发生在 **URL 层面**（`permission_denied` + `reason: restricted_tab_url`），只接受 http/https。
 `--tab-id` 看着像"可以指定任意标签页"，**但受沙箱约束**；`tab borrow` 也没用。
