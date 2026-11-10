@@ -17,10 +17,36 @@
  * | --- | --- |
  * | `hasCredential: false` | 还没配置 → 主按钮是「扫码登录」 |
  * | `enabled: false` + 有凭据 | 用户主动关的 → 主按钮是「重新开启」 |
- * | `enabled: true` + `ruleCount: 0` | **不一致状态**，说明规则被清了（如浏览器重启后自愈失败） |
+ * | `enabled: true` + `ruleCount: 0` | **本实例的路径规则数为 0**，见下方 ⚠️ —— **不等于代理没生效**，不要报异常 |
  *
- * 第三种最危险：用户以为在代理，实际一条规则都没有。所以 `ruleCount` 必须回传给 UI，
- * 不能只报 `enabled`。
+ * `ruleCount` 必须回传给 UI，不能只报 `enabled` —— 但**它的含义被 2026-11-10 的排查更正过**。
+ *
+ * ## ⚠️ `enabled: true` + `ruleCount: 0` **不是**"最危险的不一致状态"
+ *
+ * 本行原来写的是「**不一致状态**，说明规则被清了（如浏览器重启后自愈失败）」。
+ * **那句话是错的**，已导致一次整轮排查（task-15）白跑：有人拿它当 bug 去追，
+ * 最后发现根本没有规则丢失。三个事实：
+ *
+ * 1. **本实例视角，不是全局视角。** `wxt.config.ts` 是 `incognito: "split"`，
+ *    普通/无痕是**两个独立 SW 进程**。`enabled` 存在 `storage.local`（跨实例共享），
+ *    而 `sessionRules` 是**实例内存**（Chrome 规格：backed in memory，不跨 session 持久）。
+ *    两者天然可能不同源 —— 在无痕窗口里读到 `enabled: true + ruleCount: 0`
+ *    是**正常现象**，普通实例的 3 条规则好好的。详见 `dnr.ts` 的 `countPathRules()`。
+ *
+ * 2. **计数口径与生效规则不是一回事。** `ruleCount` 只数 `kind === 'path'`（10000 段），
+ *    而番剧页实际生效的是**标签页规则**（20000 段，随 `page/activate` 异步重建）。
+ *    番剧页读到 0 而代理完全正常。
+ *
+ * 3. **用户已明确定过性：不报警。** 2026-10-29 用户实测否决了旧的「请关闭再开启一次」提示，
+ *    原话：「可问题是播放已经成功的被接管了，不用再重新开关一次」。
+ *    理由与现在的判据见 `src/core/ui/popup-state.ts:295-315`。
+ *
+ * **「取流成功了」这个事实比规则计数硬得多。** 判代理有没有生效，看真实取流高度，
+ * 不要看这个数。
+ *
+ * ⚠️ 仍有一处口径残留：`src/platform/diagnostics/collect.ts` 的 `consistent` 判据
+ * 还按老含义标「⚠️ 不一致」，与 `popup-state.ts` 冲突 —— 已作为待办另行处理，
+ * **不要照它写新逻辑**。
  */
 
 import { describeRules, disableProxy, enableProxy, isProxyEnabled } from '@platform/http/dnr';

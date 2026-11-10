@@ -422,14 +422,54 @@ export async function collectFacts(opts: CollectOptions = {}): Promise<DiagRow[]
 
   // 6) 总开关
   //
-  // ⚠️ `ok` 不能只看 enabled：开关开着但规则数为 0 是**最危险的状态** ——
-  // 代码以为在代理，实际一条规则都没有。这里必须标红，否则自检页会骗人。
+  /**
+   * ## ⚠️ `enabled` 是**唯一**判据，`ruleCount` 只作信息展示（2026-11-10 改）
+   *
+   * 原判据是：
+   *
+   * ```ts
+   * const consistent = !proxy.enabled || !ruleCountKnown || proxy.ruleCount > 0;
+   * ```
+   *
+   * 它有两个方向都错的后果：
+   *
+   * | 状态 | 旧判据 | 错在哪 |
+   * | --- | --- | --- |
+   * | `enabled: true` + `ruleCount: 0` | **`false`（标红）** | 与 `popup-state.ts:295-315` 直接矛盾 —— 同一个界面，诊断报红「不一致」，画质区却说「已接管」 |
+   * | `enabled: false` | **`true`（中性色）** | 关着反而不标；而 `tipFor()` 靠 `ok === false` 识别"已关闭"，于是**永远走不到那条分支** |
+   *
+   * 第二条是真 bug：`tipFor()` 里 `if (proxyRow && proxyRow.ok === false) return '代理已关闭…'`
+   * 在修复前是**死代码**，任何"开关关着"的场景下诊断页都说不出这句话。
+   *
+   * ### 为什么 `ruleCount` 不能参与判据（三条，均已核实）
+   *
+   * 1. **本实例视角，不是全局视角。** `wxt.config.ts` 是 `incognito: "split"`，
+   *    普通/无痕是两个独立 SW 进程；`enabled` 在 `storage.local`（跨实例共享），
+   *    而 `sessionRules` 是**实例内存**。两者天然可能不同源 —— 在无痕窗口读到
+   *    `enabled: true + ruleCount: 0` 是**正常现象**，普通实例的规则好好的。
+   *    见 `dnr.ts` 的 `countPathRules()` 与 ADR 0012 补充三。
+   * 2. **计数口径与生效规则不是一回事。** 这里数的是 10000 段路径规则，
+   *    而番剧页实际生效的是 20000 段**标签页规则**（随 `page/activate` 异步重建）。
+   * 3. **用户已明确否决报警。** 2026-10-29 用户实测原话见 `popup-state.ts:295-315`：
+   *    「可问题是播放已经成功的被接管了，不用再重新开关一次」。
+   *
+   * ### 「规则到底几条」由第 7 项负责
+   *
+   * 第 7 项（`DNR 全局路径规则`）有三态判据，能把"读不到"和"读到 0 条"分开。
+   * 本项不再重复这件事 —— 两项各管一件事：**本项管开关**，第 7 项管规则。
+   */
   const proxy = await proxyState();
   const ruleCountKnown = proxy.ruleCount >= 0;
-  const consistent = !proxy.enabled || !ruleCountKnown || proxy.ruleCount > 0;
+  const consistent = proxy.enabled;
+  /**
+   * 文案仍如实报出数值，但要标明口径。
+   *
+   * ⚠️ 不能只写「0 条路径规则」—— 那正是让人误读成"没装上"的地方。
+   * 「本实例」三个字是这句文案的**全部价值**，删了就又回到误解。
+   */
   const countText = !ruleCountKnown
     ? '规则数读不到（background 侧失败）'
-    : `${String(proxy.ruleCount)} 条路径规则${consistent ? '' : '，⚠️ 不一致'}`;
+    : `${String(proxy.ruleCount)} 条路径规则（本实例视角，不等于全局）`;
   put('播放代理总开关', proxy.enabled ? `已开启（${countText}）` : '已关闭', consistent);
 
   // 7) DNR 规则 —— "取流是否生效"的直接证据
