@@ -364,6 +364,78 @@ export function describeExpiry(expireAt: number | null, now: number): string {
   return `${String(Math.floor(days / 30))} 个月后到期`;
 }
 
+/**
+ * 凭据健康状态 → 卡片第三行（2026-11-10）。
+ *
+ * ## 为什么要显示它
+ *
+ * `account/summary` 一直返回 `health: { healthy, checkedAt, reason }`，
+ * 但面板从没渲染过（原 options 的账号页有，随它一起删了）。
+ * 没有这一行，用户看不出凭据是否还有效 —— 只能等它失效、画质掉下来才发现。
+ *
+ * ## ⚠️ 只显示相对时间，**不加猜测性文案**
+ *
+ * `docs/02-ui-spec.md` §2.4 明确写过：
+ * > 过期是内部卫生，不该变成 UI 上的疑虑
+ *
+ * 所以写「刚刚校验」/「5 分钟前校验」，**绝不写**「可能已过期了」「建议重新登录」。
+ * 那些话术会把一个内部维护动作变成用户的日常焦虑。
+ *
+ * ## 唯一的例外：`healthy: false`
+ *
+ * 那种情况**必须**说「凭据异常：<原因>」—— 它直接影响可用性，
+ * 用户有权知道。这与"不许猜测"不冲突：一个是事实，一个是猜。
+ *
+ * @returns 空串 = **整行不渲染**（`health` 为 null / `checkedAt` 为 0 时）
+ */
+export function describeHealth(
+  account: Pick<PopupAccount, 'healthy' | 'checkedAt' | 'reason'> | null,
+  now: number,
+): string {
+  if (!account) return '';
+
+  /**
+   * ## ⚠️ 必须是 `=== false`，不能写 `!account.healthy`（2026-11-10 真机假警报）
+   *
+   * `!value` 把 `undefined` / `null` / `0` / `''` **全当 false**。
+   * 而本函数的入参是 `Pick<PopupAccount, ...>` —— 它的字段在类型上可缺省，
+   * 所以**传错形状时 `healthy` 会是 `undefined`，编译期照样通过**。
+   *
+   * 真机事故：面板把 `AccountSummary`（健康状态嵌套在 `health` 对象里）
+   * 直接当成 `PopupAccount`（扁平字段）传进来 →
+   * `account.healthy === undefined` → `!undefined === true` → **显示「凭据异常」**。
+   * 而底层数据是 `{"healthy":true,"ruleCount":3}`，代理完全正常。
+   *
+   * 那是一条**没有原因、没有动作的假警报** —— 比不显示更糟。
+   *
+   * 改成严格判据后：`undefined` 走"未知"分支 → **整行不渲染**。
+   *
+   * 同类教训在 `ui-prefs-store.ts` 文件头、`02-ui-spec.md` §7 都记过。
+   */
+  if (account.healthy === false) {
+    return account.reason ? `凭据异常：${account.reason}` : '凭据异常';
+  }
+
+  /**
+   * `healthy !== true` 且不是明确的 `false` → 形状不对 / 字段缺失 → **未知**。
+   *
+   * 这时**什么都不说**：写「未知」会让用户以为出了问题，
+   * 而真相只是"这次没拿到这一项"。
+   */
+  if (account.healthy !== true) return '';
+
+  // 从未校验过：如实说，但不渲染整行（没有信息量）
+  if (!account.checkedAt) return '';
+
+  const mins = Math.floor((now - account.checkedAt) / 60_000);
+  if (mins < 1) return '刚刚校验';
+  if (mins < 60) return `${String(mins)} 分钟前校验`;
+
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${String(hours)} 小时前校验`;
+  return `${String(Math.floor(hours / 24))} 天前校验`;
+}
+
 /** 会员类型 + 到期日，拼成账号卡片第二行 */
 export function describeVip(
   account: Pick<PopupAccount, 'vipLabel' | 'expireAt'>,

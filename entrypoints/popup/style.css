@@ -1,9 +1,15 @@
 /* Popup 样式 —— 只引用 tokens.css 的变量，不硬编码颜色/字号。
  *
- * 尺寸依据 docs/02-ui-spec.md §1：
- *   - 宽 360px（规范建议 360–400，更宽会显得空）
- *   - min-height 钉住高度，避免不同状态之间抖动
- *   - 绝不出现滚动条（内容超了就是设计失败，该砍内容）
+ * ## 2026-11-10 大幅精简（ADR 0033 阶段 4）
+ *
+ * options 页废除、popup 只留**悬浮入口开关**后，这里从 688 行砍到只剩
+ * 一个标题条 + 一行开关。原来的画质卡、双账号卡、Tab 栏、条形图、
+ * 按钮三档权重等样式**全部删除** —— 它们对应的元素已经不存在了。
+ *
+ * ⚠️ **删样式不是洁癖**：留在这里的每一行都在暗示"这里还有那个元素"，
+ * 下一个人会照着它去找已经不存在的 DOM。
+ *
+ * 尺寸依据 docs/02-ui-spec.md §1：宽 360–400px，绝不出现滚动条。
  */
 
 * {
@@ -22,20 +28,19 @@ body {
 }
 
 body {
-  /* 380px：为双 Tab 与 ⚙ 入口留出空间（方案 §3.1）。上线前 360px。
-     高度上限仍是 600px，见 docs/02-ui-spec.md §1。 */
-  width: 380px;
+  /* 360px 足够：内容只有一个标题条 + 一行开关 + 可能的一行提示 */
+  width: 360px;
 }
 
 .popup {
   display: flex;
   flex-direction: column;
-  /* 钉住高度：内容少的态与内容多的态切换时不跳 */
-  min-height: 220px;
-  padding: 12px 14px 10px;
+  /* 钉住高度：开关开/关时提示文案有无不改变整体高度 */
+  min-height: 84px;
+  padding: 12px 14px 14px;
 }
 
-/* ── 状态条：20% 注意力，2 秒内读完 ── */
+/* ── 标题条 ── */
 
 .bar {
   display: flex;
@@ -55,283 +60,38 @@ body {
   letter-spacing: 0.2px;
 }
 
-/**
- * 品牌图标。18px = 标题字号（15px）的 1.2 倍。
- *
- * 用 `chrome.runtime.getURL('icon/128.png')` 而不是 `import logo from ...`：
- * 后者会让 Vite 另生成一份带 hash 的资源，同一张图打两遍。
- * 取 128 而不是 32，是因为 18px 显示在 3x 屏要 54px，只有 128 覆盖得住。
- *
- * `flex: none` 不能省 —— 状态胶囊文案变长时，图标会被压扁。
- * 图标自带浅色底板，暗色主题下是个亮白小方块，18px 下可接受（见 tokens.css 的暗色块）。
- */
 .brand-logo {
   width: 18px;
   height: 18px;
-  border-radius: 4px;
-  flex: none;
   display: block;
 }
 
-/* 状态胶囊：文案必须短（2–3 字），用户不会读长句 */
+/* ── 状态胶囊：这里只用来标"这是页内面板的开关"，不是状态机 ── */
+
 .pill {
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: var(--pluma-font-caption);
-  white-space: nowrap;
-}
-
-.pill-idle {
-  color: var(--pluma-text-muted);
-  background: var(--pluma-accent-bg);
-}
-
-.pill-success {
-  color: #ffffff;
-  background: var(--pluma-accent);
-}
-
-.pill-danger {
-  color: #ffffff;
-  background: var(--pluma-danger);
-}
-
-/* 琥珀只用于"降级"这一类可恢复的警告，不要拿去表示失败 */
-.pill-warn {
-  color: #ffffff;
-  background: var(--pluma-warning);
-}
-
-.body {
-  flex: 1;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  padding: 14px 0;
-}
-
-.placeholder {
-  margin: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
   font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
+  line-height: 1.4;
 }
 
-.placeholder.error {
-  color: var(--pluma-danger);
+.pill-neutral {
+  background: color-mix(in srgb, var(--pluma-text-muted) 16%, transparent);
+  color: var(--pluma-text-muted);
 }
 
 /* ── 内容区 ── */
 
-.content {
-  width: 100%;
+.body {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 10px;
-}
-
-/* 一句话结论。tone 决定颜色，不要用颜色编码状态以外的含义 */
-.line {
-  margin: 0;
-  text-align: center;
-  font-size: var(--pluma-font-body);
-}
-
-.line.neutral {
-  color: var(--pluma-text-muted);
-}
-
-.line.good {
-  color: var(--pluma-accent);
-}
-
-.line.warn {
-  color: var(--pluma-warning);
-}
-
-.line.bad {
-  color: var(--pluma-danger);
-}
-
-/* ── §2.3 当前页解锁画质（核心价值区）──
-   规范要求：必须有对比锚点、徽章换行不横向滚动、最多 6 个。 */
-
-.unlock {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.unlock-bv {
-  margin: 0;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-}
-
-.unlock-card {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  padding: 9px 11px;
-  border: 0.5px solid var(--pluma-border);
-  border-radius: var(--pluma-radius-card);
-}
-
-.unlock-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
   gap: 8px;
+  padding-top: 10px;
 }
 
-/* 「已解锁」用信息色；「没有提升」用正文色 —— 后者不是好消息，但也不是故障 */
-.unlock-title {
-  font-size: var(--pluma-font-title);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.unlock-title.good {
-  color: var(--pluma-accent);
-}
-
-.unlock-title.muted {
-  color: var(--pluma-text);
-}
-
-/* 价值锚点：这行小字是用户能感知到"插件做了什么"的唯一依据 */
-.unlock-anchor {
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-  text-align: right;
-  line-height: 1.35;
-}
-
-/* 换行，不横向滚动（规范 §2.3 明确禁止横向滚动） */
-.badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.badge {
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-accent);
-  background: var(--pluma-accent-bg);
-  white-space: nowrap;
-}
-
-.unlock-empty {
-  margin: 0;
-  padding: 10px 0;
-  text-align: center;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-}
-
-/* ── §2.4 双账号卡片（信任建立区）──
-   视觉层级刻意拉开：A 灰（只读）、B 信息色（受控的工具）。
-   用户的潜在恐惧是"我的号会不会被切走"，所以 B 必须看起来像工具，不像另一个活跃账号。 */
-
-.pair {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.p-row {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 9px;
-  border: 0.5px solid var(--pluma-border);
-  border-radius: var(--pluma-radius-control);
-  background: transparent;
-  text-align: left;
-  font-family: inherit;
-  color: inherit;
-}
-
-/* 播放账号：信息色底 + 可点（就地展开菜单，不跳转） */
-.p-row.playback {
-  width: 100%;
-  background: var(--pluma-accent-bg);
-  border-color: transparent;
-  cursor: pointer;
-}
-
-.p-row.playback:hover,
-.p-row.playback.open {
-  border-color: var(--pluma-accent);
-}
-
-.p-avatar {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  font-size: 10px;
-  color: var(--pluma-text-muted);
-  background: var(--pluma-border);
-}
-
-.p-avatar.accent {
-  color: var(--pluma-accent);
-  background: var(--pluma-surface);
-}
-
-.p-main {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.p-name {
-  font-size: var(--pluma-font-body);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.p-sub {
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.p-tag {
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-  white-space: nowrap;
-}
-
-.p-tag.accent {
-  color: var(--pluma-accent);
-  font-weight: 500;
-}
-
-.actions {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-}
-
-.note {
-  margin: 0;
-  text-align: center;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-}
-
-/* ── 开关行 ── */
+/* ── 开关行（全项目同一形态：面板里也是这套） ── */
 
 .row {
   display: flex;
@@ -358,8 +118,7 @@ body {
 }
 
 /* 开关本体：原生 checkbox 隐藏，用 span 画。
-   不用 appearance: none 直接改 checkbox，是因为那样在深色模式下
-   各浏览器表现不一致（踩过的老问题）。 */
+   不用 appearance: none 直接改 checkbox —— 深色模式下各浏览器表现不一致。 */
 .switch {
   position: relative;
   flex: 0 0 auto;
@@ -393,7 +152,7 @@ body {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--pluma-surface);
   transition: transform 0.15s;
   pointer-events: none;
 }
@@ -402,287 +161,15 @@ body {
   transform: translateX(16px);
 }
 
-/* ── 受影响标签页提示 ── */
-
-.affected {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: var(--pluma-radius-control);
-  background: var(--pluma-accent-bg);
-}
-
-.affected-text {
-  margin: 0;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text);
-  line-height: 1.35;
-}
+/* ── 提示 ── */
 
 .hint {
-  margin: 4px 0 0;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-  max-width: 280px;
-}
-
-.hint.danger {
-  color: var(--pluma-danger);
-}
-
-/* ── 按钮：三档权重 ── */
-
-button {
-  font-family: inherit;
-  font-size: var(--pluma-font-body);
-  border-radius: var(--pluma-radius-control);
-  cursor: pointer;
-  transition:
-    background-color 0.15s,
-    border-color 0.15s,
-    color 0.15s;
-}
-
-button:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.primary {
-  padding: 7px 18px;
-  color: #ffffff;
-  background: var(--pluma-accent);
-  border: 0.5px solid var(--pluma-accent);
-}
-
-.primary:hover:not(:disabled) {
-  filter: brightness(0.94);
-}
-
-.ghost {
-  padding: 6px 14px;
-  color: var(--pluma-text-muted);
-  background: transparent;
-  border: 0.5px solid var(--pluma-border);
-}
-
-.ghost.small {
-  padding: 4px 10px;
-  font-size: var(--pluma-font-caption);
-  flex: 0 0 auto;
-  align-self: center;
-}
-
-.ghost:hover:not(:disabled) {
-  color: var(--pluma-accent);
-  border-color: var(--pluma-accent);
-}
-
-/* ── §2.6 底部操作 ──
-   两个按钮：「播放账号」就地展开，「设置」跳 options。 */
-
-.foot {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding-top: 8px;
-  border-top: 0.5px solid var(--pluma-border);
-}
-
-/* 就地展开的菜单：不跳转，避免丢掉"我刚才在看哪个页面"的上下文 */
-.foot-menu {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-}
-
-.foot-actions {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 6px;
-}
-
-.foot-btn {
-  padding: 6px 0;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-  background: transparent;
-  border: 0.5px solid var(--pluma-border);
-  border-radius: var(--pluma-radius-control);
-}
-
-.foot-btn:hover {
-  color: var(--pluma-accent);
-  border-color: var(--pluma-accent);
-}
-
-.foot-btn.active {
-  color: var(--pluma-accent);
-  border-color: var(--pluma-accent);
-}
-
-/* 危险色只用于"退出账号"这类不可逆动作 */
-.danger-text {
-  color: var(--pluma-danger);
-  border-color: var(--pluma-danger);
-}
-
-/* ── 成功率条形图（§3 状态 4）──
-   12 根柱子 = 最近 1 小时 × 5 分钟一桶。
-   **颜色是唯一编码**，高度刻意做成等高 —— 用高度表示样本数会暗示一种不存在的精度。
-   ⚠️ 类名带 `rate-` 前缀：`.bar` 已被顶部的状态条占用，撞名会让状态条也吃到这些规则。 */
-
-.rate-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.rate-bars {
-  display: flex;
-  align-items: stretch;
-  gap: 2px;
-  height: 22px;
-}
-
-.rate-bar {
-  flex: 1 1 0;
-  border-radius: 2px;
-}
-
-/* 绿（信息色）与「已接管」同色 —— 这个项目里"好"就是信息蓝，不另设绿色 */
-.rate-bar.ok {
-  background: var(--pluma-accent);
-}
-
-/* 琥珀只用于"可恢复的警告"，与 pill-warn 一致 */
-.rate-bar.partial {
-  background: var(--pluma-warning);
-}
-
-.rate-bar.fail {
-  background: var(--pluma-danger);
-}
-
-/* 灰 = 这段时间没有请求。**没发生 ≠ 失败**，绝不能画红 */
-.rate-bar.empty {
-  background: var(--pluma-border);
-}
-
-.rate-note {
   margin: 0;
   font-size: var(--pluma-font-caption);
   color: var(--pluma-text-muted);
   line-height: 1.4;
 }
 
-/* ── ⚙ 设置入口（方案 §3.1 顶部状态条）──
-   与状态胶囊同行、靠右。不加边框，避免抢状态胶囊的注意力。 */
-.gear {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  font-size: 14px;
-  line-height: 1;
-  color: var(--pluma-text-muted);
-  background: transparent;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.gear:hover {
-  color: var(--pluma-accent);
-  background: var(--pluma-accent-bg);
-}
-
-/* ── 双 Tab（方案 §3.1）──
-   Fluent TabList 形态：下划线表示选中，不用背景色块。
-   ⚠️ 默认停在「画质」—— 偏好不能抢首屏（02 §0）。 */
-.tabs {
-  display: flex;
-  gap: 2px;
-  padding-top: 8px;
-  border-bottom: 0.5px solid var(--pluma-border);
-}
-
-.tab {
-  flex: 1;
-  padding: 6px 0 7px;
-  font-size: var(--pluma-font-body);
-  color: var(--pluma-text-muted);
-  background: transparent;
-  border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  cursor: pointer;
-}
-
-.tab:hover {
-  color: var(--pluma-text);
-}
-
-.tab.active {
-  color: var(--pluma-accent);
-  border-bottom-color: var(--pluma-accent);
-  font-weight: 500;
-}
-
-/* ── 净化视图（偏好视图，非状态）──
-   ⚠️ 这里**不放开关**：改偏好一律去设置页（02 §0 popup 是查看器）。 */
-.clean {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-}
-
-.clean-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0.5px solid var(--pluma-border);
-  border-radius: var(--pluma-radius-control);
-}
-
-/* 当前页不适用：灰显但**不隐藏** —— 用户需要知道"有这个功能，只是这里用不上" */
-.clean-row.na {
-  opacity: 0.55;
-}
-
-.clean-main {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-
-.clean-name {
-  font-size: var(--pluma-font-body);
-}
-
-.clean-scope {
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-}
-
-.clean-state {
-  flex: none;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-}
-
-.clean-state.on {
-  color: var(--pluma-accent);
-  font-weight: 500;
-}
-
-.manage {
-  align-self: center;
-  margin-top: 2px;
+.hint.danger {
+  color: var(--pluma-danger);
 }
