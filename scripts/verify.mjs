@@ -14,8 +14,9 @@
  * ## 用法
  *
  * ```bash
- * node scripts/verify.mjs            # 跑全部
+ * node scripts/verify.mjs            # 跑全部（静态组与 vitest 并行）
  * node scripts/verify.mjs --fast     # 跳过 vitest（改了文档/脚本时够用）
+ * node scripts/verify.mjs --changed  # 按 git 改动自动选档；判不出来退化为全量
  * node scripts/verify.mjs --help
  * ```
  *
@@ -24,7 +25,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = process.cwd();
@@ -176,7 +177,69 @@ const STEPS = [
     args: ['scripts/check-ad-selectors.mjs'],
     first: true,
   },
-  { name: 'test', cmd: binPath('vitest'), args: ['run'], first: false, slow: true },
+  {
+    // 单测项。**并行与否由 `vitest.config.ts` 的 `fileParallelism` 决定**（现为 true），
+    // 这里不传 `--fileParallelism`，避免两处各写一份判据（改一处忘另一处必然漂移）。
+    //
+    // 曾经的风险（config 注释里记着原始判断）：并行 worker 写临时文件 EPERM
+    // → 部分测试文件被**静默跳过**，只跑一半却显示通过。
+    //
+    // **那个结论靠两样东西撑着，缺一不可**：
+    //   1. tests/ 下零写文件操作（只有 `readFile` / `readFileSync`）
+    //   2. 本文件的 `assertTestTotals()` —— **每次**都断言「磁盘上的测试文件数 == vitest
+    //      报告的文件数」且「用例数 > 0」。worker 一旦静默跳过，这里立刻变红。
+    //      第 2 条才是保险：它让"现在的结论会不会过期"变成每次运行都重新验证的断言。
+    //
+    // 实测（2026-11-10）：串行 95.1s / 并行 13.5s，两种跑法都是 78 files / 1381 tests。
+    name: 'test',
+    cmd: binPath('vitest'),
+    args: ['run'],
+    first: false,
+    slow: true,
+  },
+];
+
+/**
+ * ── 执行分组（2026-11-10 加：并行 + 增量）──────────────────────────────
+ *
+ * ## 为什么分组
+ *
+ * 改造前 20 项**串行**跑，实测 109–112s，其中 `test` 一项就占 89–93s（约 83%）。
+ * 其余 19 项加起来只有约 15s，却排在 test 前面一份一份等。
+ * 分组成三条**互不依赖**的流水线并行，墙面时间 ≈ 最慢那条（也就是 test）。
+ *
+ * ```
+ *   G1 重型静态（三条互不依赖，并行；各自 first:true）
+ *     typecheck | format | lint
+ *   G2 静态检查组（原顺序，首个失败即中止）
+ *     boundaries → messages → … → ad-selectors
+ *   G3 单测组（独立，不与前两条抢"哪个先失败"的判定）
+ *     test
+ * ```
+ *
+ * ⚠️ **并行只改"怎么跑"，不改"跑什么"**：每组的命令行参数、退出码判据、
+ *    `first`（失败即中止）语义全部原样保留。这里不新增、不删除任何检查项。
+ *
+ * ⚠️ **为什么 test 单独成组**：`test` 的 `first` 是 false（不中止别人），
+ *    但若它和 `first:true` 的项在一个组里并行，`first` 的语义会变得不可预测
+ *    （test 比 typecheck 先失败时该不该中止？）。拆成独立组后各自语义保持不变，
+ *    且**任何一个组失败，整体都 exit 1** —— 见 `main()` 的汇总裁定。
+ *
+ * ⚠️ **为什么 typecheck / format / lint 单独并行**：它们各约 4.5–5.5s，
+ *    且**互相不读对方的产物**（tsc 不读 prettier 结果，eslint 不读 tsc 输出），
+ *    串行跑纯属白等约 10s。这三项任一失败仍然中止 G2（它就是原来的前置项语义）。
+ */
+const HEAVY_STATIC_GROUP = STEPS.filter((s) => ['typecheck', 'format', 'lint'].includes(s.name));
+const CHECK_GROUP = STEPS.filter(
+  (s) => !s.slow && !['typecheck', 'format', 'lint'].includes(s.name),
+);
+const TEST_GROUP = STEPS.filter((s) => s.slow);
+
+/** 完整模式的分组。三组并行，任一组失败 → 整体 exit 1 */
+const GROUPS = [
+  { id: 'heavy', steps: HEAVY_STATIC_GROUP },
+  { id: 'static', steps: CHECK_GROUP },
+  { id: 'test', steps: TEST_GROUP },
 ];
 
 /** 每项一句话说明。**项数不写死**：增删检查项时只改 STEPS，帮助文本自动跟上 */
@@ -211,12 +274,35 @@ const ITEM_LINES = STEPS.map((s) => `  ${s.name.padEnd(14)} ${STEP_DOC[s.name] ?
 const HELP = `
 Pluma 验收入口（不依赖 pnpm 在 PATH 里）
 
-  node scripts/verify.mjs           跑全部 ${TOTAL} 项（约 45s）
-  node scripts/verify.mjs --fast    跳过 vitest，${FAST_TOTAL} 项（约 20s，改文档/脚本时够用）
+  node scripts/verify.mjs           跑全部 ${TOTAL} 项（约 30–50s，静态组与 test 并行）
+  node scripts/verify.mjs --fast    跳过 vitest，${FAST_TOTAL} 项（约 15–25s，改文档时够用）
+  node scripts/verify.mjs --changed 按 git 改动自动选档（见下）
   node scripts/verify.mjs --help    显示本帮助
 
-本脚本覆盖的 ${TOTAL} 项（顺序执行）：
+本脚本覆盖的 ${TOTAL} 项（静态组内按下列顺序执行，test 与静态组并行）：
 ${ITEM_LINES}
+
+⚠️ 上面的耗时是**区间不是承诺**：同一命令实测能差 20s 以上，取决于机器负载
+   （2026-11-10 记录：完整 verify 多次实测落在 30–50s；改造前串行约 107–130s）。
+   看单次数字请以脚本自己打印的耗时为准。
+
+── --changed 的三档（改动判定不出来时一律退化为全量：宁可慢，不可漏）──
+
+  只改 *.md                     → 等同 --fast，不跑 test
+  只改 src/ entrypoints/ 的源码  → vitest related <改动文件>，只跑受影响的用例
+  改到 scripts/ tests/ package.json / 锁定文件 /
+       vitest.config / eslint.config / wxt.config / tsconfig /
+       .github/workflows/** / 任何判不准的文件
+                                → 退化为**全量**
+
+  ⚠️ --changed 只是"少跑不相关的单测"，**任何检查项的判据都没有变**。
+     交付前仍建议跑一次完整模式（AGENTS.md §8）。
+
+  📌 related 档多跑一遍：为了让「防静默跳过」的断言仍有意义，related 档会先用
+     JSON reporter 完整跑一次 related 当**基准尺子**，再跑第二次作为被检对象。
+     两次的文件集合不一致 → 判红。所以 related 档耗时约是单次 related 的 2 倍
+     （实测仍只有 3~7s）。**这不是浪费**：否则期望值只能取 vitest 自己报的数字，
+     断言退化成 N === N，等于没设防。
 
 ═══════════════════════════════════════════════════════════════
 ⚠️ 本脚本**不等于**"全部自检"。另有两档它跑不了，必须单独做：
@@ -261,7 +347,7 @@ function quoteIfNeeded(s) {
   return /[\s"]/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s;
 }
 
-function runStep(step) {
+function runStep(step, outBuf) {
   return new Promise((resolve) => {
     const rel = step.cmd.startsWith(ROOT) ? step.cmd.slice(ROOT.length + 1) : step.cmd;
     const started = Date.now();
@@ -278,12 +364,14 @@ function runStep(step) {
       ? spawn(command, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], shell: true })
       : spawn(command, step.args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
 
-    let out = '';
+    // 调用方可以传一个自己的缓冲区进来，用来在**跑的过程中**读部分输出
+    // （并行模式下 "…… 仍在跑，最近输出" 那行靠它）。不传就自己开一个。
+    const buf = outBuf ?? { stdout: '', stderr: '' };
     child.stdout.on('data', (d) => {
-      out += d.toString();
+      buf.stdout += d.toString();
     });
     child.stderr.on('data', (d) => {
-      out += d.toString();
+      buf.stderr += d.toString();
     });
 
     child.on('error', (err) => {
@@ -292,11 +380,13 @@ function runStep(step) {
         ms: Date.now() - started,
         out: `无法启动 ${rel}：${err.message}`,
         step,
+        buf,
       });
     });
 
     child.on('close', (code) => {
-      resolve({ ok: code === 0, ms: Date.now() - started, out: out.trim(), step, code });
+      const out = `${buf.stdout}${buf.stderr}`.trim();
+      resolve({ ok: code === 0, ms: Date.now() - started, out, step, code, buf });
     });
   });
 }
@@ -329,6 +419,133 @@ function changedFiles() {
     .map((s) => s.trim())
     .filter(Boolean);
   return all.length > 0 ? [...new Set(all)] : null;
+}
+
+/**
+ * `--changed` 的分类结果。
+ *
+ * `mode` 的三档，对应任务卡需求 A：
+ * - `full`    退化为全量（判不出来 / 改到了会改变全局语义的文件）
+ * - `static`  只跑静态组，**不跑 test**（只改了文档）
+ * - `related` 跑静态组 + `vitest related <改动的源码文件>`（只改了几个源码文件）
+ */
+const MODE = { FULL: 'full', STATIC: 'static', RELATED: 'related' };
+
+/** 改了这些就**退化为全量**：它们会改变"哪些测试存在"或"检查判据本身" */
+const CONFIG_DIRS = new Set(['scripts', 'tests', 'poc', 'node_modules']);
+const CONFIG_FILES = new Set([
+  'package.json',
+  'package-lock.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
+  'vitest.config.ts',
+  'vite.config.ts',
+  'tsconfig.json',
+  'wxt.config.ts',
+  'eslint.config.mjs',
+  '.prettierrc',
+  '.prettierrc.json',
+  '.prettierignore',
+  '.eslintignore',
+]);
+/** 扩展名 → 算"源码"。**只列 TS/JS 系**：`.css` / `.d.ts` 也算源码（有单测直接读它们） */
+const SOURCE_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|css)$/i;
+
+/**
+ * 把改动文件列表分类成 `--changed` 的执行模式。
+ *
+ * ⚠️ **安全底线（任务卡红线 2）：任何判不出来的情况一律退化为全量。**
+ *    下面每一个 `return MODE.FULL` 都是在说"我不确定，宁可慢"。
+ *    **不要为了让它更"快"而放宽任何一条** —— 少跑一个断言比慢一万倍严重。
+ *
+ * @param {string[] | null} files `changedFiles()` 的结果；null = 没有任何改动或拿不到 git
+ * @returns {{mode: string, reason: string, sourceFiles: string[], ignored: string[]}}
+ */
+function classifyChanged(files) {
+  // 拿不到 git、或工作区干净 → 无从判断"改了哪些会影响测试的东西"，全量。
+  if (!files || files.length === 0) {
+    return {
+      mode: MODE.FULL,
+      reason: '拿不到改动列表（不是 git 仓库 / 工作区干净），无法判断 → 全量',
+      sourceFiles: [],
+      ignored: [],
+    };
+  }
+
+  const sourceFiles = [];
+  const ignored = [];
+
+  for (const raw of files) {
+    const f = raw.replace(/\\/g, '/'); // git 在 Windows 上给正斜杠，但防御性统一
+
+    // ① 配置 / 检查逻辑 / 测试本身 → 全量。这一类任何一条命中就整体全量。
+    const top = f.split('/')[0];
+    if (CONFIG_FILES.has(f) || CONFIG_DIRS.has(top)) {
+      return {
+        mode: MODE.FULL,
+        reason: `改到了 ${f}（配置 / 检查逻辑 / 测试本身），会影响"哪些测试该跑" → 全量`,
+        sourceFiles: [],
+        ignored: [],
+      };
+    }
+
+    if (f.startsWith('.github/workflows/')) {
+      return {
+        mode: MODE.FULL,
+        reason: `改到了 CI 工作流 ${f}，可能影响运行环境 → 全量`,
+        sourceFiles: [],
+        ignored: [],
+      };
+    }
+
+    // ② 文档 → 不需要 test，静态组就够
+    if (/\.(md|markdown)$/i.test(f)) {
+      ignored.push(f);
+      continue;
+    }
+
+    // ③ 源码（src/ entrypoints/ 及任何 TS/JS 文件）→ 进 related 候选
+    const isSrcTree = f.startsWith('src/') || f.startsWith('entrypoints/');
+    if (isSrcTree || SOURCE_EXT.test(f)) {
+      // 但 test 目录下的源码已经在 ① 拦掉了
+      if (f.startsWith('tests/')) {
+        return {
+          mode: MODE.FULL,
+          reason: `改到了测试文件 ${f}（可能新增/删除用例）→ 全量`,
+          sourceFiles: [],
+          ignored: [],
+        };
+      }
+      sourceFiles.push(f);
+      continue;
+    }
+
+    // ④ 其他（图片、字体、LICENSE、.gitignore 等）：
+    //    不可能是 test 的输入，但也说不准 —— **按重的走**。
+    //    只有明确"文档类"才降到 static，其余一律全量。
+    return {
+      mode: MODE.FULL,
+      reason: `改到了 ${f}（不是源码也不是文档，无法判断它是否是测试输入）→ 全量`,
+      sourceFiles: [],
+      ignored: [],
+    };
+  }
+
+  if (sourceFiles.length === 0) {
+    return {
+      mode: MODE.STATIC,
+      reason: `只改了文档（${ignored.length} 个 .md），不需要跑 test → 静态组`,
+      sourceFiles: [],
+      ignored,
+    };
+  }
+
+  return {
+    mode: MODE.RELATED,
+    reason: `改了 ${sourceFiles.length} 个源码文件 → 只跑受影响的单测（vitest related）`,
+    sourceFiles,
+    ignored,
+  };
 }
 
 /**
@@ -365,6 +582,234 @@ function detectRouteWarnings() {
   return out;
 }
 
+/**
+ * 单测"防静默跳过"闸门。
+ *
+ * ## 它防的是什么
+ *
+ * `vitest.config.ts` 原本用 `fileParallelism: false` 串行跑，理由是：
+ * 「并行 worker 写临时文件会 EPERM，表现是**部分测试文件被静默跳过**
+ * （只跑了一半却显示通过）」。
+ *
+ * 本仓库实测表明那个风险不成立（tests/ 里没有任何写文件的用例），于是改成并行以提速。
+ * **但"不成立"是一条会过期的结论** —— 将来谁加一个写临时文件的测试，
+ * 就可能重现"静默跳过 + 显示通过"这种最危险的失败形态。
+ *
+ * 所以这里把那个风险变成**每次都执行的断言**。
+ *
+ * ## 两档的不同期望值（2026-11-10 修：related 档原本恒假红）
+ *
+ * 期望值来自**谁**决定了该跟什么比：
+ *
+ * - **全量档**（`expected: undefined`）：本来就要跑 tests/ 下**全部**文件
+ *   → 期望值 = `countTestFiles(tests/)`（磁盘实际个数）。
+ * - **related 档**（`expected: number`）：`vitest related <文件>` 的语义就是**只跑子集**，
+ *   用磁盘全量当期望值必然恒不相等 → 恒报"静默跳过"。
+ *   **这不是门开松，是门焊死**；更糟的是使用者会因此开始无视 test 项的红灯。
+ *   所以 related 档传入「本次实际被选中的文件数」作为期望值（来源见 `countRelatedFiles`）。
+ *
+ * ## 为什么 related 档的期望值不能靠"从输出里反推"
+ *
+ * 若拿 vitest 自己报的 `Test Files N passed (N)` 当期望值，断言就变成 `N === N`，
+ * 永远成立 —— **等于没设防**。所以期望值必须来自**独立于本次运行**的来源。
+ *
+ * @param {string} out vitest 的完整输出
+ * @param {number | undefined} expected 期望的测试文件数；undefined = 用磁盘全量
+ * @returns {string | null} null = 通过；字符串 = 失败原因
+ */
+function assertTestTotals(out, expected) {
+  // 全量档：期望值取磁盘上真实的测试文件数
+  if (expected === undefined) {
+    try {
+      expected = countTestFiles(join(ROOT, 'tests'));
+    } catch (err) {
+      return `无法枚举 tests/ 下的测试文件，无法验证"有没有被静默跳过"：${err instanceof Error ? err.message : String(err)}`;
+    }
+    if (expected === 0) {
+      return 'tests/ 下一个 *.test.ts 都没有 —— 说明用例被发现路径漏了（这本身就是失败）';
+    }
+  }
+
+  // ⚠️ 取**最后一个**匹配，不是第一个（2026-11-10 修）。
+  //
+  // 为什么：vitest 的摘要打在输出**末尾**，而某个测试自己往 stdout 打印一行
+  // `Test Files 78 passed (78)` 是完全可能的（比如测日志解析的用例）。用 `match()`
+  // 取首个会让那行冒牌摘要抢在真实摘要之前被采信 → 断言被骗过。
+  //
+  // `matchAll` + 取末项：真实摘要永远在最后，所以末项才是真的。
+  const filesMatches = [
+    ...out.matchAll(/Test Files\s+(?:(\d+)\s+failed\s*\|\s*)?(\d+)\s+passed(?:\s*\((\d+)\))?/g),
+  ];
+  const testsMatches = [...out.matchAll(/Tests\s+(\d+)\s+passed(?:\s*\((\d+)\))?/g)];
+
+  const filesMatch = filesMatches.at(-1);
+  const testsMatch = testsMatches.at(-1);
+
+  if (!filesMatch) return '在 vitest 输出里找不到「Test Files … passed」行，无法确认跑了多少文件';
+
+  const filesRan = Number(filesMatch[2]);
+  const testsRan = testsMatch ? Number(testsMatch[1]) : 0;
+
+  if (filesRan !== expected) {
+    // `expected < 0` = 基准尺子自己跑挂了（`countRelatedFiles` 返回 -1），不是"有文件被跳过"。
+    // 这种情形下断言仍然红（fail-closed），但文案必须指向真正的排查方向，
+    // 否则会把人引去"查哪个测试文件被静默跳过"——那是错的方向。
+    if (expected < 0) {
+      return (
+        `⚠️ related 基准跑失败：没能确定「本该跑几个文件」（实跑 ${filesRan} 个）。\n` +
+        '   这不是"有测试文件被静默跳过"，而是**基准尺子本身没拿到结果** ——\n' +
+        '   先去看 `vitest related …` 那一遍为什么失败（语法？导入？vitest 启动？）。\n' +
+        '   **本断言在拿不到期望值时一律判红（fail-closed）**：宁可挡住提交，也不放行无法确认的结果。'
+      );
+    }
+    const hint =
+      expected === countTestFilesSafe()
+        ? '   这正是 vitest.config.ts 里 `fileParallelism` 注释描述的那个失败形态\n' +
+          '   （worker EPERM → 文件被静默跳过 → 只跑一半却显示通过）。\n' +
+          '   **不要忽略它，也不要调低这个断言** —— 去查是哪个文件被跳过。'
+        : `   期望 ${expected} 个（related 选中的那几个），实际跑了 ${filesRan} 个。\n` +
+          '   说明 `vitest related` 选中的文件里有人被静默跳过了（并行 worker 的经典失败形态）。\n' +
+          '   **不要忽略它，也不要调低这个断言。**';
+    return `⚠️ 静默跳过：期望 ${expected} 个测试文件，vitest 只报了 ${filesRan} 个。\n${hint}`;
+  }
+
+  if (testsRan === 0) {
+    return `vitest 报 ${filesRan} 个文件通过，但执行用例数是 0 —— 这不叫绿`;
+  }
+
+  return null;
+}
+
+/** 尽力数磁盘测试文件；出错返回 -1（只用于在错误信息里区分"是全量档还是 related 档"） */
+function countTestFilesSafe() {
+  try {
+    return countTestFiles(join(ROOT, 'tests'));
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * related 模式下，独立求出「`vitest related <files>` 应该跑几个测试文件」。
+ *
+ * ## 为什么需要独立来源（这是本函数存在的全部理由）
+ *
+ * 期望值**不能**从被测那次运行的输出里读 —— 那样断言退化成 `N === N`，永远成立，
+ * 等于没设防（verifier-2 明确把这条定为红线：related 档「可以比全量弱，不能弱到没有」）。
+ *
+ * ## 怎么求：**先完整跑一次** related（带 JSON reporter），拿它实跑的文件清单当基准
+ *
+ * 即 related 档实际跑**两遍**：
+ *   第一遍（本函数）当"基准尺子"，第二遍（`test` 项）才是被检对象。
+ *   两边都是同样的 `vitest related <同一批文件>`，正常情况下文件集合必定一致；
+ *   若第二遍比第一遍少，说明有文件被静默跳过了 → 判红。
+ *
+ * ⚠️ **实测过做不到更便宜的做法**（2026-11-10）：
+ *   - `--shard=1/200` 只跑 1 个文件，拿不到全集；JSON 的 `numTotalTestSuites`
+ *     是**测试套件数**（25）不是文件数（3），拿它当期望值必然误判。
+ *   - vitest 没有 dry-run / `--filesOnly` 列表模式。
+ *   - 没有公开 API 能静态算出 related 集合。
+ *   所以只能实跑一遍。成本实测 **约 3.2s**（related 子集本来就小），可接受。
+ *
+ * @param {string[]} sourceFiles 改动的源码文件（相对仓库根）
+ * @returns {Promise<number>} related 应跑的测试文件数；-1 = 求不出来（调用方保守处理）
+ */
+async function countRelatedFiles(sourceFiles) {
+  const outFile = join(ROOT, '.tmp', 'verify-related-baseline.json');
+
+  const probe = {
+    name: 'related-baseline',
+    cmd: binPath('vitest'),
+    args: ['related', ...sourceFiles, '--run', '--reporter=json', `--outputFile=${outFile}`],
+    first: false,
+  };
+
+  try {
+    mkdirSync(join(ROOT, '.tmp'), { recursive: true });
+    const r = await runStep(probe);
+
+    // related 一个都没选中 → vitest 打印 "No test files found" 且不写 JSON → 就是 0 个
+    if (!existsSync(outFile)) {
+      return r.out.includes('No test files found') ? 0 : -1;
+    }
+
+    const report = JSON.parse(readFileSync(outFile, 'utf8'));
+    const suites = Array.isArray(report.testResults) ? report.testResults : [];
+    const files = new Set(suites.map((t) => t?.name).filter(Boolean));
+
+    // 基准那次自己就失败了 → 拿它的文件数当期望值不可靠，交给调用方保守处理
+    if (Number(report.numFailedTestSuites) > 0) return -1;
+    return files.size;
+  } catch {
+    return -1;
+  } finally {
+    try {
+      if (existsSync(outFile)) unlinkSync(outFile);
+    } catch {
+      /* 清理失败不影响结果 */
+    }
+  }
+}
+
+/**
+ * 递归数目录下 `*.test.ts` 的个数。
+ *
+ * @param {string} dir
+ * @returns {number}
+ */
+function countTestFiles(dir) {
+  let n = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      n += countTestFiles(full);
+    } else if (/\.test\.tsx?$/.test(entry.name)) {
+      n += 1;
+    }
+  }
+  return n;
+}
+
+/**
+ * 跑一条"流水线"：组内**串行**，语义与改造前完全一致（`first: true` 失败即中止本组）。
+ *
+ * @param {Array} steps
+ * @param {(step: object) => void} onStart
+ * @param {(r: object) => void} onDone
+ * @param {number | undefined} testExpected
+ *   `test` 项的期望文件数。undefined = 全量档（用磁盘全量）；
+ *   数字 = related 档（用 `countRelatedFiles()` 独立求出的 related 集合大小）。
+ * @returns {Promise<{results: object[], aborted: object | null, groupMs: number}>}
+ */
+async function runGroup(steps, onStart, onDone, testExpected) {
+  const started = Date.now();
+  const results = [];
+  for (const step of steps) {
+    onStart(step);
+    const r = await runStep(step);
+
+    // 单测专有闸门：退出码 0 还不够，必须证明**没有被静默跳过**（见 assertTestTotals）。
+    //
+    // ⚠️ 只在 `r.ok` 时跑：vitest 已经失败了就把它的失败详情原样露出来，
+    //    不要用"静默跳过"的判定去覆盖一个**真错**（2026-11-10 修：
+    //    related 档曾有假红盖住真回归信息的问题）。
+    if (step.name === 'test' && r.ok) {
+      const problem = assertTestTotals(r.out, testExpected);
+      if (problem) {
+        r.ok = false;
+        r.out = problem;
+      }
+    }
+
+    results.push(r);
+    onDone(r);
+    if (!r.ok && step.first) {
+      return { results, aborted: r, groupMs: Date.now() - started };
+    }
+  }
+  return { results, aborted: null, groupMs: Date.now() - started };
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   if (argv.includes('--help') || argv.includes('-h')) {
@@ -372,14 +817,19 @@ async function main() {
     return;
   }
   const fast = argv.includes('--fast');
+  const changed = argv.includes('--changed');
+
+  if (fast && changed) {
+    console.error('[verify] ❌ --fast 与 --changed 不能同时用：--changed 已经自己决定跑不跑 test');
+    process.exitCode = 2;
+    return;
+  }
 
   if (!existsSync(BIN)) {
     console.error(`[verify] ❌ 找不到 ${BIN}，先装依赖（pnpm install）`);
     process.exitCode = 2;
     return;
   }
-
-  const steps = fast ? STEPS.filter((s) => !s.slow) : STEPS;
 
   // ── 路由提醒（AGENTS.md §4.3）──
   // 有些检查**不能**放在这里自动跑：最典型的是 dnr.ts 的 Q2 回归，
@@ -394,51 +844,150 @@ async function main() {
     }
   }
 
-  console.log(`[verify] 共 ${steps.length} 项${fast ? '（--fast：已跳过 vitest）' : ''}\n`);
+  // ── 决定要跑什么 ──
+  /** @type {Array<{id: string, steps: Array}>} */
+  let groups;
+  let modeLabel = '';
+  /** `test` 项的期望文件数：undefined = 全量档（磁盘全量）；数字 = related 档 */
+  let relatedExpected;
 
-  const results = [];
-  for (const step of steps) {
-    process.stdout.write(`  ${pad(step.name, 12)} 跑…`);
-    // 用 \r 覆盖"跑…"，跑完写终态
-    const r = await runStep(step);
-    results.push(r);
+  /** 不带 test 的三组（heavy + static）—— `--fast` / `--changed` 的纯静态档都用它 */
+  const NO_TEST_GROUPS = [
+    { id: 'heavy', steps: HEAVY_STATIC_GROUP },
+    { id: 'static', steps: CHECK_GROUP },
+  ];
 
-    const mark = r.ok ? '✅' : '❌';
-    const time = `${(r.ms / 1000).toFixed(1)}s`;
-    process.stdout.write(`\r  ${pad(step.name, 12)} ${mark} ${pad(time, 8)}`);
-
-    if (!r.ok) {
-      console.log('');
-      // 失败时把输出完整打出来——被截断的报错等于没有报错
-      if (r.out) {
-        console.log(`\n───── ${step.name} 输出 ─────`);
-        console.log(r.out);
-        console.log('─'.repeat(30) + '\n');
-      }
-      if (step.first) {
-        console.log(`[verify] ⛔ ${step.name} 是前置项，后续检查已跳过（结果无意义）`);
-        process.exitCode = 1;
-        return;
-      }
+  if (fast) {
+    groups = NO_TEST_GROUPS;
+    modeLabel = '--fast：已跳过 vitest';
+  } else if (changed) {
+    const cls = classifyChanged(changedFiles());
+    console.log(`[verify] --changed 判定：${cls.reason}`);
+    if (cls.mode === MODE.STATIC) {
+      groups = NO_TEST_GROUPS;
+      modeLabel = '--changed：只改文档，跳过 vitest';
+    } else if (cls.mode === MODE.RELATED) {
+      // ⚠️ `vitest related` 只跑**能静态追踪到这些文件**的用例。
+      //    它比全量窄，但在"只动了实现、没动测试"的场景下是安全的。
+      //
+      // ⚠️ 期望值必须独立求（`countRelatedFiles`），**不能**拿 vitest 自己报的 N 当期望值
+      //    —— 那会退化成 `N === N`，等于没设防（见 assertTestTotals 的注释）。
+      relatedExpected = await countRelatedFiles(cls.sourceFiles);
+      groups = [
+        ...NO_TEST_GROUPS,
+        {
+          id: 'test',
+          steps: [
+            {
+              ...TEST_GROUP[0],
+              args: ['related', ...cls.sourceFiles, '--run'],
+            },
+          ],
+        },
+      ];
+      modeLabel = '--changed：vitest related';
     } else {
-      console.log('');
+      groups = GROUPS;
+      modeLabel = '--changed：退化为全量';
     }
+  } else {
+    groups = GROUPS;
   }
 
-  const failed = results.filter((r) => !r.ok);
-  const totalMs = results.reduce((a, r) => a + r.ms, 0);
+  const total = groups.reduce((a, g) => a + g.steps.length, 0);
+  const parallel = groups.length > 1;
+  console.log(`[verify] 共 ${total} 项${modeLabel ? `（${modeLabel}）` : ''}\n`);
+
+  // ── 并行跑各分组 ──
+  //
+  // ⚠️ **不消耗失败**：每条流水线自己收集结果，最后**统一**汇总。
+  //    任何一组失败 → `failed.length > 0` → exit 1。
+  //    这里用 `Promise.allSettled` 而不是 `Promise.all`：
+  //    后者在第一个 reject 时就会丢掉其余结果，正是"吃掉失败"的经典写法。
+  const allResults = [];
+  const abortedGroups = [];
+  const started = Date.now();
+
+  const runners = groups.map((g) =>
+    runGroup(
+      g.steps,
+      (step) => {
+        if (!parallel) {
+          process.stdout.write(`  ${pad(step.name, 12)} 跑…`);
+        } else {
+          // 并行模式下不同流水线的日志会交错，所以每行前面带组名
+          process.stdout.write(`  [${g.id}] ${pad(step.name, 12)} 跑…\n`);
+        }
+      },
+      (r) => {
+        if (!parallel) {
+          // 串行：用 \r 覆盖"跑…"，跑完写终态（与改造前一致）
+          process.stdout.write(
+            `\r  ${pad(r.step.name, 12)} ${r.ok ? '✅' : '❌'} ${pad(`${(r.ms / 1000).toFixed(1)}s`, 8)}`,
+          );
+        } else {
+          console.log(
+            `  [${g.id}] ${pad(r.step.name, 12)} ${r.ok ? '✅' : '❌'} ${pad(`${(r.ms / 1000).toFixed(1)}s`, 8)}`,
+          );
+        }
+
+        if (!r.ok) {
+          console.log('');
+          // 失败时把输出完整打出来——被截断的报错等于没有报错
+          if (r.out) {
+            console.log(`\n───── ${r.step.name} 输出 ─────`);
+            console.log(r.out);
+            console.log('─'.repeat(30) + '\n');
+          }
+          if (r.step.first) {
+            const others = parallel ? '（另一条流水线仍在跑，不中止）' : '';
+            console.log(
+              `[verify] ⛔ ${r.step.name} 是前置项，本组后续检查已跳过（结果无意义）${others}`,
+            );
+          }
+        } else {
+          console.log('');
+        }
+      },
+      // 只有 test 组需要期望值；其余组传 undefined（它们的 step 名不会匹配 'test'）
+      g.id === 'test' ? relatedExpected : undefined,
+    ).then((res) => {
+      allResults.push(...res.results.map((x) => ({ ...x, group: g.id })));
+      if (res.aborted) abortedGroups.push(g.id);
+      return res;
+    }),
+  );
+
+  const settled = await Promise.allSettled(runners);
+  const wallMs = Date.now() - started;
+
+  // `Promise.allSettled` 里若真有 rejected（脚本自身挂掉），也必须算失败
+  const runnerErrors = settled.filter((s) => s.status === 'rejected');
+  for (const e of runnerErrors) {
+    console.error(`[verify] ❌ 流水线自身出错：${e.reason}`);
+  }
+
+  const failed = allResults.filter((r) => !r.ok);
+  const sumMs = allResults.reduce((a, r) => a + r.ms, 0);
 
   console.log('');
-  if (failed.length === 0) {
-    console.log(`[verify] ✅ ${results.length} 项全绿（共 ${(totalMs / 1000).toFixed(1)}s）`);
+  if (failed.length === 0 && runnerErrors.length === 0) {
+    const parallelNote = parallel
+      ? `，并行墙面 ${(wallMs / 1000).toFixed(1)}s，串行合计 ${(sumMs / 1000).toFixed(1)}s`
+      : '';
+    console.log(
+      `[verify] ✅ ${allResults.length} 项全绿（共 ${(wallMs / 1000).toFixed(1)}s${parallelNote}）`,
+    );
     return;
   }
 
-  console.log(
-    `[verify] ❌ ${failed.length}/${results.length} 项未通过：${failed.map((f) => f.step.name).join(', ')}`,
-  );
-  if (failed.some((f) => f.step.name === 'format')) {
-    console.log('[verify]     format 挂了就跑 `node_modules/.bin/prettier --write .`，不要手改');
+  if (failed.length > 0) {
+    console.log(
+      `[verify] ❌ ${failed.length}/${allResults.length} 项未通过：${failed.map((f) => f.step.name).join(', ')}`,
+    );
+    if (failed.some((f) => f.step.name === 'format')) {
+      console.log('[verify]     format 挂了就跑 `node_modules/.bin/prettier --write .`，不要手改');
+    }
   }
   process.exitCode = 1;
 }
