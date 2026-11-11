@@ -47,6 +47,51 @@ export type RequestMsg =
   /** 切换总开关。关闭 = 删掉所有规则，所有请求回退主账号身份 */
   | { type: 'proxy/set'; enabled: boolean }
   /**
+   * 切换**取流身份**：扩展托管账号 ⇄ 浏览器当前登录态（2026-11-11，步骤 4）。
+   *
+   * ## 与 `proxy/set` 的区别，别混
+   *
+   * | | `proxy/set` | `streaming/set` |
+   * | --- | --- | --- |
+   * | 回答 | "这个功能要不要开" | "开了的话，用谁取流" |
+   * | 关闭后 total 开关 | `false` | **保持 `true`** |
+   * | 用户意图 | 停用 | 换个身份 |
+   *
+   * 所以 `page` 模式下 popup 显示的是「无需代理」而不是「已停用」——
+   * 用户没有停用任何东西，他只是选了另一个合法身份。
+   *
+   * ## 为什么必须由 background 处理而不是直接写 storage
+   *
+   * 切身份 = **重建全部规则**（先清两类规则、再按新身份建），
+   * 且要遵守"先 disable 再 enable"的顺序（见 `dnr.switchStreamingIdentity()`）。
+   * 直接 `chrome.storage.local.set` 只会改状态位，规则不跟着变 ——
+   * 那会造出"界面说用浏览器账号，实际还在换 Cookie"的不一致。
+   */
+  | { type: 'streaming/set'; identity: 'extension' | 'page' }
+  /** 查询取流身份。与 `proxy/status` 分开：两者的失败模式不同 */
+  | { type: 'streaming/status' }
+  /**
+   * 设置「首页推荐流使用取流账号」开关（2026-11-11）。
+   *
+   * ## 为什么要走消息，而不是面板直接写 `storage.local`
+   *
+   * 这个开关不只改一个布尔：**它决定 `feed/rcmd` 那条 DNR 规则装不装**
+   * （`dnr.applyRulePlan()` 的 `feedAccount` 槽）。
+   *
+   * 面板直接写存储 → 规则不会重建 → **开关看着是开的、实际没生效**，
+   * 正是本项目反复出现的「界面说在工作、实际没工作」。
+   *
+   * ## 它与 `streaming/set` **完全独立**
+   *
+   * | 消息 | 管什么 | 影响哪条规则 |
+   * | --- | --- | --- |
+   * | `streaming/set` | playurl 族用谁的凭据 | 10000 段路径规则 |
+   * | **`feed-account/set`** | **首页推荐流**用谁的凭据 | **11000 段推荐流规则** |
+   *
+   * 用户原话：「首页推荐流的变化与取流身份是完全独立的两个功能」。
+   */
+  | { type: 'feed-account/set'; enabled: boolean }
+  /**
    * 查"哪些已打开的视频页会因为总开关变化而失效"。
    *
    * 为什么需要它：playurl **只在页面加载和切 P 时调一次**（Q3 实测），
@@ -82,6 +127,71 @@ export type RequestMsg =
    * 相关命名空间在 content script 里不存在（见 `diag/facts:ok` 的长注释）。
    */
   | { type: 'diag/facts' };
+/**
+ * `page/activate:ok` 的 `reason` —— **唯一真相源**（2026-11-11 提取）。
+ *
+ * ## 为什么必须提取成一个具名类型
+ *
+ * 在它之前，这个联合被**手抄了 4 份**：`page.handler.ts`（已用派生）、
+ * `page-snapshot.ts`、`playinfo.ts` 的 `proxyIdentity`、`page-state.ts` 的
+ * `ProxyActivateReason`、以及 `content.ts` 的内联字面量断言。
+ *
+ * 2026-11-11 加 `'page-identity'` 时，就发生过**只改两处、漏三处**，
+ * 而 `tsc` **全程没报错** —— 因为漏掉的那几处恰好没有生产调用方，
+ * 或者说"两边一起错"互相抵消了。**类型断链被静默掩盖**，
+ * 一接上就会把 `page-identity` 吞成「已接管」→ 谎报扩展在工作。
+ *
+ * 提取成具名类型后，消费方写 `import type { ProxyActivateReason }` 就没有抄写动机；
+ * 但**这不等于不会再错**，见下面的已知缺口。
+ *
+ * ## ⚠️ 已知缺口：哪些位置**结构性无法**被 `tsc` 保护
+ *
+ * 加了新值之后，下面这些地方**不会**报错，必须靠 `check-messages.mjs`、
+ * 单测或人工审查兜住：
+ *
+ * 1. **内联字面量断言**：`as { reason?: 'ok' | 'self' | ... }` —— 那是一个
+ *    独立的结构类型，与 `ResponseMsg` 没有链接。改成派生即可修好单处，
+ *    但**任何人下次再写一份内联断言，就又断一次**，`tsc` 抓不到。
+ *    → **✅ 已由 `check-messages.mjs` 的内联联合扫描覆盖**（2026-11-11 加）。
+ *    它扫 `src/` 与 `entrypoints/` 里所有"字段名 + 字面量联合"的写法并报红，
+ *    含 Prettier 格式化后的多行形态与 `as {...}` 内联断言。
+ *    该检查自身的形态穷举见 `tests/unit/scripts/check-messages-inline-union.test.ts`。
+ * 2. **`as` 类型断言**：`x as ProxyActivateReason` 会绕过检查。
+ * 3. **字符串模板拼接 / `String(reason)`**：转成 `string` 后信息就丢了。
+ * 4. **JSON 反序列化**：`JSON.parse(...) as {...}` 完全绕过类型系统。
+ * 5. **跨 world 的 `postMessage`**：主世界那份是裸 JS，`tsc` 根本不看。
+ * 6. **`Record<string, ...>` 之类的宽类型容器**：键是任意字符串，
+ *    新增值不会产生编译错误（`collect.ts` 的 `REASON_TEXT` 是
+ *    `Record<ProxyActivateReason, string>`，那个**会**报错，因为它键类型是封闭的 ——
+ *    但写成 `Record<string, string>` 就不会）。
+ *
+ * **能保证的**：凡是 `import` 了这个类型、且用 `switch` / 封闭联合比较的地方，
+ * 新增值会让 `tsc` 报错。
+ *
+ * **不能保证的**：
+ *
+ * | 类别 | 有无机械兜底 |
+ * | --- | --- |
+ * | 第 1 类（内联字面量断言） | ✅ **有**（`check-messages` 内联联合扫描） |
+ * | 第 2–6 类 | ❌ **无**，只能靠单测 / 人工审查 |
+ *
+ * **这不是改完就安全了。** 加新 reason 时，第 2–6 类的位置仍需人工逐个确认 ——
+ * 尤其第 5 类（主世界裸 JS）连 `check-messages` 都扫不到。
+ */
+export type ProxyActivateReason =
+  /** 正常：装上了规则 */
+  | 'ok'
+  /** 还没扫码 / 凭据读不出 */
+  | 'not-configured'
+  /** 事实：两个 mid 恰好相同 → 换 Cookie 是空操作，不装规则 */
+  | 'self'
+  /** 选择：用户把取流身份设成浏览器登录态 → 不装规则（与 `self` 的成因不同，界面话也不同） */
+  | 'page-identity'
+  /** 用户主动关了总开关 */
+  | 'disabled'
+  /** 内部异常 */
+  | 'error';
+
 /** background → UI / content */
 export type ResponseMsg =
   /**
@@ -125,8 +235,56 @@ export type ResponseMsg =
        * 与 `not-configured` 不同：那时是还没配置账号；这里是用户主动关了开关。
        * 两者都不能算"取流失败"，`recordStat` 要区分对待，
        * 否则关掉开关会把统计打成一片红。
+       *
+       * ## `self` —— 取流账号与页面身份是同一个号（2026-11-11 新增）
+       *
+       * **这是「不需要代理」，不是「拒绝代理」。** 曾叫 `same-account`，那时
+       * `page.handler.ts` 提前 `return`，三个后果全是坏的：
+       *
+       *   1. 已装的标签页规则无人清理（`removeTabRule` 没被调到）
+       *   2. `reason` 在 UI 层**零消费方** → 开关开着、什么都没生效、**一个字都不说**
+       *   3. `entrypoints/background.ts` 的统计排除列表漏了它 → 每次打开视频页
+       *      记一次**假失败**，成功率条形图一路变红指向不存在的问题
+       *
+       * 改名成 `self` 是为了让语义对齐「一等状态」：它和 `ok` 一样走完整收尾路径
+       * （删规则 → 上报 → UI 有话可说），只是不装规则。**不装规则 ≠ 出错了。**
+       *
+       * ⚠️ 它同样**不能算取流失败**，统计排除列表必须有它。
+       *
+       * ## `page-identity` —— 用户把取流身份设成了「浏览器当前登录态」（2026-11-11 新增）
+       *
+       * 与 `self` 的区别（**很容易混，必须分清**）：
+       *
+       * | | `self` | `page-identity` |
+       * | --- | --- | --- |
+       * | 谁决定的 | **事实**：两个 mid 恰好相同 | **选择**：用户在面板里选的 |
+       * | 数据来源 | `primaryMid === dedeUserId` 比对 | `readStreamingIdentity()` |
+       * | 语义 | 换 Cookie 是空操作，所以不装 | 用户要求不换身份，所以不装 |
+       *
+       * 两者在 DNR 层面都是"不装规则"，但在**界面上说的话不同**：
+       * `self` 是"你这两个号居然一样"，`page-identity` 是"你选了让浏览器自己取流"。
+       * 把后者说成前者，用户会以为扩展发现了一个他不知道的问题。
+       *
+       * ⚠️ 同样**不算取流失败**，统计排除列表必须有它。
+       * 同样 `activated: false`（没装规则就是不装，不因为"这是好事"就报 true）。
+       *
+       * ## ⚠️ `activated` 在 `self` 下**恒为 `false`**，这是刻意的
+       *
+       * 判据只认 `reason === 'self'`，**不要看 `activated`**。
+       *
+       * 下一个人最容易在这里"顺手改对"：既然是"不需要代理"这种正常情况，
+       * 那 `activated` 报 `true` 是不是更合理？**不。**
+       *
+       * `activated` 的语义是「**这个标签页装上了 DNR 规则**」，而 `self` 恰恰是
+       * 「不装规则」。报 `true` 会让 `entrypoints/content.ts` 的
+       * `badgeState.proxying = res.activated === true` 变成 true →
+       * 角标画成「已接管」→ **界面谎报扩展在工作**，而实际一条规则都没装。
+       * 那正是本字段改名要修的那类 bug 的镜像。
+       *
+       * 「不需要」和「已接管」是两件事：前者是这件事**不需要扩展参与**，
+       * 后者是扩展**参与成功**。混成一个布尔就再也分不开了。
        */
-      reason: 'ok' | 'not-configured' | 'same-account' | 'disabled' | 'error';
+      reason: ProxyActivateReason;
     }
   /**
    * 登录窗口是否打开成功。
@@ -148,6 +306,16 @@ export type ResponseMsg =
   | { type: 'proxy/status:ok'; enabled: boolean; hasCredential: boolean; ruleCount: number }
   | { type: 'proxy/set:ok'; enabled: boolean }
   | { type: 'proxy/set:err'; detail: string }
+  /** 取流身份。`applied` = 切换后是否真的处于"换 Cookie"状态（凭据可能已失效） */
+  | { type: 'streaming/status:ok'; identity: 'extension' | 'page' }
+  | { type: 'streaming/set:ok'; identity: 'extension' | 'page'; activated: boolean }
+  | { type: 'streaming/set:err'; detail: string }
+  /**
+   * 推荐流开关的应答。`applied` = **规则是否真的装上了**
+   * （`hasCredential === false` 时会是 `false` —— 那时开关开着也不生效）。
+   */
+  | { type: 'feed-account/set:ok'; enabled: boolean; applied: boolean }
+  | { type: 'feed-account/set:err'; detail: string }
   /**
    * 受影响的视频标签页数。
    *

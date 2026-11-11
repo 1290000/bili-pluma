@@ -68,6 +68,19 @@
 | `node poc/verify/check-urlfilter.cjs` | `urlFilter` 写法 | 改规则条件 |
 
 > **两个 DNR 脚本必须一起跑**（`AGENTS.md` §4.3）——它们测的是不同东西，缺一不可。
+>
+> ### ⚠️ 每次改完 `dnr.ts` 都要**两个一起重跑**，不是"这个会话跑过一次就行"
+>
+> 跑完会在 `.tmp/dnr-regression-stamp.json` 写一条指纹（`dnr.ts` 的内容哈希）。
+> `verify` 的 `dnr-regression` 项比对**当前文件指纹**与戳里的指纹：
+> 对不上 = "改了但没重跑"，**直接判红**。
+>
+> **所以真实体验是**：改一行注释也会让戳失效，必须再花 3 分钟重跑。
+> 这**不是** bug，是这条判据的全部意义 —— 防的是"改了代码却拿上一次的结果充数"。
+> 2026-11-11 有人误以为戳坏了，实际是改完注释没收尾。
+>
+> **正确收尾顺序**：改完 `dnr.ts` → `pnpm build` → 两个脚本都跑 → 再跑 `verify`。
+> （脚本读的是 `.output/chrome-mv3`，**不 build 就是拿旧产物测新代码**，会全红且看起来像环境问题。）
 
 ---
 
@@ -84,7 +97,63 @@
 | `node poc/probe/probe-pgc-layer2-chain.mjs <sid> <tab> <ep>` | 第二层清缓存 → 第三层的完整链路 |
 | `node poc/probe/read-diag.cjs` | 读产品自己写的 `pluma:diag` 日志 |
 | `node poc/probe/popup-inspect.mjs` | 读 popup 状态 |
+| `node poc/probe/probe-streaming-status.mjs <sid> <tab>` | **测 background SW 的消息通道**（见下） |
 | `node poc/probe/setup-profile.mjs` | 准备测试用 profile |
+| **`node poc/probe/bsk-eval.mjs <sid> <tab> <expr-file>`** | **所有 `bsk evaluate` 都必须用它**（见 §3.1） |
+
+### 3.1 ⚠️ 所有 `bsk evaluate` 都该走 `bsk-eval.mjs`（2026-11-11 实测踩坑）
+
+**在 pwsh 里直接传表达式给 `bsk evaluate`，必然失败。**
+
+```powershell
+# ❌ 这些全部失败（括号/引号被 PowerShell 参数解析吃掉）
+bsk evaluate --session <sid> --tab-id <tab> "(async () => { ... })()"
+bsk evaluate --session <sid> --tab-id <tab> -- (async () => { ... })()
+```
+
+实测遇到的四种报错（都是同一个根因）：
+
+```
+error: unexpected argument '.map(a' found
+evaluate threw: SyntaxError: missing ) after argument list
+evaluate threw: SyntaxError: Invalid or unexpected token
+evaluate threw: SyntaxError: Unexpected token '<'      ← 相对路径打到页面域名
+```
+
+**`bsk evaluate` 没有 `--stdin`，也没有 `--file`**（`--help` 确认只有 `--session` / `--tab-id` / `--json` / `--quiet` / `--await-promise`）。
+
+**正确形态**：用 `poc/probe/bsk-eval.mjs`，它把表达式作为**单元素 argv** 传给
+`execFileSync('bsk', [..., expr])` —— **不经过任何 shell 解析**。
+
+```bash
+# 1) 表达式写进文件（文件里可以随意写括号引号，不用转义）
+# 2) 用包装脚本调
+node poc/probe/bsk-eval.mjs <session> <tabId> <expr-file>
+```
+
+**为什么放在 `search-identity/` 却要给所有人用**：它本来就是通用的，
+最初为搜索取证写的。**路径不好记的话记住"`bsk-eval.mjs` + 三个参数"即可**。
+
+> 同类坑在 `docs/guides/browser-skill-setup.md` §7 也记过一次（shell 转义），
+> 但那条只说了"注意引号"，**没给可用方案**。本节给的是方案。
+
+### 测 background SW 的消息：为什么必须走 content 桥
+
+`node poc/probe/probe-streaming-status.mjs` 是**本项目第一套能自己测 SW 消息的手段**。
+
+| 发送方 | 能不能 | 为什么 |
+| --- | --- | --- |
+| 页面主世界（`bsk evaluate` 默认） | ❌ | 没有 `chrome.runtime` |
+| popup（`chrome-extension://`） | ❌ | bsk 沙箱按 URL 白名单拒绝 |
+| **background SW 自己** | ❌ | Chrome 不派发给发送者自己 → 恒报 `Receiving end does not exist`（**这是预期，不是 bug**） |
+| **content script** | ✅ | **唯一可达的第三方上下文** |
+
+**所以：不要要求用户开 console 去测消息。** 已有桥，自己测。
+
+> ⚠️ **`undefined` 与"报错"是两种不同故障，别混**：
+> - `Receiving end does not exist` → 没有接收方
+> - **`undefined`（不报错）** → 消息派发了，但应答没接上
+>   → **先怀疑「浏览器跑的是旧代码」**，读 `pluma:build-proof`（见 §5）
 
 > ⚠️ **读页面状态必须用 `async IIFE` + 内部 `await` 再 stringify**。
 > 直接 stringify 一个 Promise 会得到 `{}`，而 `bsk evaluate` **exit 0** ——看起来完全"成功"。
@@ -124,6 +193,57 @@ $env:PATH = "C:\Users\i1290\.local\bin;" + $env:PATH
 | **`Get-Content` 读中文乱码**（`閲嶆柊鍔犺浇`） | 读文件用 read 工具；**绝不用 `Get-Content` + `Set-Content` 回写**（会真写坏中文） |
 | **PowerShell 内联 Node 脚本的引号转义反复失败** | 写成独立 `.mjs` 文件再 `node` 执行 |
 | **临时文件被 lint/prettier 扫到** | 放 `.tmp/`（已在 ignores 里），不要放 `.tmp-xxx/` |
+
+### ⚠️ 真机验证前必须确认「浏览器跑的是这份代码」（2026-11-11，本轮最贵的一课）
+
+**`reload-extension.mjs` 的 `✓ 生效：true` 只证明「主世界脚本在视频页跑起来了」**
+（它检查 `window.__PLUMA_MAIN__`，而 `main-hook` 的 `matches` 只含播放页），
+**不等于 background SW 是新代码。**
+
+**判据**：读 storage 的 `pluma:build-proof`
+- 有值 / `swStartedAt` 接近刚才的构建时间 → 跑的是新代码 → 实验有意义
+- **没有 / 很旧 → 跑的是旧 bundle → 所有实验无效**
+
+### 怎么读（**现成的自动化通道，不要问用户开控制台**）
+
+`content.ts` 的 `streaming-probe` 桥已经会带回 `buildProof` ——
+它是本项目"确认跑的是哪份代码"的**唯一自动化手段**：
+
+```js
+// bsk evaluate 里，在任意 bilibili 页面
+(async () => {
+  const r = await new Promise((res) => {
+    const t = setTimeout(() => res({ jsTimeout: true }), 15000);
+    const h = (e) => {
+      if (e.data?.__ns === '__PLUMA__' && e.data.type === 'streaming-probe-reply') {
+        clearTimeout(t); window.removeEventListener('message', h);
+        res(e.data.trace);
+      }
+    };
+    window.addEventListener('message', h);
+    window.postMessage({ __ns: '__PLUMA__', type: 'streaming-probe', probeTypes: ['proxy/status'] }, '*');
+  });
+  return JSON.stringify(r);
+})()
+```
+
+**返回的 `trace.buildProof` 就是 `{ swStartedAt, probeVersion }`。**
+
+> ⚠️ **桥可能超时**（它要 `browser.runtime.sendMessage` 拿身份，
+> background 慢/挂时会挂住）。**2026-11-11 实测两次 15s 超时。**
+>
+> **超时时的替代判据**（同样硬）：**看产物里独有的字符串有没有出现在页面上**。
+> 例如那一轮验 hint 时，面板里出现了只有最新构建才有的新文案
+> —— **旧产物不可能有那串字**，这就证明了跑的是新代码。
+
+**若不符**：让用户在 `edge://extensions/` 点一次**「重新加载」**。
+
+> **Edge 对解压加载扩展（`location: 4`）有 Service Worker 代码缓存。**
+> `taskkill /F` + 重启浏览器 **清不掉它**，只有扩展页的「重新加载」能清。
+>
+> **代价实录**：2026-11-11 排查「面板胶囊不渲染」时，因为这个盲区
+> 走了三条错路（归因 `incognito:split` / `return true` / listener 结构），
+> 2 小时后才发现唯一解法是用户点一下「重新加载」。
 
 ---
 

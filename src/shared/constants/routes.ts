@@ -76,13 +76,14 @@ export interface ProxyRoute {
  *   1 → 2026-10-26 普通视频两条
  *   2 → 2026-10-27 打开 `/pgc/player/web/playurl`（ADR 0019，实测接口有效）
  *   3 → 2026-10-28 打开 `/ogv/player/playview`（实测是 GET，SPA 切集时页面会调用）
+ *   4 → 2026-11-11 新增 `/x/web-interface/wbi/index/top/feed/rcmd`（首页推荐，ADR 0035）
  *
  * ⚠️ **2026-10-29 增加了域名 `api.biliapi.net`（ADR 0027），修订号不变。**
  * 规则是「只在**路径字符串**或 `enabled` 开关变化时 +1」——
  * 路径一条没动、开关一个没改，所以不 +1。
  * 域名变化体现在 `BILI_API_HOSTS`，它有自己的注释说明。
  */
-export const ROUTES_REVISION = 3;
+export const ROUTES_REVISION = 4;
 
 /**
  * 白名单最后一次**人工核对 B站 前端**的日期。
@@ -132,7 +133,34 @@ export const PROXY_ROUTES = [
     method: 'GET',
     label: '番剧 OGV 播放器（SPA 切集时页面调用）',
     enabled: false,
+    /**
+     * ⚠️ 本条 `note` 里仍写「播放账号」，**是刻意保留，不是漏改**（2026-11-11）。
+     *
+     * 本文件其它 `note` 也同理：`note` 是**开发者字段**，不渲染给任何用户界面
+     * （界面文案的权威位置是 `docs/02-ui-spec.md` 与各 tsx/ts 里的字符串）。
+     * 术语从「播放账号」改成「取流账号」时，**只改用户可见字符串**，
+     * 内部注释与 note 保留旧名 —— 否则 diff 会混入大量无行为变化的替换，
+     * 让人看不出哪一处才是真正的语义改动。
+     *
+     * 看到这里还有旧名，**不要去"顺手统一"**。
+     */
     note: '**保持 false，但理由已更正**（2026-10-28 真机重测）。它是 GET，SPA 切集时页面必经此路取流。⚠️ **不能给它开 DNR**：一开 Cookie 就换成播放账号，服务端返回的流形态从「durl 4 组 × 6 分钟」变成「完整集 dash」，而播放器已按 durl 分支准备好 → 灰屏（两次实测）。**正确做法是在页面侧拦它的响应、把 durl 换成完整集 durl**（形态一致，ADR 0023）—— 那条路不需要它进白名单，因为换流由主世界做，取完整流走的是已在白名单里的 `/pgc/player/web/playurl`',
+  },
+  {
+    path: '/x/web-interface/wbi/index/top/feed/rcmd',
+    method: 'GET',
+    label: '首页推荐流（滚动加载）',
+    enabled: true,
+    note:
+      '2026-11-11 新增（ADR 0035）。**这是第一条非取流路径** —— 它不提升任何画质，' +
+      '改变的是「用户看到哪一批推荐」，所以它的授权理由与上面几条不同，单独写在 ADR 0035 里。' +
+      '⚠️ **这条接口本身只影响滚动加载**：首屏推荐是 SSR 写进 HTML 的（由 Cookie 决定），' +
+      '换这条接口的 Cookie 对首屏无效；要换首屏只能代理 main_frame 整页换身份，' +
+      '那违背 ADR 0004，已被否决。' +
+      '**2026-11-11 后续**：首屏改由「隐藏 `.feed-card`」处理（纯页内视觉，见 ADR 0035 末节），' +
+      '所以用户打开那个开关后看到的首屏也是取流账号的 —— 但**不是这条路径做到的**。' +
+      '实测：不校验 `w_rid`（传 32 个 0 仍 code 0）、`wbi` 密钥与身份无关、`data.mid` 回显请求者。' +
+      '**别顺手加别的 feed 接口** —— 热门/排行榜/ding.json 实测都不随身份变或已废弃',
   },
   {
     path: '/xlive/web-room/v2/index/getRoomPlayInfo',

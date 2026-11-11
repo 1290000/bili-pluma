@@ -95,7 +95,11 @@ async function boot(
   };
 
   win.eval(SOURCE);
-  win.postMessage({ __ns: '__PLUMA__', type: 'cfg', token: 'test-token', enabled: true }, '*');
+  win.postMessage(
+    // ⚠️ `rewriteGate` 必带：playview 换流是**改写响应**，初值 false（fail-closed）会拦住它
+    { __ns: '__PLUMA__', type: 'cfg', token: 'test-token', enabled: true, rewriteGate: true },
+    '*',
+  );
   await new Promise((r) => setTimeout(r, 10));
 
   return {

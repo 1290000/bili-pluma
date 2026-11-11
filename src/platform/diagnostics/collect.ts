@@ -17,6 +17,8 @@
 import { queryPageState } from '@platform/page/page-state-client';
 import { ROUTES_CHECKED_AT, ROUTES_REVISION } from '@shared/constants/routes';
 import { readDiag, diag } from '@platform/storage/diag-store';
+import { readStreamingIdentity } from '@platform/storage/streaming-identity-store';
+import { DEFAULT_STREAMING_IDENTITY, isStreamingReady } from '@shared/constants/streaming-identity';
 import type { PageTracksView, PrimaryBaselineReason } from '@shared/types/playinfo';
 
 export interface DiagRow {
@@ -35,7 +37,12 @@ export interface DiagRow {
  */
 const REASON_TEXT: Record<PrimaryBaselineReason, string> = {
   ssr: 'SSR，可用',
-  'client-written': '⚠️ 客户端写入（播放账号身份）→ 不可用',
+  'client-written': '⚠️ 客户端写入（取流账号身份）→ 不可用',
+  /**
+   * ⚠️ **不带 ⚠️ 前缀**：这不是异常，是"两个号是同一个，本来就没有基线"。
+   * 加上警示符号会让用户以为出问题了（而 `ok` 字段之所以不设，也是同一理由）。
+   */
+  'same-identity': '同一身份，无需基线',
   absent: '页面没有 __playinfo__',
   unparsable: '有数据但解析不出轨道',
 };
@@ -122,16 +129,49 @@ function pageTracksRowsFrom(v: PageTracksView, rows: DiagRow[]): DiagRow[] {
   const primary = v.primary;
   const playback = v.playback?.capability ?? null;
 
+  /**
+   * ## ⚠️ `same-identity` 时**不设 `ok` 字段** —— 这是"修诊断遮蔽"的核心一行
+   *
+   * ### 修的是什么
+   *
+   * 单账号模式（取流号 == 页面身份号）下 `primary.usable` 恒为 `false`，
+   * 于是这一行原本会带 `ok: false` → `tipFor()` **第一个 return** 就是
+   * 「主账号基线不可用」（见 `tipFor()` 里的注释），把
+   * 「代理已关闭」「全局规则没装上」「标签页规则为 0」这些**用户真正需要看的**
+   * 诊断全部遮蔽掉。
+   *
+   * 更严重的是：它会把一个**正常状态**报成异常。用户看到红字说基线坏了，
+   * 而他的号本来就只有这一个，什么都不缺。
+   *
+   * ### 为什么用"不设 `ok`"而不是"改 `tipFor()` 的判据"
+   *
+   * `tipFor()` 的文档（`:532-557`）已经定义了**三态**：
+   *
+   * | 情况 | 含义 | 行为 |
+   * | --- | --- | --- |
+   * | `ok === undefined` | 不需要关注（中性） | 不报警 |
+   * | `ok === false` | 确实是坏的 | 报警 |
+   * | `ok === true` | 正常 | 往下走 |
+   *
+   * `same-identity` 正好是第三态"不需要关注" —— **塞进现有设计就够了**。
+   * 改 `tipFor()` 的判据需要给 `DiagRow` 加 `code` 字段（扩影响所有诊断行的
+   * 公共类型），换来的只是一个枚举值，不划算。
+   *
+   * ⚠️ 也**不能**写成 `ok: primary.usable || primary.reason === 'same-identity'`：
+   * 那会把这行标成"正常 ✓"，而它其实只是"不适用" —— 中性 ≠ 正常。
+   */
+  const neutral = primary.reason === 'same-identity';
+
   rows.push({
     label: `主账号基线 · ${v.pageKey} P${String(v.p)}`,
     value:
       REASON_TEXT[primary.reason] +
       (primary.capability ? ` · 最高 ${String(primary.capability.maxHeight)}p` : ''),
-    ok: primary.usable,
+    ...(neutral ? {} : { ok: primary.usable }),
   });
 
   rows.push({
-    label: '播放账号（页面 playurl 响应）',
+    label: '取流账号（页面 playurl 响应）',
     value:
       playback !== null
         ? `最高 ${String(playback.maxHeight)}p · ${String(playback.videoCount)} 条视频轨` +
@@ -150,7 +190,7 @@ function pageTracksRowsFrom(v: PageTracksView, rows: DiagRow[]): DiagRow[] {
         ? `提升 ${String(v.diff.heightGain)}p` +
           (v.diff.frameRateGain > 0 ? ` · +${String(v.diff.frameRateGain)}fps` : '') +
           (v.diff.hiResGained ? ' · +Hi-Res' : '')
-        : '无提升（两侧能力相同，或播放账号更弱）'
+        : '无提升（两侧能力相同，或取流账号更弱）'
       : '无法比较（缺一侧数据）',
     ...(v.diff ? { ok: v.diff.improved } : {}),
   });
@@ -411,11 +451,31 @@ export async function collectFacts(opts: CollectOptions = {}): Promise<DiagRow[]
     put('可见 cookie 分区', facts.cookieStores.join(', ') || '(空)');
   }
 
-  // 5) 凭据是否已配置
+  /**
+   * 5) 取流账号凭据
+   *
+   * ## ⚠️ 单账号模式下「未配置」是**假警报**（2026-11-11）
+   *
+   * 取流身份 = `'page'`（浏览器当前登录态）时**不需要任何凭据**，
+   * 而此时 vault 里自然没有 blob。旧判据只看 blob 在不在 →
+   * 这条**必然**「未配置」+ `ok: false` → 诊断页**常红**，
+   * 把用户引去查一个根本不是问题的地方。
+   *
+   * 判据统一走 `isStreamingReady()`（与 `popup-state` / `account.handler` 同一处），
+   * 不在这里另写一份。
+   */
   try {
     const bag = await chrome.storage.local.get('pluma:vault:blob');
     const has = !!bag['pluma:vault:blob'];
-    put('播放账号凭据', has ? '已配置' : '未配置', has);
+    const identity = await readStreamingIdentity().catch(() => DEFAULT_STREAMING_IDENTITY);
+    const ready = isStreamingReady(identity, has);
+
+    if (identity === 'page') {
+      // 「不需要」而不是「未配置」—— 后者读起来像故障
+      put('取流账号凭据', '不需要（取流使用浏览器登录身份）', true);
+    } else {
+      put('取流账号凭据', has ? '已配置' : '未配置', ready);
+    }
   } catch (e) {
     put('凭据状态', '读取失败: ' + String(e));
   }

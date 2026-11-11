@@ -48,6 +48,7 @@ import {
   type PanelModel,
 } from './panel-data';
 import { accountTab, cleanTab, displayTab, homeCleanPane, qualityTab } from './tabs';
+import type { StreamingIdentity } from '@shared/constants/streaming-identity';
 import { buildExportPayload, diagnosticsPane, downloadJson, exportFileName } from './diagnostics';
 
 /**
@@ -154,6 +155,44 @@ export interface PanelActions {
   login: () => void;
   /** 退出播放账号。**UI 已过两步确认**，这里直接发请求 */
   logout: () => Promise<{ ok: boolean; detail?: string }>;
+  /**
+   * ── 取流身份（2026-11-11，步骤 4）──
+   *
+   * ## 为什么放在 `PanelActions` 而不是 `PanelModel`
+   *
+   * 它是**纯配置读取**（`storage.local` 一次 `.get()`），不是"页面数据"。
+   * 放进 `PanelModel` 会让那个模型多一个与当前页面无关的字段，
+   * 而 `PanelModel` 的职责是"这一页采集到了什么"。
+   *
+   * ## 与 `AccountActions` 的关系
+   *
+   * 这两个字段**原样透传**给 `accountTab()`（见 `:557` 附近的调用）。
+   * 两边形状一致不是为了省事，是为了让"面板层不加工身份数据"这件事在类型上可见 ——
+   * 面板只负责搬运，判据在 `popup-state.ts` / `streaming-pill.ts`。
+   */
+  /** 当前取流身份；`null` = 还没读出来（胶囊不渲染） */
+  streamingIdentity: StreamingIdentity | null;
+  /** 切换取流身份。失败时由实现方自己弹提示，这里不返回 Promise */
+  toggleStreamingIdentity: (next: StreamingIdentity) => void;
+
+  /**
+   * ── 首页推荐流开关（2026-11-11，**与上面两项完全独立**）──
+   *
+   * 用户原话：「首页推荐流的变化与取流身份是完全独立的两个功能」。
+   *
+   * ## ⚠️ 类型里**没有** `StreamingIdentity` —— 这是有意的
+   *
+   * 与 `feed-hide.ts` 同一手法：谁想在推荐流开关的判据里用取流身份，
+   * 必须先改这个签名，而改签名会让调用点报错 → **不可能静默发生**。
+   *
+   * ## 它读的是 `storage.local` 的 `pluma:feed-account-enabled`
+   *
+   * 与 `streaming/status` 消息**无关**：那个消息回答"谁在取流"，
+   * 本开关回答"推荐流用谁" —— 两个问题各有各的数据源。
+   */
+  feedAccountEnabled: boolean;
+  /** 拨推荐流开关。失败时由实现方自己弹提示 */
+  toggleFeedAccount: (next: boolean) => void;
 }
 
 /**
@@ -240,6 +279,82 @@ export function mountPanelBody(actions: PanelActions): PanelController {
       await writeBadgeEnabled(next);
     } catch {
       badgeEnabled = prev;
+      render();
+    }
+  };
+
+  /**
+   * ## ❌ 这里曾有 `feedBoundaryEnabled` 状态 + 读写函数（2026-11-11 删除）
+   *
+   * 它服务于「显示推荐来源分界线」开关。**分界线功能整体取消**：
+   *
+   * 1. 用户裁决：设完取流账号后直接隐藏 `.feed-card`，首屏就是取流账号的，线没有意义
+   * 2. 而隐藏方案也因**选择器（父子嵌套）与身份（M1）两层都未验证**而冻结
+   *
+   * 面板里那个开关、它的懒读、它的乐观更新全部删除。
+   */
+
+  /**
+   * ── 取流身份（2026-11-11，步骤 4）──
+   *
+   * ## 为什么由 `actions` 提供初值，而不是面板自己读
+   *
+   * `streamingIdentity` 的来源是 **`streaming/status` 消息**（background 是唯一
+   * 知道"用户选了谁"的地方 —— 它同时管着规则重建）。面板是纯 DOM 层，
+   * 不该自己去读 `storage.local` 再判断。
+   *
+   * ## 为什么还要在面板里存一份可变副本
+   *
+   * `actions.streamingIdentity` 是**挂载那一刻**的初值。用户点了胶囊之后，
+   * 面板必须立刻重画（乐观更新），否则会有"点了没反应"的观感。
+   * 所以这里镜像一份，`render()` 用这份；`actions` 只作为初值来源。
+   *
+   * ⚠️ 两者**同源不同步**是有意的：面板不负责感知"别处改了身份"，
+   * 那是 `streaming/set` 的实现方（content 入口）在成功后回调刷新的职责。
+   */
+  let streamingIdentity: StreamingIdentity | null = actions.streamingIdentity;
+
+  /**
+   * 点胶囊切换。
+   *
+   * 采用与 `writeFeedBoundary` **同款**的乐观更新 + 失败回滚：
+   * 先本地切、立刻重画；调用方失败时回滚。
+   * "点了没反应"是最糟的反馈，而身份切换通常 <100ms，乐观更新完全值得。
+   */
+  const toggleStreamingIdentity = async (next: StreamingIdentity): Promise<void> => {
+    const prev = streamingIdentity;
+    streamingIdentity = next;
+    render();
+    try {
+      await actions.toggleStreamingIdentity(next);
+    } catch {
+      streamingIdentity = prev;
+      render();
+    }
+  };
+
+  /**
+   * ── 首页推荐流开关的本地副本（2026-11-11）──
+   *
+   * ## ⚠️ 它与 `streamingIdentity` 是**两件独立的事**
+   *
+   * 用户原话：「首页推荐流的变化与取流身份是完全独立的两个功能」。
+   *
+   * 所以本状态**不从 `streamingIdentity` 派生**，也不在它变化时重置。
+   * 两者各自乐观更新、各自回滚。
+   *
+   * 同理采用乐观更新：开关要跟手，"点了没反应"是最糟的反馈。
+   */
+  let feedAccountEnabled = actions.feedAccountEnabled;
+
+  const toggleFeedAccount = async (next: boolean): Promise<void> => {
+    const prev = feedAccountEnabled;
+    feedAccountEnabled = next;
+    render();
+    try {
+      await actions.toggleFeedAccount(next);
+    } catch {
+      feedAccountEnabled = prev;
       render();
     }
   };
@@ -493,6 +608,17 @@ export function mountPanelBody(actions: PanelActions): PanelController {
         replaceChildren(content, [
           displayTab(badgeEnabled, {
             toggleBadge: (n) => void writeBadge(n),
+            /**
+             * ⚠️ 推荐流开关传**自己的**本地镜像 `feedAccountEnabled`，
+             * **不是** `streamingIdentity` —— 那是"两个功能独立"在调用点上的落地。
+             * 传错了（例如 `feedAccountEnabled: streamingIdentity === 'extension'`）
+             * 会让开关跟着身份变，而那正是用户明确否定的行为。
+             *
+             * 2026-11-11 从「账号」Tab 迁来，**判据原样保留**。
+             */
+            feedAccountEnabled,
+            toggleFeedAccount: (next) => void toggleFeedAccount(next),
+            hasCredential: model?.account.hasCredential ?? false,
             openDiag: () => {
               /**
                * ## 进入诊断浮层 = 重新采集（2026-11-10 第七轮）
@@ -514,7 +640,20 @@ export function mountPanelBody(actions: PanelActions): PanelController {
         break;
 
       case 'account':
-        replaceChildren(content, [accountTab(model.account, Date.now(), model.pageKind, actions)]);
+        replaceChildren(content, [
+          accountTab(model.account, Date.now(), model.pageKind, {
+            login: actions.login,
+            logout: actions.logout,
+            /**
+             * ⚠️ 传**本地镜像**的 `streamingIdentity`，不是 `actions.streamingIdentity`。
+             *
+             * `actions` 那份是挂载时的初值，用户点过胶囊之后它就过期了。
+             * 用本地镜像才能让乐观更新生效（否则点了看不到变化）。
+             */
+            streamingIdentity,
+            toggleStreamingIdentity: (next) => void toggleStreamingIdentity(next),
+          }),
+        ]);
         break;
     }
   };

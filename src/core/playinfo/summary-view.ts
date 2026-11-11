@@ -66,7 +66,7 @@ export function isVideoPage(pageKey: string): boolean {
  * **"不做对比"这件事本身仍然成立**（ADR 0024），只是不需要在界面上声明：
  * 没有那行「主账号仅可用 X」时，用户自然不会以为自己在看对比。
  */
-export const PGC_ANCHOR = '播放账号提供';
+export const PGC_ANCHOR = '取流账号提供';
 
 /**
  * PGC 页**不显示**的画质徽章。
@@ -126,7 +126,7 @@ export const PGC_HIDDEN_BADGES: ReadonlySet<string> = new Set(['1080P', '720P', 
  * @param label 最高画质的短标签（`4K` / `1080P` …）；空串表示拿不到高度
  */
 export function pgcTitle(label: string): string {
-  return label ? `已取得 ${label}` : '已取得播放账号的画质';
+  return label ? `已取得 ${label}` : '已取得取流账号的画质';
 }
 
 /**
@@ -188,6 +188,66 @@ function anchorText(view: PageTracksView): string {
   if (!isVideoPage(view.pageKey)) return PGC_ANCHOR;
 
   /**
+   * ## `same-identity` **优先于**「未登录主账号」
+   *
+   * 两者互斥（游客态 `primaryMid === null` → `same-account` 分支不可能触发），
+   * 所以正常情况下这个顺序无差别。**但互斥是另一个文件保证的**，不是本文件 ——
+   * 一旦 `page.handler.ts` 改了，这个顺序就成了唯一的诚实性防线：
+   *
+   *   - 「未登录主账号」是**行动号召**（去登录）—— 只在真的没登录时才对
+   *   - 「同一身份」是**事实陈述** —— 说错了用户会白跑一趟去登录
+   *
+   * 所以先说事实。单测在 `tests/unit/content/page-state-same-identity.test.ts`。
+   *
+   * ## ⚠️ 同一条 `same-identity`，**两种成因，两句话术**（2026-11-11 修）
+   *
+   * ### 用户看到的问题
+   *
+   * `page` 模式（用户主动选了「浏览器账号」）下，画质区**同一屏出现两句互不衔接的话**：
+   *   - 标题「**无需代理**」—— 说的是"你选了浏览器账号"
+   *   - 锚点「**取流身份与页面身份相同**」—— 说的是"两个账号刚好是同一个"
+   *
+   * 用户实测反馈：**「我是自己选的浏览器账号，为什么说身份相同？」**
+   *
+   * ### 根因：合并判据是对的，合并话术是错的
+   *
+   * `SAME_IDENTITY_REASONS = ['self', 'page-identity']` 回答的是
+   * **「有没有第二个身份可比」** —— 两者答案确实相同（都没有），**所以那个数组合并是对的**。
+   *
+   * 但「**为什么**没有第二个身份」不同：
+   *
+   * | 成因 | 事实 | 该说的话 |
+   * | --- | --- | --- |
+   * | `self` | 两个 mid **碰巧相同** | **事实陈述**：「身份相同」 |
+   * | `page-identity` | 用户**主动选择**用浏览器账号 | **选择陈述**：「用浏览器登录账号」 |
+   *
+   * **这就是「成因不同、后果相同」在界面层的落点遗漏** ——
+   * 数据判据合并了，话术却没跟着分。
+   *
+   * ### 为什么用 `proxyIdentity` 而不是新增枚举值
+   *
+   * `primary.reason` 仍然只是 `'same-identity'`（**不改 `SAME_IDENTITY_REASONS`**，
+   * 也不新增 `PrimaryBaselineReason` 值）—— 那会动摇"有没有第二个身份可比"这条判据。
+   *
+   * 区分显示只需要**多读一个已有字段**：`PageTracksView.proxyIdentity`
+   * （`page-state.ts` 的 `setProxyIdentity()` 写入，取值域派生自 `ProxyActivateReason`）。
+   */
+  if (view.primary.reason === 'same-identity') {
+    /**
+     * `page-identity` → 用户的选择，不说"身份相同"。
+     *
+     * ⚠️ **`proxyIdentity` 可能缺失**（`undefined` = 老快照 / 还没收到回包）。
+     * 缺失时回落到事实陈述 —— 那是**保守方向**：
+     * 「身份相同」在 `self` 情形下永远正确，只是没说清成因；
+     * 而反过来把 `self` 说成"你选的浏览器账号"是**假话**（用户可能根本没选）。
+     */
+    if (view.proxyIdentity === 'page-identity') {
+      return '当前用浏览器登录账号取流，无对比基线';
+    }
+    return '取流身份与页面身份相同，无对比基线';
+  }
+
+  /**
    * ⚠️ **未登录主账号时，锚点不能说"仅可用 480P"。**
    *
    * 那句话读起来像"你这个号只有 480P"，而真实原因是"没有号"。
@@ -227,10 +287,28 @@ function anchorText(view: PageTracksView): string {
     return label ? `主账号仅可用 ${label}` : `主账号仅可用 ${String(cap.maxHeight)}p`;
   }
 
-  // 基线不可用时如实说"未知"，并区分原因 —— 否则用户和开发者都无从判断
+  /**
+   * ## 基线不可用时如实说"未知"，并区分原因
+   *
+   * ### ⚠️ 这里**故意不再列** `same-identity`
+   *
+   * `anchorText()` 开头（函数第一行之后）已经 `if (reason === 'same-identity') return`，
+   * 所以走到这里时 TS 已经把该成员从联合里**收窄掉**了。再写
+   * `case 'same-identity'` 会报 `TS2678: 不可比` —— 编译器在提醒"这条永远走不到"。
+   *
+   * 这不是妥协，是**比加分支更诚实的写法**：同一身份在函数开头就返回了，
+   * 若在这里再写一遍，会让人以为这里也可能命中，从而不敢改上面的早退。
+   *
+   * ### 但仍然**不用 `default`**
+   *
+   * 封闭联合的意义是新增成员时编译器强制每个消费点表态。写成 `default`
+   * 会让下一个新值静默落进"主账号基线未知"，而那句话未必对。
+   * 现在四个 `case` 恰好覆盖收窄后的联合 —— 下次加 reason 时这里会报错，
+   * 那正是我们要的强制提醒。
+   */
   switch (view.primary.reason) {
     case 'client-written':
-      return '主账号基线不可用（数据来源是播放账号）';
+      return '主账号基线不可用（数据来源是取流账号）';
     case 'absent':
       return '主账号基线未知（本页没有 SSR 数据）';
     case 'unparsable':
@@ -336,6 +414,34 @@ export function describeUnlock(
   // 「已解锁」是事实陈述：两侧能比、且播放账号更强，就先说这个（与登录状态无关）
   if (view.diff?.improved) {
     return { title: '已解锁', badges, anchor, improved: true };
+  }
+
+  /**
+   * ## `same-identity` → 「无法对比」，**必须排在「未登录主账号」之前**
+   *
+   * ### 为什么它必须排在 `loggedIn === 'no'` 前面
+   *
+   * 两者真机上互斥（游客态 `primaryMid === null` → `self` 分支不触发，
+   * 见 `page.handler.ts`），**但互斥由另一个文件保证**。一旦被破坏：
+   * 「未登录主账号」是**行动号召**（去登录），先说它会让用户白跑一趟；
+   * 而"同一身份"是**事实陈述**，说了才算诚实。
+   *
+   * ### 为什么它还必须排在 `diff` 分支之前
+   *
+   * 取流身份与页面身份是同一个号时，`diff` **不是 `null`** ——
+   * 两侧拿到的是同一份数据的两次计量，各项增益全为 0。
+   *
+   * 若不在这里拦住，会落到后面的 `same === true` 分支 →
+   * 标题「无提升（源限制）」。
+   *
+   * ⚠️ **那是假事实**：它暗示"这个视频本来就只有这画质"，
+   * 而真相是"你只有一个号，没什么可比的"。用户会据此以为插件没起作用。
+   *
+   * 「无法对比」只说"没有可比的数据"，不声称任何一方强弱 —— 语义正好，
+   * 而且它是**已有状态**，不需要新增界面状态或开关。
+   */
+  if (view.primary.reason === 'same-identity') {
+    return { title: '无法对比', badges, anchor, improved: false };
   }
 
   /**

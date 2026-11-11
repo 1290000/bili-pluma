@@ -122,7 +122,7 @@ export async function handleProxySet(enabled: boolean): Promise<ResponseMsg> {
     // 开启需要凭据。没有就明确报错，不要假装成功
     const credential = await readPersistedCredential();
     if (!credential) {
-      return { type: 'proxy/set:err', detail: '还没有配置播放账号' };
+      return { type: 'proxy/set:err', detail: '还没有配置取流账号' };
     }
 
     const cookie = serializeCookie({

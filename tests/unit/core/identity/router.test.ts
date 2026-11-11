@@ -61,8 +61,17 @@ describe('走主账号的路径（不代理）', () => {
     expect(routeFor(`${API}/x/web-interface/view?bvid=BV1x`)).toBe('primary');
   });
 
-  it('首页推荐', () => {
-    expect(routeFor(`${API}/x/web-interface/wbi/index/top/feed/rcmd`)).toBe('primary');
+  it('首页推荐（ADR 0035：已进白名单，走取流账号）', () => {
+    /**
+     * ⚠️ **2026-11-11 改了期望值**：本条原本断言 `'primary'`（不代理）。
+     * ADR 0035 把 `/x/web-interface/wbi/index/top/feed/rcmd` 加进白名单后，
+     * 它应该走 `'playback'`。
+     *
+     * 为什么这**不是**"改测试让它过"：判据（`isProxyPath` → 白名单）没错，
+     * 是白名单按计划多了一条路径，期望值本来就该跟着变。
+     * 反向验证：把 `routes.ts` 里那条的 `enabled` 改回 `false` → 这条红。
+     */
+    expect(routeFor(`${API}/x/web-interface/wbi/index/top/feed/rcmd`)).toBe('playback');
   });
 });
 

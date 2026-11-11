@@ -496,6 +496,40 @@ export const PANEL_CSS = `
   flex: 1 1 auto;
 }
 
+/**
+ * 取流身份胶囊的**独立行**（2026-11-11，S4）。
+ *
+ * ## 为什么它需要单独一行（真机像素实测）
+ *
+ * 面板真实宽 **311 CSS**，卡片内容区 295。行内原本塞了
+ * '头像48 + main + VIP标签25.7 + 胶囊67'，三者都是 'flex: 0 0 auto'，
+ * 于是 '.acct-main' 只剩 **154.3** —— 不够：
+ *
+ * '''
+ * {{取流账号昵称}}（16 字）  →  {{取流账号昵称}}...   ← 少 4 字
+ * 仅取流 · 6 个月后到期（13 字）→  仅取流 · 6 个月...  ← 截断
+ * '''
+ *
+ * 挪出来后 '.acct-main' 从 154.3 → **229**（+67 胶囊 +8 间距），够放。
+ *
+ * ## 为什么左对齐而不是右对齐
+ *
+ * 左对齐与卡片左边缘对齐，读起来是"**这张卡**的当前设置"。
+ * 右对齐会把它推离卡片视觉范围，反而像页面级的控件。
+ *
+ * ## ⚠️ 它与 '.acct-row' 是**同级**，不是子级
+ *
+ * 见 'tabs.ts' 的 'pillRow' —— 胶囊被 append 到 'box'，不在 'playbackRow' 里。
+ * 所以这里的 'margin-left' 用来**模拟卡片内缩进**（与 '.acct-row' 的 padding 对齐）。
+ */
+.acct-pill-row {
+  display: flex;
+  align-items: center;
+  /* 与 .acct-row 的 padding: 7px 8px 左内边距对齐 */
+  padding: 0 8px;
+  margin-top: 2px;
+}
+
 .acct-name {
   font-size: var(--pluma-font-body);
   overflow: hidden;

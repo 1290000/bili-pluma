@@ -43,7 +43,7 @@ function realRows(): DiagRow[] {
     { label: 'InPrivate 权限', value: '已允许', ok: true },
     { label: '当前页取流数据', value: '本页没有取流数据（首页 / 直播页，或本页不是播放页）' },
     { label: '可见窗口数', value: '1' },
-    { label: '播放账号凭据', value: '已配置', ok: true },
+    { label: '取流账号凭据', value: '已配置', ok: true },
     { label: '播放代理总开关', value: '已开启（2 条路径规则）', ok: true },
     { label: 'DNR 全局路径规则', value: '2', ok: true },
     { label: '  10042', value: 'filter=/x/player/wbi/playurl', ok: true },
@@ -159,7 +159,7 @@ describe('★ 形状守卫：顶层字段固定', () => {
   it('★ DNR 规则行只带 id，不带 requestHeaders（collect.ts 源码守卫）', async () => {
     /**
      * `action.requestHeaders[0].value` 是一条**完整 Cookie 头**。
-     * 把它放进自检行 = 直接把播放账号凭据印在诊断页上、并随导出流传出去。
+     * 把它放进自检行 = 直接把取流账号凭据印在诊断页上、并随导出流传出去。
      *
      * ⚠️ 必须扫**源码**，不能扫造出来的假 payload ——
      * 假数据里本来就没有 `requestHeaders`，那种断言什么也守不住

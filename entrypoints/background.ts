@@ -21,7 +21,15 @@ import { handleQrGenerate, handleQrPoll } from '@/src/background/handlers/qr.han
 import { handleAffectedTabs, handleTabsReload } from '@/src/background/handlers/tabs.handler';
 import { handleStatsRecent } from '@/src/background/handlers/stats.handler';
 import { handleDiagFacts } from '@/src/background/handlers/diag.handler';
-import { reconcileTabRules, rebuildRulesIfEnabled } from '@/src/platform/http/dnr';
+import {
+  applyRulePlan,
+  reconcileTabRules,
+  rebuildRulesIfEnabled,
+  switchStreamingIdentity,
+} from '@/src/platform/http/dnr';
+import { readStreamingIdentity } from '@/src/platform/storage/streaming-identity-store';
+import { writeFeedAccountEnabled } from '@/src/platform/storage/ui-prefs-store';
+import { normalizeStreamingIdentity } from '@/src/shared/constants/streaming-identity';
 import { recordStat } from '@/src/platform/storage/stats-store';
 import { parsePlayPage } from '@/src/shared/utils/video-page';
 
@@ -136,6 +144,48 @@ export default defineBackground(() => {
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const type = (message as { type?: string } | undefined)?.type;
+
+    /**
+     * ## 🔨 构建证明：证明「浏览器跑的是这份代码」（2026-11-11）
+     *
+     * ### 为什么必须有它 —— 今天最贵的一课
+     *
+     * 本轮排查面板胶囊不渲染，花了两小时走了三条错路，最终发现根因是：
+     * **Edge 对解压加载的扩展（`location:4`）有 Service Worker 代码缓存，
+     * `taskkill /F` + 重启浏览器清不掉它。**
+     *
+     * 只有当用户在 `edge://extensions/` 点一次「重新加载」，新代码才真正跑起来。
+     *
+     * 而我们当时**没有任何手段能区分"代码写错了"和"浏览器跑的是旧代码"**：
+     *   - `tsc` / `verify` 全绿 → 只证明**源码**
+     *   - `reload-extension.mjs` 的 `✓ 生效：true` → 只证明
+     *     **主世界脚本在视频页跑起来了**（它检查 `window.__PLUMA_MAIN__`，
+     *     而 `main-hook` 的 `matches` 只含播放页），**不等于 background 是新代码**
+     *
+     * ### 用法：**任何真机验证前先读这个键**
+     *
+     * content 侧桥读 `pluma:build-proof`：
+     *   - **有值且 `buildAt` 接近刚才的构建时间** → 跑的是新代码 → 实验有意义
+     *   - **没有 / `buildAt` 很旧** → **跑的是旧 bundle** →
+     *     让用户去 `edge://extensions/` 点「重新加载」，**否则所有实验无效**
+     *
+     * ### 为什么每次 SW 启动都写
+     *
+     * SW 会在空闲时被浏览器挂起，下次有消息再唤醒 —— **每次唤醒都是一次
+     * "这份代码真的被加载了"的证明**。写 `buildAt` 让调用方能判断新鲜度。
+     *
+     * ⚠️ 只写时间戳与版本号，**不含任何用户数据、不含凭据**。
+     */
+    void chrome.storage.local
+      .set({
+        'pluma:build-proof': {
+          swStartedAt: Date.now(),
+          probeVersion: 2,
+        },
+      })
+      .catch(() => {
+        /* 证明写入失败不影响主流程 */
+      });
 
     /**
      * ## ⚠️ 这里**不再**调 `trace()` / `diag()`（2026-11-10 第九轮实验）
@@ -273,12 +323,30 @@ export default defineBackground(() => {
           // 记一次取流结果 —— 这是**唯一**已知的真实成败信号，
           // 比 background 另发一个探测请求更贴近用户体感。
           //
-          // ⚠️ 两类**不算失败**的情况必须排除，否则统计会谎报：
+          // ⚠️ **不算失败**的情况必须排除，否则统计会谎报：
           //   - `not-configured`：还没扫码，是"还没开始用"
           //   - `disabled`：用户主动关了总开关（2026-10-27 新增）。
           //     不排除的话，关掉开关后每刷一个视频页都记一次 fail，
           //     条形图会变成一片红，指向一个不存在的问题。
-          if (r.reason !== 'not-configured' && r.reason !== 'disabled') {
+          //   - `self`：取流账号与页面身份是同一个号（2026-11-11 新增，原 `same-account`）。
+          //     **这是"不需要代理"，不是失败** —— 代理是空操作，取流完全正常。
+          //     `page.handler.ts` 的 `same-account` 分支历史就漏在这里：
+          //     单账号用户每打开一个视频页都记一次假失败，条形图一路变红。
+          //   - `page-identity`：用户把取流身份选成了浏览器登录态（2026-11-11 新增）。
+          //     同理不算失败 —— 这是**用户主动选择的模式**，取流走页面自身身份，完全正常。
+          //
+          // ⚠️ 这几种的共同点是"**没有发生取流失败这件事**"，不是"没装规则"。
+          //    `error` **必须**留在统计里：那是真的出错了。
+          //
+          // 用集合而不是链式 `&&`：新增一个 reason 时**必须在这里表态**，
+          // 链式写法漏一个只会让统计静默变红，而集合是显式名单。
+          const NOT_A_FAILURE: ReadonlySet<string> = new Set([
+            'not-configured',
+            'disabled',
+            'self',
+            'page-identity',
+          ]);
+          if (!NOT_A_FAILURE.has(r.reason)) {
             void recordStat(r.activated);
           }
           sendResponse({ type: 'page/activate:ok', ...r });
@@ -321,11 +389,88 @@ export default defineBackground(() => {
       return true;
     }
 
+    /**
+     * ## 取流身份（2026-11-11，步骤 4）
+     *
+     * 与 `proxy/set` 分开是一条**刻意的边界**：
+     *   - `proxy/set(false)` = 用户停用这个功能（→ popup 说「已停用」）
+     *   - `streaming/set('page')` = 用户换个合法身份（→ popup 说「无需代理」，
+     *     总开关**保持 true**）
+     *
+     * 合成一条消息会让两个语义互相污染 —— 例如"切到浏览器账号"被实现成
+     * "关掉代理"，用户切回来时还得再开一次开关，而他从没想关掉任何东西。
+     */
+    if (type === 'streaming/status') {
+      readStreamingIdentity()
+        .then((identity) => sendResponse({ type: 'streaming/status:ok', identity }))
+        .catch(() => sendResponse({ type: 'streaming/status:ok', identity: 'extension' }));
+      return true;
+    }
+
+    if (type === 'streaming/set') {
+      const raw = (message as { identity?: unknown }).identity;
+      // 收敛在入口：非法值不许穿透到规则逻辑（`normalizeStreamingIdentity` 是唯一真相源）
+      const identity = normalizeStreamingIdentity(raw);
+      switchStreamingIdentity(identity)
+        .then((activated) => {
+          sendResponse({ type: 'streaming/set:ok', identity, activated });
+          void diag('streaming/set', `取流身份 → ${identity}（激活=${String(activated)}）`);
+        })
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'streaming/set:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
     if (type === 'tabs/reload') {
       const { tabIds } = message as { tabIds: number[] };
       handleTabsReload(Array.isArray(tabIds) ? tabIds : [])
         .then(sendResponse)
         .catch(() => sendResponse({ type: 'tabs/reload:ok', reloaded: 0 }));
+      return true;
+    }
+
+    /**
+     * ## 首页推荐流开关（2026-11-11，**与取流身份完全独立**）
+     *
+     * 用户原话：「首页推荐流的变化与取流身份是完全独立的两个功能」。
+     *
+     * ## 为什么必须在 background 写存储
+     *
+     * 这个开关不只改一个布尔：**它决定 `feed/rcmd` 那条 DNR 规则装不装**。
+     * 所以必须走 `applyRulePlan()` —— 它读完整状态、一次性重建所有规则。
+     *
+     * ⚠️ 面板**不能**直接写 `storage.local`：那样规则不会重建，
+     * 开关看着是开的、实际没生效。
+     */
+    if (type === 'feed-account/set') {
+      const raw = (message as { enabled?: unknown }).enabled;
+      /**
+       * 严格布尔：字符串 `"false"` / 数字 `1` 一律拒绝。
+       * 与 `set-proxy` 桥同一纪律（`docs/guides/bsk-page-bridges.md` §3）。
+       */
+      if (typeof raw !== 'boolean') {
+        sendResponse({ type: 'feed-account/set:err', detail: 'enabled 必须是布尔值' });
+        return false;
+      }
+      writeFeedAccountEnabled(raw)
+        .then(() => applyRulePlan())
+        .then((applied) => {
+          sendResponse({ type: 'feed-account/set:ok', enabled: raw, applied: applied.feedAccount });
+          void diag(
+            'feed-account/set',
+            `首页推荐流 → ${raw ? '取流账号' : '浏览器账号'}（规则已装=${String(applied.feedAccount)}）`,
+          );
+        })
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'feed-account/set:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
       return true;
     }
 

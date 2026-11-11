@@ -183,7 +183,7 @@ describe('describeUnlock：没有提升的两种原因必须分开说', () => {
 
 describe('describeUnlock：基线不可用时锚点必须说清原因', () => {
   it.each([
-    ['client-written', '主账号基线不可用（数据来源是播放账号）'],
+    ['client-written', '主账号基线不可用（数据来源是取流账号）'],
     ['absent', '主账号基线未知（本页没有 SSR 数据）'],
     ['unparsable', '主账号基线未知（数据解析失败）'],
   ] as const)('%s → %s', (reason, expected) => {
@@ -430,7 +430,7 @@ describe('describeUnlock：PGC 页不做对比（ADR 0024）', () => {
 
   it('锚点如实说不做对比，不写「无法对比」也不写「未知」', () => {
     const r = describeUnlock(pgc());
-    expect(r?.anchor).toBe('播放账号提供');
+    expect(r?.anchor).toBe('取流账号提供');
     expect(r?.anchor).not.toContain('无法对比');
     expect(r?.anchor).not.toContain('未知');
   });
@@ -461,7 +461,7 @@ describe('describeUnlock：PGC 页不做对比（ADR 0024）', () => {
       }),
     );
     expect(r?.title).toBe('已取得 4K');
-    expect(r?.anchor).toBe('播放账号提供');
+    expect(r?.anchor).toBe('取流账号提供');
   });
 
   it('普通视频页不受影响 —— 仍然能说「已解锁」', () => {
@@ -675,7 +675,7 @@ describe('describeUnlock：PGC 页不显示试看就能看的档位', () => {
     const r = describeUnlock(pgc([80]));
     expect(r?.badges).toEqual([]);
     // 不许写「已取得 1080P」（那正是被要求去掉的东西）
-    expect(r?.title).toBe('已取得播放账号的画质');
+    expect(r?.title).toBe('已取得取流账号的画质');
     expect(r?.title).not.toContain('1080P');
   });
 
@@ -850,5 +850,261 @@ describe('describeUnlock：总开关关着时不产出视图（问题 5）', () 
     expect(describeUnlock(noSsr, true)?.anchor).toContain('主账号基线未知');
     // 关着时整块不产出
     expect(describeUnlock(noSsr, false)).toBeNull();
+  });
+});
+
+/**
+ * ## 步骤 3：`same-identity`（取流身份 == 页面身份）
+ *
+ * 这一组守的是一条**假事实**：
+ *
+ * 两侧是同一个号时，`diff` **不是 `null`** —— 它是同一份数据的两次计量，各项增益全 0。
+ * 于是会落到 `same === true` 分支，标题「无提升（源限制）」。
+ *
+ * 那句在暗示"这个视频本来就只有这画质"，而真相是"你只有一个号"。
+ * 用户会据此以为插件没起作用，或者以为视频本身糊 —— **这是会骗人的**。
+ *
+ * 正确出口是「无法对比」：只说"没有可比的数据"，不声称任何一方强弱。
+ */
+describe('describeUnlock：same-identity 走「无法对比」，不许说成源限制', () => {
+  /** 同一份数据的两次计量：两侧能力完全相同 → 旧逻辑必然算出 same=true */
+  const sameCap = cap({
+    maxHeight: 1080,
+    maxFrameRate: 30,
+    maxFrameRateAtTopHeight: 30,
+    hasHiRes: false,
+  });
+
+  function sameIdentityView(): PageTracksView {
+    return view({
+      primary: {
+        usable: false, // same-identity 下基线不可用
+        reason: 'same-identity',
+        capability: null, // 能力已被清空
+        user: { uname: 'testuser-primary', face: null, level: 6 },
+        // 假 mid：测试只关心"有没有 mid"，不关心它具体是多少
+        mid: '12345',
+        loggedIn: 'yes',
+      },
+      playback: { capability: sameCap },
+      /**
+       * ⚠️ 关键：`diff` **非 null**，且增益全 0。
+       * 这正是旧逻辑会误判成「无提升（源限制）」的输入。
+       */
+      diff: {
+        heightGain: 0,
+        frameRateGain: 0,
+        hiResGained: false,
+        dolbyAudioGained: false,
+        dolbyVisionGained: false,
+        improved: false,
+      },
+    });
+  }
+
+  it('标题是「无法对比」，**不是**「无提升（源限制）」', () => {
+    const s = describeUnlock(sameIdentityView());
+    expect(s?.title).toBe('无法对比');
+    expect(s?.title).not.toContain('源限制');
+  });
+
+  it('锚点陈述事实，不喊用户去登录，也不报"基线不可用"', () => {
+    const s = describeUnlock(sameIdentityView());
+    expect(s?.anchor).toBe('取流身份与页面身份相同，无对比基线');
+    // 「未登录主账号」是行动号召，只在真没登录时才对 —— 这里不该出现
+    expect(s?.anchor).not.toContain('未登录');
+    // 「不可用」读起来像故障，而同一身份是正常状态
+    expect(s?.anchor).not.toContain('不可用');
+  });
+
+  it('improved 恒为 false（没有对比就没有能力声明）', () => {
+    expect(describeUnlock(sameIdentityView())?.improved).toBe(false);
+  });
+
+  /**
+   * ## 对照组：证明上面三条不是恒真
+   *
+   * 把 reason 换回 `'ssr'` + 两侧能力相同 + `diff` 非 null，
+   * **必须**得到「无提升（源限制）」—— 那说明这个分支确实由 reason 决定，
+   * 而不是因为输入本来就落不到那里。
+   */
+  it('对照：同样的 diff、reason=ssr → 仍走「无提升（源限制）」', () => {
+    const v = sameIdentityView();
+    const asSsr = view({
+      ...v,
+      primary: {
+        ...v.primary,
+        usable: true,
+        reason: 'ssr',
+        capability: sameCap, // 两侧相同
+      },
+    });
+    expect(describeUnlock(asSsr)?.title).toBe('无提升（源限制）');
+  });
+
+  /**
+   * ⚠️ **本文件测不到 `page-identity` 的接入**，说明一下免得下一个人误以为覆盖了：
+   *
+   * `describeUnlock` 的输入是 `PageTracksView`，里面的 `primary.reason` 是
+   * **`page-state.ts` 收敛后**的值，取不到 background 的原始 `ProxyActivateReason`。
+   *
+   * 所以"`page-identity` 会不会变成 `same-identity`"这件事
+   * **只能在 `tests/unit/content/page-state.test.ts` 里测**（见那边的
+   * 「page-identity 收成 same-identity」用例）。
+   *
+   * 本文件的职责边界：只要 `primary.reason === 'same-identity'`，
+   * 就必须输出「无法对比」且不落「无提升（源限制）」—— 上面三条已经锁住。
+   */
+
+  /**
+   * `same-identity` **优先于** `loggedIn === 'no'`。
+   *
+   * 两者真机上互斥（游客态 `primaryMid === null` → `self` 分支不触发），
+   * 但互斥由 `page.handler.ts` 保证，不是这里保证的。
+   * 一旦被破坏，先说**事实**（同一身份），再喊用户去登录 ——
+   * 否则用户白跑一趟去登录，登录完还是这套数据。
+   */
+  it('互斥被破坏时（same-identity + loggedIn=no）→ 先说事实，不喊去登录', () => {
+    const v = sameIdentityView();
+    const broken = view({ ...v, primary: { ...v.primary, loggedIn: 'no' } });
+
+    const s = describeUnlock(broken);
+    expect(s?.anchor).toBe('取流身份与页面身份相同，无对比基线');
+    expect(s?.title).toBe('无法对比');
+  });
+});
+
+/**
+ * ## task-26：`same-identity` 的**两种成因，两句话术**
+ *
+ * ### 用户看到的问题（真机实测）
+ *
+ * `page` 模式（用户主动选了「浏览器账号」）下，画质区**同一屏出现两句互不衔接的话**：
+ *   - 标题「**无需代理**」—— 说的是"你选了浏览器账号"
+ *   - 锚点「**取流身份与页面身份相同**」—— 说的是"两个账号刚好是同一个"
+ *
+ * 用户原话：**「我是自己选的浏览器账号，为什么说身份相同？」**
+ *
+ * ### 根因：合并判据是对的，合并**话术**是错的
+ *
+ * `SAME_IDENTITY_REASONS = ['self', 'page-identity']` 回答的是
+ * **「有没有第二个身份可比」** —— 两者答案确实相同（都没有），**那个数组合并是对的**。
+ *
+ * 但「**为什么**没有第二个身份」不同，界面必须分别说：
+ *
+ * | 成因 | 事实 | 话术 |
+ * | --- | --- | --- |
+ * | `self` | 两个 mid **碰巧相同** | **事实陈述**：「身份相同」 |
+ * | `page-identity` | 用户**主动选择**用浏览器账号 | **选择陈述**：「用浏览器登录账号」 |
+ *
+ * **这就是「成因不同、后果相同」在界面层的落点遗漏。**
+ *
+ * ### 为什么用 `proxyIdentity` 而不是新增枚举值
+ *
+ * `primary.reason` 仍然只是 `'same-identity'` —— **不改 `SAME_IDENTITY_REASONS`**，
+ * 也**不新增 `PrimaryBaselineReason` 值**（那会动摇"有没有第二个身份可比"这条判据）。
+ * 区分显示只需多读一个**已有字段** `PageTracksView.proxyIdentity`。
+ */
+describe('task-26：same-identity 按成因分支话术', () => {
+  const sameCap = cap({
+    maxHeight: 1080,
+    maxFrameRate: 30,
+    maxFrameRateAtTopHeight: 30,
+    hasHiRes: false,
+  });
+
+  /** 构造 `same-identity` 视图，可选择带哪个 `proxyIdentity` */
+  function sameIdentityWith(proxyIdentity?: PageTracksView['proxyIdentity']): PageTracksView {
+    return view({
+      primary: {
+        usable: false,
+        reason: 'same-identity',
+        capability: null,
+        user: { uname: 'testuser-primary', face: null, level: 6 },
+        mid: '12345',
+        loggedIn: 'yes',
+      },
+      playback: { capability: sameCap },
+      diff: {
+        heightGain: 0,
+        frameRateGain: 0,
+        hiResGained: false,
+        dolbyAudioGained: false,
+        dolbyVisionGained: false,
+        improved: false,
+      },
+      ...(proxyIdentity === undefined ? {} : { proxyIdentity }),
+    });
+  }
+
+  it('★ page-identity → 话术含「浏览器登录账号」，**不含**「身份相同」', () => {
+    const s = describeUnlock(sameIdentityWith('page-identity'));
+    expect(s?.anchor).toContain('浏览器登录账号');
+
+    /**
+     * ⚠️ 这两条是**核心**：用户抱怨的正是"我选的，为什么说身份相同"。
+     * 只要这里还出现「身份相同」，那个 bug 就没修。
+     */
+    expect(s?.anchor, 'page-identity 下仍说「身份相同」= 原 bug 未修').not.toContain('身份相同');
+  });
+
+  it('★ self → 话术含「身份相同」，**不含**「浏览器登录账号」', () => {
+    const s = describeUnlock(sameIdentityWith('self'));
+    expect(s?.anchor).toContain('身份相同');
+
+    /**
+     * 反向也要守：`self` 是"两个号碰巧一样"的**事实**，
+     * 说成"你选了浏览器账号"是**假话** —— 用户可能根本没选过。
+     */
+    expect(s?.anchor, 'self 下说「浏览器登录账号」= 把事实说成了选择').not.toContain(
+      '浏览器登录账号',
+    );
+  });
+
+  it('★ 两种成因话术**必须不同**（这是本任务的全部意义）', () => {
+    const selfAnchor = describeUnlock(sameIdentityWith('self'))?.anchor;
+    const pageAnchor = describeUnlock(sameIdentityWith('page-identity'))?.anchor;
+    expect(pageAnchor).not.toBe(selfAnchor);
+  });
+
+  it('★ proxyIdentity 缺失（老快照 / 回包未到）→ 回落**事实陈述**（保守方向）', () => {
+    /**
+     * ## 为什么缺失时回落"身份相同"而不是"浏览器登录账号"
+     *
+     * 那是**保守方向**：
+     *   - 「身份相同」在 `self` 情形下**永远正确**，只是没说清成因
+     *   - 而把 `self` 说成"你选的浏览器账号"是**假话**（用户可能根本没选）
+     *
+     * 两个方向的错误代价不对称 → 选"可能不精确但永不说错"的那个。
+     */
+    const s = describeUnlock(sameIdentityWith(undefined));
+    expect(s?.anchor).toBe('取流身份与页面身份相同，无对比基线');
+  });
+
+  it('★ 其他 proxyIdentity 值（如 unknown / ok）→ 也回落事实陈述', () => {
+    for (const other of ['unknown', 'ok', 'disabled', 'self'] as const) {
+      const s = describeUnlock(sameIdentityWith(other));
+      expect(s?.anchor, `proxyIdentity=${other} 不该说成"浏览器登录账号"`).not.toContain(
+        '浏览器登录账号',
+      );
+    }
+  });
+
+  it('两种成因的**标题**相同（都是「无法对比」—— 结论一致，成因不同）', () => {
+    /**
+     * 话术分支只影响**锚点**，不影响**标题**：
+     * 两者确实都"没有可对比的第二方"，结论相同。
+     * 若标题也分了，就变成两个界面状态 —— 而任务约束明确"不新增状态"。
+     */
+    for (const id of ['self', 'page-identity'] as const) {
+      const s = describeUnlock(sameIdentityWith(id));
+      expect(s?.title, `proxyIdentity=${id} 的标题不该变`).toBe('无法对比');
+    }
+  });
+
+  it('两种成因的 improved 都是 false（没有对比就没有能力声明）', () => {
+    for (const id of ['self', 'page-identity'] as const) {
+      expect(describeUnlock(sameIdentityWith(id))?.improved).toBe(false);
+    }
   });
 });

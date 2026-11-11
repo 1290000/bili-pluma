@@ -70,6 +70,7 @@ import { diag } from '@platform/storage/diag-store';
 import type { StatBucket } from '@shared/types/stats';
 import type { PageTracksView } from '@shared/types/playinfo';
 import type { PrimaryCard } from '@shared/utils/primary-card';
+import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
 
 // ─────────────────────────── 渲染模型 ───────────────────────────
 
@@ -299,8 +300,16 @@ export function buildPopupSnapshot(input: {
   account: { configured: boolean; account: PopupAccount | null } | null;
   buckets: StatBucket[];
   pageKind: PanelPageKind;
+  /**
+   * 用户选的取流身份（2026-11-11，步骤 6 段 1）。
+   *
+   * ⚠️ **必须透传**：`page` 身份下 `hasCredential` 恒为 `false`，
+   * 而 `configured` / 「未配置」/「凭据失效」全靠它才能正确判断。
+   * 缺省 `undefined` 时走既有判据（与 `lastActivateReason` 同一纪律）。
+   */
+  streamingIdentity?: StreamingIdentity | null;
 }): PopupSnapshot | null {
-  const { proxy, account, buckets, pageKind } = input;
+  const { proxy, account, buckets, pageKind, streamingIdentity } = input;
 
   // `proxy/status` 都拿不到：`describePopup()` 没法判，如实返回 null
   if (!proxy) return null;
@@ -308,13 +317,23 @@ export function buildPopupSnapshot(input: {
   return {
     proxy,
     /**
-     * 与 `popup/main.tsx` 同一判据：两个来源任一为真就算已配置。
-     * 一个看密文在不在（同步、不依赖网络），一个看资料能不能读出来。
+     * ## `configured` 的唯一判据在 `isStreamingReady()`
+     *
+     * 这里**不再自己写 `a || b`**。旧写法 `(account?.configured ?? false) || proxy.hasCredential`
+     * 只认 vault 密文，于是「取流身份 = 浏览器登录态」这种**完全可用**的配置
+     * 会被判成未配置。
+     *
+     * `account?.configured` 仍保留为兜底来源：它来自 background 的权威回答，
+     * 且 `account.handler.ts` 那边**也已经**改用了同一个 `isStreamingReady()`。
+     * 两者取或不会引入分歧 —— 因为底层判据只有一个。
      */
-    configured: (account?.configured ?? false) || proxy.hasCredential,
+    configured:
+      (account?.configured ?? false) ||
+      isStreamingReady(streamingIdentity ?? 'extension', proxy.hasCredential),
     account: account?.account ?? null,
     buckets,
     page: pageKind === 'play' ? { kind: 'play' } : { kind: 'other' },
+    ...(streamingIdentity != null ? { streamingIdentity } : {}),
   };
 }
 
@@ -655,8 +674,30 @@ export async function fetchPanelReplies(): Promise<{
 export async function loadPanelModel(input: {
   pageKind: PanelPageKind;
   primary: PrimaryCard;
+  /**
+   * 用户选的取流身份（2026-11-11，Bug B 修复）。
+   *
+   * ## ⚠️ 不传会导致「画质 Tab 说假话」
+   *
+   * 这个参数**曾经不存在**，于是 `buildPopupSnapshot()` 收到的
+   * `streamingIdentity` 恒为 `undefined` → `describePopup()` 里那条
+   * `if (snap.streamingIdentity === 'page')` 的短路**永远不触发** →
+   * `page` 模式一路落到「已接管」。
+   *
+   * 而「已接管」的语义是"**我替你换了 Cookie**"，`page` 模式下**什么都没换**
+   * （同一界面里「取流身份与页面身份相同，无对比基线」自己都说了）。
+   * 那是**界面陈述错误事实**，与本轮修过的 `rewriteGate`、`same-account` 同类。
+   *
+   * ## 为什么走参数而不是面板自己读
+   *
+   * 唯一真相源是 `streaming/status` 消息（background 侧），面板是纯 DOM 层。
+   * 见 `panel.ts` 的 `PanelActions.streamingIdentity` 注释。
+   *
+   * 缺省 `undefined` = 调用方没给 → 走既有判据（与 `lastActivateReason` 同一纪律）。
+   */
+  streamingIdentity?: StreamingIdentity | null;
 }): Promise<PanelModel> {
-  const { pageKind, primary } = input;
+  const { pageKind, primary, streamingIdentity } = input;
 
   const [replies, rawClean] = await Promise.all([fetchPanelReplies(), readRawCleanOptions()]);
 
@@ -666,6 +707,8 @@ export async function loadPanelModel(input: {
     account: replies.account,
     buckets: replies.buckets,
     pageKind,
+    // ⚠️ 必须透传：少了这一行，`page` 模式下画质 Tab 会说「已接管」（假话）
+    ...(streamingIdentity !== undefined ? { streamingIdentity } : {}),
   });
 
   return buildPanelModel({

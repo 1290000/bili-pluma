@@ -108,8 +108,16 @@ describe('DNR 路径规则清理（O1）', () => {
   describe('核心：白名单缩短时不得残留（O1 的原始缺陷）', () => {
     it('删掉中间一项后，旧的后位 ID 不残留', async () => {
       await enableProxy(OLD);
-      // 白名单 3 条 → 产生 ID 10000/10001/10002
-      expect(stub.rules.map((r) => r.id).sort((a, b) => a - b)).toEqual([10000, 10001, 10002]);
+      /**
+       * ⚠️ **2026-11-11 改法**：原本硬编码 `[10000, 10001, 10002]`（白名单 3 条）。
+       * ADR 0035 加了首页推荐路径后变成 4 条 —— 硬编码列表失效。
+       *
+       * 按白名单实际条数推导：本用例要守的是"ID = 下标 + BASE"，
+       * 不是"白名单恰好有 N 条"。后者每加一条路径就要改一次测试，形同虚设。
+       */
+      expect(stub.rules.map((r) => r.id).sort((a, b) => a - b)).toEqual(
+        ENABLED_ROUTE_PATHS.map((_, i) => 10000 + i),
+      );
 
       // 模拟"删掉中间那条"，用缩短后的白名单重装（换新 Cookie）
       const shortened = ENABLED_ROUTE_PATHS.filter((_, i) => i !== 1);

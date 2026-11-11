@@ -99,7 +99,11 @@ async function runPlayurl(opts: Options = {}): Promise<Result> {
 
   // 机制 1：token 必须是非空字符串，否则 tokenLocked 不锁、行为类开关被忽略
   if (opts.enable !== false) {
-    win.postMessage({ __ns: '__PLUMA__', type: 'cfg', token: 'test-token', enabled: true }, '*');
+    // ⚠️ `rewriteGate` 必带：进度还原是**改写响应**，初值 false（fail-closed）会拦住它
+    win.postMessage(
+      { __ns: '__PLUMA__', type: 'cfg', token: 'test-token', enabled: true, rewriteGate: true },
+      '*',
+    );
     await new Promise((r) => setTimeout(r, 10));
   }
 

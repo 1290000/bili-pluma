@@ -124,9 +124,50 @@ function bootWithMediaSource(methods: Record<string, unknown>): Sandbox {
   return { win, sent, page: win as unknown as Record<string, unknown> };
 }
 
-/** 下发 enabled 配置。token 与脚本约定一致才会被接受 */
-function enable(sb: Sandbox, enabled = true): void {
-  sb.win.postMessage({ __ns: '__PLUMA__', type: 'cfg', token: 'test-token', enabled }, '*');
+/**
+ * 下发配置。token 与脚本约定一致才会被接受。
+ *
+ * ## ⚠️ 2026-11-11 起必须同时传 `rewriteGate`（fail-closed 引入的连锁）
+ *
+ * 主世界现在有两个独立开关：
+ *   - `enabled`：用户总开关
+ *   - `rewriteGate`：扩展这次**有没有参与取流**（决定要不要改写响应体）
+ *
+ * 真实的 `content.ts` 在 `reason === 'ok'` 时两者都发 `true`。
+ * 本 helper 模拟那个组合 —— **只发 `enabled` 的话 `rewriteGate` 保持 `false`
+ * （fail-closed 初值），所有改写都会被拦下**，这些用例会全红。
+ *
+ * 想测"没参与取流"的场景（`page-identity`），用 `enable(sb, true, false)` ——
+ * 第二个参数是总开关（开），第三个是 `rewriteGate`（关），
+ * 正好是"开关开着、但扩展没参与取流"那个组合。
+ *
+ * ## ⚠️ 这里曾经有个 `disableRewriteGate()` helper（2026-11-11 删除）
+ *
+ * 它做的事与 `enable(sb, true, false)` **完全一样**，只是包了一层。
+ * 全仓从未被调用过 —— lint 的 `no-unused-vars` 抓到了它。
+ *
+ * **删而不是留着的理由**：两个 helper 表达同一件事，下一个人会犹豫该用哪个，
+ * 而其中一个还可能是过时的。**能力已经被 `enable()` 的第三个参数覆盖，
+ * 不需要第二个入口。**
+ *
+ * ## `enabled=false` 时 `rewriteGate` 也必须跟着 `false`
+ *
+ * 真实链路里 `content.ts` 的判据是 `extensionEngaged = reason === 'ok'`，
+ * 而总开关关着时 reason 是 `'disabled'` → `enabled` 与 `rewriteGate` **同为 false**。
+ * 两者不可能出现"开关关着但允许改写"的组合 —— helper 的默认值要跟这个现实一致，
+ * 否则会造出线上不存在的状态，让测试测的不是真行为。
+ */
+function enable(sb: Sandbox, enabled = true, rewriteGate?: boolean): void {
+  sb.win.postMessage(
+    {
+      __ns: '__PLUMA__',
+      type: 'cfg',
+      token: 'test-token',
+      enabled,
+      rewriteGate: rewriteGate ?? enabled,
+    },
+    '*',
+  );
 }
 
 /**

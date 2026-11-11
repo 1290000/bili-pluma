@@ -6,9 +6,9 @@
  */
 
 export const ERROR_CODES = {
-  /** 还没配置播放账号 */
+  /** 还没配置取流账号 */
   NOT_CONFIGURED: 'NOT_CONFIGURED',
-  /** 播放账号凭据失效，需要重新扫码 */
+  /** 取流账号凭据失效，需要重新扫码 */
   CREDENTIAL_EXPIRED: 'CREDENTIAL_EXPIRED',
   /** URL 不在白名单内，拒绝代理 */
   PATH_NOT_ALLOWED: 'PATH_NOT_ALLOWED',

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 内容脚本（ISOLATED world）—— 页面侧的编排层。
  *
  * 三件事：
@@ -44,7 +44,16 @@ import {
   loadCachedVideoInfo,
   maxVideoHeight,
   readCidFromSsr,
-  shouldWritePgcCache,
+  shouldPersistPgcCache,
+  /**
+   * ⚠️ `shouldWritePgcCache` **不再从这里 import**（2026-11-11）。
+   *
+   * 它没有消失，只是**降级为内部实现**：现在唯一的写入决策入口是
+   * `shouldPersistPgcCache()`，它内部调 `shouldWritePgcCache()` 做质量闸。
+   *
+   * 这样调用方不会再误用"只判质量、不判身份"的那道闸 —— 那正是本轮的越权来源。
+   * 需要质量闸单独行为时去 `pgc-cache-inject.ts` 测，不要在这里调。
+   */
   writePgcSessionCache,
 } from '@/src/content/isolated/pgc-cache-inject';
 import { fetchPgcPlayurl } from '@/src/content/isolated/pgc-fetch';
@@ -79,9 +88,12 @@ import { describeDiagnostic } from '@/src/content/isolated/diagnostic-routes';
 import { mergeVideoInfo } from '@core/playinfo/pgc-merge';
 import { expectedDurationMs, readSsrVideoInfo } from '@core/playinfo/pgc-duration';
 import { PROXY_ENABLED_KEY } from '@platform/http/dnr';
-import { writePgcCache } from '@platform/storage/pgc-cache-store';
+import { clearPgcCache, writePgcCache } from '@platform/storage/pgc-cache-store';
 import { readPrimaryProfile, savePrimaryProfile } from '@platform/storage/primary-profile-store';
+import { readStreamingIdentity } from '@platform/storage/streaming-identity-store';
+import { needsProxy, type StreamingIdentity } from '@shared/constants/streaming-identity';
 import { BADGE_ENABLED_KEY, readBadgeEnabled } from '@platform/storage/ui-prefs-store';
+import type { ProxyActivateReason } from '@shared/types/messages';
 import { buildPageSnapshot } from '@core/ui/page-snapshot';
 import {
   parsePlayPage,
@@ -202,6 +214,30 @@ const pgcReloadTrace = {
    * 恒为 0 = c 的判定点没生效（要么 `pgcPatchedByUs` 永远 false，要么护栏本来就不存在）。
    */
   guardClearedByOutcome: 0,
+  /**
+   * ## 主世界注入门控的**最后一次**退出阶段（2026-11-11 新增）
+   *
+   * `main-world.js` 的 `pgcTrace.lastStage` 值，经 `pgc` 消息回传到这里。
+   *
+   * ## 为什么必须补这一项
+   *
+   * 2026-11-11 新增了**第零道门控** `if (rewriteGate !== true) return;`，
+   * 它的退出阶段叫 `'skip-no-rewrite-gate'`。但那个值原本只存在
+   * `window.__PLUMA_PGC__`（MAIN world）上，而：
+   *   - `collect.ts`（诊断页）**从不读** `__PLUMA_PGC__`（实测：全仓读它的只有 `poc/` 探针）
+   *   - ISOLATED 侧也从未消费 `pgc` 类消息
+   *
+   * → 新门控**生效与否在用户可见的地方完全不可观测**，真机验证会退化成"看画面猜"。
+   *
+   * **判据（Lead 2026-11-11）：任何门控都必须有一个可观测的出口。**
+   * 所以这里接住它，并通过已有的 `page/snapshot:ok` 桥（`pgcReload` 字段）送出去 ——
+   * 不需要开新通道。
+   *
+   * 常见值：`'boot'`（还没收到 cfg）／`'skip-no-rewrite-gate'`（扩展没参与取流）／
+   * `'skip-disabled'`（总开关关着）／`'skip-inactive'`（page/activate 回未激活）／
+   * `'patched'`（真的注入了）。
+   */
+  mainWorldStage: '',
 };
 
 try {
@@ -268,6 +304,29 @@ let hasEverActivated = false;
 let proxyEnabledKnown: boolean | null = null;
 
 /**
+ * ## ⚠️ 这里**曾经**有一个模块级的 `extensionEngagedKnown`（2026-11-11 删除）
+ *
+ * 它原本的用途：让 PGC 缓存写入点知道「扩展这次有没有真的参与取流」，
+ * 从而决定要不要把取到的流写进 `pluma:pgc-vi:*`。
+ *
+ * ## 为什么删掉：职责已被 `shouldPersistPgcCache()` 覆盖，而且后者更准确
+ *
+ * 写入点（`prepareFullStream` 等）现在调
+ * `shouldPersistPgcCache(merged, expectedMs, await readStreamingIdentity())`，
+ * 它内部同时做**身份闸**（`page` 身份一律不写）和**质量闸**（截断流不写）。
+ *
+ * 而 `extensionEngagedKnown` 要等 `page/activate` 回包（~400ms）才可靠，
+ * 写入点却可能在回包之前就跑完（注入 ~358ms）—— **它天生会读到 `null`**。
+ * 靠一个"可能还没到"的状态去做不可逆动作，比不做更糟。
+ *
+ * **判据**：`streamingIdentity` 是 `storage.local` 同步可读的，任何时候问都有答案；
+ * `page/activate` 回包是异步的，问早了只有 `null`。**用前者，不用后者。**
+ *
+ * ⚠️ 删它时它**从未被赋值过**（声明之后全仓零写入），是纯粹的死变量 ——
+ * 留着会让下一个人以为"有个状态在跟踪这件事"，而实际上没有任何东西在跟踪。
+ */
+
+/**
  * 用户是否允许显示页内角标（设置页「显示」分区控制）。
  *
  * 默认 `true`；只有显式关过才不画。读到之前先按 `true` 处理 ——
@@ -314,9 +373,24 @@ function paintBadge(): void {
  * @param enabled 扩展是否启用（主世界据此决定要不要藏 `__playinfo__` / 轮询会员状态）
  * @param pgcActive `page/activate` 的结果。`false` 时主世界**不接管 PGC 播放器**
  *   （没装规则就接管，取回来的还是主账号的试看，纯属浪费一次请求）
+ * @param rewriteGate 主世界**是否允许改写响应体**（`__playinfo__` 藏起 / SSR 注入 /
+ *   会员态轮询）。**默认 `false` —— fail-closed，只有明确说"允许"才允许。**
+ *
+ * ## ⚠️ 为什么需要第三个参数，而不是复用 `enabled`
+ *
+ * `enabled` 原本同时承担两件事：① 用户的总开关 ② 扩展是否在改写响应体。
+ * 这两件事在大多数 reason 下同向，但 **`page-identity` 把它们分开了**：
+ * 用户没关总开关（`enabled` 该是 `true`），可扩展**根本没参与取流**（一条 DNR 规则
+ * 都没装）——那时改写 `__playinfo__` 只会把"页面自己的正确数据"改坏，
+ * 再让 `summary-view` 说出「基线不可用（数据来源是取流账号）」这种**不存在的归因**。
+ *
+ * 详见 `poc/probe/verify-report/PROXYENABLED-DESIGN.md`。
  */
-function tellMainWorld(enabled: boolean, pgcActive?: boolean): void {
-  window.postMessage({ __ns: NS, type: 'cfg', token: CHANNEL_TOKEN, enabled, pgcActive }, '*');
+function tellMainWorld(enabled: boolean, pgcActive?: boolean, rewriteGate = false): void {
+  window.postMessage(
+    { __ns: NS, type: 'cfg', token: CHANNEL_TOKEN, enabled, pgcActive, rewriteGate },
+    '*',
+  );
 }
 
 /**
@@ -370,6 +444,19 @@ async function takeSnapshot(): Promise<{
    * **不进 popup 的渲染路径**，popup 也从不发 `snapshot`。
    */
   pgcReload: typeof pgcReloadTrace;
+  /**
+   * 取流身份的两个来源 + 消息耗时（2026-11-11，**只做诊断**）。
+   *
+   * 面板胶囊不渲染、且 popup 里 `streaming/status` 返回 `undefined` ——
+   * 这两个字段让桥一次就能对比"消息通道"与"存储"两条路。
+   * **不进 popup 渲染路径**，与 `pgcReload` 同性质。
+   */
+  streamingProbe: {
+    fromMessage: StreamingIdentity | null;
+    fromStorage: StreamingIdentity | null;
+    messageElapsedMs: number;
+    rawShape: string;
+  };
 }> {
   try {
     /**
@@ -378,6 +465,15 @@ async function takeSnapshot(): Promise<{
      *
      * `sendToBackground` 的返回是 `unknown`（它要兜住"上下文失效返回 null"
      * 与各种应答形状），所以这里按消息类型收窄 —— 与 `activatePage()` 同样的做法。
+     *
+     * ## ⚠️ 这里**刻意不**加 `streaming/status`（2026-11-11）
+     *
+     * 曾想把它塞进这个 `Promise.all` 让快照桥顺带测它，但那会把
+     * **一条可能永不 resolve 的消息**放进自动化脚本的关键路径 ——
+     * 一旦它挂住，整个快照也跟着挂，**排查工具本身被拖垮**。
+     *
+     * 正确做法是**单独一条带超时的诊断桥**（`streaming-probe`），
+     * 失败不影响快照。见 `main()` 里 data.type === streaming-probe 那条分支。
      */
     const [proxyRes, acctRes] = (await Promise.all([
       sendToBackground({ type: 'proxy/status' }),
@@ -403,6 +499,71 @@ async function takeSnapshot(): Promise<{
 
     const proxyOk = proxyRes?.type === 'proxy/status:ok';
     const acctOk = acctRes?.type === 'account/summary:ok';
+
+    /**
+     * ## 两个**独立来源**的取流身份（2026-11-11，定位 `streaming/status`）
+     *
+     * 面板胶囊不渲染，而 `streaming/status` 在 popup 里返回 `undefined`。
+     * 要判断"是消息挂了还是存储本身有问题"，必须**分开取**：
+     *
+     * | 字段 | 来源 | 它回答 |
+     * | --- | --- | --- |
+     * | `streamingIdentityFromMessage` | `streaming/status` 消息 | **消息通道通不通** |
+     * | `streamingIdentityFromStorage` | `chrome.storage.local` 直读 | **值本身是什么** |
+     *
+     * ⚠️ **只填一个是不够的**：若只填 message 来源，读到 `null` 时分不清
+     * "消息坏了"还是"存储里真的没值"；若只填 storage 来源，
+     * 又绕过了要排查的那条消息。
+     *
+     * ### 判读矩阵
+     *
+     * | message | storage | 结论 |
+     * | --- | --- | --- |
+     * | `'extension'` | `'extension'` | ✅ 两者都正常 → 问题在渲染层 |
+     * | `null` | `'extension'` | 🔴 **消息坏了**（存储有值但没传出来） |
+     * | `null` | `null` | 🟡 存储读取本身失败 |
+     *
+     * 两个字段都**只进快照**，不进 popup 渲染路径（与 `pgcReload` 同性质）。
+     */
+    const streamingStartedAt = Date.now();
+    const streamingRes = await sendToBackground({ type: 'streaming/status' }).catch(() => null);
+    const streamingElapsedMs = Date.now() - streamingStartedAt;
+
+    const streamingIdentityFromMessage =
+      (streamingRes as { type?: string; identity?: StreamingIdentity } | null)?.type ===
+        'streaming/status:ok' &&
+      (streamingRes as { identity?: StreamingIdentity }).identity !== undefined
+        ? (streamingRes as { identity: StreamingIdentity }).identity
+        : null;
+
+    /**
+     * ## 原始返回（**排查专用**，不是给 UI 的）
+     *
+     * 上一步的判据只会给出 `null`，**丢掉"到底收到了什么"** ——
+     * 而 2ms 就返回说明它不是超时，是**拿到了一个非预期形状的应答**。
+     *
+     * 这里把**完整原始值**也带上，桥一次就能看到：
+     *   - `res === undefined` → 通道关了（sendResponse 被丢弃）
+     *   - `res === null` → `sendToBackground` 兜底（上下文失效）
+     *   - `res` 有值但 `type !== 'streaming/status:ok'` → **background 回了别的**
+     *   - `res.identity === undefined` → 回了 `:ok` 但**没带 identity 字段**
+     *
+     * ⚠️ **只含 `type` / `identity` 两个字段**，不含凭据。
+     * 值先做 `JSON.stringify` 再截断，避免把意外字段整个带出来。
+     */
+    let streamingRawShape: string;
+    try {
+      streamingRawShape =
+        streamingRes === undefined
+          ? 'undefined'
+          : streamingRes === null
+            ? 'null'
+            : JSON.stringify(streamingRes).slice(0, 200);
+    } catch {
+      streamingRawShape = '<非可序列化>';
+    }
+
+    const streamingIdentityFromStorage = await readStreamingIdentity().catch(() => null);
 
     const proxy = {
       enabled: proxyOk ? proxyRes.enabled === true : false,
@@ -449,6 +610,15 @@ async function takeSnapshot(): Promise<{
         proxy,
         account,
         cached: cached ? { uname: cached.uname, level: cached.level } : null,
+        /**
+         * `page/activate` 的结果 —— 给 popup 判「取流号是不是就是页面这个号」。
+         *
+         * 从 `pageView` 里取而不是从 `pageState` 直读：`view()` 是本类唯一出口
+         * （理由见 `page-state.ts` 里 `proxyIdentity` 字段的注释）。
+         * `pageView` 为 `null`（非播放页 / 还没报到）时传 `undefined`，
+         * 表示"不知道"——**不许猜成 `'ok'`**。
+         */
+        lastActivateReason: pageView?.proxyIdentity,
       }),
       /**
        * PGC 重载链路的诊断快照（2026-10-29 加）。
@@ -466,6 +636,31 @@ async function takeSnapshot(): Promise<{
        * ⚠️ 它只在 `page/snapshot:ok` 里，**不进 popup 的渲染路径**。
        */
       pgcReload: pgcReloadTrace,
+
+      /**
+       * ## 取流身份的两个来源 + 耗时（2026-11-11，诊断用）
+       *
+       * 面板胶囊不渲染，而 `streaming/status` 在 popup 里返回 `undefined`。
+       * 这两个字段让桥**一次就能对比**两条路：
+       *
+       * | fromMessage | fromStorage | 结论 |
+       * | --- | --- | --- |
+       * | `'extension'` | `'extension'` | ✅ 两者都正常 → 问题在渲染层 |
+       * | `null` | `'extension'` | 🔴 **消息坏了**（存储有值却没传出来） |
+       * | `null` | `null` | 🟡 存储读取本身失败 |
+       *
+       * ⚠️ **不进 popup 渲染路径**（与 `pgcReload` 同性质）。
+       * ⚠️ 值只有 `'extension' | 'page' | null`，**不含任何凭据**。
+       */
+      streamingProbe: {
+        /** 走 `streaming/status` 消息拿到的值（`null` = 没返回 `:ok` 或没带 identity） */
+        fromMessage: streamingIdentityFromMessage,
+        /** 直接读 `chrome.storage.local` 的凝聚值（`null` = 读取本身失败） */
+        fromStorage: streamingIdentityFromStorage,
+        /** 消息往返耗时（ms）。**异常大 = Promise 挂过** */
+        messageElapsedMs: streamingElapsedMs,
+        rawShape: streamingRawShape,
+      },
     };
   } catch (e) {
     reportQuality({
@@ -482,6 +677,19 @@ async function takeSnapshot(): Promise<{
       }),
       // 失败时也带上诊断 —— 排查恰恰最需要它
       pgcReload: pgcReloadTrace,
+      /**
+       * ⚠️ **失败分支也要给这三个字段**（`null` / `-1`），不能省。
+       *
+       * 省掉会让类型报错；而**用 `null` 而不是编一个默认值**，
+       * 是为了让桥能把"组装失败"和"消息返回了 null"**区分开** ——
+       * 这与整个排查的判据一致：不猜。
+       */
+      streamingProbe: {
+        fromMessage: null,
+        fromStorage: null,
+        messageElapsedMs: -1,
+        rawShape: '<catch>',
+      },
     };
   }
 }
@@ -569,6 +777,31 @@ function listenMainWorld(): void {
        * 配置只下发一次（`hello` 那一次）。开关变化本来就靠刷新页面生效
        * （popup 上写着"刷新后生效"），不需要热切换通道。
        */
+      return;
+    }
+
+    /**
+     * ## 接住主世界的 PGC 门控阶段（2026-11-11 新增）
+     *
+     * `main-world.js` 的 `pgcPost(stage, detail)` 每退出一道门控就发一条，
+     * 载荷里同时带两套枚举（**别混**）：
+     *
+     * | 字段 | 含义 | 例 |
+     * | --- | --- | --- |
+     * | `stage` | 事件类别 | `'skip'` / `'playview'` / `'error'` |
+     * | **`lastStage`** | **注入链路停在哪一道门控** | **`'skip-no-rewrite-gate'`** / `'skip-disabled'` / `'patched'` |
+     *
+     * 这里取的是 **`lastStage`** —— 它才是回答"走到哪一步退出的"的那个值。
+     * 取错成 `stage` 会让所有跳过都读成 `'skip'`，等于没观测。
+     *
+     * ⚠️ **这里必须 `return`**：`pgc` 消息不是 `ssr-playinfo`，落到下面会被
+     * 当成基线载荷解析，污染 `PageState`。
+     */
+    if (d.type === 'pgc') {
+      const lastStage = (d as { lastStage?: unknown }).lastStage;
+      if (typeof lastStage === 'string' && lastStage) {
+        pgcReloadTrace.mainWorldStage = lastStage;
+      }
       return;
     }
 
@@ -938,8 +1171,11 @@ async function tryUpgradeForQuality(cid: string, ssrInfo: unknown): Promise<bool
    * 走到这里才写缓存 —— **只有真正要用的那份才进 LRU**。
    * 入口已用长度闸拦过截断流（G1），这里再防御一次：写缓存是不可逆动作。
    */
-  if (!shouldWritePgcCache(merged, expectedMs)) {
-    reportQuality({ height: 0, note: '[PGC] 补取结果是截断流，拒绝写缓存（防御）' });
+  if (!shouldPersistPgcCache(merged, expectedMs, await readStreamingIdentity())) {
+    reportQuality({
+      height: 0,
+      note: '[PGC] 补取结果不可写缓存（截断流，或取流身份 = 浏览器登录态）',
+    });
     return false;
   }
   await writePgcCache(cid, merged);
@@ -1623,7 +1859,32 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
    * **代价**：这一集在本次会话里不会再尝试取流（`pgcCacheTried` 已置 true）。
    * 用户刷新页面可以重试。这比"无限刷新"和"把坏数据存 100 分钟"都好。
    */
-  if (!shouldWritePgcCache(merged, expectedMs)) {
+  /**
+   * ## 写缓存前的**唯一门控点**（2026-11-11 修正）
+   *
+   * 两道闸合在一起：
+   *   ① **身份闸**：`page` 身份下扩展没取流，这份流不该被后续注入（否则越权）
+   *   ② **质量闸**：截断流（试看）不写
+   *
+   * ⚠️ 为什么身份闸在这里而不是主世界：写进 `pluma:pgc-vi:<cid>` 的流会在
+   * 下一趟刷新的 `__playinfo__` setter 里被**同步**读走注入（358ms），
+   * 而 `page/activate` 回包要 ~400ms —— **消费端判必然晚到**（ADR 0028 洞 1）。
+   * 而写入这一刻，`streamingIdentity` 已经同步可知。
+   *
+   * 见 `pgc-cache-inject.ts` 的 `shouldPersistPgcCache()` 长注释。
+   */
+  const streamingIdentity = await readStreamingIdentity();
+  if (!shouldPersistPgcCache(merged, expectedMs, streamingIdentity)) {
+    // 分开记退出原因：身份闸 ≠ 质量闸，排查时结论相反
+    if (!needsProxy(streamingIdentity)) {
+      reportQuality({
+        height: 0,
+        note: '[PGC] 取流身份 = 浏览器登录态 → **不写缓存**（写进去就等于让扩展账号的流被注入）',
+      });
+      pgcReloadTrace.orchestrateExit = 'prepare-page-identity-no-write';
+      pgcReloadTrace.lastReason = '取流身份是浏览器登录态，不写 PGC 缓存';
+      return;
+    }
     reportQuality({
       height: 0,
       note:
@@ -1745,8 +2006,25 @@ function report(): void {
     })) as {
       type?: string;
       activated?: boolean;
-      /** 与 `messages.ts` 的 `page/activate:ok` 同源。`'disabled'` = 用户关了总开关 */
-      reason?: 'ok' | 'not-configured' | 'same-account' | 'disabled' | 'error';
+      /**
+       * 与 `messages.ts` 的 `page/activate:ok` 同源 —— **派生，不手抄**（2026-11-11）。
+       *
+       * ## ⚠️ 这是一个**内联字面量断言**，`tsc` 结构性保护不到它
+       *
+       * `as { ... reason?: ... }` 是一份**独立的结构类型**，与 `ResponseMsg` 没有
+       * 任何链接。所以：
+       *   - 这里漏写一个值 → `tsc` **不会报错**
+       *   - `res.reason` 会比实际回包窄，后续 `=== '某值'` 判断会静默变成死分支
+       *
+       * 2026-11-11 就发生过：加 `'page-identity'` 时这里漏改，
+       * 而 `page-snapshot.ts` / `playinfo.ts` / `page-state.ts` 也各自漏改，
+       * 四处一起错让 `tsc` 全程沉默。
+       *
+       * 现在改成引用 `ProxyActivateReason`。⚠️ **但"下一个人再写一份内联断言"
+       * 这个风险没有消除** —— 见 `messages.ts` 里 `ProxyActivateReason` 注释中
+       * 「已知缺口」一节列的 6 类无法保护的位置。
+       */
+      reason?: ProxyActivateReason;
     } | null;
 
     /**
@@ -1755,6 +2033,46 @@ function report(): void {
      */
     if (res?.type === 'page/activate:ok') {
       badgeState.proxying = res.activated === true;
+
+      /**
+       * ## 把"这次到底有没有第二个身份"回灌给 `pageState`（步骤 3）
+       *
+       * ### 为什么必须由这里回灌
+       *
+       * 画质对比建立在「SSR = 一个账号、playurl = 另一个账号」上。
+       * 但 `PageState` 的三个入口（`applySsr` / `setPrimaryMid` / `applyPlayback`）
+       * **都无法回答"两者是不是同一个号"** —— 它们只看得到时机、mid、响应体。
+       * 唯一知道答案的是 background：它在 `page.handler.ts` 比对两个 mid。
+       *
+       * 不回灌的后果不是"少一个提示"，而是 `'same-identity'` 成为**永远算不出来的
+       * reason**：类型能编译、单测能过，真机上却是死代码。
+       *
+       * ### 为什么要传原始 reason 而不是传一个布尔
+       *
+       * 五种 reason 里只有 `'self'`（原 `same-account`）能确证"没有第二个身份"。
+       * `disabled` / `error` 只是"没代理"/"装规则失败"——**不知道**两个号的关系，
+       * 把它们说成"同一身份"就是拿未知冒充结论。
+       * 判定责任放在 `PageState.setProxyIdentity()`（有输入域表格 + 单测）。
+       *
+       * ### ⚠️ `res.reason` 缺失时传 `'unknown'`，**不是 `'error'`**
+       *
+       * 两者都走保守分支（不断言同一身份），但语义不同：
+       *
+       *   - `'error'` = background **确实回了**"某处失败了"
+       *   - `'unknown'` = 回了 `page/activate:ok` 但**没有 reason 字段** —— 协议没遵守
+       *
+       * 更根本的一条：`'error'` 本身也**不能**断言同一身份 ——
+       * `self` 分支前面还有 credential / isProxyEnabled / 设备 Cookie 等若干步，
+       * 任何一步抛异常都会变成 `'error'`。所以它的含义是"某处失败了"，
+       * **不是"不是同一身份"**。
+       *
+       * ### 失败分支为什么不调用
+       *
+       * `res === null` / 非 `page/activate:ok`（background 未就绪、SW 休眠、
+       * `Extension context invalidated`）→ **不调用**，`proxyIdentity` 保持 `'unknown'`。
+       * "没收到回包" ≠ "不是同一账号"。
+       */
+      pageState.setProxyIdentity(res.reason ?? 'unknown');
       /**
        * 把 activate 的结果转给主世界：PGC 分支据此决定要不要接管播放器。
        *
@@ -1770,10 +2088,35 @@ function report(): void {
        * （`page.handler.ts` 的 `isProxyEnabled()` 分支），
        * 那是这里能拿到的**最权威**的开关信号 —— 比另外发一条 `proxy/status` 更好，
        * 因为它搭在这条**本来就要发的**消息上，不额外多一次往返、也不会晚到。
+       *
+       * ⚠️ **两个布尔，别合并**：它们默认向相反，且理由不同 —— 见下面的注释块。
+       *
+       * ### `switchOn` 为什么保留 fail-open（否定式）
+       *
+       * 它回答的是"**用户的总开关**开没开"，而这个值的**真相源是 `storage.local`**
+       * （`isProxyEnabled()`）。这里只是顺路把 background 的判断带话给主世界，
+       * 最坏情况是"少传一次关"——后果是主世界多跑一次同步，**不产生新的副作用**。
+       *
+       * 按 `poc/probe/verify-report/PROXYENABLED-DESIGN.md` §2.3 的判据：
+       * **fail-open 只有在"放行 = 回退到既有行为、不产生新副作用"时可接受。**
+       * 这一条满足，所以保持否定式 —— 与 `hello-timing.ts:103` 的 `offMark !== true` 同类。
+       *
+       * ### `extensionEngaged` 为什么必须 fail-closed（正向白名单）
+       *
+       * 它回答的是"**扩展这次有没有参与取流**"，而这个布尔**直接决定主世界要不要改写响应体**
+       * ——那是**有副作用**的动作。放行会让主世界多做一件事，不满足上面那条判据。
+       *
+       * 而且原写法 `!(res.activated === false && res.reason === 'disabled')` 有个致命性质：
+       * **新增 reason 时不需要任何人改这一行，它自动落进"在工作"。**
+       * 错误是默认的、正确需要额外动作 —— 这正是 fail-open 的定义性危害
+       * （真值表 6 行里原来只有 2 行对，`page-identity` 就在错的那 4 行里）。
+       *
+       * 所以写成 `=== 'ok'`：**默认不参与，只有明确成功才参与。**
        */
-      const proxyEnabled = !(res.activated === false && res.reason === 'disabled');
-      proxyEnabledKnown = proxyEnabled;
-      tellMainWorld(proxyEnabled, res.activated === true);
+      const switchOn = res.reason !== 'disabled';
+      const extensionEngaged = res.reason === 'ok';
+      proxyEnabledKnown = switchOn;
+      tellMainWorld(switchOn, res.activated === true, extensionEngaged);
 
       /**
        * ## 总开关状态的本地落地（ADR 0028 第一层 + 第二层）
@@ -1798,20 +2141,107 @@ function report(): void {
        * 这里也写一次，是为了兜住"扩展刚装上 / content 刚注入、onChanged 没收到
        * 那一次变化"的情况 —— 两条路互相兜底，任一条到就够。
        */
-      writeProxyOffMark(!proxyEnabled);
+      /**
+       * ⚠️ **`!switchOn` 的语义**（2026-11-11 补）：`switchOn` 是**肯定式**
+       * （"用户的总开关开着"），而 `writeProxyOffMark()` 要的是**否定式**
+       * （"代理已关"）。两者之间有一次取反，**它是一次隐式耦合**。
+       *
+       * 这一行曾经写成 `writeProxyOffMark(!proxyEnabled)` ——
+       * **`proxyEnabled` 这个变量根本不存在**，而它没被发现，
+       * 是因为当时文件里有一处注释块提前闭合（见文件顶部同类事故说明），
+       * 把后面所有语义错误都挡住了。语法修好后才暴露出来。
+       *
+       * ⚠️ **写注释时不要在正文里出现注释结束符本身** —— 本段第一版就是
+       * 在括号里写了那个符号，结果注释在这里就结束了，把后 5 行变成代码。
+       *
+       * **改 `switchOn` 的语义（例如改成 `res.reason === 'ok'`）时必须同时改这一行**，
+       * 否则"代理已关"标记会在错误的时候被写上/漏写。
+       */
+      writeProxyOffMark(!switchOn);
 
       /**
        * 第二层：清掉注入缓存（**只做数据卫生 + 双保险**，不承担门控职责）。
        *
        * 只在 background **明确**说"总开关关着"时才清：
-       * `reason === 'not-configured'` / `'same-account'` / `'error'` 都不清 ——
+       * `reason === 'not-configured'` / `'self'` / `'error'` 都不清 ——
        * 那几种情况下开关其实是开着的，清了会让用户配好账号后白白多取一次流。
+       *
+       * `'self'`（2026-11-11，原 `same-account`）尤其不能清：取流账号就是页面这个号，
+       * **无需代理** —— 规则不装，取流按页面自身身份进行，不经过扩展。
+       * 这不是故障，是"不需要"。清缓存只会让用户白白多取一次流。
+       *
+       * ## ⚠️ `page-identity` **必须清**（2026-11-11 越权修复）
+       *
+       * 用户切到「浏览器账号取流」后，`sessionStorage` / `storage.local` 里
+       * **还躺着上一轮用扩展账号取回的 4K 流**。那份流是**用户当前没有权限的画质** ——
+       * 不清就是越权：他在 `page` 身份下拿到了大会员才有的档位。
+       *
+       * ## 三种"不装规则"的 reason，清缓存清单必须区分
+       *
+       * | reason | 语义 | 清不清 | 为什么 |
+       * | --- | --- | --- | --- |
+       * | `disabled` | 用户关总开关 | ✅ 清 | 关掉后不该再用扩展账号取回的流 |
+       * | `self` | 两号相同 | ❌ **不清** | 同一身份取的流，仍是当前用户有权拿的 |
+       * | `page-identity` | 用户选了浏览器账号 | ✅ **清** | 缓存来自**另一个**身份，权限不同 |
+       *
+       * ## ⚠️ 本判据与 `page-state.ts` 的 `SAME_IDENTITY_REASONS` **不是同一个问题**
+       *
+       * 两处都列了 `self` 与 `page-identity`，但**对它们的答案相反** ——
+       * 下一个人看到两处都出现这两个值，会以为可以随便合并。**不能。**
+       *
+       * | | 这里（清缓存） | `SAME_IDENTITY_REASONS`（有没有第二个身份） |
+       * | --- | --- | --- |
+       * | **问的问题** | 这份旧缓存**该不该失效**？ | 有没有第二个身份**可对比**？ |
+       * | `self` | ❌ 不清（同一身份，缓存仍有效） | ✅ **是**同一身份 |
+       * | `page-identity` | ✅ **清**（另一个身份的流，越权） | ❌ **不是**"两个号相同"这个事实 |
+       *
+       * **为什么答案相反**：`self` 是"两个号恰好相同"的**事实**，缓存来自同一个号，
+       * 所以还有效；`page-identity` 是"用户选了浏览器账号"的**选择**，
+       * 缓存来自**另一个**（扩展托管的）账号 —— 权限完全不同。
+       *
+       * ⚠️ 两者在 `SAME_IDENTITY_REASONS` 里**答案也相反**（`page-identity` 被剔除过），
+       * 因为那里问的是"有没有第二个身份可对比"：
+       * `self` 的答案是"确实只有同一个"，而 `page-identity` 的答案是
+       * "用户选了浏览器账号，本来就没有两个身份相比" —— 成因不同，不能合并。
+       * 详见 `src/content/isolated/page-state.ts` 的 `SAME_IDENTITY_REASONS` 注释。
+       *
+       * ⚠️ **时序承认**：`page/activate` 回包（~400ms）晚于注入（~358ms），
+       * 所以**这一页可能已经注入了旧流**，清缓存救不了它，只能修"下一次打开"。
+       * **主修法在生产端**（`pgc-cache-inject.ts` 的 `shouldPersistPgcCache`：
+       * `page` 身份下**根本不写**）；这里清缓存是**补充**，管的是存量。
+       *
+       * ## 这条分支现在做**两件事**，第二件是顺带修的既有缺陷
+       *
+       * | # | 清什么 | 之前 | 现在 |
+       * | --- | --- | --- | --- |
+       * | 1 | `sessionStorage`（同步缓存） | ✅ 一直接着 | 不变 |
+       * | 2 | **`storage.local`（持久缓存）** | ❌ **从来没清过** | ✅ 现在清了 |
+       *
+       * 第 2 件为什么必须补：`clearPgcCache()` 在此之前**全仓零调用方**，
+       * `pluma:pgc-playurl-cache` 只靠 100 分钟 TTL 自然过期。
+       * 于是 `disabled` 路径原本就有一个洞 —— 用户关掉总开关后，
+       * `storage.local` 里的旧流仍会被下次打开读出来。
+       * **`page-identity` 让这个洞变成了越权**（另一身份的流），所以一并补上。
+       *
+       * ⚠️ `await` 是刻意的，不是 fire-and-forget：清缓存失败时 `reportQuality`
+       * 说的"已清"就会变成假话。代价是这条分支多一次 `storage` 往返 —— 可接受，
+       * 因为它只在"总开关刚关"或"刚切到浏览器账号"时走一次。
        */
-      if (res.reason === 'disabled') {
+      if (res.reason === 'disabled' || res.reason === 'page-identity') {
         const purged = clearPgcSessionCache();
+        /**
+         * `clearPgcCache()` 返回 `void`（`storage.local` 侧整表删）。
+         *
+         * ⚠️ 「顺手修了 `disabled` 路径不清异步缓存」这件事写在上面的表里 ——
+         * **别把它当成只是为 `page-identity` 加的，`disabled` 也受益。**
+         */
+        await clearPgcCache();
         reportQuality({
           height: 0,
-          note: `[PGC] 总开关已关闭，已清 ${String(purged)} 条同步缓存（不影响本页已完成的注入）`,
+          note:
+            res.reason === 'page-identity'
+              ? `[PGC] 已切到浏览器账号取流，已清 ${String(purged)} 条同步缓存 + 持久缓存（避免用旧身份取的流）`
+              : `[PGC] 总开关已关闭，已清 ${String(purged)} 条同步缓存 + 持久缓存（不影响本页已完成的注入）`,
         });
       }
 
@@ -2010,9 +2440,203 @@ export default defineContentScript({
             snapshot: reply.snapshot,
             // ISOLATED world 的 PGC 重载诊断（MAIN world 读不到那个对象，见 `takeSnapshot`）
             pgcReload: 'pgcReload' in reply ? reply.pgcReload : null,
+            /**
+             * 取流身份的两个来源 + 耗时（2026-11-11，诊断用）。
+             *
+             * 面板胶囊不渲染、popup 里 `streaming/status` 返回 `undefined` ——
+             * 这个字段让桥**一次就能对比**"消息通道"与"存储"两条路。
+             * 只含 `'extension' | 'page' | null`，**不含任何凭据**。
+             */
+            streamingProbe: 'streamingProbe' in reply ? reply.streamingProbe : null,
           },
           '*',
         );
+      });
+    });
+
+    /**
+     * ## 诊断桥：`streaming-probe` —— 单独测 `streaming/status`（2026-11-11）
+     *
+     * ### 它回答什么问题
+     *
+     * 面板胶囊不渲染，怀疑 `streaming/status` 这条消息本身有问题。但：
+     *   - 页面主世界**没有 `chrome.runtime`** → `bsk evaluate` 直接调不到
+     *   - popup 是 `chrome-extension://` → bsk 沙箱按 URL 白名单拒绝
+     *   - **只有 content script 有完整的 `chrome.runtime`**
+     *
+     * 所以这里开一条**只读、只测这一条消息**的桥。
+     *
+     * ### 为什么要带独立超时
+     *
+     * 三种机制必须区分开：
+     *
+     * | 结果 | 机制 |
+     * | --- | --- |
+     * | 立刻返回 `{type:'streaming/status:ok', identity:…}` | 通道正常，问题在别处 |
+     * | 立刻返回 `undefined` | `sendResponse` 被丢弃（通道已关） |
+     * | **超时（`timedOut: true`）** | Promise 永不 resolve（SW 挂起边界） |
+     *
+     * 没有超时的话，第三种会和"页面卡死"混在一起，**排查工具自己先挂住**。
+     *
+     * ### 安全边界（与 `snapshot` 同一条）
+     *
+     * - **只读**：不改任何状态
+     * - **不含凭据**：只回 `identity`（`'extension' | 'page'`）与耗时
+     * - **不回环**：`streaming-probe-reply` 与 `streaming-probe` 不同名
+     */
+    window.addEventListener('message', (ev) => {
+      const d = ev.data as { __ns?: string; type?: string; probeTypes?: unknown } | null;
+      if (!d || d.__ns !== NS || d.type !== 'streaming-probe') return;
+
+      /**
+       * ⚠️ 允许页面侧传一组消息类型来做**对照实验**。
+       *
+       * 白名单硬编码，**不接受任意类型** —— 这条桥是只读诊断通道，
+       * 不开放成通用的"发任意消息"入口（那会绕过 `docs/guides/bsk-page-bridges.md` §3 的安全边界）。
+       */
+      const ALLOWED = ['streaming/status', 'proxy/status', 'account/summary'] as const;
+      type Allowed = (typeof ALLOWED)[number];
+      const requested = Array.isArray(d.probeTypes)
+        ? d.probeTypes.filter((t): t is Allowed => ALLOWED.includes(t as Allowed))
+        : (['streaming/status'] as Allowed[]);
+
+      /**
+       * ⚠️ 同时把 background 写进 `storage.local` 的**执行轨迹**带出来 ——
+       * 那是唯一能看到 SW 内部执行到哪一步的手段（`bsk console` 读不到 SW）。
+       */
+      const readTrace = async (): Promise<unknown> => {
+        try {
+          const bag = await chrome.storage.local.get([
+            'pluma:probe-streaming',
+            'pluma:probe-types',
+            'pluma:streaming-identity',
+            'pluma:proxy-enabled',
+            'pluma:probe-from-content',
+            'pluma:probe-writecheck',
+            'pluma:build-proof',
+          ]);
+          return {
+            streaming: bag['pluma:probe-streaming'] ?? null,
+            receivedTypes: bag['pluma:probe-types'] ?? null,
+            /** content 刚写的键。**能读到 = content 侧 storage 读写正常** */
+            contentWritten: bag['pluma:probe-from-content'] ?? null,
+            /** background 自检：写完能不能读回。**有值 = listener 那次执行了** */
+            writeCheck: bag['pluma:probe-writecheck'] ?? null,
+            /**
+             * ## 🔨 构建证明（2026-11-11）—— **真机验证的前置检查**
+             *
+             * background 每次 SW 启动都会写 `pluma:build-proof`。
+             * 它存在 = **浏览器里跑的是带这段代码的产物**。
+             *
+             * 今天为此栽过两次：Edge 对解压扩展（`location:4`）有 SW 代码缓存，
+             * `taskkill /F` + 重启浏览器清不掉，只有扩展页「重新加载」能清。
+             * **没有这个键就当"跑的是旧代码"处理，不要继续验证。**
+             */
+            buildProof: bag['pluma:build-proof'] ?? null,
+            /**
+             * ## ⚠️ 运行中代码的自我指纹（2026-11-11）
+             *
+             * 关键判据：**能不能证明"浏览器跑的这份代码里含新增的探针字符串"**。
+             *
+             * - `runtimeVersion` 来自 `chrome.runtime.getManifest()` —— 它反映的是
+             *   **当前加载的扩展包**，不是源码状态
+             * - `probeKeyWritable`：本机能否写 `pluma:probe-types`（验证 storage 可用）
+             *
+             * 若 `runtimeVersion` 与 `.output/chrome-mv3/manifest.json` 的 version 一致，
+             * 且 storage 可写，**那"探针键不出现"就只能归因于 background 那段代码没跑**。
+             */
+            runtimeVersion: chrome.runtime.getManifest().version,
+            runtimeName: chrome.runtime.getManifest().name,
+            /**
+             * ⚠️ 这两个键用来验证 **content script 读到的分区
+             * 与 background 写入的分区是不是同一个**。
+             *
+             * `incognito: 'split'` 下普通窗口与无痕窗口是**两个独立 SW**、
+             * 共享同一份 `storage.local`。若它们不共享某个键，
+             * 就会出现"background 写了、content 读不到"。
+             */
+            keysSeen: Object.keys(bag),
+            identity: bag['pluma:streaming-identity'] ?? null,
+            proxyEnabled: bag['pluma:proxy-enabled'] ?? null,
+          };
+        } catch {
+          return null;
+        }
+      };
+
+      const TIMEOUT_MS = 2000;
+
+      const runOne = async (t: Allowed) => {
+        /**
+         * ## 探针第一步：**自己写一个 storage 键**
+         *
+         * 用来验证"content script 与 background 是不是同一个 `storage.local` 分区"。
+         * 若 background 的探针键读不到、而这里写的键**能读到**，说明：
+         *   - content 侧读写正常
+         *   - **background 侧写进了另一个分区，或那段代码没跑**
+         *
+         * ⚠️ 必须放在 `runOne`（async）里：外层 `message` 回调不是 async。
+         */
+        await chrome.storage.local
+          .set({ 'pluma:probe-from-content': Date.now() })
+          .catch(() => undefined);
+
+        const startedAt = Date.now();
+        /**
+         * ⚠️ **绕过 `sendToBackground` 直接调**，把异常原样抓出来。
+         *
+         * `sendToBackground` 内部 `catch { return null }` —— 它**吞掉**了
+         * 真实的错误信息。而实测拿到的是 `undefined`（不是 `null`），
+         * 说明那个 catch **根本没走**，是 `sendMessage` **正常 resolve 了 undefined**。
+         *
+         * 为了排除"其实是别的异常"，这里两条都测：
+         *   - `raw`：直接 `browser.runtime.sendMessage`，异常原文
+         *   - `viaHelper`：走 `sendToBackground`，看它吞成了什么
+         */
+        let raw: unknown;
+        let rawError: string | null = null;
+        try {
+          raw = await browser.runtime.sendMessage({ type: t });
+        } catch (e) {
+          rawError = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+        }
+        const rawMs = Date.now() - startedAt;
+
+        const sent = sendToBackground({ type: t });
+        const timeout = new Promise<{ timedOut: true }>((resolve) => {
+          setTimeout(() => resolve({ timedOut: true }), TIMEOUT_MS);
+        });
+        const settled = sent.then((r) => ({
+          timedOut: false as const,
+          elapsedMs: Date.now() - startedAt,
+          kind: r === undefined ? 'undefined' : r === null ? 'null' : 'value',
+          shape:
+            r === undefined ? 'undefined' : r === null ? 'null' : JSON.stringify(r).slice(0, 160),
+        }));
+        const viaHelper = await Promise.race([settled, timeout]);
+
+        return {
+          type: t,
+          ...viaHelper,
+          rawMs,
+          rawError,
+          rawShape:
+            raw === undefined
+              ? 'undefined'
+              : raw === null
+                ? 'null'
+                : JSON.stringify(raw).slice(0, 160),
+        };
+      };
+
+      void Promise.all(requested.map(runOne)).then(async (results) => {
+        /**
+         * 轨迹要在**消息发完之后**读 —— 此时 background 已经写过了。
+         * 稍等一拍，避免和 SW 的 `storage.local.set` 抢跑。
+         */
+        await new Promise((r) => setTimeout(r, 120));
+        const trace = await readTrace();
+        window.postMessage({ __ns: NS, type: 'streaming-probe-reply', probe: results, trace }, '*');
       });
     });
 

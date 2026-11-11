@@ -19,6 +19,7 @@
 
 import type { PgcCacheEntry } from '@platform/storage/pgc-cache-store';
 import { readPgcCache } from '@platform/storage/pgc-cache-store';
+import { needsProxy, type StreamingIdentity } from '@shared/constants/streaming-identity';
 
 /** 从 URL 读出 cid 之外的信息；cid 只能从页面 SSR 拿，见 `readCidFromPlayinfo` */
 export interface PgcContext {
@@ -368,6 +369,54 @@ export function isSyncCacheUsable(raw: string | null, expectedMs = 0): boolean {
 export function shouldWritePgcCache(merged: unknown, expectedMs = 0): boolean {
   if (!merged || typeof merged !== 'object') return false;
   return !isVideoInfoTruncated(merged, expectedMs);
+}
+
+/**
+ * 取流成功后，这份结果**该不该写进 PGC 缓存** —— 把"流质量"与"身份"两道闸合起来。
+ *
+ * ## 为什么必须在这里判，而不是在消费端（2026-11-11，ADR 0020 的教训）
+ *
+ * 写进 `pluma:pgc-vi:<cid>` 的流，会在**下一趟刷新的 `__playinfo__` setter 里
+ * 被主世界同步读走并注入**。而主世界那一层**没有、也不该有**身份门控 ——
+ * 那正是被 ADR 0020 移除的"第三条护栏"。
+ *
+ * 所以**这里是唯一的门控点**。挪到消费端就必然晚到：
+ *
+ * ```
+ * document_start ──358ms──→ 主世界在 setter 里同步读 sessionStorage → 注入
+ * page/activate 回包 ──~400ms──→ 才知道 streamingIdentity
+ * ```
+ *
+ * 而**写入时机在取流成功之后**，那一刻 `streamingIdentity` **已经同步可知**。
+ *
+ * > **判据：判断"要不要产生副作用"时，如果所需信息在生产端已经同步可得，
+ * > 就必须在生产端判 —— 挪到消费端必然晚到。**
+ *
+ * ## 为什么 `page` 身份下必须不写（越权，不是显示错误）
+ *
+ * ```
+ * 1. 扩展账号取流 → 番剧页注入 4K → 写缓存
+ * 2. 用户切到「浏览器账号」（明确要求"别用扩展账号取流"）
+ * 3. 打开同一番剧页 → 同步读到上次的 4K → 注入 → 播放器拿到 4K
+ * ```
+ *
+ * 用户看到的是他**没有权限**的 4K。性质与 `AGENTS.md` §3 决策 5（不做伪装的
+ * 会员标识）同类。
+ *
+ * @param merged       `mergeVideoInfo()` 的结果
+ * @param expectedMs   期望时长，用于判定截断
+ * @param identity     当前取流身份；**默认 `extension`** 以保持既有调用方语义
+ * @returns `true` = 完整流且扩展真的在取流 → 可以写缓存；否则 `false`
+ */
+export function shouldPersistPgcCache(
+  merged: unknown,
+  expectedMs: number,
+  identity: StreamingIdentity,
+): boolean {
+  // ① 身份闸：`page` 身份下扩展**没有**取流，这份流不该被你后续注入
+  if (!needsProxy(identity)) return false;
+  // ② 质量闸：截断流（试看）不写
+  return shouldWritePgcCache(merged, expectedMs);
 }
 
 /**

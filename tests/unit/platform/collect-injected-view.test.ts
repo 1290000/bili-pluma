@@ -186,13 +186,13 @@ describe('★ 传 view：用传递进来的那份，不查标签页', () => {
      * 这里传前者，验证注入路径没有把这两支搞混。
      */
     const rows = await collectFacts({ pageView: view({ playback: null }) });
-    const pb = rows.find((r) => r.label === '播放账号（页面 playurl 响应）');
+    const pb = rows.find((r) => r.label === '取流账号（页面 playurl 响应）');
     expect(pb?.value).toContain('尚未收到');
   });
 
   it('playback 有对象但 capability 为 null → "收到但解析不出轨道"', async () => {
     const rows = await collectFacts({ pageView: view({ playback: { capability: null } }) });
-    const pb = rows.find((r) => r.label === '播放账号（页面 playurl 响应）');
+    const pb = rows.find((r) => r.label === '取流账号（页面 playurl 响应）');
     expect(pb?.value).toContain('解析不出轨道');
   });
 });
@@ -322,7 +322,7 @@ describe('其余各项不受参数影响（改动范围守卫）', () => {
     const labels = rows.map((r) => r.label);
     for (const k of [
       'InPrivate 权限',
-      '播放账号凭据',
+      '取流账号凭据',
       '播放代理总开关',
       'DNR 全局路径规则',
       '代理路径白名单',

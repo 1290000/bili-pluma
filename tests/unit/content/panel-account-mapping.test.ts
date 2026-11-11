@@ -39,6 +39,21 @@ import { accountTab } from '../../../src/content/panel/tabs';
 import { toPopupAccount } from '../../../src/content/panel/panel-data';
 import type { AccountSummary } from '../../../src/shared/types/account';
 
+/**
+ * 账号卡动作的公共默认值。
+ *
+ * `streamingIdentity: null` = **这些用例不关心胶囊**（它们测的是账号映射与假警报），
+ * 显式传 `null` 而不是省略 —— 字段是必填的，"省略"和"明确没有"必须能区分。
+ */
+const ACTS = {
+  login: () => undefined,
+  logout: async () => ({ ok: true }),
+  streamingIdentity: null,
+  toggleStreamingIdentity: () => undefined,
+  feedAccountEnabled: false,
+  toggleFeedAccount: () => undefined,
+} as const;
+
 const NOW = 1_800_000_000_000;
 
 /** smoke 真机上报的那份数据的**真实形状** */
@@ -112,7 +127,7 @@ describe('★★★ 端到端：真实 AccountSummary → 渲染出「刚刚校�
       },
       NOW,
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
 
     expect(box.textContent, '健康的账号被报成了「凭据异常」').not.toContain('凭据异常');
@@ -134,7 +149,7 @@ describe('★★★ 端到端：真实 AccountSummary → 渲染出「刚刚校�
       },
       NOW,
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).toContain('凭据异常');
     expect(box.textContent).toContain('-101');
@@ -201,7 +216,7 @@ describe('★★★ 端到端：走真实消息路径 fetchPanelReplies → 映�
       },
       NOW,
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
 
     expect(box.textContent, '走完整消息路径后出现了假警报').not.toContain('凭据异常');
@@ -245,7 +260,7 @@ describe('★★★ 端到端：走完整面板（消息形状进、DOM 出）',
   let controller: PanelController | null = null;
 
   beforeEach(() => {
-    controller = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    controller = mountPanelBody(ACTS);
   });
 
   afterEach(() => {

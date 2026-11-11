@@ -30,6 +30,16 @@ import { mountPanelBody } from '../../../src/content/panel/panel';
 import type { PanelModel } from '../../../src/content/panel/panel-data';
 import { DEFAULT_CLEAN_OPTIONS } from '../../../src/content/site-clean/clean-options';
 
+/** 面板动作的公共默认值（`streamingIdentity: null` = 本用例不关心胶囊） */
+const ACTS = {
+  login: () => undefined,
+  logout: async () => ({ ok: true }),
+  streamingIdentity: null,
+  toggleStreamingIdentity: () => undefined,
+  feedAccountEnabled: false,
+  toggleFeedAccount: () => undefined,
+} as const;
+
 /**
  * ⚠️ `vi.mock` 的工厂函数会被**提升到文件顶部**，所以它引用的变量必须用
  * `vi.hoisted()` 先建出来 —— 直接写 `const writeFlags = vi.fn()` 会报
@@ -55,6 +65,17 @@ vi.mock('@platform/storage/ui-prefs-store', () => ({
   // 阶段 3 新增：角标开关迁入净化 Tab
   readBadgeEnabled: async () => true,
   writeBadgeEnabled: async () => undefined,
+  /**
+   * ## ❌ 这里曾有 `readFeedBoundaryEnabled` / `writeFeedBoundaryEnabled`（2026-11-11 删除）
+   *
+   * 它们服务于「显示推荐来源分界线」开关 —— **那个功能整体取消**
+   * （用户裁决：设完取流账号后直接隐藏 `.feed-card`，线没有意义；
+   *   而隐藏方案也因选择器与身份两层都未验证而冻结）。
+   *
+   * **mock 里也要删掉，不能只删生产代码**：`vi.mock` 的工厂是"全量替换"语义，
+   * 留着两个已不存在的导出不会报错（多余字段被忽略），
+   * 但它会让下一个人以为 `ui-prefs-store` 里还有这两个函数。
+   */
 }));
 
 /** 阶段 3：诊断浮层的数据源也要 mock 掉（本文件不测诊断） */
@@ -119,7 +140,7 @@ beforeEach(() => {
 
 /** 切到净化 Tab 并点某个开关 */
 async function toggleClean(label: string, next: boolean): Promise<void> {
-  const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+  const c = mountPanelBody(ACTS);
   c.setModel(model());
   c.showTab('clean');
 
@@ -197,7 +218,7 @@ describe('★ 读—改—写：只改一个键，其余三个必须原样写回
       },
     });
 
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(stale);
     c.showTab('clean');
     // 面板上显示的是旧快照（adDebug 关）—— 但写回时必须用存储里的新值
@@ -229,7 +250,7 @@ describe('★ 读—改—写：只改一个键，其余三个必须原样写回
       hideCategories: [],
     };
 
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('clean');
     // 进入二级浮层
@@ -296,7 +317,7 @@ describe('★ T5 写完必须主动应用', () => {
 
 describe('Tab 与返回栈', () => {
   it('默认在画质 Tab，切 Tab 生效', () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     expect(c.currentTab()).toBe('quality');
     expect(c.depth()).toBe(0);
@@ -306,7 +327,7 @@ describe('Tab 与返回栈', () => {
   });
 
   it('★ 进入二级浮层会压栈，返回会弹栈', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('clean');
 
@@ -322,7 +343,7 @@ describe('Tab 与返回栈', () => {
   });
 
   it('★ 切 Tab 会清栈（用户点 Tab 是"看那个 Tab"，不是"在浮层里切后台"）', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('clean');
     c.root.querySelector('.sub-entry')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -334,7 +355,7 @@ describe('Tab 与返回栈', () => {
   });
 
   it('模型还没到时不崩，显示"正在读取…"', () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     expect(c.root.textContent).toContain('正在读取');
   });
 });

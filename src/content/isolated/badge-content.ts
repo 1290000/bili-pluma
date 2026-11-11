@@ -8,6 +8,31 @@
  * 所以这里只做一件事：把已知事实翻译成短语，不知道的一律不说。
  */
 
+/**
+ * ## ⚠️ 这里**曾经**有一个 `STREAMING_IDENTITY_PREFIX`（2026-11-11 删除）
+ *
+ * 它原本被三处 hover 详情用来拼 `取流身份：取流账号 …`。
+ *
+ * ## 为什么整体删掉，而不是改成动态
+ *
+ * 那一行是**身份陈述**，而角标回答的是"当前画面是多少画质" ——
+ * **它不该说"谁在取流"**。三个理由：
+ *
+ * 1. **信息量为零**：用户点了角标是为了看画质，不是看"谁在取流"；
+ *    扩展在不在工作，他点开 popup / 面板一眼就知道。
+ * 2. **静态字符串在说一个可能不存在的实体**：取流身份可以设成「浏览器账号」，
+ *    那时根本没有"取流账号"这个东西 —— 这比"动态但可能拿不到"更糟，
+ *    因为前者**永远在说错**。
+ * 3. 改成动态要跨链路把 `lastActivateReason` 传进 `BadgeInput`，
+ *    而角标在 `document_start` 早期根本拿不到它 —— **成本与收益不匹配**。
+ *
+ * **判据**（与 `streaming-pill.ts` 的"拿不到就不渲染"是同一条原则的两个方向）：
+ *   - 胶囊：**拿不到就不猜**
+ *   - 角标：**从来没拿到过，就不该假装有**
+ *
+ * ⚠️ 删的只是"取流身份：XX"这一行**身份陈述**。
+ * **画质高度、chips、编码、音频信息全部保留** —— 那才是角标的本职。
+ */
 /** 角标要显示的内容 */
 export interface BadgeContent {
   /** 是否处于接管状态（false 时角标整体隐藏） */
@@ -248,14 +273,14 @@ export function buildBadge(input: BadgeInput): BadgeContent {
         visible: true,
         label: heightLabel(lastKnown),
         chips,
-        detail: `取流身份：播放账号 ｜ 画面正在切换（上次 ${String(lastKnown)}p）`,
+        detail: `画面正在切换（上次 ${String(lastKnown)}p）`,
       };
     }
     return {
       visible: true,
       label: '已接管',
       chips: [],
-      detail: '取流身份：播放账号。等待播放器开始加载视频…',
+      detail: '等待播放器开始加载视频…',
     };
   }
 
@@ -335,6 +360,6 @@ export function buildBadge(input: BadgeInput): BadgeContent {
     visible: true,
     label,
     chips,
-    detail: `取流身份：播放账号 ｜ ${detailParts.join(' ｜ ')}${dolbyNote}`,
+    detail: detailParts.join(' ｜ ') + dolbyNote,
   };
 }

@@ -32,18 +32,47 @@
  */
 
 import { readPersistedCredential } from '@platform/storage/credential-store';
+import {
+  readStreamingIdentity,
+  writeStreamingIdentity,
+} from '@platform/storage/streaming-identity-store';
+import { readFeedAccountEnabled } from '@platform/storage/ui-prefs-store';
 import { BILI_API_HOSTS, ENABLED_ROUTE_PATHS, isProxyPath } from '@shared/constants/routes';
+import {
+  DEFAULT_STREAMING_IDENTITY,
+  type StreamingIdentity,
+} from '@shared/constants/streaming-identity';
 import { serializeCookie } from '@shared/utils/cookie';
+
+import { FEED_RCMD_PATH, buildRulePlan, planPaths } from './rule-plan';
 
 /**
  * 规则 ID 分配。
  *
  * 按路径索引固定分配：同一路径永远用同一个 ID，不轮转、不复用。
- * 分三个区段避免与将来的其他规则集撞车：
- *   10000–10999  路径常驻规则（全局，整个浏览器范围）
+ * 分四个区段避免与将来的其他规则集撞车：
+ *   10000–10999  路径常驻规则（全局，整个浏览器范围）—— **不含首页推荐流**
+ *   **11000–11999  首页推荐流规则**（2026-11-11 新增，见下）
  *   20000–29999  标签页限定规则（ADR 0010，页面代理用）
  */
 const PATH_RULE_BASE = 10000;
+
+/**
+ * ## 首页推荐流为什么**单独一个 ID 段**（2026-11-11）
+ *
+ * 产品需求：「首页推荐流的变化与取流身份是完全独立的两个功能」。
+ *
+ * 所以推荐流**不能**用 `ruleIdForPath()` 的止式分配（`10000 + 白名单下标`）：
+ *   - 那套 ID 依赖 `ENABLED_ROUTE_PATHS` 的**顺序**，增删路径会整体漂移
+ *   - 而推荐流的启停是**独立开关**，与白名单顺序毫无关系
+ *   - 两者混在一个段里 → `removeAllPathRules()` 会把推荐流规则一起删掉
+ *
+ * **独立段 = 独立生命周期**：清、装、诊断都能各自进行。
+ */
+const FEED_RULE_BASE = 11000;
+
+/** 推荐流规则段大小 */
+const FEED_RULE_SPAN = 1000;
 
 /** 标签页规则区段（ADR 0010） */
 const TAB_RULE_BASE = 20000;
@@ -158,7 +187,33 @@ export async function enableProxy(cookie: string, paths?: string[]): Promise<voi
     throw new Error('白名单里没有启用中的代理路径，无法开启');
   }
 
-  // ⚠️ 必须先清整个路径规则段，不能只删"当前白名单算出的 ID"——见 installPathRules 的注释（O1）
+  /**
+   * ## ⚠️ "规则消失窗口"—— 本项目**第二次**遇到它（2026-11-11 补记）
+   *
+   * 这里是**第一次**：`removeAllPathRules()` 与 `updateSessionRules({addRules})`
+   * 是两次独立调用，中间有一个 await 间隙。此间白名单**一条规则都没有**，
+   * 那些毫秒内发出的 playurl 会退化成页面身份（**只掉画质，不串号** ——
+   * 清了规则等于"不代理"，而不是"代理到错的人"）。
+   *
+   * **第二次**在 `removeStaleTabRules()`：一条规则覆盖多个标签页之后，
+   * "摘掉一个死 tab"需要先删 ID 再加同 ID 的新规则。如果分成两次调用，
+   * 中间态就是"这条规则不存在"→ 那些**活着的**标签页短暂失去取流身份。
+   * 所以那里把 `removeRuleIds` 与 `addRules` **放进同一次
+   * `updateSessionRules` 调用**里，让浏览器把它当一次原子变更。
+   *
+   * ## 两条写法的关系（别只修一处）
+   *
+   * | 位置 | 能不能改成一次调用 | 原因 |
+   * | --- | --- | --- |
+   * | 本函数（先清后加） | ❌ **不能** | `removeAllPathRules()` 要读 `getSessionRules()` 才知道 ID，无法与 add 合并成一次 |
+   * | `removeStaleTabRules()` | ✅ **必须** | ID 已知（就在 `tabIds` 里迭代出来），没有理由分两次 |
+   *
+   * 更要紧的是**语义要求**：`switchStreamingIdentity()` 依赖"先清干净、再按新身份建"
+   * 这个顺序（见该函数注释）。所以本函数的窗口期是**有意的**：
+   * 窗口期内"不代理"是安全方向，而"一半旧账号一半新账号"不是。
+   *
+   * ⚠️ 必须先清整个路径规则段，不能只删"当前白名单算出的 ID"——见 installPathRules 的注释（O1）
+   */
   await removeAllPathRules();
 
   await chrome.declarativeNetRequest.updateSessionRules({ addRules });
@@ -191,6 +246,193 @@ export async function disableProxy(): Promise<void> {
   await removeAllTabRules();
 }
 
+// ── 取流身份切换（2026-11-11） ──
+
+/**
+ * 切换取流身份：`extension`（扩展托管账号） ⇄ `page`（浏览器当前登录态）。
+ *
+ * ## 为什么必须"先关再开"（实测约束，不许优化掉）
+ *
+ * `installTabRule()` 有幂等比对（"完全一致就跳过重建"）。
+ * 直接改 Cookie 值当然会触发重建，但**切到 `page` 时根本不装规则**，
+ * 而切回 `extension` 时若规则表里还留着上一次的痕迹，就可能被判定成"没变"而跳过。
+ *
+ * 更关键的是**中间态**：先 `disableProxy()` 把两类规则都清空，再按新身份重建，
+ * 任何时刻都不会出现"一半规则是旧账号、一半是新账号"的混合态。
+ * 反过来（先加后删）会在中间态里同时存在两套 Cookie 的规则，
+ * 那几毫秒内的请求用哪套取决于规则优先级——不可控。
+ *
+ * ## ⚠️ 本函数**永不写 `ENABLED_KEY`**（2026-11-11 修的真 bug）
+ *
+ * ### 修之前是什么样
+ *
+ * ```ts
+ * await installPathRules(cookie);
+ * await chrome.storage.local.set({ [ENABLED_KEY]: true });   // ← 无条件打开
+ * ```
+ *
+ * 场景：用户**关掉总开关** → 切身份 `extension → page → extension`
+ * → 回到 `extension` 分支时，`ENABLED_KEY` 被**重新置为 true**。
+ *
+ * **用户从没表示要重新开启代理，他只是切换了身份。** 那之后
+ * popup 显示「已接管」而用户以为自己还关着——与
+ * 「界面说停了、实际还在代理」（`disableProxy()` 注释里那个 bug）
+ * 是**同一类不一致，方向相反**。
+ *
+ * ### 为什么"只在原本开着时才置 true"也不够
+ *
+ * 那样仍然会**写** `ENABLED_KEY`，值虽不变但写操作本身是噪音；
+ * 而且判断条件将来一旦改错就又会出问题。**彻底解耦才是结构性修复**：
+ *
+ * | 概念 | 谁负责 | 什么时候变 |
+ * | --- | --- | --- |
+ * | **开关**（要不要让扩展介入） | `enableProxy` / `disableProxy` / `proxy/set` | **只在用户操作时** |
+ * | **身份**（介入的话用谁） | 本函数 / `streaming/set` | 只在用户切换时 |
+ *
+ * 两者正交。总开关是用户对"是否让扩展介入"的**唯一控制点**，
+ * **任何非用户操作引起它的变化都是错的。**
+ *
+ * ### 连带检查（2026-11-11 已做）
+ *
+ * 本函数只有一个调用方：`entrypoints/background.ts` 的 `streaming/set` 分支。
+ * **没有任何流程依赖它"顺便打开开关"** —— 所以解耦不会破坏登录后自动启用之类的路径。
+ * （登录成功后的启用走的是 `page/activate` → `installTabRule`，与开关无关。）
+ */
+/**
+ * **按"完整状态"重建所有规则** —— 状态推导的落点（2026-11-11）。
+ *
+ * ## 为什么要有这个函数（结构性修复，不是补一句）
+ *
+ * 修之前，规则装载是**由动作驱动**的：
+ * ```
+ * enableProxy()            → 装全部白名单路径
+ * switchStreamingIdentity() → 清空 → 按新身份重建（**不知道**推荐流开关的存在）
+ * ```
+ * 于是"推荐流开关开着 → 切取流身份"会把推荐流那条规则**悄悄清掉** ——
+ * 开关看着是开的、实际没生效。
+ *
+ * **如果只是"在 switch 里补一句重建推荐流规则"，将来加第三个独立开关时又会漏一次。**
+ *
+ * 所以现在：**任何"状态变了"的入口都调本函数**，由它读完整状态、
+ * 算完整计划、一次性重建。不再有"某处补一句"。
+ *
+ * ## 当前完整状态 = 三个输入
+ *
+ * | 输入 | 来源 | 影响 |
+ * | --- | --- | --- |
+ * | `streamingIdentity` | `storage.local` | 取流路径用谁的凭据 |
+ * | `feedAccountEnabled` | `storage.local`（**独立开关**） | 推荐流用谁的凭据 |
+ * | `hasCredential` | vault 里有没有密文 | 两者都要它才能装 |
+ *
+ * 推导逻辑在 `rule-plan.ts`（纯函数，有 10 条单测）。
+ *
+ * ## ⚠️ 不写 `ENABLED_KEY`
+ *
+ * 与 `switchStreamingIdentity` 同一条纪律：**本函数只负责"装哪些规则"，
+ * 不决定"要不要用扩展"** —— 后者归总开关（`enableProxy` / `disableProxy` /
+ * `proxy/set`）。
+ *
+ * @returns 实际装了哪些槽
+ */
+export async function applyRulePlan(): Promise<{
+  feedStreaming: boolean;
+  feedAccount: boolean;
+}> {
+  /**
+   * ① 读完整状态。
+   *
+   * ⚠️ `feedAccountEnabled` 用 **`readFeedAccountEnabled()`**（默认 `false`）——
+   * 与取流身份**完全独立**（用户原话：这是两个功能）。
+   */
+  const [identity, feedAccountEnabled, credential] = await Promise.all([
+    readStreamingIdentity().catch(() => DEFAULT_STREAMING_IDENTITY),
+    readFeedAccountEnabled().catch(() => false),
+    readPersistedCredential().catch(() => null),
+  ]);
+
+  const plan = buildRulePlan({
+    streamingIdentity: identity,
+    feedAccountEnabled,
+    hasCredential: credential !== null,
+  });
+  const paths = planPaths(plan, ENABLED_ROUTE_PATHS);
+
+  /**
+   * ② 先清空**两段**（路径规则 + 推荐流规则），再按计划重建。
+   *
+   * 顺序不能反：反了会在中间态出现"同一路径两条规则"。
+   * 而且必须先清、后加 —— 与 `enableProxy` 的窗口期理由相同
+   * （窗口期内"不代理"是安全方向，"一半旧一半新"不是）。
+   *
+   * ⚠️ **标签页规则也一起清**：它们同样带一份 Cookie，
+   * 与取流身份强相关（`installTabRule` 用当前凭据）。
+   * 清掉后由各页面 `page/activate` 自己重建（它们知道 `PageKind`）。
+   */
+  await removeAllPathRules();
+  await removeFeedAccountRule();
+  await removeAllTabRules();
+
+  if (credential === null) {
+    // 没有凭据 → 两个槽都装不了（`buildRulePlan` 已判成 false，这里只是提前返回）
+    return { feedStreaming: false, feedAccount: false };
+  }
+
+  const cookie = serializeCookie({
+    SESSDATA: credential.sessdata,
+    bili_jct: credential.biliJct,
+    DedeUserID: credential.dedeUserId,
+  });
+
+  // ③ 装取流路径（`planPaths` 已保证不含 `feed/rcmd`）
+  if (paths.streamingPaths.length > 0) {
+    const addRules = paths.streamingPaths
+      .map((p) => buildPathRule(p, cookie))
+      .filter((r): r is chrome.declarativeNetRequest.Rule => r !== null);
+    if (addRules.length > 0) {
+      await chrome.declarativeNetRequest.updateSessionRules({ addRules });
+    }
+  }
+
+  // ④ 装推荐流（独立 ID 段）
+  const feedApplied = await setFeedAccountRule(cookie, paths.feedAccount);
+
+  return {
+    feedStreaming: paths.streamingPaths.length > 0,
+    feedAccount: feedApplied,
+  };
+}
+
+/**
+ * 切换取流身份：`extension`（扩展托管账号）⇄ `page`（浏览器当前登录态）。
+ *
+ * ## 2026-11-11 重构：从"清空重建"改成"改状态 + 走状态推导"
+ *
+ * 修之前本函数**自己**清空两类规则再按新身份重建 —— 它**不知道**推荐流开关的存在，
+ * 所以"开关开着时切身份"会把推荐流规则清掉、且不重建。
+ *
+ * 现在改成：**只写状态，然后调 `applyRulePlan()`**。
+ * 完整状态由那一个函数统一推导，将来加第三个独立开关不用改这里。
+ *
+ * ## 为什么仍然要"先关再开"（实测约束，不许优化掉）
+ *
+ * `installTabRule()` 有幂等比对（"完全一致就跳过重建"）。
+ * 直接改 Cookie 值当然会触发重建，但**切到 `page` 时根本不装规则**，
+ * 而切回 `extension` 时若规则表里还留着上一次的痕迹，就可能被判定成"没变"而跳过。
+ *
+ * 更关键的是**中间态**：`applyRulePlan()` 内部先清两段再重建，
+ * 任何时刻都不会出现"一半规则是旧账号、一半是新账号"的混合态。
+ *
+ * ## ⚠️ 本函数**永不写 `ENABLED_KEY`**（2026-11-11 修的真 bug）
+ *
+ * 见下方原注释 —— 结论不变：开关归用户，身份归本函数，两者正交。
+ */
+export async function switchStreamingIdentity(next: StreamingIdentity): Promise<boolean> {
+  await writeStreamingIdentity(next);
+
+  const applied = await applyRulePlan();
+  return applied.feedStreaming;
+}
+
 // ── 规则构建 ──
 
 /**
@@ -202,8 +444,16 @@ export async function disableProxy(): Promise<void> {
  *
  * ⚠️ DNR 的 `||` 是域名锚点，`||api.bilibili.com/path` 也能用（已验证），
  * 但拆开后语义更清楚，改路径时不容易出错。
+ *
+ * @param explicitId **显式指定规则 ID**（2026-11-11 新增）。
+ *   传了就跳过 `ruleIdForPath()` 的止式分配 —— 首页推荐流用它占
+ *   `FEED_RULE_BASE`（11000 段），与白名单顺序解耦。
  */
-function buildPathRule(path: string, cookie: string): chrome.declarativeNetRequest.Rule | null {
+function buildPathRule(
+  path: string,
+  cookie: string,
+  explicitId?: number,
+): chrome.declarativeNetRequest.Rule | null {
   if (!isProxyPath(path)) return null;
 
   /**
@@ -219,7 +469,7 @@ function buildPathRule(path: string, cookie: string): chrome.declarativeNetReque
    * 当前唯一调用方 `defaultProxyPaths()` 直接取 `ENABLED_ROUTE_PATHS`，走不到这条路；
    * 这个守卫是给 `enableProxy(cookie, paths)` 的显式传参留的 —— 那是公开 API。
    */
-  const id = ruleIdForPath(path);
+  const id = explicitId ?? ruleIdForPath(path);
   if (id < 0) {
     console.error(`[dnr] 路径不在白名单里，无法分配规则 ID：${path}（已忽略）`);
     return null;
@@ -345,6 +595,67 @@ async function removeAllPathRules(): Promise<number> {
   return ours.length;
 }
 
+// ── 首页推荐流规则（独立 ID 段，独立生命周期。2026-11-11） ──
+
+/**
+ * 装/删**首页推荐流**那一条规则。
+ *
+ * ## 它与路径规则的区别
+ *
+ * | | 路径规则（10000 段） | 推荐流规则（11000 段） |
+ * | --- | --- | --- |
+ * | 管什么 | playurl 族（取流） | `feed/rcmd`（首页推荐） |
+ * | 由谁决定 | `streamingIdentity` | **独立的推荐流开关** |
+ * | ID 分配 | 白名单下标止式 | **固定 `FEED_RULE_BASE`** |
+ *
+ * **两个 ID 段互不清除**：`removeAllPathRules()` 只删 10000 段，
+ * 本函数只删 11000 段 —— 这才是"独立"的物理保证。
+ *
+ * @param cookie 扩展账号的 Cookie 头值
+ * @param enabled `true` 装，`false` 删
+ * @returns 实际是否安装了规则
+ */
+export async function setFeedAccountRule(cookie: string, enabled: boolean): Promise<boolean> {
+  // 先删（幂等：没有就什么都不做）
+  await chrome.declarativeNetRequest
+    .updateSessionRules({ removeRuleIds: [FEED_RULE_BASE] })
+    .catch(() => {});
+
+  if (!enabled) return false;
+
+  const rule = buildPathRule(FEED_RCMD_PATH, cookie, FEED_RULE_BASE);
+  if (!rule) {
+    /**
+     * `feed/rcmd` 不在白名单里 → `buildPathRule` 返回 null。
+     * **不静默**：这是配置错误，要说出来。
+     */
+    console.error(`[dnr] 无法为 ${FEED_RCMD_PATH} 建规则 —— 它不在代理白名单里`);
+    return false;
+  }
+
+  await chrome.declarativeNetRequest.updateSessionRules({ addRules: [rule] });
+  return true;
+}
+
+/** 当前是否装着推荐流规则（诊断用） */
+export async function hasFeedAccountRule(): Promise<boolean> {
+  const rules = await chrome.declarativeNetRequest.getSessionRules().catch(() => []);
+  return rules.some((r) => r.id >= FEED_RULE_BASE && r.id < FEED_RULE_BASE + FEED_RULE_SPAN);
+}
+
+/**
+ * 只**删**推荐流规则（不装）。
+ *
+ * 抽成独立函数是为了让 `applyRulePlan()` 的"先清后加"读起来是
+ * `removeFeedAccountRule()` 而不是 `setFeedAccountRule('', false)` ——
+ * 后者要传一个空 cookie，看着像在装一条空规则。
+ */
+async function removeFeedAccountRule(): Promise<void> {
+  await chrome.declarativeNetRequest
+    .updateSessionRules({ removeRuleIds: [FEED_RULE_BASE] })
+    .catch(() => {});
+}
+
 /**
  * 删掉**所有**标签页限定规则，返回删除数量。
  *
@@ -379,26 +690,73 @@ async function removeStaleTabRules(): Promise<number> {
   const liveTabs = new Set(tabs.map((t) => t.id).filter((x): x is number => typeof x === 'number'));
 
   /**
-   * ⚠️ **不能用 `r.id - TAB_RULE_BASE` 反推 tabId。**
+   * ⚠️ **不能用规则 ID 反推 tabId。**
    *
-   * 规则 ID 是 `TAB_RULE_BASE + (tabId % TAB_RULE_SPAN)`，取模之后信息已经丢了：
+   * 旧实现规则 ID 是 `TAB_RULE_BASE + (tabId % TAB_RULE_SPAN)`，取模之后信息已丢：
    * tabId 10005 的规则 ID 是 20005，反推得 5，于是去问"标签页 5 还在吗"——
-   * 不在就**删掉 tab 10005 那条有效规则**，该页画质静默回落到主账号，且没有任何报错。
+   * 不在就**删掉 tab 10005 那条有效规则**，该页画质静默回落，且没有任何报错。
    *
-   * 单个会话累计开满 10000 个标签页就会碰到（长期不重启的机器可达）。
-   * 正确做法是读规则自己带的 `tabIds` —— `tabs.handler.ts` 一直是这么写的。
+   * 2026-11-11 起 ID 改由 `kind` 决定（`tabRuleIdForKind`），
+   * `tabIds` 里可以有多个值，"哪个 tab 没了"只能**读规则自己的 `tabIds`** 判断。
+   *
+   * ## 合并之后这里的行为变了
+   *
+   * 旧实现：一条规则挂一个 tab，全死才删。
+   * 现在：一条规则挂多个 tab，所以必须**逐个 tab 摘掉**，而不是"任一存活就整条保留"——
+   * 否则关掉一个视频页之后，它的 tabId 永远留在 `tabIds` 里，
+   * 规则表持续持有指向已关闭标签页的 ID（不会误伤，但会累积到上限）。
    */
-  const stale = tabRules
-    .filter((r) => {
-      const ids = r.condition.tabIds ?? [];
-      // 一条 tab 规则只该挂一个 tabId；挂了多个说明规则被人改过，按"任一存活即保留"处理
-      return ids.length > 0 && ids.every((id) => !liveTabs.has(id));
-    })
-    .map((r) => r.id);
+  const addRules: chrome.declarativeNetRequest.Rule[] = [];
+  /** 要整条删掉的规则 ID（`tabIds` 摘完为空） */
+  const dropIds: number[] = [];
+  /** 要改写（摘掉死 tab、保留活 tab）的规则 ID */
+  const rewriteIds: number[] = [];
 
-  if (stale.length === 0) return 0;
-  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: stale }).catch(() => {});
-  return stale.length;
+  for (const r of tabRules) {
+    const ids = r.condition.tabIds ?? [];
+    const alive = ids.filter((id) => liveTabs.has(id));
+    if (alive.length === ids.length) continue; // 没有死 tab，不动
+
+    if (alive.length === 0) {
+      dropIds.push(r.id);
+      continue;
+    }
+
+    const value = r.action?.requestHeaders?.[0]?.value ?? '';
+    const filter = r.condition.urlFilter ?? '';
+    rewriteIds.push(r.id);
+    addRules.push(tabRuleSpec(r.id, filter, value, alive));
+  }
+
+  if (dropIds.length === 0 && rewriteIds.length === 0) return 0;
+
+  /**
+   * ## ⚠️ "规则消失窗口"—— 本项目**第二次**遇到它
+   *
+   * `removeRuleIds` 必须同时含**两种**：
+   *   - `dropIds`：摘完为空，整条不要了
+   *   - `rewriteIds`：要换成"只留活 tab"的版本 —— DNR 没有"改一条规则"的 API，
+   *     **改写 = 先删 ID 再加同 ID 的新规则**
+   *
+   * **两者必须在同一次 `updateSessionRules` 里**。分两次的话，中间态是
+   * "这条规则不存在"→ 那些**还活着的**标签页会短暂失去取流身份。
+   *
+   * 第一次遇到同一个形状是 `enableProxy()` 的"先清后加"
+   * （见那里的完整对比表：那个窗口**不能**合并、且是安全方向；
+   * 这里的窗口**可以且必须**合并，因为 ID 已知，没有理由分两次）。
+   *
+   * **判据**：凡是"ID 已知"的规则变更，都该合并成一次调用；
+   * 只有"要先读规则表才知道 ID"的场景才允许分两次，且必须确认窗口期是安全方向。
+   */
+  await chrome.declarativeNetRequest
+    .updateSessionRules({
+      removeRuleIds: [...dropIds, ...rewriteIds],
+      ...(addRules.length > 0 ? { addRules } : {}),
+    })
+    .catch(() => {});
+
+  // 返回"处理过的规则条数"（不是 tab 数）：调用方只关心"这一轮有没有动规则表"
+  return dropIds.length + rewriteIds.length;
 }
 
 // ── 页面代理：标签页限定规则（ADR 0010） ──
@@ -421,6 +779,78 @@ const PLAYURL_PATH_BY_KIND = {
 export type PageKind = keyof typeof PLAYURL_PATH_BY_KIND;
 
 /**
+ * 页面类型 → 标签页规则 ID（2026-11-11，`tabIds` 合并之后）。
+ *
+ * ## 为什么不再由 tabId 决定
+ *
+ * 旧实现：`TAB_RULE_BASE + (tabId % TAB_RULE_SPAN)` —— **一个标签页一条规则**。
+ * 后果是规则数 `O(打开的标签页数)`，而 session 规则上限**实测只有 5000**
+ * （`poc/probe/dnr-initiator/RESULT.md` Q3.1）。长期不重启的机器开满 5000 个
+ * 视频页级标签页就会撞上限，表现是 `Session rule count exceeded`：
+ * 新规则一条都加不进去，那个标签页的取流**静默回落到页面身份**，
+ * 画质掉了而界面上没有任何报错。
+ *
+ * 现在按 `kind` 分配（`video` / `pgc` 各一个 ID），同类型的多个标签页
+ * **共用同一条规则**，用 `condition.tabIds` 数组表达"这条规则管哪些页"。
+ *
+ * | | 旧 | 新 |
+ * | --- | --- | --- |
+ * | 规则数 | `O(标签页数)` | `O(页面类型数)` = 2 |
+ * | ID 稳定性 | 随 tabId 变 | **恒定** |
+ *
+ * 按 `kind` 的**下标**止式分配（`Object.keys` 顺序由对象字面量决定，稳定），
+ * 与 `ruleIdForPath()` 同一套理由：天然无碰撞，不依赖哈希。
+ *
+ * ⚠️ **`kind` 顺序即 ID 顺序**。`PLAYURL_PATH_BY_KIND` 里增删键会改 ID，
+ * 已在装的规则要等下一次 `installTabRule` 才会换过来 —— 增删时**往后追加**。
+ */
+function tabRuleIdForKind(kind: PageKind): number {
+  const index = (Object.keys(PLAYURL_PATH_BY_KIND) as PageKind[]).indexOf(kind);
+  // 走不到：`kind` 的类型就是 `keyof PLAYURL_PATH_BY_KIND`
+  if (index < 0) return TAB_RULE_BASE;
+  return TAB_RULE_BASE + index;
+}
+
+/**
+ * 构造一条标签页限定规则。`tabIds` 必须是**非空**数组。
+ *
+ * 抽出来是因为 `installTabRule` 与 `removeTabRule` 都要拼同一种规则
+ * （后者在"还剩别的 tab"时改写），两处各写一份必然漂移 ——
+ * 漂移的后果是 `removeTabRule` 拼出的规则漏掉某个 condition 字段，
+ * 那条规则就变成"条件更宽"的版本，**可能命中它本不该命中的请求**。
+ */
+function tabRuleSpec(
+  id: number,
+  urlFilter: string,
+  cookie: string,
+  tabIds: number[],
+): chrome.declarativeNetRequest.Rule {
+  if (tabIds.length === 0) {
+    /**
+     * 空数组会被 DNR 当成「不限定标签页」= 全局规则，把取流身份套到所有页上。
+     * 调用方必须在此之前决定"没有 tab 了就删规则"。这里显式抛错而不是静默降级。
+     */
+    throw new Error('[dnr] tabIds 不能为空 —— 空数组等于一条不限标签页的全局规则');
+  }
+
+  return {
+    id,
+    priority: 2, // 高于全局路径规则（priority 1）
+    action: {
+      type: 'modifyHeaders',
+      requestHeaders: [{ header: 'cookie', operation: 'set', value: cookie }],
+    },
+    condition: {
+      urlFilter,
+      requestDomains: [...BILI_API_HOSTS],
+      resourceTypes: ['xmlhttprequest'],
+      requestMethods: ['get'],
+      tabIds: [...tabIds].sort((a, b) => a - b),
+    },
+  };
+}
+
+/**
  * 给某个标签页装一条规则，把它的取流请求 Cookie 换成播放账号的。
  *
  * 与全局路径规则的区别：多了 `tabIds` 限定，只对这一个标签页生效。
@@ -434,52 +864,117 @@ export type PageKind = keyof typeof PLAYURL_PATH_BY_KIND;
  *
  * 所以这里先比对现有规则：**Cookie 值与 urlFilter 都一样就什么都不做**。
  * 这不是微优化——反复重建规则是"恢复标签页时卡一下"的直接来源之一。
+ *
+ * ## ⚠️ `tabIds` 是数组：同一条规则覆盖多个标签页（2026-11-11）
+ *
+ * `condition.tabIds` 一直是**数组**，而旧实现（以及这里的旧签名）把它当单值用：
+ * 每个标签页独占一个规则 ID。那是 `O(标签页数)` 条规则，而实际只需要
+ * `O(页面类型数)` 条——同类型的多个标签页完全可以共用一条规则。
+ *
+ * 为什么必须合并（实测依据 `poc/probe/dnr-initiator/RESULT.md` Q3.1）：
+ *   - session 规则上限**实测 5000**（不是常量里自相矛盾的 30000）
+ *   - 「每标签页一条」会让规则数随打开的页数线性增长，长期不重启的机器会撞上限
+ *   - 撞上限的表现是 `Session rule count exceeded` —— 一条都加不进去，
+ *     取流静默回落到页面身份，**界面无任何报错**
+ *
+ * 合并后规则 ID **只由页面类型决定**（见 `tabRuleIdForKind`），不再由 tabId 决定。
+ * 好处不止是省规则：ID 稳定意味着切页不需要换 ID，`removeTabRule` 也变成
+ * "从数组里摘掉一个 tabId"而不是"删掉整条规则"。
+ *
+ * @param tabId 要挂到这个规则上的标签页
+ * @param cookie 取流账号的完整 Cookie 头值
+ * @param kind 页面类型（决定 urlFilter 与规则 ID）
  */
 export async function installTabRule(
   tabId: number,
   cookie: string,
   kind: PageKind = 'video',
 ): Promise<void> {
-  const id = TAB_RULE_BASE + (tabId % TAB_RULE_SPAN);
+  const id = tabRuleIdForKind(kind);
   const urlFilter = PLAYURL_PATH_BY_KIND[kind];
 
   const existing = await chrome.declarativeNetRequest.getSessionRules().catch(() => []);
   const current = existing.find((r) => r.id === id);
+
   if (current) {
     const currentValue = current.action?.requestHeaders?.[0]?.value;
     const currentFilter = current.condition?.urlFilter;
-    if (currentValue === cookie && currentFilter === urlFilter) return; // 完全一致，跳过重建
+    const currentTabs = current.condition?.tabIds ?? [];
+
+    /**
+     * 幂等判断必须**同时**看三件事：Cookie、urlFilter、这个 tab 在不在列表里。
+     *
+     * 旧实现只看前两个。合并之后如果仍只看前两个，就会漏掉一个真实场景：
+     * 标签页 A 和 B 共用一条规则，A 先报了到，B 后报到 —— Cookie 和 urlFilter
+     * 都没变，于是直接 return，**B 永远不会被加进 `tabIds`** → B 的取流不换身份，
+     * 画质静默回落，而 popup 一切正常。
+     */
+    if (currentValue === cookie && currentFilter === urlFilter && currentTabs.includes(tabId)) {
+      return;
+    }
+
+    /**
+     * 合并：把本 tab 加进已有的 `tabIds`，**保留其它 tab**。
+     *
+     * ⚠️ 这里绝不能写成 `tabIds: [tabId]` —— 那会把同一类型的其它标签页
+     * 从规则里挤掉，它们的取流会**在无提示的情况下**回到页面身份。
+     */
+    const merged = Array.from(new Set([...currentTabs, tabId])).sort((a, b) => a - b);
+    await chrome.declarativeNetRequest.updateSessionRules({
+      removeRuleIds: [id],
+      addRules: [tabRuleSpec(id, urlFilter, cookie, merged)],
+    });
+    return;
   }
 
   await chrome.declarativeNetRequest.updateSessionRules({
-    removeRuleIds: [id],
-    addRules: [
-      {
-        id,
-        priority: 2, // 高于全局路径规则
-        action: {
-          type: 'modifyHeaders',
-          requestHeaders: [{ header: 'cookie', operation: 'set', value: cookie }],
-        },
-        condition: {
-          urlFilter,
-          requestDomains: [...BILI_API_HOSTS],
-          resourceTypes: ['xmlhttprequest'],
-          requestMethods: ['get'],
-          tabIds: [tabId],
-        },
-      },
-    ],
+    addRules: [tabRuleSpec(id, urlFilter, cookie, [tabId])],
   });
 }
 
-/** 删掉某个标签页的规则 */
+/**
+ * 删掉某个标签页的规则贡献。
+ *
+ * ## 合并之后语义变了（2026-11-11）
+ *
+ * 旧实现：一个 tab 一条规则，所以"删 tab 的规则"= 删整条。
+ * 现在一条规则覆盖多个 tab，所以这里必须**只摘掉这一个 tabId**：
+ *   - 还剩别的 tab → 改写规则，保留其余
+ *   - 只剩它自己   → 删掉整条规则（`updateSessionRules` 不接受空 `tabIds`）
+ *
+ * ⚠️ 空数组不能用来表达"没有 tab"：DNR 会把 `tabIds: []` 当成"不限定标签页"，
+ * 也就是**变成一条全局规则**——那会把取流身份强行套到所有标签页上，是最糟的误伤。
+ */
 export async function removeTabRule(tabId: number): Promise<void> {
-  const id = TAB_RULE_BASE + (tabId % TAB_RULE_SPAN);
-  // 先查再删：没有这条规则时不必触发一次规则表重算
   const existing = await chrome.declarativeNetRequest.getSessionRules().catch(() => []);
-  if (!existing.some((r) => r.id === id)) return;
-  await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [id] }).catch(() => {});
+  const ours = existing.filter(
+    (r) => r.id >= TAB_RULE_BASE && r.id < TAB_RULE_BASE + TAB_RULE_SPAN,
+  );
+
+  const hits = ours.filter((r) => (r.condition?.tabIds ?? []).includes(tabId));
+  if (hits.length === 0) return; // 先查再删：不必触发一次规则表重算
+
+  const removeRuleIds: number[] = [];
+  const addRules: chrome.declarativeNetRequest.Rule[] = [];
+
+  for (const r of hits) {
+    const rest = (r.condition.tabIds ?? []).filter((t) => t !== tabId);
+    if (rest.length === 0) {
+      removeRuleIds.push(r.id);
+      continue;
+    }
+    const value = r.action?.requestHeaders?.[0]?.value ?? '';
+    const filter = r.condition.urlFilter ?? '';
+    removeRuleIds.push(r.id);
+    addRules.push(tabRuleSpec(r.id, filter, value, rest));
+  }
+
+  await chrome.declarativeNetRequest
+    .updateSessionRules({
+      removeRuleIds,
+      ...(addRules.length > 0 ? { addRules } : {}),
+    })
+    .catch(() => {});
 }
 
 /** 校正标签页规则：删掉不属于任何现存标签页的（标签页崩溃时留下） */

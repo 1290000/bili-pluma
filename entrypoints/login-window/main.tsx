@@ -175,7 +175,7 @@ function App() {
 
   return (
     <div class="wrap">
-      <h1 class="title">登录播放账号</h1>
+      <h1 class="title">登录取流账号</h1>
       <p class="subtitle">主账号无需配置，自动沿用浏览器当前的登录状态</p>
 
       <div class={`qr-card ${status.kind}`}>

@@ -11,6 +11,7 @@ import {
   isVideoInfoTruncated,
   maxVideoHeight,
   readCidFromSsr,
+  shouldPersistPgcCache,
   shouldWritePgcCache,
 } from '../../../src/content/isolated/pgc-cache-inject';
 
@@ -633,6 +634,85 @@ describe('shouldWritePgcCache：写入侧决策', () => {
      * 真正保证"有流"的是 `mergeVideoInfo` 的 `hasStreamField`（它在更上游）。
      */
     expect(shouldWritePgcCache({ timelength: 1166528 })).toBe(true);
+  });
+});
+
+/**
+ * ## 🔴 `shouldPersistPgcCache`：**生产端门控**（2026-11-11，task-15）
+ *
+ * 这一条守的是**越权**，不是体验：
+ *
+ * 切到「浏览器账号取流」（`streamingIdentity = 'page'`）后，`sessionStorage` /
+ * `storage.local` 里**还躺着上一轮用扩展账号取回的 4K 流**。
+ * 若照写/照注入，用户会拿到他**当前没有权限的画质**。
+ *
+ * ## 为什么门控必须在**生产端**
+ *
+ * 时序实测：`page/activate` 回包 ~400ms，注入 ~358ms → **回包晚于注入**。
+ * 所以"写了再去清"救不了这一页。而 `streamingIdentity` 是 `storage.local`
+ * **同步可读**的 —— 写缓存那一刻就一定有答案，**不需要等任何消息**。
+ *
+ * 判据：**谁提供了这份流，就由谁负责门控。**
+ * 这份流由 ISOLATED 产出（扩展账号取的），所以 ISOLATED 必须在**写入前**拦住。
+ */
+describe('shouldPersistPgcCache：page 身份下根本不写缓存（防越权）', () => {
+  /**
+   * ⚠️ **fixture 形状必须是平铺的 `video_info`**，不是 `{ result: { video_info } }`。
+   *
+   * `shouldPersistPgcCache` 直接把入参交给 `shouldWritePgcCache(merged, expectedMs)`，
+   * 后者调 `isVideoInfoTruncated(merged)` —— 它读的是**顶层** `timelength` / `durl` / `dash`。
+   *
+   * **第一版我传了带 `result` 外壳的数据，于是质量闸认不出它、一律返回 `true`**，
+   * 导致「截断流不写」那几条红。教训：判据函数要求的形状要去读它的实现，
+   * 不能按"响应体长得像什么"猜。
+   */
+  const FULL = {
+    timelength: 24 * 60 * 1000, // 24 分钟，远长于 expectedMs
+    quality: 120,
+    dash: { duration: 1440, video: [{ height: 2160 }] },
+  };
+  const TRUNCATED = {
+    timelength: 1166528,
+    quality: 80,
+    durl: [{ length: 180160 }],
+  };
+  const EXPECT_MS = 24 * 60 * 1000;
+
+  it('★★ extension 身份 + 完整流 → **写**（对照组，证明不是恒 false）', () => {
+    expect(shouldPersistPgcCache(FULL, EXPECT_MS, 'extension')).toBe(true);
+  });
+
+  it('★★ page 身份 + **同一份完整流** → **不写**', () => {
+    /**
+     * 这是本测试的核心：输入**只差 `identity` 一个变量**。
+     *
+     * 反向验证：把 `shouldPersistPgcCache` 里的
+     * `if (!needsProxy(identity)) return false;` 删掉 →
+     * 它会一路走到质量闸并返回 `true` → **本用例红**。
+     */
+    expect(shouldPersistPgcCache(FULL, EXPECT_MS, 'page')).toBe(false);
+  });
+
+  it('⚠️ 身份闸在质量闸**之前**：page + 截断流也不写（两道都拦）', () => {
+    expect(shouldPersistPgcCache(TRUNCATED, EXPECT_MS, 'page')).toBe(false);
+    expect(shouldPersistPgcCache(TRUNCATED, EXPECT_MS, 'extension')).toBe(false);
+  });
+
+  it('extension + 截断流 → 不写（质量闸仍然生效，没被身份闸顶掉）', () => {
+    expect(shouldPersistPgcCache(TRUNCATED, EXPECT_MS, 'extension')).toBe(false);
+  });
+
+  it('两种身份 × 两种流的全矩阵：只有 extension+完整 会写', () => {
+    const combos = [
+      { id: 'extension', flow: FULL, name: '完整' },
+      { id: 'extension', flow: TRUNCATED, name: '截断' },
+      { id: 'page', flow: FULL, name: '完整' },
+      { id: 'page', flow: TRUNCATED, name: '截断' },
+    ] as const;
+    const writes = combos
+      .filter((c) => shouldPersistPgcCache(c.flow, EXPECT_MS, c.id))
+      .map((c) => `${c.id}/${c.name}`);
+    expect(writes).toEqual(['extension/完整']);
   });
 });
 

@@ -21,6 +21,8 @@ import { OBSERVED_CATEGORIES } from '@/src/content/site-clean/home-selectors';
 import { describeAdDebugCaveat, type AccountView, type QualityView } from './panel-data';
 import { el, pill, switchRow } from './dom';
 import { describeExpiry, describeHealth } from '@core/ui/popup-state';
+import { describeStreamingIdentity } from '@core/ui/streaming-pill';
+import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
 import { primaryPlaceholder } from '@shared/utils/primary-card';
 
 /** 会员类型短标签 */
@@ -144,6 +146,19 @@ export function cleanTab(
   actions: {
     toggleOption: (key: CleanOptionKey, next: boolean) => void;
     openSub: () => void;
+    /**
+     * ## ❌ 这里曾有 `toggleFeedBoundary` / `feedBoundaryEnabled`（2026-11-11 删除）
+     *
+     * 它们服务于「显示推荐来源分界线」那个开关。**分界线功能整体取消**：
+     *
+     * 1. 用户裁决：设完取流账号后直接隐藏 `.feed-card`，首屏就是取流账号的，线没有意义
+     * 2. 而隐藏方案也因**选择器与身份两层都未验证**（父子嵌套 / M1）而冻结
+     *
+     * 所以净化 Tab 里那个开关、它的 action、它的参数全部删除。
+     *
+     * ⚠️ **不要为了"以后可能要用"把它加回来** —— 一个"看起来在做"
+     * 但永远不生效的开关，比没有更糟（用户会拨它，然后什么都没发生）。
+     */
   },
 ): HTMLElement {
   const box = el('div', 'tab-pane');
@@ -242,6 +257,27 @@ export function displayTab(
   actions: {
     toggleBadge: (next: boolean) => void;
     openDiag: () => void;
+    /**
+     * ── 首页推荐流开关（2026-11-11 从「账号」Tab 迁来）──
+     *
+     * ## 为什么归「显示」而不是「账号」
+     *
+     * 用户原话：「**移到显示 tab，但不改 tab 名**」。
+     *
+     * 语义上也确实更合：这个 Tab 的现有内容（页内角标）都是
+     * **"页面怎么表现"的偏好**，而"首页用谁的推荐"正是同一类。
+     * 它**不是**"我有哪几个号"——那才是「账号」Tab 的回答。
+     *
+     * ## 可点性判据不变
+     *
+     * 仍然是 `hasCredential`（没有托管账号就没有"另一个账号"可用），
+     * **不是** `streamingIdentity` —— 见 `accountTab` 里那段原注释。
+     * 迁 Tab 只改渲染位置，**不改判据**。
+     */
+    feedAccountEnabled: boolean;
+    toggleFeedAccount: (next: boolean) => void;
+    /** 有没有扫码登录过扩展账号 —— 决定推荐流开关能否点 */
+    hasCredential: boolean;
   },
 ): HTMLElement {
   const box = el('div', 'tab-pane');
@@ -256,6 +292,44 @@ export function displayTab(
       onToggle: actions.toggleBadge,
     }),
   );
+
+  /**
+   * ## 首页推荐流（2026-11-11 从「账号」Tab 迁来）
+   *
+   * ### hint 从 62 字压到 14 字
+   *
+   * 用户原话：「描述太复杂了，必须精简、精简、再精简」。
+   * 且用户明确否决了写机制：「**这个开关的说明没有必要写清"首屏也会换"，按我说的来**」。
+   *
+   * 机制细节（首屏藏 / 滚动换 Cookie）**保留在 [ADR 0035] 里给维护者**，
+   * 界面只留"打开会发生什么"。
+   *
+   * ⚠️ **旧 hint 里有一句「与上面的取流身份是两个独立设置」—— 已删除。**
+   * 那句话在「账号」Tab 里指代成立（"上面"就是账号卡），
+   * **迁到「显示」Tab 后"上面"是「页内角标」，指代完全错位。**
+   * 这是迁位置时最容易漏的一处：**文案里的空间指代会随着位置失效**。
+   */
+  box.appendChild(el('p', 'diag-section', '首页推荐流'));
+  box.appendChild(
+    switchRow({
+      label: '首页推荐流使用取流账号',
+      // 14 字。不写"首屏""滚动加载""隐藏"—— 那是机制，不是用户要理解的东西。
+      hint: '打开后，首页推荐换成取流账号的',
+      checked: actions.feedAccountEnabled,
+      /**
+       * 没有托管账号 → 灰掉。
+       *
+       * ⚠️ **只判 `hasCredential`**，不判任何身份相关的值 ——
+       * 那是"两个功能独立"在代码上的落地（原判据，迁 Tab 时原样保留）。
+       */
+      disabled: !actions.hasCredential,
+      onToggle: actions.toggleFeedAccount,
+    }),
+  );
+
+  if (!actions.hasCredential) {
+    box.appendChild(el('p', 'pane-note', '先扫码登录取流账号，才能用它来换首页推荐流'));
+  }
 
   /**
    * 诊断入口。
@@ -385,6 +459,47 @@ export interface AccountActions {
   login: () => void;
   /** 退出播放账号（`account/remove`）。**调用前 UI 必须已经过两步确认** */
   logout: () => Promise<{ ok: boolean; detail?: string }>;
+  /**
+   * ── 取流身份（2026-11-11，步骤 4）──
+   *
+   * ## 为什么是**必填**（原本做成可选，2026-11-11 改）
+   *
+   * 第一版做成可选，理由是"不破坏既有 8 处测试"。**那个理由掩盖了一个真缺口**：
+   * `panel.ts` 调 `accountTab()` 时根本没传这两个字段，于是
+   * **胶囊永远不渲染 → 这个功能在生产里是死代码**，而所有测试都是绿的。
+   *
+   * 做成必填后，每个调用点都必须**明确表态**：
+   *   - 有身份 → 传 `'extension' | 'page'`
+   *   - 确实没有（例如测试里只想看账号卡）→ 传 `null` 并断言"胶囊不渲染"
+   *
+   * **"明确表达这里没有" ≠ "忘了传"。** 前者是一个判据，后者是一个缺口。
+   */
+  /** 当前取流身份；`null` = 还没读出来（胶囊不渲染，**不猜**） */
+  streamingIdentity: StreamingIdentity | null;
+  /** 点胶囊切换。`next` 是要切到的目标，不是"取反"（让调用方可复用同一回调） */
+  toggleStreamingIdentity: (next: StreamingIdentity) => void;
+
+  /**
+   * ── 首页推荐流开关**已迁到「显示」Tab**（2026-11-11）──
+   *
+   * 这两个字段（`feedAccountEnabled` / `toggleFeedAccount`）**已移到
+   * `displayTab()` 的 `actions` 里**，不再属于 `AccountActions`。
+   *
+   * 用户裁决：「**移到显示 tab，但不改 tab 名**」。
+   *
+   * ## ⚠️ 迁位置 ≠ 迁判据
+   *
+   * 原有一段类型级防线（不能删，只是搬走了）：
+   *
+   * > 本字段的**类型里根本没有 `StreamingIdentity`** ——
+   * > 谁想在推荐流开关的判据里用取流身份，必须先改这个签名，
+   * > 而改签名会让调用点报错 → **不可能静默发生**。
+   *
+   * 那条防线**现在由 `displayTab()` 的 `actions` 类型承担**：
+   * 它同样只有 `hasCredential: boolean`，**没有** `StreamingIdentity`。
+   *
+   * **迁 Tab 只改渲染位置，没改这条判据。**
+   */
 }
 
 /**
@@ -450,10 +565,42 @@ export function accountTab(
   const pb = a.playback;
   if (pb || a.hasCredential) {
     const playbackRow = el('div', 'acct-row playback');
-    playbackRow.appendChild(el('span', 'acct-avatar accent', '播'));
+    /**
+     * 头像字用「**取**」不是「播」。
+     *
+     * 踩过：这里原本是 `'播'`（"播放账号"的缩写），而全线已改叫**取流账号**
+     * （术语纠错，`task-1`）。留下 `播` 会让用户在账号卡上看到一个
+     * 在别处已经不存在了的叫法 —— 术语漂移的典型形态。
+     *
+     * ⚠️ A 卡是 `'主'`。两个字都只有 1 字符，`.acct-avatar` 是 24×24 定宽，
+     * 换成「取」不会改变任何布局。
+     */
+    playbackRow.appendChild(el('span', 'acct-avatar accent', '取'));
     const bMain = el('span', 'acct-main');
-    bMain.appendChild(el('span', 'acct-name', pb?.uname ?? '播放账号已配置'));
+    bMain.appendChild(el('span', 'acct-name', pb?.uname ?? '取流账号已配置'));
     const exp = pb ? describeExpiry(pb.expireAt, now) : '';
+    /**
+     * ## ⚠️ 副标题**保持原样**，不要在这里缩短（2026-11-11 回退）
+     *
+     * 曾经试过把 `仅取流 · 6 个月后到期`（13 字）缩成 `仅取流 · 6 个月`（9 字），
+     * 想靠少三个字解决截断。**已回退。**
+     *
+     * ### 为什么回退
+     *
+     * 真机实测证明**光把胶囊挪出卡片就够了**：`.acct-main` 从 **154.3 → 229**，
+     * 229 放得下 13 字的副标题。
+     *
+     * 更重要的理由是方法论：**一次只改一个变量**。
+     * 若同时挪胶囊 + 缩文案，复测"变好了"就**无法归因**是哪个改动的功劳；
+     * 万一还是截断，也不知道该再动哪个。
+     *
+     * ### 如果将来真需要缩短
+     *
+     * 判据是**真机复测显示 229 仍不够**，而不是"看起来挤"。
+     * 那时优先缩短文案，**但不要改 `describeExpiry()`** ——
+     * 它是 `popup-state.ts` 的共用纯函数，输出 `N 个月后到期` 在别的语境下是完整句子；
+     * 而且它承载单位换算的正确性（曾因子单位算错显示过"698197 个月后到期"）。
+     */
     bMain.appendChild(
       el(
         'span',
@@ -477,7 +624,157 @@ export function accountTab(
     if (healthText) bMain.appendChild(el('span', 'acct-sub acct-health', healthText));
     playbackRow.appendChild(bMain);
     playbackRow.appendChild(el('span', 'acct-tag accent', pb ? VIP_TAG[pb.vipLabel] : '已配置'));
+
+    /**
+     * 胶囊的**独立行容器**（2026-11-11，S4 新增）。
+     *
+     * 它不在 `playbackRow` 里 —— 见下面"为什么挪出来"的实测数据。
+     * 单独建一个容器而不是直接 append 到 `box`，是为了让 CSS 能把它
+     * 与卡片**视觉绑定**（缩进对齐），同时又不参与卡片内部的 flex 竞争。
+     */
+    const pillRow = el('div', 'acct-pill-row');
+
+    /**
+     * ── 取流身份胶囊（2026-11-11，步骤 4）──
+     *
+     * ## 为什么放在 B 卡上而不是 A 卡
+     *
+     * A 卡是**浏览器登录态**（`tabs.ts` 文件头那段：A 只读、灰、列出四项社交行为）。
+     * 让它变成可点击的，会让用户怀疑扩展在管主账号 —— 与 [ADR 0004] 的
+     * 设计意图（消除"我的号会不会被切走"的恐惧）直接冲突。
+     *
+     * 胶囊挂在 B 卡，语义是"**扩展这一侧提供哪种取流**"：
+     *   - 「取流：扩展账号」→ 用 vault 里那个号
+     *   - 「取流：浏览器账号」→ 扩展不介入，页面自己取流
+     *
+     * 两个状态都是**正常配置**，没有一个是"停用"。
+     *
+     * ## ⚠️ `identity === null` 时**仍然渲染**（2026-11-11 修正）
+     *
+     * ### 上一版是错的
+     *
+     * 上一版写的是 `if (streamingIdentity !== null) { … }` —— **`null` 时整块消失**。
+     * 当时的理由是"渲染任何默认值都是编数据"。**那个理由只对了一半**：
+     *
+     * | 规则 | 正确理解 |
+     * | --- | --- |
+     * | 「不渲染任何默认值」 | 是**内容**规则 —— 不许假装用户选了 `extension` 或 `page` |
+     * | 但它**不是**删掉入口的许可 | **控件消失不是安全默认值，而是隐形 bug** |
+     *
+     * `null` 有两种成因，上一版**把它们都吞成了"不存在"**：
+     *   - 消息还没回来（读得晚）
+     *   - 消息**永远失败**（background 没应答 / 实例不对）
+     *
+     * 第二种下用户**永远看不到这个控件的任何痕迹** —— 而它是"切换取流身份"的
+     * **唯一入口**。用户看不见 = 功能没做。
+     *
+     * ### 现在的规则
+     *
+     * | 值 | 胶囊 | 可点 |
+     * | --- | --- | --- |
+     * | `'extension'` | 「取流：扩展账号」 | ✅ |
+     * | `'page'` | 「取流：浏览器账号」 | ✅ |
+     * | **`null`** | 「**取流身份：未知**」 | ❌（点了也不知道切成什么） |
+     *
+     * 未知态**不可点**：在没有读到当前值时，"切到另一个"这个动作的目标是不确定的
+     * —— 若当前其实已经是 `page`，用户点一下反而切到了 `extension`。
+     * **宁可少一个动作，不可让动作的结果违反预期。**
+     */
+    {
+      const identity = actions.streamingIdentity;
+      const known = identity !== null;
+      const pill = known
+        ? describeStreamingIdentity(identity)
+        : {
+            label: '取流身份：未知',
+            accent: false,
+            /**
+             * 未知态**不强调**：`accent` 是"这是当前生效的身份"的视觉信号，
+             * 而未知时我们连它是什么都不知道。
+             */
+            stale: true,
+          };
+      const pillEl = el('span', pill.accent ? 'acct-tag accent' : 'acct-tag', pill.label);
+
+      if (known) {
+        /**
+         * 可点：`toggleStreamingIdentity` 现在是**必填**（见 `AccountActions` 的注释），
+         * 所以这里不再需要"有没有回调"的分支 —— 那就跳过了一个"渲染了点不动的按钮"的坑。
+         */
+        pillEl.setAttribute('role', 'button');
+        pillEl.setAttribute('tabindex', '0');
+        pillEl.style.cursor = 'pointer';
+        pillEl.title = pill.accent
+          ? '点击改为用浏览器当前登录的账号取流'
+          : '点击改为改用扩展账号取流';
+
+        const toggle = actions.toggleStreamingIdentity;
+        const fire = (ev: Event): void => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          // 传**目标值**而不是"取反"：调用方不需要自己算 next，也就不可能算错
+          toggle(identity === 'extension' ? 'page' : 'extension');
+        };
+        pillEl.addEventListener('click', fire);
+        pillEl.addEventListener('keydown', (ev) => {
+          if (ev.key === 'Enter' || ev.key === ' ') fire(ev);
+        });
+      } else {
+        /**
+         * 未知态：**留痕但不给动作**。
+         *
+         * `title` 说明"为什么不能点"，而不是让用户点一下没反应（那更糟）。
+         */
+        pillEl.title = '还没读到取流身份设置。收起重开面板会重新读取。';
+      }
+
+      /**
+       * ## ⚠️ 胶囊**不再 append 进 `playbackRow`**（2026-11-11，S4）
+       *
+       * ### 为什么挪出来：实测它把昵称挤断了
+       *
+       * 真机像素实测（面板真实宽 **311 CSS**）：
+       *
+       * | 元素 | 宽 | 说明 |
+       * | --- | --- | --- |
+       * | 卡片内容区 | 295 | 311 − padding 16 |
+       * | 头像 + 间距 | 48 | `flex: 0 0 auto` |
+       * | VIP 标签 | 25.7 | `flex: 0 0 auto` |
+       * | **胶囊** | **67.0** | `flex: 0 0 auto` |
+       * | **`.acct-main` 剩余** | **154.3** | ← **不够** |
+       *
+       * 后果（截图实证）：
+       *   - `.acct-name`：`{{取流账号昵称}}`（16 字）→ 屏显 `{{取流账号昵称}}...`（**少 4 字**）
+       *   - `.acct-sub`：`仅取流 · 6 个月后到期` → 屏显 `仅取流 · 6 个月...`
+       *
+       * 胶囊移出后 `.acct-main` 从 **154.3 → 229**（+67 胶囊 +8 间距），
+       * 229 足够放 16 字昵称（≈110–120）与 9 字副标题（≈70–80）。
+       *
+       * ### 为什么语义上也该分开
+       *
+       * | 元素 | 表达什么 |
+       * | --- | --- |
+       * | 昵称 / VIP / 健康 | **账号属性**（这个号是什么、多强、还好吗） |
+       * | **胶囊** | **当前设置**（现在用谁取流） |
+       *
+       * 两者不是一类 —— 前者随账号变，后者随用户选择变。
+       * 挤在同一行还会让用户以为胶囊是"这个账号的属性之一"。
+       *
+       * ### ⚠️ 不要动 `.acct-main` 的 `flex: 1 1 auto`
+       *
+       * 它**本来就该占剩余空间**。问题在胶囊不收缩（`flex: 0 0 auto`），不在 main。
+       * 把 main 改成 `flex: 1 1 0` 之类只会让它更窄。
+       */
+      pillRow.appendChild(pillEl);
+    }
+
     box.appendChild(playbackRow);
+    /**
+     * 胶囊单独一行，挂在**卡片下方**（不是卡片内部）。
+     *
+     * 左对齐 —— 与卡片左边缘对齐，读起来是"这张卡的当前设置"。
+     */
+    if (pillRow.childElementCount > 0) box.appendChild(pillRow);
 
     /**
      * ## 「有凭据但读不出资料」的解释（2026-11-10，原 options 有、迁移时漏了）
@@ -507,16 +804,37 @@ export function accountTab(
    *
    * | 状态 | 判据 | 文案 |
    * | --- | --- | --- |
-   * | 真的没配置 | `!pb && !hasCredential && !unknown` | 「还没有配置播放账号」 |
+   * | 真的没配置 | `!pb && !hasCredential && !unknown` | 「还没有配置取流账号」 |
    * | **有凭据但读不出资料** | `hasCredential && !pb` | 见上面 playback 分支里的专门文案 |
    * | 完全不知道 | `unknown` | 「账号信息读取失败，稍后重试」 |
    *
    * ⚠️ 读不到 `account/summary` 时**不能显示"未配置"** ——
    * 那会引导用户去扫一个可能已经存在的号（`messages.ts` 里记过这条）。
+   *
+   * ## ⚠️ 第四种：`page` 身份下「没凭据」是**正常配置**（2026-11-11 任务 10 剩余）
+   *
+   * 取流身份 = `'page'`（用浏览器当前登录态）时，`hasCredential` **恒为 `false`** ——
+   * 这种配置**本来就不需要** vault 里的凭据。
+   *
+   * 旧判据只看 `!pb && !hasCredential`，于是会把一个**完全可用**的配置
+   * 报成「还没有配置取流账号」—— 和 popup 里 `!configured` 那条是同一个 bug，
+   * 只是这里在面板侧又写了一份。
+   *
+   * 判据统一走 `isStreamingReady()`（同一处实现），**不在这里另写 `a || b`**。
    */
-  if (!pb && !a.hasCredential) {
+  const streamingIdentity = actions.streamingIdentity ?? null;
+  /**
+   * ⚠️ `streamingIdentity === null`（还没读出来）时**走旧的保守判据** ——
+   * 与 popup 的"缺参数不改口"同一纪律：不知道就别替他下结论。
+   */
+  const streamingReady =
+    streamingIdentity === null
+      ? pb !== null || a.hasCredential
+      : isStreamingReady(streamingIdentity, a.hasCredential);
+
+  if (!streamingReady) {
     box.appendChild(
-      el('p', 'pane-note', a.unknown ? '账号信息读取失败，稍后重试' : '还没有配置播放账号'),
+      el('p', 'pane-note', a.unknown ? '账号信息读取失败，稍后重试' : '还没有配置取流账号'),
     );
   }
 
@@ -539,7 +857,7 @@ export function accountTab(
    * 已配置时是"换一个号"，未配置时它就是登录入口 —— 两种情况同一个动作。
    * 所以文案按状态变，行为不变。
    */
-  const loginBtn = el('button', 'acct-btn ghost', pb ? '重新登录' : '扫码登录播放账号');
+  const loginBtn = el('button', 'acct-btn ghost', pb ? '重新登录' : '扫码登录取流账号');
   loginBtn.type = 'button';
   loginBtn.addEventListener('click', (ev) => {
     ev.stopPropagation();
@@ -567,13 +885,13 @@ export function accountTab(
     cancelBtn.type = 'button';
     cancelBtn.style.display = 'none';
 
-    const removeBtn = el('button', 'acct-btn ghost', '退出播放账号');
+    const removeBtn = el('button', 'acct-btn ghost', '退出取流账号');
     removeBtn.type = 'button';
 
     /** 回到非确认态 */
     const reset = (): void => {
       confirming = false;
-      removeBtn.textContent = '退出播放账号';
+      removeBtn.textContent = '退出取流账号';
       removeBtn.classList.remove('danger');
       cancelBtn.style.display = 'none';
     };
@@ -621,7 +939,7 @@ export function accountTab(
           box.appendChild(note);
         }
         note.textContent = r.ok
-          ? '已退出播放账号，取流回退到主账号身份'
+          ? '已退出取流账号，取流回退到主账号身份'
           : `退出失败：${r.detail ?? '未知原因'}`;
         note.classList.toggle('danger', !r.ok);
 
@@ -643,5 +961,29 @@ export function accountTab(
     box.appendChild(el('p', 'pane-note', '主账号无需配置，自动沿用浏览器当前登录状态'));
   }
 
+  /**
+   * ## 首页推荐流开关**已迁到「显示」Tab**（2026-11-11）
+   *
+   * 用户裁决：「**移到显示 tab，但不改 tab 名**」。
+   *
+   * 这里原本是：
+   * ```
+   * box.appendChild(el('div', 'acct-divider'));
+   * box.appendChild(switchRow({ label: '首页推荐流使用取流账号', hint: '打开后，首页推荐流（含首屏）…（62 字）', … }));
+   * if (!a.hasCredential) box.appendChild(el('p','pane-note','先扫码登录取流账号…'));
+   * ```
+   *
+   * ### 为什么连 `acct-divider` 一起删
+   *
+   * 它只有一个用途 —— 把推荐流开关与账号卡**隔开**，传达"这是另一件事"。
+   * 开关迁走后，**它失去了唯一的功能**。
+   *
+   * ⚠️ 而且它**从来没有样式**：`sidebar.ts` 里搜不到 `.acct-divider`
+   * （2026-11-11 盘点确认，`task-28` PLAN.md §1.4）。也就是说它一直是
+   * 一个**零高度、无边框的空 div** —— 那个"用分隔线告诉用户这是两件事"
+   * 的设计意图，**从未真正实现过**。
+   *
+   * 所以删它不是"清理顺手"，而是**删掉一个从未生效的东西**。
+   */
   return box;
 }

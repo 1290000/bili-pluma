@@ -28,11 +28,17 @@ import {
   qualityTab,
 } from '../../../src/content/panel/tabs';
 import type { AccountView, QualityView } from '../../../src/content/panel/panel-data';
+import type { StreamingIdentity } from '../../../src/shared/constants/streaming-identity';
 import {
   DEFAULT_CLEAN_OPTIONS,
   type CleanPreferences,
 } from '../../../src/content/site-clean/clean-options';
 import { OBSERVED_CATEGORIES } from '../../../src/content/site-clean/home-selectors';
+/**
+ * ⚠️ 这条 import 让「文案与实现一致」成为**可断言**的事：
+ * hint 说"全部"，前提是隐藏逻辑真的会隐藏首屏批。
+ */
+import { shouldHideFeedCards } from '../../../src/core/feed-identity/feed-hide';
 
 /** 一个「已接管 + 已解锁」的画质视图 */
 function quality(overrides: Partial<QualityView> = {}): QualityView {
@@ -238,7 +244,7 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
    */
 
   function display(badge: boolean | null = true) {
-    return displayTab(badge, { toggleBadge: () => undefined, openDiag: () => undefined });
+    return displayTab(badge, { ...DISPLAY_ACTS });
   }
 
   it('★★ 角标开关在「显示」Tab 里', () => {
@@ -283,7 +289,7 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
 
   it('拨角标开关会回调', () => {
     const spy = vi.fn();
-    const box = displayTab(true, { toggleBadge: spy, openDiag: () => undefined });
+    const box = displayTab(true, { ...DISPLAY_ACTS, toggleBadge: spy });
     const cb = checkboxFor(box, '页内角标');
     if (!cb) throw new Error('没找到角标开关');
     cb.checked = false;
@@ -293,7 +299,7 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
 
   it('点诊断入口会回调 openDiag', () => {
     const spy = vi.fn();
-    const box = displayTab(true, { toggleBadge: () => undefined, openDiag: spy });
+    const box = displayTab(true, { ...DISPLAY_ACTS, openDiag: spy });
     [...box.querySelectorAll('.sub-entry')]
       .find((e) => e.textContent?.includes('诊断'))
       ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -359,6 +365,50 @@ describe('二级浮层：首页净化', () => {
   });
 });
 
+/**
+ * 账号卡动作的公共默认值。
+ *
+ * ## 为什么抽成常量（2026-11-11）
+ *
+ * `AccountActions` 的 `streamingIdentity` / `toggleStreamingIdentity` 已改成**必填**
+ * （理由见 `tabs.ts` 的 `AccountActions` 注释：可选会掩盖"胶囊永不渲染"的死代码缺口）。
+ *
+ * 21 处调用点若各写一份，既啰嗦，又会让"这里到底该传什么"变得不明显。
+ * 抽成一个带注释的常量后：
+ *   - **默认没有身份**（`null`）→ 胶囊不渲染，因为大多数用例只关心账号卡本身
+ *   - 关心胶囊的用例用 `render()` 显式覆盖 —— 那个辅助函数把"传了什么"写在校验点旁边
+ */
+const ACTS = {
+  login: () => undefined,
+  logout: async () => ({ ok: true }),
+  streamingIdentity: null,
+  toggleStreamingIdentity: () => undefined,
+} as const;
+
+/**
+ * 「显示」Tab 的动作公共默认值（2026-11-11，推荐流开关迁入后新增）。
+ *
+ * ## 为什么它和 `ACTS` 分开
+ *
+ * `displayTab()` 现在**同时管两件互不相干的事**：
+ *   - 页内角标（原来的职责）
+ *   - 首页推荐流（2026-11-11 从「账号」Tab 迁来）
+ *
+ * 而它的 `actions` 里**刻意没有 `StreamingIdentity`** ——
+ * 推荐流开关的可点性只认 `hasCredential`，与取流身份无关。
+ * **这个类型约束就是"两个功能独立"的防线**（见 `tabs.ts` 的 `displayTab` 注释）。
+ *
+ * 默认 `feedAccountEnabled: false` + `hasCredential: false`
+ * → 开关**灰着**（这是"没配置扩展账号"的真实形态），大多数用例不关心它。
+ */
+const DISPLAY_ACTS = {
+  toggleBadge: () => undefined,
+  openDiag: () => undefined,
+  feedAccountEnabled: false,
+  toggleFeedAccount: () => undefined,
+  hasCredential: false,
+} as const;
+
 describe('账号 Tab', () => {
   function account(overrides: Partial<AccountView> = {}): AccountView {
     return {
@@ -381,8 +431,7 @@ describe('账号 Tab', () => {
 
   it('双卡都在，A 灰 / B 信息色（class 区分）', () => {
     const box = accountTab(account(), Date.now(), 'play', {
-      login: () => undefined,
-      logout: async () => ({ ok: true }),
+      ...ACTS,
     });
     expect(box.querySelectorAll('.acct-row').length).toBe(2);
     expect(box.querySelector('.acct-row.primary')).not.toBeNull();
@@ -394,7 +443,7 @@ describe('账号 Tab', () => {
       account({ primary: { uname: '主', level: null, loggedIn: 'yes', source: 'live' } }),
       Date.now(),
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     const tags = [...box.querySelectorAll('.acct-tag')].map((n) => n.textContent);
     expect(tags[0]).toBe('只读');
@@ -404,8 +453,7 @@ describe('账号 Tab', () => {
 
   it('播放账号显示"仅取流"与会员类型', () => {
     const box = accountTab(account(), Date.now(), 'play', {
-      login: () => undefined,
-      logout: async () => ({ ok: true }),
+      ...ACTS,
     });
     expect(box.textContent).toContain('仅取流');
     expect(box.textContent).toContain('年度大会员');
@@ -420,7 +468,7 @@ describe('账号 Tab', () => {
       account({ playback: null, unknown: true, hasCredential: false }),
       Date.now(),
       'other',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).toContain('账号信息读取失败');
     expect(box.textContent).not.toContain('未配置');
@@ -439,13 +487,12 @@ describe('账号 Tab', () => {
      * 反例：把按钮重新包回那个 `if` → 本条必红。
      */
     const box = accountTab(account(), Date.now(), 'play', {
-      login: () => undefined,
-      logout: async () => ({ ok: true }),
+      ...ACTS,
     });
 
     const btns = [...box.querySelectorAll('.acct-btn')].map((b) => b.textContent);
     expect(btns).toContain('重新登录');
-    expect(btns).toContain('退出播放账号');
+    expect(btns).toContain('退出取流账号');
   });
 
   it('★ 未配置时给登录入口，且**不**给退出按钮', () => {
@@ -453,12 +500,12 @@ describe('账号 Tab', () => {
       account({ playback: null, hasCredential: false, needsLogin: true }),
       Date.now(),
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     const btns = [...box.querySelectorAll('.acct-btn')].map((b) => b.textContent);
-    expect(btns).toContain('扫码登录播放账号');
+    expect(btns).toContain('扫码登录取流账号');
     // 没配置时给「退出」会让人莫名其妙
-    expect(btns).not.toContain('退出播放账号');
+    expect(btns).not.toContain('退出取流账号');
   });
 
   it('★ 读不到 account（unknown）时一个按钮都不给', () => {
@@ -470,21 +517,21 @@ describe('账号 Tab', () => {
       account({ playback: null, unknown: true, hasCredential: false }),
       Date.now(),
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.querySelectorAll('.acct-btn').length).toBe(0);
   });
 
   // ────────────── 三种"看起来都像没配置"的状态必须分开说（2026-11-10）──────────────
 
-  it('★★ 真没配置 → 「还没有配置播放账号」', () => {
+  it('★★ 真没配置 → 「还没有配置取流账号」', () => {
     const box = accountTab(
       account({ playback: null, hasCredential: false, unknown: false }),
       Date.now(),
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
-    expect(box.textContent).toContain('还没有配置播放账号');
+    expect(box.textContent).toContain('还没有配置取流账号');
   });
 
   it('★★ 有凭据但读不出资料 → 专门文案（不是「没配置」）', () => {
@@ -499,11 +546,11 @@ describe('账号 Tab', () => {
       account({ playback: null, hasCredential: true, unknown: false }),
       Date.now(),
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).toContain('已配置，但暂时读不出账号资料');
     // ★ 不能说成"没配置"
-    expect(box.textContent).not.toContain('还没有配置播放账号');
+    expect(box.textContent).not.toContain('还没有配置取流账号');
   });
 
   it('★★ 完全读不到（unknown）→ 「读取失败」，既不说没配置也不说已配置', () => {
@@ -511,10 +558,10 @@ describe('账号 Tab', () => {
       account({ playback: null, hasCredential: false, unknown: true }),
       Date.now(),
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).toContain('账号信息读取失败');
-    expect(box.textContent).not.toContain('还没有配置播放账号');
+    expect(box.textContent).not.toContain('还没有配置取流账号');
     expect(box.textContent).not.toContain('暂时读不出账号资料');
   });
 
@@ -536,7 +583,7 @@ describe('账号 Tab', () => {
       }),
       now,
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).toContain('5 分钟前校验');
   });
@@ -557,7 +604,7 @@ describe('账号 Tab', () => {
       }),
       now,
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).toContain('凭据异常');
     expect(box.textContent).toContain('-101');
@@ -579,7 +626,7 @@ describe('账号 Tab', () => {
       }),
       now,
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).not.toMatch(/可能|建议|或许|疑似/);
   });
@@ -596,10 +643,10 @@ describe('账号 Tab', () => {
    * 原 options 的账号页就是这么做的（`account.tsx` 的 `confirmRemove` 状态）。
    */
 
-  /** 找到「退出播放账号」按钮 */
+  /** 找到「退出取流账号」按钮 */
   function removeBtn(box: HTMLElement): HTMLElement | undefined {
     return [...box.querySelectorAll<HTMLElement>('.acct-btn')].find(
-      (b) => b.textContent === '退出播放账号',
+      (b) => b.textContent === '退出取流账号',
     );
   }
 
@@ -623,7 +670,7 @@ describe('账号 Tab', () => {
      */
     const logoutSpy = vi.fn(async () => ({ ok: true }));
     const box = accountTab(account(), Date.now(), 'play', {
-      login: () => undefined,
+      ...ACTS,
       logout: logoutSpy,
     });
 
@@ -640,7 +687,7 @@ describe('账号 Tab', () => {
   it('★★ 第二次点「确认退出」才真正执行', () => {
     const logoutSpy = vi.fn(async () => ({ ok: true }));
     const box = accountTab(account(), Date.now(), 'play', {
-      login: () => undefined,
+      ...ACTS,
       logout: logoutSpy,
     });
 
@@ -653,7 +700,7 @@ describe('账号 Tab', () => {
   it('★★ 点「取消」回到非确认态，**不执行**', () => {
     const logoutSpy = vi.fn(async () => ({ ok: true }));
     const box = accountTab(account(), Date.now(), 'play', {
-      login: () => undefined,
+      ...ACTS,
       logout: logoutSpy,
     });
 
@@ -668,23 +715,22 @@ describe('账号 Tab', () => {
 
   it('★ 「确认退出」带 danger 样式（与第一次点击视觉上可区分）', () => {
     const box = accountTab(account(), Date.now(), 'play', {
-      login: () => undefined,
-      logout: async () => ({ ok: true }),
+      ...ACTS,
     });
     removeBtn(box)?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(confirmBtn(box)?.classList.contains('danger')).toBe(true);
   });
 
-  it('★ 未配置时点登录按钮会回调（文案是「扫码登录播放账号」）', () => {
+  it('★ 未配置时点登录按钮会回调（文案是「扫码登录取流账号」）', () => {
     const spy = vi.fn();
     const box = accountTab(
       account({ playback: null, hasCredential: false, needsLogin: true }),
       Date.now(),
       'play',
-      { login: spy, logout: async () => ({ ok: true }) },
+      { ...ACTS, login: spy },
     );
     const btn = [...box.querySelectorAll('.acct-btn')].find(
-      (b) => b.textContent === '扫码登录播放账号',
+      (b) => b.textContent === '扫码登录取流账号',
     );
     expect(btn).toBeDefined();
     btn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -700,7 +746,7 @@ describe('账号 Tab', () => {
       account({ primary: { uname: null, level: null, loggedIn: 'unknown', source: 'none' } }),
       Date.now(),
       'play',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).toContain('读取中…');
     expect(box.textContent).not.toContain('未登录');
@@ -711,8 +757,355 @@ describe('账号 Tab', () => {
       account({ primary: { uname: null, level: null, loggedIn: 'unknown', source: 'none' } }),
       Date.now(),
       'other',
-      { login: () => undefined, logout: async () => ({ ok: true }) },
+      ACTS,
     );
     expect(box.textContent).toContain('打开视频页后可见');
+  });
+});
+
+describe('取流身份胶囊（步骤 4，2026-11-11）', () => {
+  const BASE = {
+    primary: { uname: '主', level: 6, loggedIn: 'yes' as const, source: 'live' as const },
+    playback: {
+      uname: '播',
+      mid: 2,
+      vipLabel: 'annual' as const,
+      expireAt: null,
+      healthy: true,
+      checkedAt: 0,
+      reason: null,
+    },
+    unknown: false,
+    hasCredential: true,
+    needsLogin: false,
+  };
+
+  function render(
+    streamingIdentity: 'extension' | 'page' | null,
+    toggleStreamingIdentity: (next: 'extension' | 'page') => void = () => undefined,
+  ) {
+    /**
+     * 显式传值，**不用可选展开**：
+     * 两个字段现在是必填，"不传"= 忘传，是一个缺口。
+     * 想让胶囊不渲染就传 `null` 并断言 —— 那是一个判据。
+     */
+    return accountTab(BASE, Date.now(), 'play', {
+      ...ACTS,
+      streamingIdentity,
+      toggleStreamingIdentity,
+    });
+  }
+
+  it('extension → 胶囊写「取流：扩展账号」', () => {
+    expect(render('extension').textContent).toContain('取流：扩展账号');
+  });
+  it('page → 胶囊写「取流：浏览器账号」', () => {
+    expect(render('page').textContent).toContain('取流：浏览器账号');
+  });
+
+  it('★★ identity 为 null（还没读出来）→ **胶囊仍然渲染**，显示「取流身份：未知」', () => {
+    /**
+     * ## 这条用例 2026-11-11 被**反转**了，不是被"改成让它过"
+     *
+     * 上一版断言的是 `not.toContain('取流：')`（整块不渲染），理由是
+     * "渲染任何默认值都是编数据"。**那个理由只对了一半**：
+     *
+     * | 规则 | 正确理解 |
+     * | --- | --- |
+     * | 「不渲染任何默认值」 | 是**内容**规则 —— 不许假装用户选了 extension / page |
+     * | 但它**不是**删掉入口的许可 | **控件消失不是安全默认值，而是隐形 bug** |
+     *
+     * 真机事故：`streaming/status` 读失败 → `null` → 整块消失 →
+     * **用户永远看不到"切换取流身份"的唯一入口**，以为功能没做。
+     *
+     * 正确做法：**内容仍是"未知"（不编数据），但入口要留着**。
+     */
+    const box = render(null);
+    expect(box.textContent).toContain('取流身份：未知');
+    // 未知态**不许**冒充任何一个真实身份
+    expect(box.textContent).not.toContain('取流：扩展账号');
+    expect(box.textContent).not.toContain('取流：浏览器账号');
+  });
+
+  it('★ 未知态**不可点**（目标不确定，点了可能违反预期）', () => {
+    /**
+     * 未知时若允许点击，`identity === 'extension' ? 'page' : 'extension'` 会取到
+     * 分支的错误一侧 —— 用户点一下可能反而切到他不想要的身份。
+     *
+     * **宁可少一个动作，不可让动作的结果违反预期。**
+     *
+     * 反向验证：把未知态也设成 `role="button"` → 本用例红。
+     */
+    const box = render(null);
+    expect(box.querySelector('[role="button"]')).toBeNull();
+  });
+
+  it('有回调 → 可点，点击时传「目标值」而不是"取反"', () => {
+    const spy = vi.fn();
+    const box = render('extension', spy);
+    const pillEl = box.querySelector('[role="button"]');
+    expect(pillEl).not.toBeNull();
+    pillEl?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(spy).toHaveBeenCalledWith('page');
+  });
+
+  it('page 状态下点击 → 目标值是 extension', () => {
+    const spy = vi.fn();
+    const box = render('page', spy);
+    box.querySelector('[role="button"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(spy).toHaveBeenCalledWith('extension');
+  });
+
+  it('★ 胶囊只加一个可点元素，不重复渲染', () => {
+    /**
+     * 原来这里测的是"没有回调时不渲染成可点元素"。
+     *
+     * **2026-11-11 改成必填后那个场景不再存在**（`toggleStreamingIdentity` 一定给），
+     * 所以换一条更有意义的：胶囊**只出现一次**。
+     *
+     * 防的是"B 卡渲染两次"或"胶囊在 `pb` 有值/无值两个分支各加一次"这类回归。
+     */
+    const box = render('extension');
+    expect(box.querySelectorAll('[role="button"]').length).toBe(1);
+  });
+
+  it('★ 任何状态下都不出现「停用」「关闭」字样', () => {
+    for (const id of ['extension', 'page'] as const) {
+      const text = render(id).textContent ?? '';
+      expect(text).not.toContain('停用');
+      expect(text).not.toContain('关闭');
+    }
+  });
+  /**
+   * ## task-10 剩余：`page` 身份下「没凭据」不是「没配置」（2026-11-11）
+   *
+   * 与 popup 里 `!configured` 那条**是同一个 bug 的面板侧镜像**：
+   * 取流身份 = `'page'` 时 `hasCredential` 恒为 `false`，
+   * 而旧判据 `!pb && !hasCredential` 会把这种**完全可用**的配置
+   * 报成「还没有配置取流账号」。
+   */
+  describe('账号 Tab：page 身份下不误报「未配置」', () => {
+    /** `page` 身份 + 无凭据 + 读不到资料 = 单账号模式的典型形态 */
+    function noCredentialView(): AccountView {
+      return {
+        ...BASE,
+        playback: null,
+        hasCredential: false,
+        unknown: false,
+      };
+    }
+
+    function renderWith(
+      identity: StreamingIdentity | null,
+      view: AccountView = noCredentialView(),
+    ) {
+      return accountTab(view, Date.now(), 'play', {
+        ...ACTS,
+        streamingIdentity: identity,
+        toggleStreamingIdentity: () => undefined,
+      });
+    }
+
+    it('★★ page + 无凭据 → **不**显示「还没有配置取流账号」', () => {
+      const box = renderWith('page');
+      /**
+       * 反向验证：把 `tabs.ts` 的判据改回 `if (!pb && !a.hasCredential)` →
+       * 这里会再次显示「还没有配置取流账号」→ 本用例红。
+       */
+      expect(box.textContent).not.toContain('还没有配置取流账号');
+    });
+
+    it('★★ extension + 无凭据 → **仍然**显示「还没有配置取流账号」（对照组）', () => {
+      /**
+       * 对照组：证明上面那条不是"恒不显示"。
+       * 唯一差别是 `streamingIdentity` 的取值。
+       */
+      const box = renderWith('extension');
+      expect(box.textContent).toContain('还没有配置取流账号');
+    });
+
+    it('⚠️ identity 为 null（还读不出来）→ 走旧的保守判据，仍然报未配置', () => {
+      /**
+       * 纪律与 popup 一致：**缺参数不改口**。不知道用户选了谁，
+       * 就不能替他认定"这个配置是好的"。
+       *
+       * 反向验证：把 `streamingIdentity === null` 当成 `'page'` → 本用例红。
+       */
+      const box = renderWith(null);
+      expect(box.textContent).toContain('还没有配置取流账号');
+    });
+
+    it('page + 有凭据（配过但选择不用）→ 也不误报', () => {
+      const box = renderWith('page', { ...BASE, hasCredential: true });
+      expect(box.textContent).not.toContain('还没有配置取流账号');
+    });
+  });
+});
+
+/**
+ * ## 首页推荐流开关（2026-11-11）—— 与取流身份**完全独立**
+ *
+ * 用户原话：
+ * > **首页推荐流的变化与取流身份是完全独立的两个功能**
+ *
+ * 所以本组测试最重要的一条是：**改 `streamingIdentity` 不影响本开关的可点性与勾选态**。
+ */
+describe('显示 Tab：首页推荐流开关（2026-11-11 从账号 Tab 迁来）', () => {
+  /**
+   * ## 为什么整组迁到这里
+   *
+   * 用户裁决：「**移到显示 tab，但不改 tab 名**」。
+   *
+   * 迁移只改**渲染位置**，不改任何判据 —— 所以下面这些断言
+   * （可点性 = `hasCredential`、与 `streamingIdentity` 无关、勾选态来自 `feedAccountEnabled`）
+   * **一条都没删，只是换了个宿主 Tab**。
+   *
+   * ⚠️ 如果哪天有人把开关挪回账号 Tab 或别处，**这一组会红** ——
+   * 那正是它该做的事：它钉的是"这个开关存在于哪个 Tab"。
+   */
+  const VIEW_WITH_CRED: AccountView = {
+    primary: { uname: '主', level: 6, loggedIn: 'yes', source: 'live' },
+    playback: {
+      uname: 'bili_x',
+      mid: 1,
+      vipLabel: 'annual',
+      expireAt: null,
+      healthy: true,
+      checkedAt: 0,
+      reason: null,
+    },
+    unknown: false,
+    hasCredential: true,
+    needsLogin: false,
+  };
+
+  function renderDisplay(
+    over: {
+      feedAccountEnabled?: boolean;
+      hasCredential?: boolean;
+    } = {},
+  ) {
+    return displayTab(true, {
+      ...DISPLAY_ACTS,
+      feedAccountEnabled: over.feedAccountEnabled ?? false,
+      hasCredential: over.hasCredential ?? true,
+    });
+  }
+
+  /** 找到推荐流开关的 checkbox（按 label 文案） */
+  function feedSwitch(box: HTMLElement): HTMLInputElement | undefined {
+    return [...box.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')].find((el) =>
+      (el.closest('label')?.textContent ?? '').includes('首页推荐流使用取流账号'),
+    );
+  }
+
+  it('★ 开关在「显示」Tab 里（迁位置的直接断言）', () => {
+    expect(renderDisplay().textContent).toContain('首页推荐流使用取流账号');
+  });
+
+  it('★ 开关**不在**账号 Tab 里了（迁走之后账号 Tab 不该再有它）', () => {
+    /**
+     * ## 这条防的是"迁了一半"
+     *
+     * 只断言"显示 Tab 有"是不够的 —— 若旧位置没删干净，
+     * 用户会看到**两个**同名开关，而且它们共用同一个 storage key，
+     * 拨一个另一个不同步（面板只在切 Tab 时重画）。
+     *
+     * 反向验证：把账号 Tab 里那段加回去 → 本用例红。
+     */
+    const accountBox = accountTab(VIEW_WITH_CRED, Date.now(), 'play', {
+      ...ACTS,
+      streamingIdentity: 'extension',
+      toggleStreamingIdentity: () => undefined,
+    });
+    expect(accountBox.textContent).not.toContain('首页推荐流使用取流账号');
+  });
+
+  it('★★ 有凭据 → 开关**可点**', () => {
+    expect(feedSwitch(renderDisplay({ hasCredential: true }))?.disabled).toBe(false);
+  });
+
+  it('★★ **没有凭据 → 开关灰掉点不动**', () => {
+    /**
+     * 用户原话：「如果用户没有扫码登录扩展账号的话这个开关就灰掉无法点击」。
+     *
+     * 🔁 反向验证：把 \`disabled: !actions.hasCredential\` 改成 \`disabled: false\` → 本用例红。
+     */
+    const el = feedSwitch(renderDisplay({ hasCredential: false }));
+    expect(el).toBeDefined();
+    expect(el?.disabled).toBe(true);
+  });
+
+  it('没有凭据时给出**下一步动作**（不只是灰着）', () => {
+    expect(renderDisplay({ hasCredential: false }).textContent).toContain('先扫码登录取流账号');
+  });
+
+  it('勾选态来自 feedAccountEnabled', () => {
+    expect(feedSwitch(renderDisplay({ feedAccountEnabled: true }))?.checked).toBe(true);
+    expect(feedSwitch(renderDisplay({ feedAccountEnabled: false }))?.checked).toBe(false);
+  });
+
+  it('★★ 可点性**与取流身份无关** —— 类型里根本没有 StreamingIdentity', () => {
+    /**
+     * ## 为什么这条从"传不同 identity 看结果"改成了"看类型"
+     *
+     * 迁到 \`displayTab\` 之后，**它的 \`actions\` 里没有 \`streamingIdentity\` 这个字段** ——
+     * 想"让开关跟着身份变"必须先改类型签名，那会让调用点报错。
+     *
+     * **比原来在账号 Tab 里"传两个不同的 identity 试一下"更强**：
+     * 原来那个是**行为**断言（试出来的一样），现在是**结构**断言（根本传不进去）。
+     *
+     * 见 \`tabs.ts\` 的 \`displayTab\` 注释：「迁 Tab 只改渲染位置，不改这条判据」。
+     */
+    const actsKeys = Object.keys(DISPLAY_ACTS);
+    expect(
+      actsKeys,
+      'displayTab 的 actions 里出现了身份相关字段 —— 两个功能被耦合了',
+    ).not.toContain('streamingIdentity');
+    expect(actsKeys).toContain('hasCredential');
+  });
+
+  it('★★ hint 只有 14 字，且**不提机制词**（用户裁决）', () => {
+    /**
+     * ## 用户原话
+     *
+     * > 「描述太复杂了，必须精简、精简、再精简」
+     * > 「**这个开关的说明没有必要写清"首屏也会换"，按我说的来**」
+     *
+     * 所以：62 字 → 14 字，且**不许出现**"首屏""滚动加载""隐藏"这类机制词。
+     *
+     * ## 为什么这条替换了原来那条"从实现推导预期"
+     *
+     * 原来那条断言的是「若隐藏首屏 → 文案须含"含首屏"」——
+     * **那套逻辑在用户裁决下已经失效**：用户明确不要机制描述。
+     *
+     * 但**机制本身没变**（\`shouldHideFeedCards\` 仍然是 true），
+     * 见下一条"实现事实"用例。
+     */
+    const box = renderDisplay();
+    const text = box.textContent ?? '';
+
+    // 14 字的那句必须在
+    expect(text).toContain('打开后，首页推荐换成取流账号的');
+
+    // 机制词一个都不许出现
+    for (const banned of ['首屏', '滚动加载', '隐藏']) {
+      expect(text, `hint 里出现了机制词「${banned}」—— 用户明确不要`).not.toContain(banned);
+    }
+  });
+
+  it('★ 实现事实没变：打开开关仍隐藏首屏批（只是不再写进文案）', () => {
+    /**
+     * ## 文案精简 ≠ 功能改变
+     *
+     * 用户说"不用写清首屏也会换" —— 那是**文案**要求。
+     * **实现该隐藏还是要隐藏**，否则"首页推荐换成取流账号的"就变成假话。
+     *
+     * 反向验证：把 \`shouldHideFeedCards\` 改成恒 \`false\` → 本用例红。
+     */
+    expect(
+      shouldHideFeedCards({ feedAccountEnabled: true, hasCredential: true }),
+      '打开开关应隐藏首屏批（否则文案"换成取流账号的"是假话）',
+    ).toBe(true);
   });
 });

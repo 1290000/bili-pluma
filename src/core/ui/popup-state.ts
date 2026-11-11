@@ -11,6 +11,8 @@
  */
 
 import type { StatBucket } from '@shared/types/stats';
+import type { ProxyActivateReason } from '@shared/types/messages';
+import type { StreamingIdentity } from '@shared/constants/streaming-identity';
 
 /** 与 `messages.ts` 的 `account/summary:ok` 对齐的最小视图 */
 export interface PopupAccount {
@@ -30,6 +32,56 @@ export interface PopupSnapshot {
   account: PopupAccount | null;
   /** 12 个时间窗的原始统计。用于算样本数与成功率 */
   buckets: StatBucket[];
+  /**
+   * 最近一次 `page/activate` 的 reason（**可选**）。
+   *
+   * ## 为什么需要它（2026-11-11）
+   *
+   * `'self'` 表示"取流账号与页面身份是同一个号" —— 那是**不需要代理**，
+   * 不是故障。但它在快照里的表现与"配好了、正常代理"高度相似
+   * （都有凭据、开关都开着），仅凭 `proxy.enabled` + `hasCredential`
+   * 判不出来，界面就会说「已接管」——**而实际一条规则都没装**。
+   *
+   * 那正是本项目反复强调的最坏一类不一致：「界面说在工作，实际没工作」。
+   * 所以让调用方把 background 的权威回答带进来，这里据此说实话。
+   *
+   * 缺省（`undefined`）= 调用方没有这次信息（旧快照 / 自动化），
+   * 此时**保持既有判据不变**，不因缺参数就改口。
+   * ## ⚠️ 取值域**派生自** `ProxyActivateReason`（2026-11-11 改）
+   *
+   * 这里曾经也手抄了一份。`check-messages.mjs` 新加的"内联字面量联合"检查
+   * 把本行抓了出来 —— 也就是说，我在修完另外 4 处断链之后，**这里漏了第 5 处**，
+   * 而这正是那条检查存在的理由：**手抄的联合，靠人逐个想起来是不可靠的**。
+   */
+  lastActivateReason?: ProxyActivateReason | null;
+  /**
+   * 用户选的取流身份（`readStreamingIdentity()` 的结果）。
+   *
+   * ## 为什么 popup 需要它（2026-11-11，步骤 6 段 1）
+   *
+   * `'page'` = 用户选了「用浏览器当前登录态取流」。这是一种**完整、可用**的配置，
+   * 但它**不需要任何凭据** —— 于是 `hasCredential` 恒为 `false`。
+   *
+   * 旧逻辑拿 `hasCredential` 当"配好了没有"的判据，于是这种配置会被报成
+   * 「未配置 / 还没配置取流账号」（`needsLogin: true`，引导用户去扫一个他不需要的号），
+   * 或者落到「凭据失效 / 需要重新扫码」。**两条都是假话。**
+   *
+   * ## 它与 `lastActivateReason` 的关系
+   *
+   * 两者回答不同问题，且**都要有**：
+   *
+   * | 字段 | 来源 | 回答 |
+   * | --- | --- | --- |
+   * | `streamingIdentity` | `storage.local`（同步可读） | 用户**选**了谁 |
+   * | `lastActivateReason` | `page/activate` 回包（异步、仅播放页） | 那一刻**实际发生了**什么 |
+   *
+   * 首页 / 非播放页拿不到 `lastActivateReason`，但**一定拿得到** `streamingIdentity`。
+   * 只靠 `lastActivateReason` 的实现在非播放页会退化成"什么都不知道"。
+   *
+   * 缺省（`undefined` / `null`）= 调用方没给 → **保持既有判据不变**，
+   * 不因缺参数就改口（与 `lastActivateReason` 同一纪律）。
+   */
+  streamingIdentity?: StreamingIdentity | null;
   /**
    * 当前标签页是不是**受支持的播放页**（普通视频 / 番剧 / 国创 / 电影）。
    *
@@ -115,6 +167,112 @@ export function sampleRate(buckets: readonly StatBucket[]): number | null {
 }
 
 /**
+ * 「代理状态未知」—— 收到一个**不认识的 reason** 时的 fail-closed 结论。
+ *
+ * ## 为什么必须有这一支（2026-11-11，🔴 修复）
+ *
+ * `describePopup()` 里有两处是"一串 `if (reason === 'X')` + 兜底 return"。
+ * 兜底原本是「已接管」—— 于是**任何没匹配上的值都自动落进"扩展在工作"**，
+ * 包括将来新增的 reason、拼错的值、空串。
+ *
+ * 实测（`popup-state-unknown-reason.test.ts` 用 `as never`）：3 条红。
+ *
+ * ## 判据
+ *
+ * > **"未知" ≠ "没问题"。** 界面说「已接管」是**断言**（我替你换了 Cookie），
+ * > 而收到不认识的 reason 时，我们**根本不知道**有没有换。
+ * >
+ * > 把"不知道"说成"已经做了"，与把"没收到回包"说成"不是同一账号"是同一类错误
+ * > —— 见 `page-state.ts` 里 `'unknown'` 被列为一等值的理由。
+ *
+ * ## 为什么是「未知」而不是"什么都不显示"
+ *
+ * 2026-11-11 在胶囊那条上已经确立过同一条纪律：
+ * **控件消失不是安全默认值，而是隐形 bug**（用户看不见就以为功能没做）。
+ * **不猜内容 ≠ 删掉入口。**
+ *
+ * 所以：渲染，但如实说"未知"，并给一句归因（`line`），让用户知道
+ * 这不是"没问题"，而是"读不到"。
+ *
+ * ## 为什么不可点
+ *
+ * 它不是一个可操作的状态 —— 用户点它也不知道该做什么（不是重扫、不是开关）。
+ * 可点的东西必须对应一个明确的动作，否则就是给用户一个假的出路。
+ */
+function unknownProxyState(): PopupView {
+  return {
+    state: 'active',
+    pill: '未知',
+    tone: 'neutral',
+    line: '无法确认代理状态',
+    needsLogin: false,
+  };
+}
+
+/**
+ * 「同一个号」状态 —— 取流账号就是页面自己那个号，**不需要代理**。
+ *
+ * ## 为什么必须有这一支（2026-11-11）
+ *
+ * 旧的 `same-account` 在 UI 层**零消费方**：用户开关开着、什么都没生效、
+ * 也没有任何提示。那是比"说错话"更糟的一类问题 —— **它什么都不说**。
+ *
+ * ## 为什么复用 `active` 而非新增 state
+ *
+ * 新增 state 要同步 `PopupState` 联合、`docs/02-ui-spec.md` §3 的状态表、
+ * 以及所有 `switch (state)` 的地方。而这里要表达的**不是一个新状态**，
+ * 而是同一个"在用"状态下的**另一种成因** —— 用户看到的仍然是"提取流这一步没问题"，
+ * 只是走的不是代理这条路。
+ *
+ * 所以：`state` 沿用 `active`（语义上确实"取流是好的"），
+ * 但 **`pill` 换成「无需代理」**，绝不说「已接管」——
+ * 「已接管」是"我替你换了 Cookie"的断言，而这里一条规则都没装。
+ * 界面说在工作而实际没工作，正是本项目反复强调的最坏一类不一致。
+ *
+ * ## 文案为什么这么短
+ *
+ * 用户 2026-10-29 明确要求删掉"取流已由播放账号接管"这类把胶囊说一遍的长句。
+ * 这里保留一句，是因为它讲的**不是同一件事**：它在归因（"为什么没有提升"），
+ * 没有它用户会以为功能坏了。
+ */
+function selfIdentity(): PopupView {
+  return {
+    state: 'active',
+    pill: '无需代理',
+    tone: 'neutral',
+    line: '取流账号与当前登录账号是同一个，不需要替换身份',
+    // 不需要重扫 —— 号是好的，只是没有第二个号可用
+    needsLogin: false,
+  };
+}
+
+/**
+ * 「你选择了用浏览器账号取流」—— 与 `selfIdentity()` **必须分开**（2026-11-11）。
+ *
+ * ## 为什么不能复用 `selfIdentity()`
+ *
+ * | | `self` | `page-identity` |
+ * | --- | --- | --- |
+ * | 谁决定的 | **事实**：两个 mid 恰好相同（扩展发现的） | **选择**：用户在面板里设的 |
+ * | 说 `self` 那句话的后果 | 准确 | 用户会以为"扩展发现了我不知道的问题" |
+ *
+ * 同一句话套在两种成因上，用户读到的意思是错的 —— 这正是本项目反复强调的
+ * "**界面陈述错误事实**"，比不提示更糟。
+ *
+ * 面板（`tabs.ts` 的二态胶囊）说「取流：浏览器账号」，这里说「当前用浏览器账号取流」，
+ * **两个界面说同一件事**。哪天两者不一致，就说明有地方改漏了。
+ */
+function pageIdentity(): PopupView {
+  return {
+    state: 'active',
+    pill: '无需代理',
+    tone: 'neutral',
+    line: '当前用浏览器账号取流，未使用取流账号',
+    needsLogin: false,
+  };
+}
+
+/**
  * 判定该显示哪种状态。
  *
  * ## 顺序不能调换
@@ -138,7 +296,46 @@ export function describePopup(snap: PopupSnapshot): PopupView {
   const { proxy, configured, account, buckets, page } = snap;
 
   /**
-   * 「未生效」：有播放账号、开关开着，但当前页不是视频页。
+   * ## 取流身份 = `'page'` 的**完整短路**（2026-11-11，步骤 6 段 1）
+   *
+   * 用户选了「用浏览器当前登录态取流」时，**`hasCredential` 与 `configured`
+   * 都不再能回答任何问题** —— 这种配置本来就不需要凭据。旧逻辑会把它报成
+   * 「未配置」或「凭据失效」，两条都是假话，并引导用户去扫一个不需要的号。
+   *
+   * 所以这里**整段短路**，不走下面的任何既有分支。
+   *
+   * ## 内部顺序（与主流程的判据一致）
+   *
+   * | 条件 | 结论 | 理由 |
+   * | --- | --- | --- |
+   * | 开关关着 | **「已停用」** | 用户主动关开关是最能解释当前结果的事实，**必须赢过**「无需代理」 |
+   * | 不在播放页 | 「未生效」 | 非播放页没有取流这回事 |
+   * | 其余 | 「无需代理」 | 配置完整且在工作，只是不需要扩展参与 |
+   *
+   * ⚠️ **`!proxy.enabled` 必须排在最前**。原来的实现（`self` / `page-identity`
+   * 写在 `hasCredential` 分支内部）让「关开关」永远走不到「已停用」——
+   * engineer-b 在交接时指出并核实过。这里短路一并修掉。
+   *
+   * ⚠️ **`undefined` / `null` 不走短路**：那是"还读不出用户选了谁"，
+   * 与 `lastActivateReason` 缺省时的处理一致 —— **缺参数不改判据**。
+   */
+  if (snap.streamingIdentity === 'page') {
+    if (!proxy.enabled) {
+      return {
+        state: 'stopped',
+        pill: '已停用',
+        tone: 'neutral',
+        needsLogin: false,
+      };
+    }
+    if (page.kind !== 'play') {
+      return { state: 'not-video', pill: '未生效', tone: 'neutral', needsLogin: false };
+    }
+    return pageIdentity();
+  }
+
+  /**
+   * 「未生效」：有取流账号、开关开着，但当前页不是视频页。
    *
    * 排序依据（02-ui-spec §3）：**能解释当前结果的状态优先**。
    *   - 用户自己关掉开关（已停用）> 当前页不对（未生效）
@@ -161,12 +358,75 @@ export function describePopup(snap: PopupSnapshot): PopupView {
     needsLogin: false,
   });
 
+  /**
+   * ## ⚠️ 「已停用」提到整条链的**第二位**（2026-11-11 重排）
+   *
+   * ### 为什么它不是"某个分支的位置问题"，而是全局顺序问题
+   *
+   * 顶层原则（`02-ui-spec` §3 的原话，以前只当局部理由用）：
+   *
+   * > **能解释当前结果的状态优先，且用户主动操作优先于默认/派生状态。**
+   *
+   * 按它推，整条链必须是：
+   *
+   * | 序 | 状态 | 依据 |
+   * | --- | --- | --- |
+   * | 1 | `page` 身份的短路（见上） | 配置完整，只是不需要代理 |
+   * | 2 | **`!proxy.enabled` → 已停用** | **用户主动操作，压过一切派生状态** |
+   * | 3 | `!configured` → 未配置 | 没配过，引导去配 |
+   * | 4 | `not-video` | 页面不对，能解释结果 |
+   * | 5 | `self` / `page-identity` → 无需代理 | 与号健康无关 |
+   * | 6 | `!account.healthy` / 降级 / 已接管 | 后台校验，最后 |
+   *
+   * ### 修掉的具体 bug
+   *
+   * 原来「已停用」在 `:394`，排在 `!configured`（`:318`）与 `!account`（`:343`）**之后**。
+   * 后果：**用户明明自己关掉了开关，却先被告知「未配置」或「凭据失效」** ——
+   * 他会去扫码、去查凭据，而真相是他自己关的。
+   *
+   * 这正是"用户主动操作必须压过派生状态"那条原则被违反的样子。
+   *
+   * ### 为什么不影响 `!configured`
+   *
+   * `page` 身份已经在上面短路掉了。剩下的两种身份里：
+   * - `extension` + 无密文 → `disabled` 说明的是**更具体**的事实（他关了开关），
+   *   比"未配置"更能解释"为什么没 4K"
+   * - `extension` + 有密文 → 本来就该优先说"你关了"
+   *
+   * ### ⚠️ 两条规则组合出来的行为（**单独看任何一条都推不出来**）
+   *
+   * 这里的顺序 + `!configured` 的判据（`isStreamingReady`）合起来，会产生一个
+   * 只看代码看不出的组合行为：
+   *
+   * | 用户状态 | 开关默认开着 | 显示 |
+   * | --- | --- | --- |
+   * | **新用户，从没配过号** | 开（默认） | 走不到本分支 → 「未配置」✅ |
+   * | **配过号、后来手动关了开关** | 关 | 本分支 → 「已停用」✅ |
+   * | `page` 身份（不需要号）+ 开关关 | 关 | **上面短路里** → 「已停用」✅ |
+   *
+   * **所以「已停用」不会吞掉新用户的引导**：新用户开关是默认开着的，
+   * 根本走不到这里。只有当用户**自己动手关过**开关，才会看到「已停用」——
+   * 而那时他确实该先知道"是你自己关的"。
+   *
+   * ⚠️ **改这里的顺序或改 `!configured` 的判据，都要回到这张表重算一遍。**
+   * 组合行为是下一个人最容易改坏的东西。
+   */
+  if (!proxy.enabled) {
+    return {
+      state: 'stopped',
+      pill: '已停用',
+      tone: 'neutral',
+      // 用户自己关的开关，胶囊「已停用」已经说清，不需要再解释一遍
+      needsLogin: false,
+    };
+  }
+
   if (!configured) {
     return {
       state: 'not-configured',
       pill: '未配置',
       tone: 'neutral',
-      line: '还没配置播放账号',
+      line: '还没配置取流账号',
       needsLogin: true,
     };
   }
@@ -206,6 +466,46 @@ export function describePopup(snap: PopupSnapshot): PopupView {
     if (proxy.hasCredential) {
       // 有凭据但不在播放页 → 说「未生效」比说「已接管」诚实
       if (page.kind !== 'play') return notVideo();
+      // 取流账号就是这个号 → 不需要代理，**不许说「已接管」**（见 `selfIdentity()`）
+      if (snap.lastActivateReason === 'self') return selfIdentity();
+      // 用户选择了用浏览器账号取流 → 同一胶囊，但说的是另一件事（见 `pageIdentity()`）
+      if (snap.lastActivateReason === 'page-identity') return pageIdentity();
+      /**
+       * ## ⚠️ **fail-closed**：只有 `'ok'` 才能说「已接管」（2026-11-11，🔴 修复）
+       *
+       * 这里原本是**直接** `return 已接管` —— 于是任何**没有匹配上面两个 `if`** 的
+       * reason（包括将来新增的值、拼错的值、空串）都自动落进
+       * 「已接管」= **谎报扩展在工作**。
+       *
+       * ### 为什么这是真缺陷，不是理论风险
+       *
+       * `tests/unit/core/ui/popup-state-unknown-reason.test.ts` 用 `as never` 构造
+       * 不存在的 reason，实测**3 条红**：
+       *
+       * ```
+       * × 未知 reason 不落进「已接管」→ expected '已接管' not to be '已接管'
+       * ```
+       *
+       * 也就是说 `''` / `'OK'` / `'page_identity'`（下划线拼错）全都会被说成「已接管」。
+       *
+       * ### 判据（`methodology.md` 规则 8 的推广）
+       *
+       * > **决定"是否产生副作用"的布尔必须用正向白名单（fail-closed）。**
+       * > 推广：**任何决定"界面该说什么"的枚举判断，也必须用正向白名单。**
+       *
+       * 写判据时问一句：**将来加一个我没见过的新值，默认落进哪一边？**
+       * 默认落进"告诉用户没问题" → 必须改成白名单。
+       *
+       * 这与 `content.ts` 的 `extensionEngaged = res.reason === 'ok'` 是同一手法
+       * （那里默认"不参与取流"，这里默认"不声称已接管"）。
+       *
+       * ### ⚠️ `undefined` / `null`（调用方没给）**不走这道门**
+       *
+       * 缺参数时保持既有判据不变 —— 与 `:549` 那处同一条纪律，也与本文件
+       * `streamingIdentity` 缺省时不走短路一致。**缺参数 ≠ 收到未知值。**
+       */
+      const reasonGiven = snap.lastActivateReason !== undefined && snap.lastActivateReason !== null;
+      if (reasonGiven && snap.lastActivateReason !== 'ok') return unknownProxyState();
       return {
         state: 'active',
         pill: '已接管',
@@ -219,7 +519,7 @@ export function describePopup(snap: PopupSnapshot): PopupView {
       state: 'credential-missing',
       pill: '凭据失效',
       tone: 'bad',
-      line: '播放账号凭据读取失败，需要重新扫码',
+      line: '取流账号凭据读取失败，需要重新扫码',
       needsLogin: true,
     };
   }
@@ -233,24 +533,68 @@ export function describePopup(snap: PopupSnapshot): PopupView {
    *
    * 顺序原则：**能解释当前结果的状态优先**，与用户操作相关的优先于与后台校验相关的。
    */
-  if (!proxy.enabled) {
-    return {
-      state: 'stopped',
-      pill: '已停用',
-      tone: 'neutral',
-      // 用户自己关的开关，胶囊「已停用」已经说清，不需要再解释一遍
-      needsLogin: false,
-    };
-  }
-
   /**
    * 顺序说明：**已停用 > 未生效 > 凭据校验**。
    *
-   * 用户自己关掉开关时，那是当下最能解释"为什么没 4K"的事实（02-ui-spec §3 状态 6）；
-   * 排在它后面的是"当前页不对"——同样能解释，但与用户操作无关；
-   * 再往后才是后台校验（凭据失效 / 异常 / 降级）。
+   * ⚠️ 「已停用」已在**函数前段**（`!configured` 之前）判过了，
+   * 这里不再重复 —— 见上面重排注释里的六条链。
    */
   if (page.kind !== 'play') return notVideo();
+
+  /**
+   * ## 取流账号就是这个号 → **不需要代理**（2026-11-11）
+   *
+   * 排在「已停用」之后、健康检查之前：
+   *   - 用户关掉开关时，那句话仍然最能解释"为什么没 4K"，所以先让它说
+   *   - 但比健康检查**早**：账号健康不健康都改变不了"不需要代理"这件事，
+   *     先报"凭据失效"会让用户去重扫一个本来就没问题的号（扫完照旧）
+   *
+   * 判据放在这里而不是更早，是因为它**只有到了播放页才有意义**
+   * —— 非播放页已被 `notVideo()` 接走。
+   */
+  if (snap.lastActivateReason === 'self') return selfIdentity();
+  if (snap.lastActivateReason === 'page-identity') return pageIdentity();
+
+  /**
+   * ## ⚠️ **fail-closed**：只有 `'ok'` 才能说「已接管」（2026-11-11，🔴 修复）
+   *
+   * 与上面 `!account` 分支里那条是**同一个判据的第二处实现**（两处都有
+   * "一串 `if` + 兜底 `return 已接管`"的结构）。**两处都必须 fail-closed** ——
+   * 只改一处等于没改：另一处仍会把未知 reason 说成「已接管」。
+   *
+   * ### ⚠️ 两个条件缺一不可（第一版写错过）
+   *
+   * ```ts
+   * if (snap.lastActivateReason !== 'ok') return unknownProxyState();   // ❌ 写漏了 null 检查
+   * ```
+   *
+   * 那条**把 `undefined`（"调用方没给这个参数"）也当成了"未知 reason"**，
+   * 于是 11 条既有测试全红 —— 它们构造 snapshot 时根本没传 `lastActivateReason`。
+   *
+   * 区别：
+   *
+   * | 值 | 含义 | 该怎么做 |
+   * | --- | --- | --- |
+   * | `undefined` / `null` | **调用方没给**（旧快照 / 自动化） | **保持既有判据不变**（缺参数不改口） |
+   * | 其它任何非 `'ok'` 的值 | 收到了一个**不认识的 reason** | fail-closed → 「未知」 |
+   *
+   * 这条纪律在本文件里已经用过两次：`streamingIdentity` 缺省时
+   * **不走短路**、`lastActivateReason` 缺省时**保持原判据**。
+   *
+   * ### 为什么门放在这里（`account.healthy` 检查之前）
+   *
+   * 下面三条分支（`!account.healthy` 的非失效路径、降级、正常）**都以
+   * "代理在工作"为前提**才说得出「已接管」/「已降级」。而未知 reason 时，
+   * **那个前提本身不成立**。
+   *
+   * 尤其 `!account.healthy` 的**非失效路径**（`:581`）写着
+   * 「用户能播就说明代理在工作」—— 那句话在 `reason` 未知时是**没有依据**的。
+   *
+   * 实测依据：`tests/unit/core/ui/popup-state-unknown-reason.test.ts`
+   * 用 `as never` 构造未知值，加这条门之前 **3 条红**。
+   */
+  const reasonKnown = snap.lastActivateReason !== undefined && snap.lastActivateReason !== null;
+  if (reasonKnown && snap.lastActivateReason !== 'ok') return unknownProxyState();
 
   if (!account.healthy) {
     /**
@@ -276,7 +620,7 @@ export function describePopup(snap: PopupSnapshot): PopupView {
         state: 'expired',
         pill: '凭据失效',
         tone: 'bad',
-        line: account.reason ? `播放账号登录已过期（${account.reason}）` : '播放账号登录已过期',
+        line: account.reason ? `取流账号登录已过期（${account.reason}）` : '取流账号登录已过期',
         needsLogin: true,
       };
     }

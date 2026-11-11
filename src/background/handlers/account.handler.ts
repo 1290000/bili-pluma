@@ -23,6 +23,8 @@ import { applyVerdict, needsRecheck } from '@core/auth/health';
 import { checkCredential } from '@platform/http/nav';
 import { readPersistedCredential } from '@platform/storage/credential-store';
 import { readHealth, writeHealth } from '@platform/storage/health-store';
+import { readStreamingIdentity } from '@platform/storage/streaming-identity-store';
+import { isStreamingReady } from '@shared/constants/streaming-identity';
 import type { AccountSummary, Credential } from '@shared/types/account';
 import type { ResponseMsg } from '@shared/types/messages';
 
@@ -33,8 +35,39 @@ import type { ResponseMsg } from '@shared/types/messages';
  */
 export async function handleAccountSummary(recheck = false): Promise<ResponseMsg> {
   try {
+    /**
+     * ## `configured` 语义（2026-11-11，ADR 0035 系列）
+     *
+     * 它回答的是「**这个功能是否已经可用**」，**不是「有没有存过密文」**。
+     *
+     * 判据只许有一处：`isStreamingReady()`（`@shared/constants/streaming-identity`）。
+     * 本文件、`page-snapshot.ts`、`panel-data.ts`、`popup-state.ts` 全部调它，
+     * 不许各自写 `a || b` —— 分开写必然在某次改动后分裂成
+     * "面板说能用、popup 说未配置"（verifier 反复指出的交叉一致性缺口）。
+     *
+     * ⚠️ 取流身份 = `'page'`（浏览器当前登录态）时**不需要任何凭据**，
+     * 此时 `configured` 必须是 `true`，否则界面会把一个**完全可用的配置**
+     * 报成「未配置」并引导用户扫一个他不需要的号。
+     */
+    const streamingIdentity = await readStreamingIdentity();
     const credential = await readPersistedCredential();
     if (!credential) {
+      /**
+       * 没有凭据。**这不再是"一定未配置"**：
+       * `page` 身份下无凭据是**正常且完整**的配置（页面本来就是那个身份）。
+       *
+       * 其余分支（`configured: true`）保持不动 —— 它们都在 `credential` 存在的前提下，
+       * 也就是 `extension` 身份的正常路径。
+       */
+      if (isStreamingReady(streamingIdentity, false)) {
+        return {
+          type: 'account/summary:ok',
+          configured: true,
+          // 没有扩展账号可言 —— `page` 身份下 UI 不该显示"是哪个号"
+          account: null,
+          needsRecheck: false,
+        };
+      }
       // 未配置：不探测、不报警。这是"还没开始用"，不是"出错了"
       return { type: 'account/summary:ok', configured: false, account: null, needsRecheck: false };
     }

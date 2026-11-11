@@ -60,6 +60,21 @@ import { mountPanelBody } from '../../../src/content/panel/panel';
 import { mountSidebar } from '../../../src/content/panel/sidebar';
 import type { PanelModel } from '../../../src/content/panel/panel-data';
 
+/**
+ * 面板动作的公共默认值。
+ *
+ * `streamingIdentity: null` = **这些用例不关心取流身份胶囊**（它们测诊断接线）。
+ * 显式传 `null` 而不是省略 —— 字段必填，"省略"与"明确没有"必须能区分。
+ */
+const ACTS = {
+  login: () => undefined,
+  logout: async () => ({ ok: true }),
+  streamingIdentity: null,
+  toggleStreamingIdentity: () => undefined,
+  feedAccountEnabled: false,
+  toggleFeedAccount: () => undefined,
+} as const;
+
 function model(): PanelModel {
   return {
     quality: {
@@ -121,7 +136,7 @@ afterEach(() => {
 
 describe('★ 诊断浮层接线', () => {
   it('★ 点「诊断」进入二级浮层，并懒加载 collectFacts', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
 
@@ -146,7 +161,7 @@ describe('★ 诊断浮层接线', () => {
      *
      * 反例：把 `{ pageView: model?.pageView ?? null }` 改成 `collectFacts()` → 本条必红。
      */
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
     const diagEntry = [...c.root.querySelectorAll('.sub-entry')].find((e) =>
@@ -164,7 +179,7 @@ describe('★ 诊断浮层接线', () => {
   });
 
   it('数据到了之后画出自检行与日志', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
     const diagEntry = [...c.root.querySelectorAll('.sub-entry')].find((e) =>
@@ -180,7 +195,7 @@ describe('★ 诊断浮层接线', () => {
   });
 
   it('★ 点返回弹栈，回到净化 Tab', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
     const diagEntry = [...c.root.querySelectorAll('.sub-entry')].find((e) =>
@@ -201,7 +216,7 @@ describe('★ 诊断浮层接线', () => {
       { label: '坏', value: 'b', ok: false },
       { label: '中性', value: 'c' },
     ]);
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
     [...c.root.querySelectorAll('.sub-entry')]
@@ -233,7 +248,7 @@ describe('★ 诊断浮层接线', () => {
   }
 
   it('★★ 第二次进入诊断浮层会**重新**取数（不是只拉一次）', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
 
@@ -252,7 +267,7 @@ describe('★ 诊断浮层接线', () => {
   });
 
   it('★ 点「⟳」刷新按钮会重新取数', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
     enterDiag(c);
@@ -283,7 +298,7 @@ describe('★ 诊断浮层接线', () => {
           };
         }),
     );
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
     enterDiag(c);
@@ -326,8 +341,7 @@ describe('★ 端到端：点「诊断」后不会收起（2026-11-10 真机 bug
     const shadow = host.attachShadow({ mode: 'open' });
 
     const controller = mountPanelBody({
-      login: () => undefined,
-      logout: async () => ({ ok: true }),
+      ...ACTS,
     });
     controller.setModel(model());
     const sidebar = mountSidebar(shadow, { body: controller.root });
@@ -359,7 +373,7 @@ describe('★ 端到端：点「诊断」后不会收起（2026-11-10 真机 bug
 
 describe('★ 角标开关接线', () => {
   it('★ 进净化 Tab 才懒读角标开关', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     // 默认在画质 Tab：不应读
     await flush();
@@ -371,7 +385,7 @@ describe('★ 角标开关接线', () => {
   });
 
   it('★ 拨开关会写入 storage', async () => {
-    const c = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+    const c = mountPanelBody(ACTS);
     c.setModel(model());
     c.showTab('display');
     await flush();

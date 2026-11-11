@@ -45,6 +45,66 @@
 
   var NS = '__PLUMA__';
   var enabled = false;
+
+  /**
+   * **是否允许改写响应体**（藏 `__playinfo__` / 注入完整流 / 轮询会员态）。
+   *
+   * ## ⚠️ 与 `enabled` 不是一回事，别合并
+   *
+   * | 变量 | 回答的问题 | 谁决定 |
+   * | --- | --- | --- |
+   * | `enabled` | 用户的总开关开没开 | `content.ts` 的 `switchOn`（否定式，见那里的注释） |
+   * | `rewriteGate` | 扩展这次**有没有参与取流** | `content.ts` 的 `extensionEngaged`（`reason === 'ok'`） |
+   *
+   * ## 为什么必须分开（2026-11-11，`poc/probe/verify-report/PROXYENABLED-DESIGN.md`）
+   *
+   * `page-identity` 这个 reason 把它们分开了：用户没关总开关（`enabled = true`），
+   * 但扩展**根本没参与取流**（一条 DNR 规则都没装，取流走页面自身身份）。
+   * 那时若仍按 `enabled` 去改写 `__playinfo__`，会把页面**本来正确**的数据改坏，
+   * 再让 `summary-view` 说「主账号基线不可用（数据来源是取流账号）」
+   * —— 而那时**根本不存在"取流账号"这个第二身份**，那是纯假话。
+   *
+   * ## 为什么初值是 `false`（fail-closed）
+   *
+   * 与 `enabled` 的初值 `false` 同理，但更重要：**这是决定要不要产生副作用的闸**。
+   * 判据（methodology 规则 8）：写下这个判断时问「将来加一个新值，默认落进哪一边？」
+   * 默认落进"改" → 必须 fail-closed；默认落进"不改" → 可接受。
+   * **放行会让人多做一件事，所以默认必须是不做。**
+   *
+   * ## 📋 全部副作用入口清单（2026-11-11 逐处核过，**改这里时逐条复查**）
+   *
+   * 本文件里凡是"**会改写响应体 / 发起额外请求**"的地方，判据必须用 `rewriteGate`。
+   * 下面是全部 10 处（按出现顺序）。**这份清单是 `main-world.js` 唯一的守护** ——
+   * 它不被 `tsc` / `eslint` / `prettier` 检查（`docs/04-project-structure.md` §6 明写），
+   * 所以注释就是防线。
+   *
+   * | # | 位置 | 做什么 | 判据 |
+   * | --- | --- | --- | --- |
+   * | 1 | `pgcPatchPlayinfo` 第零道门控 | PGC 注入完整流 | `rewriteGate !== true` → return |
+   * | 2 | `startSsPatch` 内部自检 | 轮询会员态 | `!rewriteGate` → stop |
+   * | 3 | `playinfoHidden` / `startSsPatch` 启动 | 藏 `__playinfo__` | `rewriteGate && !IS_PGC` |
+   * | 4 | `patchResponseText` | `PATCH_PATHS` 会员字段伪装 | `!rewriteGate` → 原样返回 |
+   * | 5 | `shouldTakeOver`（XHR） | 接管会员态接口 | `rewriteGate && matchPath` |
+   * | 6 | `needPatch`（fetch） | 同上 | `rewriteGate && matchPath` |
+   * | 7 | `isPgcPlayview` | 拦 `playview` 换 durl | `rewriteGate && IS_PGC && …` |
+   * | 8 | fetch playurl 分支 | 预取主账号进度 | `isPlayurl && rewriteGate` |
+   * | 9 | XHR playurl 分支 | 预取主账号进度 | `if (rewriteGate)` |
+   * | 10 | `patchPlayurlXhrProgress` | 还原观看进度 | `!rewriteGate` → return false |
+   *
+   * **剩余 `enabled` 只有赋值与诊断用途**（`cfgEnabled` / `lastCfgEnabled` /
+   * `ready` 上报 / `hello` 回执），**没有漏的副作用入口**。
+   * 新增任何改写/请求时，先问：这个动作会不会让系统**多做一件事**？会 → 用 `rewriteGate`。
+   *
+   * ## 🔍 可观测性（Lead 2026-11-11 判据：门控必须有可观测出口）
+   *
+   * 第 1 项门控退出时置 `pgcTrace.lastStage = 'skip-no-rewrite-gate'` 并 +1
+   * `skipNoGateCount`；`pgcPost()` 会把 `lastStage` **一起发出去**，
+   * 由 `content.ts` 接住写进 `pgcReloadTrace.mainWorldStage`，
+   * 最终出现在 `page/snapshot:ok` 的 `pgcReload` 字段里（bsk / 自动化可读）。
+   * **这条链路有测试**：`tests/unit/content/pgc-gate-observability.test.ts`。
+   */
+  var rewriteGate = false;
+
   var token = '';
   var tokenLocked = false;
 
@@ -766,6 +826,14 @@
     skipDisabledCount: 0,
     skipInactiveCount: 0,
     /**
+     * 被**第零道**（`rewriteGate` 未开 → 扩展没参与取流）拦下的次数（2026-11-11 加）。
+     *
+     * 与 `skipInactiveCount` **必须分开**：那个是"`page/activate` 回未激活"，
+     * 这个是"用户选了页面账号取流"（`page-identity`）。两者的排查结论相反 ——
+     * 一个是配置没生效、一个是配置按预期生效。合成一个会让诊断读错成因。
+     */
+    skipNoGateCount: 0,
+    /**
      * 被**第一道**（`localStorage` 的 `pluma:proxy-off` 标记）拦下的次数（ADR 0028）。
      *
      * ## 为什么三个计数必须分开（不能合成一个）
@@ -860,7 +928,23 @@
   }
 
   function pgcPost(stage, detail) {
-    safePost({ __ns: NS, type: 'pgc', token: token, stage: stage, detail: detail });
+    /**
+     * `lastStage` 与 `stage` 是**两套枚举，别混**：
+     *   - `stage`（本参数）：这是**哪一类事件**（`'skip'` / `'playview'` / `'error'` …）
+     *   - `pgcTrace.lastStage`：注入链路**停在哪一道门控**（`'skip-no-rewrite-gate'` /
+     *     `'skip-disabled'` / `'patched'` …），取值域见它各赋值处
+     *
+     * 两者一起发出去，ISOLATED 侧才能既知道事件类别、又知道门控阶段
+     * （`content.ts` 的 `mainWorldStage` 消费的就是 `lastStage`）。
+     */
+    safePost({
+      __ns: NS,
+      type: 'pgc',
+      token: token,
+      stage: stage,
+      detail: detail,
+      lastStage: pgcTrace.lastStage,
+    });
   }
 
   /**
@@ -1096,6 +1180,41 @@
      * 所以这一道**结构性必然漏掉第一次注入** —— 它只是双保险，不是主修复。
      * 主修复是上面那道 `localStorage`。
      */
+    /**
+     * ## ⚠️ 这里**没有** `rewriteGate` 门控，这是刻意的（2026-11-11 第二次修正）
+     *
+     * 曾在此处加过一道 `if (rewriteGate !== true) return;`，**已删除**。
+     *
+     * ### 为什么删：判据放错了层
+     *
+     * 本函数注入的流来自 **`sessionStorage` 的 `pluma:pgc-vi:{cid}`**，不是来自 `cfg`。
+     * 而那份缓存**只由 ISOLATED 在取流成功后写入**（`shouldWritePgcCache()` 闸门，
+     * 见 `entrypoints/content.ts` 的 `writePgcCache` 调用点）——
+     * 能取到完整流，本身就已经证明 DNR 换 Cookie 生效了。
+     *
+     * 所以"这份流该不该被写进来"这个判断，**在写入端就完成了**；
+     * 在消费端再判一次不但多余，而且**必然输给时序**：
+     *
+     * ```
+     * createPlayer         : 409ms   ← 播放器读数据
+     * patchedAt            : 2032ms  ← 走 postMessage 才到的 cfg
+     * ```
+     *
+     * `rewriteGate` 从消息来，初值 `false` → 这 1.6 秒内一律不注入 →
+     * **ADR 0020 的存在理由被否掉**（真机 `video.duration` 会退回 180 秒试看）。
+     *
+     * ADR 0020 §「⚠️ 曾经有第三条 `active`，2026-10-28 移除」记的就是同一个教训：
+     * *"能通过 `credentials:'include'` 取到播放账号的 4K dash，本身就已经证明
+     * DNR 换 Cookie 生效了 —— 那是取流成功的前提。"*
+     *
+     * ### 通用判据（写进 methodology）
+     *
+     * > **判据该放在产出数据的地方，不是消费数据的地方。**
+     * > 问一句"这个判据的输入，在这个位置真的拿得到吗？"——
+     * > `rewriteGate` 在 `__playinfo__` setter 里**拿不到**（要等消息），
+     * > 这就是它在那一层根本不该存在的直接证据。
+     */
+
     if (cfgEnabled === false) {
       pgcTrace.skipDisabledCount += 1;
       pgcTrace.lastStage = 'skip-disabled';
@@ -1350,8 +1469,10 @@
     ssTimer = setInterval(function () {
       ssTicks += 1;
 
-      // 关掉开关就停
-      if (!enabled) {
+      // 闸关了（或扩展没参与取流）就停。⚠️ 判 `rewriteGate`：启动条件用的是它，
+      // 运行条件必须一致，否则会出现"按 enabled 启动、按 enabled 继续"却在
+      // page-identity 下白跑轮询的情况
+      if (!rewriteGate) {
         stopSsPatch();
         return;
       }
@@ -1380,9 +1501,26 @@
      *
      * `/video` 页藏它是为了逼播放器发 playurl（好让 DNR 有请求可改）；
      * PGC 页的播放器**只吃 SSR 数据**，藏了就等于把流藏了，直接黑屏。
+     *
+     * ## 为什么这里用 `enabled` 而**不是** `rewriteGate`（2026-11-11 第二次修正）
+     *
+     * 按判据逐条问：**这一处产出的数据会不会被播放器当成事实？**
+     *
+     * - **`playinfoHidden`**：产出的结果是"**没有数据**"（getter 返回 `undefined`），
+     *   不是"错的数据"。播放器读不到就会去发 playurl —— **那正是扩展想要的行为**。
+     *   把 `__playinfo__` 藏掉不会让任何一方相信一个假事实，所以它**不需要** `rewriteGate`。
+     *   ⚠️ 若这里也判 `rewriteGate`，`page-identity` 下就不藏了 → 播放器直接吃 SSR
+     *   → **不发 playurl** → 取流链路整个不启动。那是比原 bug 更严重的行为改变。
+     *
+     * - **`startSsPatch`**：它轮询并把 `__INITIAL_STATE__` 的 `vipStatus` / `vipType`
+     *   **改成会员**（ADR 0013 授权）。产出的数据**会被播放器当成事实**（据此放开画质菜单）。
+     *   在扩展没参与取流时做这件事，等于给出一个没有依据的权益声明 → **要 `rewriteGate`**。
+     *
+     * 见 `poc/probe/verify-report/PROXYENABLED-DESIGN.md`。
      */
     playinfoHidden = enabled && !IS_PGC;
-    if (enabled) startSsPatch();
+    // 会员态伪装**产出会被当成事实的数据**，必须与"扩展是否参与取流"绑定
+    if (rewriteGate) startSsPatch();
     else stopSsPatch();
   }
 
@@ -1502,7 +1640,7 @@
 
   /** 改写响应文本；解析失败就原样返回 */
   function patchResponseText(url, text) {
-    if (!enabled || !matchPath(url, PATCH_PATHS)) return text;
+    if (!rewriteGate || !matchPath(url, PATCH_PATHS)) return text;
     try {
       var o = JSON.parse(text);
       if (!o || typeof o !== 'object') return text;
@@ -2299,7 +2437,13 @@
         //   1. open 时就并行取一次主账号进度 —— readystatechange 是同步回调，里面没法 await
         //   2. 记录轨道清单 + 把进度写回响应
         if (isPlayurlPath(abs)) {
-          if (enabled) {
+          /**
+           * 预取主账号进度 —— **有副作用的网络请求**，所以用 `rewriteGate` 而不是 `enabled`。
+           *
+           * 理由同 `playinfoHidden`：`page-identity` 下扩展没参与取流，
+           * 预取进度只会多打一次请求、拿回自己不需要的数据。
+           */
+          if (rewriteGate) {
             var pids = playurlIds(abs);
             if (pids) prefetchProgress(pids.aid, pids.cid);
           }
@@ -2356,7 +2500,11 @@
      * 伪装成完整 XHR 生命周期。这样页面看到的始终是"一个正常的 XHR"，
      * 不存在第二个读取者，也不依赖可写性。
      *
-     * 只在 `enabled && PATCH_PATHS` 命中时接管；其余一律原样走。
+     * 只在 `rewriteGate && PATCH_PATHS` 命中时接管；其余一律原样走。
+     *
+     * ⚠️ **2026-11-11 起是 `rewriteGate` 不是 `enabled`**：两者在 `page-identity`
+     * 下会分开（总开关开着，但扩展没参与取流），那时改写会员态只会产生假数据。
+     * 见 `poc/probe/verify-report/PROXYENABLED-DESIGN.md`。
      */
     XMLHttpRequest.prototype.send = function (body) {
       var xhr = this;
@@ -2365,7 +2513,7 @@
       try {
         var url = xhr.__plumaUrl || '';
         // 只对**会员状态接口**接管。playurl 不需要改内容，走原请求即可
-        shouldTakeOver = enabled && matchPath(url, PATCH_PATHS);
+        shouldTakeOver = rewriteGate && matchPath(url, PATCH_PATHS);
       } catch (e) {}
 
       if (!shouldTakeOver) {
@@ -2525,7 +2673,7 @@
         var p = origFetch.apply(self, args);
 
         var isPlayurl = isPlayurlPath(url);
-        var needPatch = enabled && matchPath(url, PATCH_PATHS);
+        var needPatch = rewriteGate && matchPath(url, PATCH_PATHS);
 
         /**
          * ## PGC SPA 切集：`/ogv/player/playview` 才是真正的数据源（2026-10-28 实测）
@@ -2580,11 +2728,11 @@
          *
          * 详见 ADR 0023。
          */
-        var isPgcPlayview = enabled && IS_PGC && /\/ogv\/player\/playview/.test(url);
+        var isPgcPlayview = rewriteGate && IS_PGC && /\/ogv\/player\/playview/.test(url);
 
         // playurl 若走 fetch（2026-10-26 实测主路径是 XHR，这里是兜底），
         // 同样要并行预取主账号进度
-        if (isPlayurl && enabled) {
+        if (isPlayurl && rewriteGate) {
           var fids = playurlIds(url);
           if (fids) prefetchProgress(fids.aid, fids.cid);
         }
@@ -3298,7 +3446,8 @@
    * @returns 是否改写了
    */
   function patchPlayurlXhrProgress(xhr, raw) {
-    if (!enabled) return false;
+    // 进度改写是**有副作用**的动作（会改页面读到的 last_play_time），所以看 `rewriteGate`
+    if (!rewriteGate) return false;
 
     // 已经播起来了就不再改写。切清晰度 / 换轨会重新拉一次 playurl，
     // 那时缓存里的进度是**页面打开时**的旧值，再写回去可能把播放位置拽回过去。
@@ -3680,6 +3829,23 @@
     if (!!d.enabled !== enabled) {
       enabled = !!d.enabled;
       syncHooks();
+    }
+
+    /**
+     * **改写闸**（2026-11-11 新增）—— 与 `enabled` 分开存、分开判。
+     *
+     * `d.rewriteGate` 缺失时**保持当前值不动**（老版本 ISOLATED 不会带这个字段）。
+     * ⚠️ 但它的初值是 `false`，所以"老版本不带"= 不改写 = 最保守的行为，
+     * 不会因为缺字段而误开。这正是 fail-closed 初值的价值。
+     *
+     * ⚠️ 绝不写成 `rewriteGate = d.rewriteGate !== false` —— 那就退化成 fail-open，
+     * 等于把本变量存在的意义抹掉（见它定义处的长注释）。
+     */
+    if (typeof d.rewriteGate === 'boolean') {
+      if (d.rewriteGate !== rewriteGate) {
+        rewriteGate = d.rewriteGate;
+        syncHooks();
+      }
     }
 
     /**

@@ -162,11 +162,26 @@ function removePathBandOnly(sw) {
  *
  * 优先在扩展页里发（那里一定有 `chrome.runtime`）；
  * 扩展页打不开时退回到 SW 自发（SW 给自己发消息同样会触发 onMessage）。
+ *
+ * ## ⚠️ 2026-11-11 修：这里原来打开的是 `options.html`，而它已不存在
+ *
+ * `options.html` 在提交 `63506af`「诊断迁入面板浮层，**废除 options 页**」
+ * （ADR 0033）里被删除，但本脚本一直在 `goto` 它。后果是**这个脚本静默失效**：
+ *
+ *   - `goto` 抛错 → 走 `catch` 分支"SW 自发"
+ *   - **MV3 的 SW 对自己 `sendMessage` 收不到** → 消息从未被处理
+ *   - 于是 `disableProxy()` 压根没执行，三项判据全红（`enabled=undefined`、两类规则都没清）
+ *
+ * 为什么之前没人发现：`dnr-regression` 这道门只在 `dnr.ts` **有改动时**
+ * 才要求跑本脚本。所以它红了很久而没人看见。
+ *
+ * **修法只换目标页**（`popup.html` 一直存在，是 manifest 的 `default_popup`，
+ * 扩展内部可以 `goto`），**不动任何判据、期望值、阈值**。
  */
 async function disableViaMessage(ctx, sw, extId) {
   try {
     const extPage = await ctx.newPage();
-    await extPage.goto(`chrome-extension://${extId}/options.html#/account`, {
+    await extPage.goto(`chrome-extension://${extId}/popup.html`, {
       waitUntil: 'domcontentloaded',
       timeout: 10000,
     });

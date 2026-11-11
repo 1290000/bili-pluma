@@ -19,6 +19,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mountPanelBody, type PanelController } from '../../../src/content/panel/panel';
 import type { PanelModel } from '../../../src/content/panel/panel-data';
 
+/** 面板动作的公共默认值（`streamingIdentity: null` = 本用例不关心胶囊） */
+const ACTS = {
+  login: () => undefined,
+  logout: async () => ({ ok: true }),
+  streamingIdentity: null,
+  toggleStreamingIdentity: () => undefined,
+  feedAccountEnabled: false,
+  toggleFeedAccount: () => undefined,
+} as const;
+
 /** 最小可用模型（提示条测试不关心内容） */
 function model(): PanelModel {
   return {
@@ -48,7 +58,7 @@ let controller: PanelController | null = null;
 
 beforeEach(() => {
   vi.useFakeTimers();
-  controller = mountPanelBody({ login: () => undefined, logout: async () => ({ ok: true }) });
+  controller = mountPanelBody(ACTS);
   controller.setModel(model());
 });
 

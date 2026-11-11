@@ -62,6 +62,73 @@ export async function writePanelEntryEnabled(enabled: boolean): Promise<void> {
 }
 
 /**
+ * ## ❌ 这里**曾有** `pluma:feed-boundary-enabled`（2026-11-11 删除）
+ *
+ * 它控制"首页推荐流来源分界线"显不显示。那条线**整体不再做**：
+ *
+ * | 阶段 | 状态 |
+ * | --- | --- |
+ * | 原设计 | 在第 10 个 `.is-rcmd` 卡后插一条线，说明"以下来自取流账号" |
+ * | 第二阶段（缺陷） | 锚点判据无几何过滤 → 第 10 个可能是 `height=0` 骨架卡 → 线落在首页顶部 → **陈述错误事实** |
+ * | 第三阶段（用户裁决） | **不做分界线**。设完取流账号后直接隐藏 `.feed-card`，首屏就是取流账号的，线没有意义 |
+ * | 现在 | 隐藏方案也因**选择器与身份两层都未验证**（父子嵌套 / M1）而冻结 |
+ *
+ * **所以这个键、它的读写函数、面板上的开关全部删除。**
+ *
+ * ⚠️ **删的理由不是"没用了"，是"留着会制造三个错误印象"**：
+ *   1. 存储里有个键，但**永远没有 UI 会去写它**
+ *   2. 有测试在为**一个已取消的功能**守默认值
+ *   3. 下一个人看到它，会以为"分界线还在做，只是默认关"
+ *
+ * 🔗 **判据本身没有丢**：`src/core/feed-identity/` 保留了
+ * `resolveFeedIdentity` / `shouldSwitchFeed` ——
+ * 那套「取流账号是否真的 ≠ 页面账号」的六态判据，正是任何
+ * "按身份做条件渲染"的功能都要用的东西。
+ */
+/**
+ * 首页推荐流「使用取流账号」开关（2026-11-11，用户最终需求）。
+ *
+ * ## 它与取流身份**完全独立**
+ *
+ * 用户原话：「首页推荐流的变化与取流身份是完全独立的两个功能」。
+ *
+ * | 开关 | 管什么 | 依赖 |
+ * | --- | --- | --- |
+ * | 取流身份（`pluma:streaming-identity`） | playurl 族用谁的凭据 | vault 有凭据 |
+ * | **本开关**（`pluma:feed-account-enabled`） | **首页推荐流用谁的凭据** | vault 有凭据 |
+ *
+ * **改一个不影响另一个。** 所以本键**绝不能**被当成取流身份的派生值，
+ * 也不能在切取流身份时顺带清掉。
+ *
+ * ## 默认 `false`
+ *
+ * 这是**新增功能**，默认关闭。用户不主动打开就保持原样（全是浏览器账号的推荐）。
+ * 语义是 `=== true`。
+ *
+ * ## 可点性由 `hasCredential` 决定（**不是**本键）
+ *
+ * 没有扫码登录扩展账号时，面板上的开关应灰掉点不动 ——
+ * 那个判据读的是 `proxy/status.hasCredential`，与存储里这个布尔无关。
+ * 本键只记录"用户希望它是开的"，**能不能开由凭据决定**。
+ */
+const FEED_ACCOUNT_KEY = 'pluma:feed-account-enabled';
+
+/** 供 content script 监听 `storage.onChanged` 时比对键名 */
+export const FEED_ACCOUNT_ENABLED_KEY = FEED_ACCOUNT_KEY;
+
+/** 首页推荐流是否使用取流账号。默认 `false` */
+export async function readFeedAccountEnabled(): Promise<boolean> {
+  const bag = await chrome.storage.local
+    .get(FEED_ACCOUNT_KEY)
+    .catch(() => ({}) as Record<string, unknown>);
+  return bag[FEED_ACCOUNT_KEY] === true;
+}
+
+export async function writeFeedAccountEnabled(enabled: boolean): Promise<void> {
+  await chrome.storage.local.set({ [FEED_ACCOUNT_KEY]: enabled });
+}
+
+/**
  * 视觉清理选项（ADR 0031 / 0032）。
  *
  * ## 为什么这里只做"存取"，不做校验

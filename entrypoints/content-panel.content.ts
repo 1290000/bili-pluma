@@ -44,9 +44,14 @@ import {
   type LoginPoller,
 } from '@/src/content/panel/login-poller';
 import { resolvePrimaryCard } from '@shared/utils/primary-card';
+import type { StreamingIdentity } from '@shared/constants/streaming-identity';
 import { parsePlayPage } from '@shared/utils/video-page';
 import { readPrimaryProfile } from '@platform/storage/primary-profile-store';
-import { PANEL_ENTRY_ENABLED_KEY, readPanelEntryEnabled } from '@platform/storage/ui-prefs-store';
+import {
+  PANEL_ENTRY_ENABLED_KEY,
+  readFeedAccountEnabled,
+  readPanelEntryEnabled,
+} from '@platform/storage/ui-prefs-store';
 // tokens.css 的**原始文本**，注入 shadow root 用。
 // ⚠️ 不能用 <link>：CSS 变量不穿透 shadow 边界，必须把规则塞进 shadow 内部
 import tokensCss from '@/src/design/tokens.css?raw';
@@ -185,7 +190,7 @@ export default defineContentScript({
             poller = null;
             if (!controller) return;
             if (outcome.kind === 'configured') {
-              controller.showNotice('播放账号已配置，可以开始用了', true);
+              controller.showNotice('取流账号已配置，可以开始用了', true);
               /** 重新取数，账号卡变成已配置态 */
               void loadOnce();
             } else if (outcome.kind === 'timeout') {
@@ -229,6 +234,110 @@ export default defineContentScript({
     };
 
     /**
+     * ## 取流身份（2026-11-11，步骤 4）
+     *
+     * ### 为什么走消息而不是直接读 `storage.local`
+     *
+     * 切身份 ≠ 只写一个配置位：它要**重建全部 DNR 规则**（先清两类、再按新身份建）。
+     * 那个流程只在 background 里（`dnr.switchStreamingIdentity`）。
+     *
+     * 直接写 storage 会造成最坏的一类不一致：
+     * **界面显示"取流：浏览器账号"，而规则还在换 Cookie** ——
+     * inventory 里那句"界面说 A、实际做 B"的老问题，只是换了方向。
+     *
+     * ### 失败必须让用户知道
+     *
+     * 用 `showNotice` 说人话。静默失败会让用户以为点坏了，反复点。
+     * 与 `openLogin` / `removeAccount` 的处理一致（"点了没反应"是最糟的反馈）。
+     */
+    const setStreamingIdentity = async (next: StreamingIdentity): Promise<void> => {
+      const res = (await chrome.runtime
+        .sendMessage({ type: 'streaming/set', identity: next })
+        .catch(() => null)) as { type?: string; detail?: string } | null;
+
+      if (res?.type === 'streaming/set:ok') {
+        /**
+         * 成功后**重新取数**：`page/activate` 会在下次页面加载时按新身份走，
+         * 而账号卡上的胶囊已经由面板乐观更新过了。这里刷一次是为了让
+         * 画质卡/账号卡其余部分与最新状态一致。
+         *
+         * ⚠️ 不 `await`：取数失败不该让"切换成功"变成"切换失败"。
+         */
+        void loadOnce();
+        return;
+      }
+
+      /**
+       * 失败：抛出去让 `panel.ts` 的乐观更新**回滚**。
+       *
+       * 为什么抛而不是只提示：面板已经先把胶囊切成新值了，
+       * 不抛的话用户会看到一个"成功了"的胶囊 + 一句失败提示 —— 自相矛盾。
+       */
+      controller?.showNotice(`取流身份切换失败：${res?.detail ?? '后台没有应答'}`, false);
+      throw new Error(res?.detail ?? 'streaming/set failed');
+    };
+
+    /**
+     * 读当前取流身份（胶囊初值）。
+     *
+     * `null` = 读不到 → 胶囊**不渲染**（不猜默认值）。
+     * 与 `readFeedBoundaryEnabled` 的"读不到就保持禁用、不画成关"同一纪律。
+     */
+    const readStreamingIdentity = async (): Promise<StreamingIdentity | null> => {
+      const res = (await chrome.runtime
+        .sendMessage({ type: 'streaming/status' })
+        .catch(() => null)) as { type?: string; identity?: StreamingIdentity } | null;
+      return res?.type === 'streaming/status:ok' && res.identity ? res.identity : null;
+    };
+
+    /**
+     * 取流身份的**缓存值**。
+     *
+     * ## 为什么声明在这里（2026-11-11 Bug B 修复时上移）
+     *
+     * 它同时被两处消费：
+     *   - `loadOnce()` —— 传给 `loadPanelModel()`，决定**画质 Tab** 说真话还是说假话
+     *   - `mountPanelBody()` —— 传给账号卡胶囊作初值
+     *
+     * 原声明在 `loadOnce` 之后（`:375`），靠 `let` 的 TDZ 之外执行顺序侥幸能用，
+     * 但**读代码的人会先看到 `loadOnce` 用了它、后看到它没有声明** ——
+     * 这种"先用后声明"是最容易误判成 bug 的形状。上移到使用点之前。
+     *
+     * ## 三个值
+     *
+     * | 值 | 含义 | 表现 |
+     * | --- | --- | --- |
+     * | `undefined` | **还没读** | 胶囊渲染「未知」态；画质 Tab 走既有判据 |
+     * | `null` | 读失败 | 同上（**但不再永久缓存**，见 `ensureStreamingIdentityRead`） |
+     * | `'extension' \| 'page'` | 真实配置 | 正常渲染 |
+     *
+     * ⚠️ **未知态也渲染**（2026-11-11 修正）。上一版是"读不到就整块不渲染"，
+     * 理由"不猜默认值"——但**控件消失不是安全默认值，而是隐形 bug**：
+     * 用户看不见就以为功能没做。不猜**内容** ≠ 删掉**入口**。
+     */
+    let streamingIdentityCache: StreamingIdentity | null | undefined = undefined;
+
+    /**
+     * ── 首页推荐流开关的缓存（2026-11-11）──
+     *
+     * ## ⚠️ 它与 `streamingIdentityCache` 是**两件独立的事**
+     *
+     * 用户原话：「首页推荐流的变化与取流身份是完全独立的两个功能」。
+     *
+     * | 状态 | 数据源 | 谁写 |
+     * | --- | --- | --- |
+     * | `streamingIdentityCache` | `streaming/status` 消息 | `streaming/set` |
+     * | **`feedAccountCache`** | **`storage.local` 的 `pluma:feed-account-enabled`** | **本开关自己** |
+     *
+     * 两者**互不派生、互不重置**。
+     *
+     * 默认 `false`（新功能默认关），不存在"还没读出来"的三态 ——
+     * 读失败按 `false` 处理：**宁可显示成关，也不要因为读失败而画成开**
+     * （那会让用户以为功能在生效）。
+     */
+    let feedAccountCache = false;
+
+    /**
      * 取一次数据并塞进面板。
      *
      * ⚠️ 失败时**不抛**：面板已经画出来了，取数失败只是让各块显示"未知"，
@@ -249,7 +358,21 @@ export default defineContentScript({
       if (!controller) return null;
       try {
         const primary = await readPrimary(pageKind);
-        const model = await loadPanelModel({ pageKind, primary });
+        /**
+         * ⚠️ **必须传 `streamingIdentity`**（2026-11-11，Bug B 修复）。
+         *
+         * 不传的话 `describePopup()` 里 `if (snap.streamingIdentity === 'page')`
+         * 那条短路永远不触发 → `page` 模式下画质 Tab 会显示「已接管」，
+         * 而 `page` 模式下**什么都没换 Cookie** —— 那是假话。
+         *
+         * 这里用缓存值：`ensureStreamingIdentityRead()` 在挂载前已读过一次并缓存，
+         * `toggleStreamingIdentity` 成功后也会更新它。
+         */
+        const model = await loadPanelModel({
+          pageKind,
+          primary,
+          streamingIdentity: streamingIdentityCache ?? null,
+        });
         /**
          * ⚠️ 这里**不再判"是不是最新的一次"** —— 那个判据在 `open-cycler` 里
          * （它持有序号）。这里只保证"取到就画"。
@@ -280,6 +403,73 @@ export default defineContentScript({
       },
     });
 
+    /**
+     * 读取流身份并缓存。
+     *
+     * ## ⚠️ 只缓存**成功**的结果（2026-11-11 修正）
+     *
+     * 上一版 `streamingIdentityCache = await readStreamingIdentity().catch(() => null)`
+     * 把失败也**永久缓存**成 `null`：
+     *
+     * ```
+     * 第一次读 → 失败 → 缓存 null
+     * 之后每次 ensureStreamingIdentityRead() → 命中缓存 → 直接 return
+     * → 这一页生命周期内**永不重试**
+     * ```
+     *
+     * 后果：**用户不刷新页面就永远看不到胶囊**，即使 background 后来恢复了。
+     *
+     * 现在的规则：
+     *   - 成功（`'extension'` / `'page'`）→ 缓存，不再重复请求
+     *   - 失败（`null`）→ **不缓存**，下次开面板会再试
+     *
+     * ## 为什么不会"无限重试"
+     *
+     * 这个函数只在**面板挂载前**调一次（`main()` 里那句 `await`），
+     * 收起重开才会再走。**用户不开面板就没有请求** —— 不存在轮询放大的风险。
+     */
+    const ensureStreamingIdentityRead = async (): Promise<void> => {
+      if (streamingIdentityCache !== undefined) return;
+      const v = await readStreamingIdentity().catch(() => null);
+      // 只在拿到真实值时写缓存；`null` 保持 undefined，下次重试
+      if (v !== null) streamingIdentityCache = v;
+    };
+
+    /**
+     * 读首页推荐流开关的初值（挂载前调一次）。
+     *
+     * ⚠️ **读失败按 `false` 处理**，不保持"未读"三态 ——
+     * 理由与身份不同：身份读失败要显示「未知」（因为那是用户选的、有明确值），
+     * 而本开关读失败时**画成"开"会让用户以为功能在生效**，
+     * 画成"关"最多是"没生效"，方向更安全。
+     */
+    const ensureFeedAccountRead = async (): Promise<void> => {
+      feedAccountCache = await readFeedAccountEnabled().catch(() => false);
+    };
+
+    /**
+     * 拨开关 → 写 `storage.local`。
+     *
+     * ## 为什么不需要走 background 消息（与取流身份不同）
+     *
+     * | | 取流身份 | **推荐流开关** |
+     * | --- | --- | --- |
+     * | 写存储后要做什么 | **重建 DNR 规则**（`switchStreamingIdentity`） | **同样要重建**（`applyRulePlan`） |
+     * | 所以必须走消息吗 | 是 | **是** |
+     *
+     * 所以这里也走一条消息（`feed-account/set`），由 background 写存储并调
+     * `applyRulePlan()` —— **面板不直接写 storage**，否则规则不会重建。
+     */
+    const setFeedAccount = async (next: boolean): Promise<void> => {
+      const res = (await chrome.runtime
+        .sendMessage({ type: 'feed-account/set', enabled: next })
+        .catch(() => null)) as { type?: string; detail?: string } | null;
+      if (res?.type !== 'feed-account/set:ok') {
+        throw new Error(res?.detail ?? 'feed-account/set failed');
+      }
+      feedAccountCache = next;
+    };
+
     /** 按当前开关重画：开 → 挂（幂等），关 → 摘 */
     const paint = (): void => {
       if (!enabled) {
@@ -306,7 +496,36 @@ export default defineContentScript({
          * ⚠️ `mountPanelBody` 的 `root` 必须在 `mountSidebar` **之前**建出来，
          * 因为 `mountSidebar` 会把它 append 进 sheet。顺序反了就塞不进去。
          */
-        const body = mountPanelBody({ login: () => void openLogin(), logout: removeAccount });
+        const body = mountPanelBody({
+          login: () => void openLogin(),
+          logout: removeAccount,
+          // `undefined` → 传 null（面板视"还没读"与"读不到"为同一表现：胶囊不渲染）
+          streamingIdentity: streamingIdentityCache ?? null,
+          toggleStreamingIdentity: (next) => {
+            // 成功后同步缓存，下次重挂载时不会退回旧值
+            void setStreamingIdentity(next)
+              .then(() => {
+                streamingIdentityCache = next;
+              })
+              .catch(() => {
+                /* 失败已由 setStreamingIdentity 内部提示 + 面板回滚 */
+              });
+          },
+          /**
+           * ⚠️ 推荐流开关与上面的身份**独立**：各自的缓存、各自的回调。
+           * 不要在这里把两者写成联动（例如 toggle 时顺带改身份）。
+           */
+          feedAccountEnabled: feedAccountCache,
+          toggleFeedAccount: (next) => {
+            void setFeedAccount(next)
+              .then(() => {
+                feedAccountCache = next;
+              })
+              .catch(() => {
+                /* 失败由面板回滚 + setFeedAccount 抛错 */
+              });
+          },
+        });
         controller = body;
         sidebar = mountSidebar(s, {
           body: body.root,
@@ -338,6 +557,26 @@ export default defineContentScript({
     };
 
     enabled = await readPanelEntryEnabled();
+    /**
+     * 先在挂载前把取流身份读好。
+     *
+     * 为什么必须 `await` 在这里而不是在 `ensurePanelHost` 的 build 回调里：
+     * 那个回调是**同步**的（要立刻返回 shadow root），而这是异步消息。
+     *
+     * 代价：面板首次挂载前多一次消息往返（`storage.local` 级，通常 <5ms）。
+     * 用"读失败也挂载"兜底：`readStreamingIdentity` 内部已 `catch` 成 `null`，
+     * 所以即使 background 没应答，面板也照常出现，只是不渲染胶囊 ——
+     * **不因为一个附属信息读不到就让整个面板不出现**。
+     */
+    await ensureStreamingIdentityRead();
+    /**
+     * 推荐流开关的初值也要在挂载前读好 —— 与身份那次 read **并列**，不是嵌套。
+     *
+     * ⚠️ 两次读可以并行（`Promise.all`），但这里保持顺序 await 是刻意的：
+     * 两者独立、互不依赖，先写哪个都不影响正确性；
+     * 分成两行是为了让"这是两件不同的事"在代码形状上也看得见。
+     */
+    await ensureFeedAccountRead();
     paint();
 
     /**

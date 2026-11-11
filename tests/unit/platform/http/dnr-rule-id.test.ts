@@ -96,13 +96,22 @@ function installChromeStub(): { rules: CapturedRule[]; readd: () => Promise<Capt
 const COOKIE = 'SESSDATA=fake; bili_jct=fake; DedeUserID=1000002';
 
 describe('DNR 路径规则 ID —— 止式分配（B-05）', () => {
-  it('白名单 3 条 → ID 是 10000 / 10001 / 10002（下标 + BASE）', async () => {
+  it('白名单每条路径都拿到「下标 + BASE」的 ID（不写死数量）', async () => {
     const { rules } = installChromeStub();
     await enableProxy(COOKIE);
 
-    // 白名单当前就是 3 条（`/x/player/wbi/playurl`、`/x/player/playurl`、`/pgc/player/web/playurl`）
-    expect(ENABLED_ROUTE_PATHS.length).toBe(3);
-    expect(rules.map((r) => r.id).sort((a, b) => a - b)).toEqual([10000, 10001, 10002]);
+    /**
+     * ⚠️ **2026-11-11 改法**：原本断言"白名单 3 条 → ID 是 10000/10001/10002"。
+     * ADR 0035 加了 `/x/web-interface/wbi/index/top/feed/rcmd` 后变成 4 条，
+     * 硬编码的数量与 ID 列表双双失效。
+     *
+     * 现在按**白名单实际条数**推导期望值 —— 本测试要守的是
+     * 「ID = 下标 + BASE 这个规则」，不是"白名单恰好有 N 条"。
+     * 后者每加一条路径就要改一次测试，而那种改动**不能发现任何 bug**。
+     */
+    expect(rules.map((r) => r.id).sort((a, b) => a - b)).toEqual(
+      ENABLED_ROUTE_PATHS.map((_, i) => 10000 + i),
+    );
   });
 
   it('ID 与白名单下标一一对应（不是碰巧算对）', async () => {

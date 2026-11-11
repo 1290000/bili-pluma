@@ -100,7 +100,7 @@ export async function checkCredential(credential: Credential, now: number) {
     if (probedMid !== credential.dedeUserId) {
       return {
         kind: 'unknown' as const,
-        reason: '探测请求跑在了错误的浏览器分区（拿到的账号不是播放账号）',
+        reason: '探测请求跑在了错误的浏览器分区（拿到的账号不是取流账号）',
       };
     }
   }

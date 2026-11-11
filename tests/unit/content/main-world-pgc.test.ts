@@ -55,17 +55,37 @@ function bootAt(url: string): Sandbox {
   return { win, sent, page: win as unknown as Record<string, unknown> };
 }
 
-/** 下发配置。`pgcVideoInfo` 是 ISOLATED 侧预读出来的完整流 */
+/**
+ * 下发配置。`pgcVideoInfo` 是 ISOLATED 侧预读出来的完整流。
+ *
+ * ## ⚠️ 2026-11-11：必须同时下发 `rewriteGate`
+ *
+ * 主世界现在有两个独立开关：`enabled`（用户总开关）与 `rewriteGate`
+ * （扩展这次**有没有参与取流**，决定要不要改写响应体）。
+ * **`rewriteGate` 初值 `false`（fail-closed）** —— 本 helper 不带它的话，
+ * 所有 PGC 注入都会被第零道门控拦下，这批用例会整体误红。
+ *
+ * 真实链路里 `content.ts` 在 `reason === 'ok'` 时两者都发 `true`；
+ * 总开关关着时（`disabled`）两者都为 `false`。所以默认值取 `opts.enabled ?? true`
+ * **跟随 enabled**，既贴近现实、又不会造出"开关关着但允许改写"这种线上不存在的组合。
+ */
 function sendCfg(
   sb: Sandbox,
-  opts: { enabled?: boolean; pgcActive?: boolean; pgcVideoInfo?: unknown } = {},
+  opts: {
+    enabled?: boolean;
+    pgcActive?: boolean;
+    pgcVideoInfo?: unknown;
+    rewriteGate?: boolean;
+  } = {},
 ): void {
+  const enabled = opts.enabled ?? true;
   sb.win.postMessage(
     {
       __ns: '__PLUMA__',
       type: 'cfg',
       token: 'test-token',
-      enabled: opts.enabled ?? true,
+      enabled,
+      rewriteGate: opts.rewriteGate ?? enabled,
       ...(opts.pgcActive !== undefined ? { pgcActive: opts.pgcActive } : {}),
       ...(opts.pgcVideoInfo !== undefined ? { pgcVideoInfo: opts.pgcVideoInfo } : {}),
     },
@@ -737,7 +757,10 @@ describe('SPA 切集：流完整但画质不够时也要换（2026-10-29）', ()
     };
 
     win.eval(SOURCE);
-    win.postMessage({ __ns: '__PLUMA__', type: 'cfg', token: 'tok', enabled: true }, '*');
+    win.postMessage(
+      { __ns: '__PLUMA__', type: 'cfg', token: 'tok', enabled: true, rewriteGate: true },
+      '*',
+    );
     return { win, hits };
   }
 

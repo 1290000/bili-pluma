@@ -13,6 +13,8 @@
 import { diag } from '@platform/storage/diag-store';
 import { buildCookieHeader } from '@platform/http/playurl';
 import { installTabRule, isProxyEnabled, removeTabRule, type PageKind } from '@platform/http/dnr';
+import { readStreamingIdentity } from '@platform/storage/streaming-identity-store';
+import { needsProxy } from '@shared/constants/streaming-identity';
 import { readPersistedCredential } from '@platform/storage/credential-store';
 import { readDeviceCookies, writeDeviceCookies } from '@platform/storage/device-cookies-store';
 import type { ResponseMsg } from '@shared/types/messages';
@@ -88,15 +90,87 @@ export async function handlePageActivate(payload: ActivatePayload): Promise<Acti
       return { activated: false, reason: 'disabled' };
     }
 
+    /**
+     * ## 取流身份选择（2026-11-11，步骤 4）
+     *
+     * 用户可以把取流身份设成「浏览器当前登录态」而不是扩展托管账号。
+     *
+     * 判据排在 `disabled` 之后、mid 比对之前：
+     *   - 用户主动关掉总开关时，那句话仍然最能解释结果，所以先让它说
+     *   - 但必须排在 mid 比对**之前**，因为 `page` 模式下 mid 相不相同都不重要
+     *     —— 本来就不换身份
+     *
+     * ⚠️ **不改下面的 mid 比对判据**。那段是 `same-identity` 链路（engineer-c 的
+     * 步骤 3）**唯一**的证据源，它回答"两个号是否同一个"。本分支回答的是另一个问题：
+     * "用户想让谁取流"。两个问题必须分开，混在一起会让 `same-identity` 失真。
+     *
+     * ## 这两个 reason 的触发条件**互斥**，不是"优先级关系"
+     *
+     * 事实（读代码可得，不需要推理）：
+     *
+     * | reason | 触发条件 | 会不会读到 `primaryMid` |
+     * | --- | --- | --- |
+     * | `page-identity` | **只看** `readStreamingIdentity() === 'page'` | ❌ **完全无关** |
+     * | `self` | `streamingIdentity === 'extension'` **且** `primaryMid === dedeUserId` | ✅ |
+     *
+     * 也就是说：**`page-identity` 命中时，代码根本不会去问"两个 mid 是否相等"**，
+     * 因为 `needsProxy()` 已经为 false，后面那段比对走不到。
+     *
+     * ⚠️ 本条注释**曾经写错**：原文说"两者可能同时成立，此时返回 `page-identity`"。
+     * **那个场景在代码路径上不存在** —— 当时把"分支顺序"误当成了"两个条件会竞争"。
+     * 描述一个不存在的场景比写错更危险：下一个人会照它去"修复"一个不存在的问题。
+     *
+     * ## 为什么顺序放在这里仍然是对的
+     *
+     * 与上表等价的说法是：**`page-identity` 一次都不需要 `credential` 之外的判断**，
+     * 而 `self` 需要先算出 `primaryMid` 与凭据 mid 的关系。把"只依赖用户选择"的分支
+     * 放在"依赖用户选择 + 事实"的分支之前，读起来就是嵌套关系，不是优先级关系。
+     *
+     * 行为上两者都是"不装规则"（`activated: false`），所以**即使顺序被调换，
+     * 行为不变、只是 reason 不同**。这个 reason 的差别才是要保住的东西：
+     *   1. `page-identity` 是**用户的决定** → UI 说「当前用浏览器账号取流」
+     *   2. `self` 是**扩展发现的事实** → UI 说「两个账号是同一个」
+     * 混用会让用户以为"扩展发现了一个我不知道的问题"，而他只是做了个选择。
+     */
+    if (!needsProxy(await readStreamingIdentity())) {
+      await diag('page/activate', '取流身份 = 浏览器登录态 → 无需代理，清掉残留标签页规则');
+      await removeTabRule(payload.tabId);
+      return { activated: false, reason: 'page-identity' };
+    }
+
     await diag(
       'page/activate',
-      `播放账号 mid=${credential.dedeUserId} 主账号 mid=${String(payload.primaryMid)}`,
+      `取流账号 mid=${credential.dedeUserId} 页面 mid=${String(payload.primaryMid)}`,
     );
 
-    // 同账号检查：两个账号相同时代理毫无意义，明确拒绝而不是假装在工作
+    // ── 同账号：**不需要代理**，不是"出错了"（2026-11-11 改） ──
+    //
+    // 判据不变：页面 cookie 里的 `DedeUserID` == 托管凭据的 mid，说明取流账号
+    // 就是页面自己那个号，换 Cookie 是语义上的空操作。
+    //
+    // ## 改了什么，为什么
+    //
+    // 旧行为：直接 `return { activated: false, reason: 'same-account' }`。
+    // 它把「不需要规则」表达成了「提前退出」，三个后果全是坏的：
+    //
+    //   1. **规则状态无人清理** —— `removeTabRule()` 从来没被调到。曾装过的
+    //      标签页规则留在 `sessionRules` 里，只是恰好与浏览器 Cookie 值相同才
+    //      表现为空操作；一旦用户之后换了取流账号，那条陈旧规则就可能继续生效
+    //   2. **界面无话可说** —— `reason: 'same-account'` 在 UI 层零消费方，
+    //      用户看到"开关开着、什么都没生效、一个字都不说"
+    //   3. **统计被误伤** —— `entrypoints/background.ts` 的排除列表只认
+    //      `not-configured` / `disabled`，这个 reason 会被 `recordStat(false)`，
+    //      单账号用户每打开一个视频页就记一次假失败
+    //
+    // 现在改成**一等状态** `self`，并走与成功一致的收尾路径：
+    // 先删掉可能残留的标签页规则，再如实上报"无需代理"。
+    //
+    // **原则**：「不装规则」和「不需要规则」在 DNR 层面是同一件事，
+    // 在界面上是两件事。旧代码把它们混成了前者，所以只能靠提前 return 表达。
     if (payload.primaryMid !== null && payload.primaryMid === credential.dedeUserId) {
-      await diag('page/activate', '两账号相同 → 拒绝代理');
-      return { activated: false, reason: 'same-account' };
+      await diag('page/activate', '两账号相同 → 无需代理，清掉残留标签页规则');
+      await removeTabRule(payload.tabId);
+      return { activated: false, reason: 'self' };
     }
 
     // ── 游客态：`primaryMid === null` 也继续代理 ──
@@ -114,7 +188,7 @@ export async function handlePageActivate(payload: ActivatePayload): Promise<Acti
     // 用户可见的诚实性由 UI 承担：§2.3 在未登录时说「未登录主账号，无对比基线」
     // （`core/playinfo/summary-view.ts`），角标报的是实际播放高度（360P），不吹牛。
     //
-    // 只有"两个账号是同一个"时才拒绝 —— 那种情况代理毫无意义。
+    // 只有"两个账号是同一个"时才跳过 —— 那种情况已经在上面的 `self` 分支处理。
 
     // ── 设备 Cookie：页面给的为空就回退到缓存 ──
     //

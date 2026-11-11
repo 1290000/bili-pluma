@@ -14,6 +14,8 @@
  * "本视频**提供**该版本"，不是"当前在播"。见 docs/decisions/0014-quality-compare-from-page-data.md。
  */
 
+import type { ProxyActivateReason } from './messages';
+
 export interface VideoTrack {
   /** B站的 quality id（16/32/64/80/112/116/120/125/126/127） */
   id: number;
@@ -193,6 +195,43 @@ export type PrimaryBaselineReason =
   | 'ssr'
   /** `__playinfo__` 是页面在**发过 playurl 之后**才写的 → 那份数据是播放账号身份，不能用 */
   | 'client-written'
+  /**
+   * **取流身份与页面身份是同一个号** → 根本不存在"另一个身份"可对比。
+   *
+   * ## 为什么它必须是一个独立的 reason，而不是复用 `client-written`
+   *
+   * | 场景 | 两侧数据 | 真实含义 |
+   * | --- | --- | --- |
+   * | `client-written` | 两侧都是**播放账号**的，基线被污染 | "基线不可信，请等/复查" |
+   * | `same-identity` | 两侧是**同一份数据**的两次计量 | "没有第二个身份，比不了" |
+   *
+   * 两者的 UI 结论都是"无法对比"，但**对用户的含义完全不同**：前者是暂时的异常
+   * （页面时序问题），后者是**设计上就没有可比的第二方**。
+   * 混成一个值会让诊断台把"正常状态"报成"异常"（见 `collect.ts` 的三态设计）。
+   *
+   * ## ⚠️ 互斥不变量：`same-identity` 与 `loggedIn === 'no'` 不可能同时成立
+   *
+   * 游客态（`primaryMid === null`）时 `page.handler.ts` 的 `same-account` 分支
+   * **不会触发**（那要求 `primaryMid !== null`），所以游客态继续代理 →
+   * 不可能是 `same-identity`。
+   *
+   * **但这条互斥是由「另一个文件的另一个分支」保证的，不是本文件保证的。**
+   * `page.handler.ts` 一旦改动，它就会静默破掉 —— 所以有单测钉住
+   * （`tests/unit/content/page-state-same-identity.test.ts`）。
+   *
+   * ## 数据来源（跨文件、跨 world，最容易断的一环）
+   *
+   * ```
+   * page.handler.ts:96-100   两账号 mid 相同 → reason: 'same-account'
+   *          ↓  page/activate:ok 回包
+   * entrypoints/content.ts   收到回包 → pageState.setProxyIdentity(reason)
+   *          ↓
+   * page-state.ts            setProxyIdentity() 写入 proxyIdentity
+   *          ↓  view()
+   * playinfo.ts              primary.reason = 'same-identity'
+   * ```
+   */
+  | 'same-identity'
   /** 页面根本没有 `__playinfo__` */
   | 'absent'
   /** 有数据但解析不出轨道 */
@@ -244,4 +283,27 @@ export interface PageTracksView {
   playback: { capability: Capability | null } | null;
   /** 两侧都拿到才有；否则 `null`，UI 必须显示"未知" */
   diff: CapabilityDiff | null;
+  /**
+   * 最近一次 `page/activate` 的结果（`'unknown'` = 还没收到 / 本次不知道）。
+   *
+   * ## 它是 `'same-identity'` 这条链路的**唯一证据**
+   *
+   * `primary.reason === 'same-identity'` 只说了结论，没说"为什么"。
+   * popup 需要区分两件事：
+   *
+   *   - 是同一身份（`'self'`）→ 说「当前只有一个身份」
+   *   - 还是别的状态（`'disabled'` / `'error'` / `'unknown'`）→ 另说
+   *
+   * 二者都可能让 `same-identity` —— 不，只有前者会。但这个字段仍然必要：
+   * `'self'` 时 popup 要说"你的号就是取流号"，而 `'disabled'` 时要说
+   * "你关掉了开关"。**只在 `reason` 里塞结论会丢掉这个区分**。
+   *
+   * ⚠️ 取值域**派生自** `ProxyActivateReason`，不再手抄（2026-11-11）。
+   *
+   * 曾经这里手抄了一份 `'ok' | 'not-configured' | 'self' | 'same-account' | ...`，
+   * 加 `'page-identity'` 时漏改 → `tsc` 不报错 → 断链被静默掩盖。
+   * 现在加新值会自动跟上。`'unknown'` 是本文件额外需要的
+   * （"没收到回包"，见 `page-state.ts` 的 `ProxyIdentityInput`）。
+   */
+  proxyIdentity?: ProxyActivateReason | 'unknown';
 }

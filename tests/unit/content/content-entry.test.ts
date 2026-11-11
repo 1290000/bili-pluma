@@ -80,8 +80,24 @@ describe('content.ts 特征测试（拆分安全网）', () => {
       /**
        * 2026-10-29 修：原来写死 `tellMainWorld(true, ...)`，
        * 导致 `cfgEnabled` 永远为 true，"关开关后刷新番剧页画质不回落"。
+       *
+       * ## ⚠️ 2026-11-11 签名扩到三个参数（task-15）
+       *
+       * 原断言是 `tellMainWorld(proxyEnabled, res.activated === true)`（两参）。
+       * 现在第三个参数是 `extensionEngaged` —— **它回答的是另一个问题**：
+       *
+       * | 参数 | 回答 | 式样 |
+       * | --- | --- | --- |
+       * | 1 | 用户的总开关开没开 | 否定式（fail-open） |
+       * | 2 | 这个标签页装没装规则 | `res.activated === true` |
+       * | 3 | **扩展这次有没有真的参与取流** | 肯定式 `=== 'ok'`（fail-closed） |
+       *
+       * 三者不能合并：总开关开着 ≠ 装了规则 ≠ 参与了取流
+       * （`page-identity` / `self` 都是"开关开着、没装规则、没参与"）。
        */
-      expect(CONTENT).toContain('tellMainWorld(proxyEnabled, res.activated === true)');
+      expect(CONTENT).toContain(
+        'tellMainWorld(switchOn, res.activated === true, extensionEngaged)',
+      );
       expect(CONTENT).not.toContain('tellMainWorld(true, res.activated === true)');
     });
 

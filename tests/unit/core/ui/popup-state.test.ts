@@ -47,6 +47,120 @@ function buckets(ok: number, fail: number): StatBucket[] {
   return [{ start: 0, ok, fail }];
 }
 
+describe('步骤 6 段 1：取流身份 = page 的完整短路（2026-11-11）', () => {
+  /**
+   * ## 这一组测的是"单账号模式"（S1）—— 原盘点的 46 条 CONFLICT 有 33 条依赖它
+   *
+   * 配置：用户选了「用浏览器当前登录态取流」（`streamingIdentity = 'page'`）。
+   * 这种配置**完全可用**，但**没有任何凭据**（`hasCredential = false`），
+   * 而 `account/summary` 也读不出号（`account = null`）。
+   *
+   * 旧逻辑会把它报成「未配置」或「凭据失效」—— 两条都是假话，
+   * 并让 `needsLogin: true` 引导用户去扫一个他**不需要**的号。
+   */
+
+  it('★★ page + 无凭据 + 无 account → 「无需代理」，**不是**「未配置」', () => {
+    const v = describePopup(
+      snap({
+        streamingIdentity: 'page',
+        proxy: { enabled: true, hasCredential: false, ruleCount: 0 },
+        configured: false, // ← 旧判据会给出 false
+        account: null,
+      }),
+    );
+    expect(v.pill).toBe('无需代理');
+    /**
+     * 反向验证：删掉 `describePopup` 里的
+     * `if (snap.streamingIdentity === 'page') { ... }` 短路块
+     * → 会落到 `if (!configured)` → pill 变「未配置」→ **本用例红**。
+     */
+    expect(v.pill).not.toBe('未配置');
+    expect(v.pill).not.toBe('凭据失效');
+  });
+
+  it('★★ page + 无凭据 → **`needsLogin` 必须为 false**（不许催他扫码）', () => {
+    const v = describePopup(
+      snap({
+        streamingIdentity: 'page',
+        proxy: { enabled: true, hasCredential: false, ruleCount: 0 },
+        configured: false,
+        account: null,
+      }),
+    );
+    /**
+     * 反向验证：把短路块里的 `pageIdentity()` 换成「未配置」那个对象
+     * （`needsLogin: true`）→ 本用例红。
+     *
+     * 这是 A3 的核心：用户没配号，但他**不需要**配号。
+     */
+    expect(v.needsLogin).toBe(false);
+  });
+
+  it('⚠️ page + **开关关着** → 「已停用」，不是「无需代理」', () => {
+    const v = describePopup(
+      snap({
+        streamingIdentity: 'page',
+        proxy: { enabled: false, hasCredential: false, ruleCount: 0 },
+        configured: false,
+        account: null,
+      }),
+    );
+    /**
+     * 反向验证：把短路块里 `if (!proxy.enabled)` 那条**挪到** `pageIdentity()` 之后
+     * → 用户主动关掉的开关会被说成「无需代理」→ 本用例红。
+     *
+     * 判据（engineer-b 交接时核实）：**`disabled` 必须赢过「无需代理」**——
+     * 用户主动关开关是最能解释当前结果的事实。
+     * 而原实现（`self` / `page-identity` 写在 `hasCredential` 分支内部）
+     * 恰恰让「关开关」永远走不到「已停用」，这个是顺带修的。
+     */
+    expect(v.pill).toBe('已停用');
+  });
+
+  it('page + 不在播放页 → 「未生效」', () => {
+    const v = describePopup(
+      snap({
+        streamingIdentity: 'page',
+        proxy: { enabled: true, hasCredential: false, ruleCount: 0 },
+        configured: false,
+        account: null,
+        page: { kind: 'other' },
+      }),
+    );
+    expect(v.pill).toBe('未生效');
+  });
+
+  it('⚠️ `streamingIdentity` 缺省（undefined）→ 走既有判据，不因缺参数改口', () => {
+    const v = describePopup(
+      snap({
+        proxy: { enabled: true, hasCredential: false, ruleCount: 0 },
+        configured: false,
+        account: null,
+      }),
+    );
+    /**
+     * 反向验证：把短路条件写成 `snap.streamingIdentity !== 'extension'`
+     * （把 undefined 当成 page）→ 本用例会得到「无需代理」→ 红。
+     *
+     * 纪律与 `lastActivateReason` 一致：**缺参数 = 不知道，不是"是 page"**。
+     */
+    expect(v.pill).toBe('未配置');
+    expect(v.needsLogin).toBe(true);
+  });
+
+  it('extension + 有凭据 → 走原逻辑（「已接管」），短路不误伤', () => {
+    const v = describePopup(
+      snap({
+        streamingIdentity: 'extension',
+        proxy: { enabled: true, hasCredential: true, ruleCount: 2 },
+        configured: true,
+        account: healthyAccount,
+      }),
+    );
+    expect(v.pill).toBe('已接管');
+  });
+});
+
 describe('sampleRate —— null 与 0 是两个意思', () => {
   it('没有样本 → null（不是 0）', () => {
     expect(sampleRate([])).toBeNull();
@@ -304,6 +418,107 @@ describe('探测失败 ≠ 凭据失效（踩过的坑）', () => {
   });
 });
 
+describe('步骤 2：reason === self → 「无需代理」，绝不说「已接管」（2026-11-11）', () => {
+  /**
+   * ## 守的是什么
+   *
+   * `page/activate` 回 `reason: 'self'` 表示「取流账号 == 页面身份号」，
+   * 此时**一条 DNR 规则都没装**。但快照上它和"配好了、正常代理"长得几乎一样
+   * （都有凭据、开关都开着），单看 `proxy` + `account` 判不出来。
+   *
+   * 旧行为：`same-account` 在 UI 层**零消费方** → 开关开着、什么都不生效、
+   * 一句提示都没有。
+   *
+   * 现在的判据：`lastActivateReason === 'self'` → state 沿用 `active`
+   * （"取流这一步是好的"），但 **pill 换成「无需代理」**。
+   *
+   * ## 为什么不能直接说「已接管」
+   *
+   * 「已接管」是"我替你换了 Cookie"的断言。说它而实际没装规则，
+   * 就是本项目反复强调的最坏一类不一致：**界面说在工作，实际没工作**。
+   */
+
+  it('self + 账号健康 → state=active 但 pill=「无需代理」，不是「已接管」', () => {
+    const v = describePopup(
+      snap({
+        lastActivateReason: 'self',
+        proxy: { enabled: true, hasCredential: true, ruleCount: 0 },
+      }),
+    );
+    expect(v.state).toBe('active');
+    expect(v.pill).toBe('无需代理');
+    expect(v.pill).not.toBe('已接管');
+    expect(v.tone).toBe('neutral');
+    // 号是好的，只是没有第二个号可用 —— 不该引导去重扫
+    expect(v.needsLogin).toBe(false);
+  });
+
+  it('self 有一句归因（否则用户以为功能坏了）', () => {
+    const v = describePopup(snap({ lastActivateReason: 'self' }));
+    expect(v.line).toBeTruthy();
+    expect(v.line).toContain('同一个');
+  });
+
+  it('self 排在「已停用」之后 —— 用户主动关开关时说的是「已停用」', () => {
+    /**
+     * 用户关掉开关时，那是当下最能解释"为什么没 4K"的事实。
+     * 若 `self` 排在它前面，用户主动操作会被说成一种默认状态。
+     */
+    const v = describePopup(
+      snap({
+        lastActivateReason: 'self',
+        proxy: { enabled: false, hasCredential: true, ruleCount: 0 },
+      }),
+    );
+    expect(v.state).toBe('stopped');
+    expect(v.pill).toBe('已停用');
+  });
+
+  it('非播放页仍是「未生效」，不会被 self 抢走', () => {
+    const v = describePopup(snap({ lastActivateReason: 'self', page: { kind: 'other' } }));
+    expect(v.state).toBe('not-video');
+    expect(v.pill).toBe('未生效');
+  });
+
+  it('self 排在健康检查之前 —— 账号不健康也不改变「不需要代理」这件事', () => {
+    /**
+     * 若排在健康检查之后，一个探测不确定（网络/风控）会把界面变成
+     * 「已接管」或「凭据失效」——两种情况都在说与"同一个号"无关的事。
+     */
+    const v = describePopup(
+      snap({
+        lastActivateReason: 'self',
+        account: {
+          ...healthyAccount,
+          healthy: false,
+          reason: '账号未登录（-101）',
+        },
+      }),
+    );
+    expect(v.pill).toBe('无需代理');
+    expect(v.state).not.toBe('expired');
+  });
+
+  it('对照组：lastActivateReason 是 ok → 仍然是「已接管」', () => {
+    const v = describePopup(
+      snap({
+        lastActivateReason: 'ok',
+        proxy: { enabled: true, hasCredential: true, ruleCount: 2 },
+      }),
+    );
+    expect(v.pill).toBe('已接管');
+  });
+
+  it('对照组：缺省 lastActivateReason（旧快照）→ 判据不变，「已接管」', () => {
+    /**
+     * 兼容性：`page-snapshot.ts` 等调用方可能拿不到这次 reason。
+     * 缺省时**不许因缺参数就改口** —— 保持既有判据。
+     */
+    const v = describePopup(snap());
+    expect(v.pill).toBe('已接管');
+  });
+});
+
 describe('第一次点图标误报"凭据失效"（竞态）', () => {
   /**
    * 用户报的 bug：第一次点扩展图标总显示"凭据失效，需要重新扫码"，
@@ -344,10 +559,35 @@ describe('第一次点图标误报"凭据失效"（竞态）', () => {
   });
 
   it('hasCredential=false 才是真未配置/失效', () => {
+    /**
+     * ⚠️ **2026-11-11 修正**：原用例把 `enabled` 也写成 `false`，
+     * 于是它同时命中「已停用」与「凭据失效」两条判据 —— 两个变量混在一个断言里。
+     *
+     * 重排后「已停用」提到链的第二位（用户主动操作压过派生状态），
+     * 这条用例就变成了在测「已停用」而不是它想测的「凭据失效」。
+     *
+     * 本用例的**意图**是"没有密文时不能说成已接管"，所以这里必须是
+     * **开关开着 + 无密文**，才能单独验证 `hasCredential` 那条判据。
+     */
+    const v = describePopup(
+      snap({ account: null, proxy: { enabled: true, hasCredential: false, ruleCount: 0 } }),
+    );
+    expect(v.state).toBe('credential-missing');
+  });
+
+  it('⚠️ 开关关着 + 无密文 → 「已停用」优先（用户主动操作压过派生状态）', () => {
+    /**
+     * 这是重排要修的那个 bug：用户明明自己关了开关，却先被告知「凭据失效」，
+     * 于是跑去重扫一个本来就没问题的号 —— 扫完照旧（因为开关还是关的）。
+     *
+     * 反向验证：把 `describePopup` 里的 `if (!proxy.enabled)` 从
+     * `!configured` 之前挪回原位置（凭据校验之后）→ 本用例红。
+     */
     const v = describePopup(
       snap({ account: null, proxy: { enabled: false, hasCredential: false, ruleCount: 0 } }),
     );
-    expect(v.state).toBe('credential-missing');
+    expect(v.pill).toBe('已停用');
+    expect(v.state).not.toBe('credential-missing');
   });
 });
 
