@@ -51,10 +51,15 @@ import {
   patchCleanOption,
   toggleHideCategory,
   loadPanelModel,
+  readUpdateStatus,
+  requestUpdateCheck,
+  writeUpdateAuto,
   type PanelModel,
 } from './panel-data';
-import { accountTab, cleanTab, displayTab, homeCleanPane, qualityTab } from './tabs';
+import { aboutTab, accountTab, cleanTab, displayTab, homeCleanPane, qualityTab } from './tabs';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
+import { UPDATE_RELEASES_PAGE } from '@shared/constants/update';
+import type { UpdateStatusView } from '@shared/types/update';
 import {
   buildExportPayload,
   describeLogsError,
@@ -78,7 +83,7 @@ import {
  *
  * 面板里犯了当初避开过的同一个错，所以单开「显示」Tab。
  */
-export const PANEL_TABS = ['quality', 'clean', 'display', 'account'] as const;
+export const PANEL_TABS = ['quality', 'clean', 'display', 'account', 'about'] as const;
 export type PanelTab = (typeof PANEL_TABS)[number];
 
 /**
@@ -93,6 +98,7 @@ const TAB_LABEL: Record<PanelTab, string> = {
   clean: '净化',
   display: '显示',
   account: '账号',
+  about: '关于',
 };
 
 /**
@@ -984,11 +990,87 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     root.querySelector('.panel-notice')?.remove();
   }
 
+  // ── 自动更新（2026-11-16）──
+  //
+  // 懒读：进入「关于」Tab 或重画时才问后台。`updateReadFailed` 那一条早退不能省，
+  // 理由与 `ensureBadgeRead` 完全相同 —— 本函数的 `.finally` 会调 `render()`，
+  // 而 `render()` 又会调本函数，缺一条早退就是无限同步递归。
+  let updateStatus: UpdateStatusView | null = null;
+  let updateReading = false;
+  let updateReadFailed = false;
+  let updateBusy = false;
+
+  /** 「关于」Tab 上的红点：有新版且用户没关过这一版时才显示 */
+  const updateDot = el('span', 'tab-dot');
+  updateDot.hidden = true;
+  tabButtons.get('about')?.appendChild(updateDot);
+
+  function ensureUpdateRead(): void {
+    if (updateStatus !== null || updateReading || updateReadFailed) return;
+    updateReading = true;
+    void readUpdateStatus()
+      .then((status) => {
+        updateStatus = status;
+        updateReadFailed = status === null;
+      })
+      .finally(() => {
+        updateReading = false;
+        render();
+      });
+  }
+
   const render = (): void => {
     // Tab 高亮
     for (const [t, b] of tabButtons) {
       b.classList.toggle('active', t === tab);
       b.setAttribute('aria-selected', t === tab ? 'true' : 'false');
+    }
+    updateDot.hidden = updateStatus?.phase !== 'available';
+
+    /**
+     * 「关于」Tab **不依赖页面模型**：面板在任何页面上都能看版本与更新。
+     * 所以它排在 `!model` 早退之前 —— 否则加载中会看到一个空 Tab。
+     */
+    if (tab === 'about') {
+      ensureUpdateRead();
+      replaceChildren(content, [
+        aboutTab(updateStatus, {
+          busy: updateBusy,
+          check: () => {
+            if (updateBusy) return;
+            updateBusy = true;
+            render();
+            void requestUpdateCheck()
+              .then((reply) => {
+                if (reply.status) updateStatus = reply.status;
+                // 四种结局说的话不同：304/限流/失败混成一句会让用户不知道等还是报 bug
+                if (reply.outcome === 'ok') showNotice('检查完成', true);
+                else if (reply.outcome === 'unchanged') showNotice('已是最新版本', true);
+                else if (reply.outcome === 'rate-limited')
+                  showNotice(reply.reason ?? 'GitHub 限流', false);
+                else if (reply.outcome === 'failed') showNotice(reply.reason ?? '检查失败', false);
+              })
+              .finally(() => {
+                updateBusy = false;
+                render();
+              });
+          },
+          toggleAuto: (next) => {
+            // 乐观更新：先改本地镜像，避免开关在往返期间不动
+            if (updateStatus) updateStatus = { ...updateStatus, autoCheckEnabled: next };
+            render();
+            void writeUpdateAuto(next).then((status) => {
+              if (status) updateStatus = status;
+              render();
+            });
+          },
+          openReleases: () => {
+            // content script 里没有 `chrome.tabs`，用 window.open（在点击手势内，不会被拦）
+            window.open(UPDATE_RELEASES_PAGE, '_blank', 'noopener,noreferrer');
+          },
+        }),
+      ]);
+      return;
     }
 
     if (!model) {

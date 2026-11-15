@@ -181,6 +181,8 @@ export const PANEL_CSS = `
 }
 
 .tab {
+  /* 红点用绝对定位挂在右上角，所以这里必须是定位上下文 */
+  position: relative;
   flex: 1 1 0;
   padding: 5px 0;
   border: none;
@@ -195,6 +197,22 @@ export const PANEL_CSS = `
 
 .tab:hover {
   background: var(--pluma-accent-bg);
+}
+
+/* 「关于」Tab 的红点：有新版本时出现。
+   用圆点而不是数字 —— 这里没有"几条"的概念，数字会被读成未读消息数。 */
+.tab-dot {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--pluma-danger, #d33);
+}
+
+.tab-dot[hidden] {
+  display: none;
 }
 
 .tab.active {

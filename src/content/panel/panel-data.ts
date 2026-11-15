@@ -68,6 +68,7 @@ import {
 import { readRawCleanOptions } from '@platform/storage/ui-prefs-store';
 import { diag } from '@platform/storage/diag-store';
 import type { StatBucket } from '@shared/types/stats';
+import type { UpdateCheckOutcome, UpdateStatusView } from '@shared/types/update';
 import type { PageTracksView } from '@shared/types/playinfo';
 import type { PrimaryCard } from '@shared/utils/primary-card';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
@@ -725,4 +726,55 @@ export async function loadPanelModel(input: {
     pageKind,
     accountKnown: replies.account !== null,
   });
+}
+
+// ── 自动更新（2026-11-16）──
+
+/**
+ * 读更新状态。
+ *
+ * 返回 `null` 表示**没读到**（后台没醒 / 消息失败），调用方要显示"读不到"，
+ * **不许**落回"已是最新"——那是谎报。
+ */
+export async function readUpdateStatus(): Promise<UpdateStatusView | null> {
+  const reply = (await chrome.runtime.sendMessage({ type: 'update/status' }).catch(() => null)) as {
+    type?: string;
+    status?: UpdateStatusView;
+  } | null;
+  if (reply?.type !== 'update/status:ok') return null;
+  return reply.status ?? null;
+}
+
+export interface UpdateCheckReply {
+  status: UpdateStatusView | null;
+  outcome: UpdateCheckOutcome | null;
+  reason: string | null;
+}
+
+/** 手动检查一次（用户点按钮）。`manual: true` 无视间隔闸门，但受 60s 冷却限制。 */
+export async function requestUpdateCheck(): Promise<UpdateCheckReply> {
+  const reply = (await chrome.runtime
+    .sendMessage({ type: 'update/check', manual: true })
+    .catch(() => null)) as {
+    type?: string;
+    status?: UpdateStatusView;
+    outcome?: UpdateCheckOutcome;
+    reason?: string | null;
+  } | null;
+  if (reply?.type !== 'update/check:ok') {
+    return { status: null, outcome: 'failed', reason: '后台没有应答' };
+  }
+  return {
+    status: reply.status ?? null,
+    outcome: reply.outcome ?? 'failed',
+    reason: reply.reason ?? null,
+  };
+}
+
+/** 拨「自动检查」开关。 */
+export async function writeUpdateAuto(enabled: boolean): Promise<UpdateStatusView | null> {
+  const reply = (await chrome.runtime
+    .sendMessage({ type: 'update/auto', enabled })
+    .catch(() => null)) as { type?: string; status?: UpdateStatusView } | null;
+  return reply?.type === 'update/auto:ok' ? (reply.status ?? null) : null;
 }

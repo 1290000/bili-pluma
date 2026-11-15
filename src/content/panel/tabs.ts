@@ -23,6 +23,7 @@ import { el, pill, switchRow } from './dom';
 import { describeExpiry, describeHealth } from '@core/ui/popup-state';
 import { describeStreamingIdentity } from '@core/ui/streaming-pill';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
+import type { UpdateStatusView } from '@shared/types/update';
 import { primaryPlaceholder } from '@shared/utils/primary-card';
 
 /** 会员类型短标签 */
@@ -1209,5 +1210,123 @@ export function accountTab(
    *
    * 所以删它不是"清理顺手"，而是**删掉一个从未生效的东西**。
    */
+  return box;
+}
+
+// ─────────────────────────── 关于 Tab ───────────────────────────
+
+/**
+ * 「上次检查」的相对说法。**不要显示绝对时间戳**：
+ * 用户问的是"刚才查了没有"，不是"哪年哪月哪秒"。
+ */
+function describeLastCheck(lastCheckAt: number | null, now: number): string {
+  if (lastCheckAt === null) return '从未检查';
+  const diff = now - lastCheckAt;
+  // 时钟回拨时 diff 为负，说"刚刚"就好，别显示"-3 分钟前"那种东西
+  if (diff < 60_000) return '刚刚';
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 60) return `${String(minutes)} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${String(hours)} 小时前`;
+  return `${String(Math.floor(hours / 24))} 天前`;
+}
+
+/** 体积文案。真实包约 283 KB，没必要显示精确到字节。 */
+function describeSize(bytes: number | null): string {
+  if (bytes === null || !Number.isFinite(bytes) || bytes <= 0) return '';
+  return bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    : `${String(Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * 关于 Tab：版本 / 更新 / 仓库入口。
+ *
+ * ## 为什么「检查更新」与「立即更新」是两个东西
+ *
+ * 前者只问一句"有没有新的"，后者才动文件。用户可能只想确认一下，
+ * 也可能只想点「去 Releases 自己下」——三条路径**互不替代**。
+ * 所以这里不给"去更新"这种含糊按钮。
+ *
+ * ## 读不到状态时不落默认值
+ *
+ * `view === null` 表示面板与后台没对上（SW 未醒 / 消息失败）。
+ * 此时**不显示"已是最新"**——那是谎报。只说明读不到，并让用户重开面板。
+ */
+export function aboutTab(
+  view: UpdateStatusView | null,
+  actions: {
+    check: () => void;
+    openReleases: () => void;
+    toggleAuto: (next: boolean) => void;
+    /** 正在检查（按钮置灰 + 文案改成"检查中…"） */
+    busy: boolean;
+  },
+): HTMLElement {
+  const box = el('div', 'tab-pane');
+  box.appendChild(el('p', 'diag-section', '更新'));
+
+  if (!view) {
+    box.appendChild(
+      el('p', 'pane-note', '读不到更新状态 —— 关掉面板再打开试试（后台可能还没醒来）'),
+    );
+    return box;
+  }
+
+  const latest = view.latestVersion;
+  const size = describeSize(view.latestSizeBytes);
+  const versionLine =
+    latest && latest !== view.currentVersion
+      ? `当前 v${view.currentVersion} · 最新 v${latest}${size ? `（${size}）` : ''}`
+      : `当前 v${view.currentVersion} · 已是最新`;
+
+  const version = el('p', 'pane-note', versionLine);
+  version.setAttribute('data-testid', 'update-version');
+  box.appendChild(version);
+
+  const checked = el(
+    'p',
+    'pane-note',
+    `上次检查 ${describeLastCheck(view.lastCheckAt, Date.now())}`,
+  );
+  checked.setAttribute('data-testid', 'update-last-check');
+  box.appendChild(checked);
+
+  const checkBtn = el('button', 'acct-btn ghost', actions.busy ? '检查中…' : '检查更新');
+  checkBtn.type = 'button';
+  checkBtn.disabled = actions.busy;
+  checkBtn.setAttribute('data-testid', 'update-check');
+  checkBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    actions.check();
+  });
+  box.appendChild(checkBtn);
+
+  /**
+   * 自动检查开关。
+   *
+   * ⚠️ 文案**不能**写成"启用更新检查"——那会让用户以为关掉后手动也失效。
+   * 它只停"自动发起"，见方案 §6.3。
+   */
+  box.appendChild(
+    switchRow({
+      label: '自动检查更新',
+      hint: `每 ${String(view.intervalDays)} 天首次打开时查一次（关掉后仍可手动检查）`,
+      checked: view.autoCheckEnabled,
+      onToggle: actions.toggleAuto,
+    }),
+  );
+
+  const releases = el('button', 'acct-btn ghost', 'GitHub Releases');
+  releases.type = 'button';
+  releases.setAttribute('data-testid', 'update-releases');
+  releases.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    actions.openReleases();
+  });
+  box.appendChild(releases);
+
   return box;
 }
