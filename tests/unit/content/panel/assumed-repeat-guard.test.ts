@@ -20,8 +20,10 @@
  *
  * ## 本文件测什么
  *
- * - `assumed` 文案的**形状判据**（不含引导重复点击的词、含零副作用定位动作、长度上限）
- * - 运行期探针：**连续两次调用 `openLogin()`，`login/open` 只发一次**
+ * - `assumed` 文案的**形状判据**（不许断言已打开 / 要说清为什么看不到 / 含零副作用定位动作 / 长度上限）
+ * - 运行期探针：**连续两次调用 `openLogin()`，`login/open` 必须发 2 次**
+ *   （2026-11-15 task-47 **反转**：判定权已交给 background 的存活探测 pong，
+ *   面板不许在发消息之前用时间推断把点击吞掉 —— 见下方那组的说明）
  *
  * ## ⚠️ 为什么用运行期探针而不是源码字符串断言
  *
@@ -211,13 +213,21 @@ describe('★★★ 缺陷 1：`assumed` 文案不许教用户重复点击（tas
    * 这一组是承重的：`assumed` 是真机上的**常态**（4/4 = 100%），
    * 也就是说**几乎所有用户看到的就是这一句**。
    */
-  it('★★★ 不含「再点一次」「重试」这类会促使用户重复点击的指令', () => {
+  it('★★★ 不含「再点一次」「重试」这类会促使用户重复点击的指令（task-47 终裁恢复）', () => {
     /**
-     * 真机证据：用户照这两句点了第二次，`windowsAfter` 4 → 6，
-     * 屏幕上真的多了一个 420×600 的二维码窗。
-     * 这不是"措辞不友好"，是**我们让他做了有副作用的事**。
+     * ## ✅ 终裁（2026-11-15，task-47 收尾）：恢复 task-44 的禁令
      *
-     * 🔁 反向验证 RV1：把文案改回「…请再点一次扫码登录」→ 本条必红。
+     * 本轮中途曾短暂允许「再点一次」，依据是两条真机日志 —— **那个依据是错的**：
+     * 那两条日志走的是 `already-open` 路径（已证明有活页面应答），
+     * 而这句话要出现在 `assumed` 路径上（`create()` 没抛错、**一条证据都没有**）。
+     * **两个状态不可外推。**
+     *
+     * QA 用真实 `openLoginWindow()` 探针实测：**无心跳 + 两次串行点击 ⇒ `create` 2 次**。
+     * ⇒ 「再点一次」在 `assumed` 下就是把用户引向多开窗口，
+     * task-44 的结论（用户照做 ⇒ `windowsAfter` 4→6，两个二维码叠一起）
+     * **在这里完全成立**。
+     *
+     * 🔁 反向验证 RV11：把「再点一次」加回 `ASSUMED_TEXT` ⇒ 本条变红。
      */
     expect(assumed.text, '「再点一次」会让用户多开一个窗口（真机实测）').not.toContain('再点一次');
     expect(assumed.text, '「重试」同理：重试 = 再开一个窗口').not.toContain('重试');
@@ -278,17 +288,47 @@ describe('★★★ 缺陷 1：`assumed` 文案不许教用户重复点击（tas
   });
 });
 
-describe('★★★★ 缺陷 2：连续两次点击，`login/open` 只发一次（task-44）', () => {
+describe('★★★★ 口径反转（task-47）：连续两次点击必须**都发到** background', () => {
   /**
+   * ## 🔄 这一组整体反转了，请勿按旧断言改回去（2026-11-15，task-47）
+   *
+   * ### 旧断言（task-44）
+   *
+   * 「连续两次 `assumed` ⇒ `login/open` 只发 **1** 次」。依据是：
+   * 那时 background **无法**在 `create()` 之前判断窗口是否还开着
+   * （真机 `probe/heartbeat` 恒 `none`），所以第二次点击必然多开一个窗口；
+   * 面板只能在**发消息之前**用时间推断把它拦住。
+   *
+   * ### 为什么必须反转
+   *
+   * 1. **那个推断实际早就失效了**：task-46 让 `assumed` 变成 `opened:false`，
+   *    而 `describeLoginOutcome()` 对 `opened !== true` 返回 `ok:false`
+   *    ⇒ 计时条件 `r.ok && reason==='assumed'` 恒 false ⇒ 守卫永不触发。
+   * 2. **task-47 让 `assumed` 回到 `ok:true`**（正常路径不该报错）——
+   *    这一改会把这个计时器**接活**。接活的后果是：
+   *    用户关掉扫码窗后 2 分钟内再点 ⇒ 面板**根本不发消息** ⇒ 窗口开不出来。
+   *    那正是**验收标准 1** 明令禁止的（关窗后 ≤5 秒再点必须能开新窗口）。
+   * 3. **多开的病根已经由两层夹住**：
+   *    - **并发**点击（同一毫秒内的多次 `login/open`）由
+   *      `openLoginWindow()` 的 **in-flight 去重**挡（QA 探针：改前 `create` 2 次，改后 1 次）；
+   *    - **串行**点击（有间隔地再点）由 **pong** 判：窗口真开着 ⇒ `already-open` ⇒ 不 `create()`。
+   *    ⇒ 判定权从"面板猜时间"交给"后台问一句"，面板不需要也不允许在发消息前拦截。
+   *
+   * ⇒ 现在这两条断言守的是**相反的不变量**：点击**不许**被面板静默吞掉。
+   *   谁把 `lastAssumedAt = Date.now()` 加回 `openLogin`，这两条必红。
+   *
    * ## 假绿构造条件（必须同时满足，否则测不到东西）
    *
    * - `controller` **不能**是 null：否则 `:322` 那条与 controller 无关的兜底
    *   `showOrphanHint()` 会替主逻辑挂提示，主逻辑改坏了也照样绿（task-41 踩过）；
    * - `isOrphanHintShown()` 恒 false：否则提示被跳过；
-   * - `sendMessage` 必须真的返回 `assumed` 应答，否则 `lastAssumedAt` 不会被写。
+   * - `sendMessage` 必须返回**生产上真实会出现的形状**：
+   *   `{opened:false, confirmed:false, reason:'assumed'}`（task-46 之后）。
+   *   ⚠️ 旧 fixture 返回 `opened:true` —— 那是 **task-46 之前**的形状，
+   *   生产上再也不会出现；用它会造出"测的形状根本不存在"的假绿。
    */
   type ProbeOpts = {
-    /** 控制 `chrome.storage` 是否可用（本卡不涉及，留口子便于将来扩展） */
+    /** `true` = 返回 `assumed` 应答（生产常态），`false` = 返回失败应答 */
     assumed: boolean;
     controller: 'ready' | 'null';
   };
@@ -323,7 +363,8 @@ describe('★★★★ 缺陷 2：连续两次点击，`login/open` 只发一次
           if (msg?.type !== 'login/open') return { type: 'account/summary:ok', account: null };
           sends += 1;
           if (!opts.assumed) return { type: 'login/open:ok', opened: false, reason: 'unknown' };
-          return { type: 'login/open:ok', opened: true, reason: 'assumed' };
+          /** 生产形状：split 模式下 `create()` 拿不到句柄 ⇒ task-46 起 `opened:false` */
+          return { type: 'login/open:ok', opened: false, confirmed: false, reason: 'assumed' };
         },
       },
     };
@@ -372,29 +413,33 @@ describe('★★★★ 缺陷 2：连续两次点击，`login/open` 只发一次
     };
   }
 
-  it('★★★★ 连续两次 `assumed`：`sendMessage({type:"login/open"})` 只被调用 **1** 次', async () => {
+  it('★★★★ 连续两次 `assumed`：两次点击都必须发到 background（不许被面板吞掉）', async () => {
     /**
-     * 这是本卡缺陷 2 的核心判据。
+     * 这是**验收标准 1** 的面板侧守卫：关窗后再点必须真的走到 background，
+     * 由它用 pong 判断窗口还在不在。
      *
-     * 🔁 反向验证 RV2：去掉面板侧记忆（`shouldSkipRepeatOpen()` 恒 false）→ 本条必红。
+     * 🔁 反向验证：把 `if (r.ok && res?.reason === 'assumed') lastAssumedAt = Date.now();`
+     * 加回 `openLogin` ⇒ 本条变红（第二次点击被拦，`sends` 停在 1）。
      */
     const probe = buildProbe({ assumed: true, controller: 'ready' });
     await probe.run();
     await probe.run();
     expect(
       probe.sendCount(),
-      '第二次点击又发了一次 login/open ⇒ background 会再 create 一个窗口（真机上就是这么多开的）',
-    ).toBe(1);
+      '第二次点击被面板拦住了 ⇒ 用户关窗后再点会"没反应"，窗口开不出来',
+    ).toBe(2);
   });
 
-  it('★★★★ 第二次点击画的是「刚已经开过」的提示，不是 `assumed` 的文案', async () => {
+  it('★★★★ 两次点击画的都是 `assumed` 文案，不再出现「别重复点」的拦截', async () => {
     const probe = buildProbe({ assumed: true, controller: 'ready' });
     await probe.run();
     await probe.run();
     const texts = probe.noticeTexts();
     expect(texts.length, '两次点击都该有提示').toBe(2);
     expect(texts[0]).toBe(ASSUMED_TEXT);
-    expect(texts[1], '第二次应换成「别重复点」的提示').toBe(ALREADY_ASKED_TEXT);
+    expect(texts[1], '第二次又变成了「别重复点」⇒ 那套时间推断被接活了，关窗后用户会被拦住').toBe(
+      ASSUMED_TEXT,
+    );
   });
 
   it('★★★ 对照：只点一次 → 只发一次（记忆不许影响第一次）', async () => {

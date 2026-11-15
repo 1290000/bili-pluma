@@ -3,7 +3,7 @@
  *
  * 为什么不能放 popup：规范 §1「Popup 失焦即关闭」，用户拿手机扫的时候窗口已经没了。
  *
- * 这里只做三件事：画二维码、轮询状态、显示三态。
+ * 这里只做四件事：画二维码、轮询状态、显示三态、应答跨分区的存活探测。
  * 生成和轮询的逻辑都在 background，UI 只发消息。
  */
 
@@ -12,8 +12,11 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 
 import {
   LOGIN_HEARTBEAT_INTERVAL_MS,
+  LOGIN_PING_KEY,
   clearLoginHeartbeat,
+  parseLoginPing,
   writeLoginHeartbeat,
+  writeLoginPong,
 } from '@/src/background/login-window';
 import { POLL_INTERVAL_MS, isTerminal } from '@/src/core/auth/qrcode';
 import { buildQrMatrix } from '@/src/platform/qr/qrcode';
@@ -100,22 +103,42 @@ function App() {
   }, [regenerate]);
 
   /**
-   * ## 心跳：告诉普通分区"这个扫码窗口还活着"（2026-11-12，task-24 方案 A）
+   * ## 心跳 + 存活应答：告诉普通分区"这个扫码窗口还活着"（2026-11-12 task-24，
+   * 2026-11-15 task-47 修）
    *
    * 背景：`incognito: "split"` 下普通实例**看不到**无痕分区的窗口和标签页
    * （`loginTabs` 恒为 0，`windows.create()` 返回 `undefined`），所以它无法
-   * 直接判断"扫码窗口是不是已经开着"。结果用户第二次点扫码时什么都不发生。
+   * 直接判断"扫码窗口是不是已经开着"。唯一跨分区共享的通道是
+   * `chrome.storage.local`（`login-handshake.ts` 已记录）。
    *
-   * 唯一跨分区共享的通道是 `chrome.storage.local`（`login-handshake.ts` 已记录）。
-   * 由**本页面**（唯一确定运行在无痕分区里的东西）周期写时间戳，普通实例读它
-   * 并配合 90 秒 TTL 判断"还开着"（见 `src/background/login-window.ts` 的
-   * `probeExistingLoginWindow()`）。
+   * 本 effect 干两件事：
    *
-   * ⚠️ **必须周期写，不能只写一次**：一次性标记在窗口关掉后仍然留着，
-   * 会让普通实例永远误判"还开着" → 再点扫码永远没反应。TTL 是兜底，
-   * 周期写才是"活着"的证据。
+   * 1. **周期写心跳** —— 只是"最近有过窗口"的线索，不是裁决依据。
+   * 2. **关窗时清心跳** —— 见下面的 ⚠️。
    *
-   * 卸载时清掉心跳（`clearLoginHeartbeat`），让关窗立即生效而不用等 TTL。
+   * ## ⚠️ 「卸载时清心跳，让关窗立即生效」这句话曾经是错的
+   *
+   * 旧注释就是这么写的，而 React 的 `useEffect` cleanup **只在组件卸载时运行**。
+   * 用户关掉浏览器窗口时，文档被**直接销毁**，React 根本不会走卸载流程
+   * ⇒ cleanup 不跑 ⇒ 心跳停在最后一次写入 ⇒ 普通实例在 90 秒 TTL 内一直读到
+   * "活着" ⇒ `probeExistingLoginWindow()` 返回非 null ⇒ `openLoginWindow()`
+   * 直接返回 `already-open` ⇒ **既不建窗也不提示**。
+   *
+   * 真机日志（同一实例 14 次连续点击，age 从 49080ms 单调涨到 62190ms，
+   * 屏幕上 0 个扫码窗）就是这个形态。
+   *
+   * ⇒ 所以清理必须挂在**文档销毁事件**上：`pagehide` 是关闭 / 导航的最后时机
+   * （bfcache 那种"还会回来"的情形要跳过，见下），`beforeunload` 作为旧内核的兜底。
+   * （`unload` 不用：Chrome 正在废弃它，且 bfcache 下不会触发。）
+   *
+   * ## ⚠️ 即使这样，清心跳仍**不是**可靠信号
+   *
+   * `chrome.storage.local.remove` 是**异步 IPC**，页面正在销毁时可能来不及完成；
+   * 硬杀（崩溃 / 任务管理器结束进程 / 断电）时任何页面代码都不会跑。
+   * 所以"窗口还在不在"的**裁决权不在这一层** —— 普通实例会发 ping，
+   * 由本页面在 `onChanged` 里**当场回 pong**（见下一个 effect）。
+   * 页面没了就没人应答，那一侧自然判"已关"。
+   * 这里清心跳只是让下一次点击**少付 600ms 的探测超时**。
    */
   useEffect(() => {
     let cancelled = false;
@@ -130,11 +153,67 @@ function App() {
     beat();
     const timer = window.setInterval(beat, LOGIN_HEARTBEAT_INTERVAL_MS);
 
-    return () => {
+    /** 幂等收尾：停心跳 + 清记录。事件与 React cleanup 都会调它 */
+    const stopHeartbeat = (): void => {
       cancelled = true;
       window.clearInterval(timer);
       void clearLoginHeartbeat();
     };
+
+    /**
+     * ⚠️ `pagehide` 的 `persisted === true` 表示页面进了 **bfcache**（还会回来）。
+     * 那种情况下清心跳等于把一个**活着的**窗口说成"关了" ⇒ 用户看到两个二维码。
+     *
+     * 注：Chrome 只要发现页面注册了 `beforeunload`，就不再让它进 bfcache，
+     * 所以这条守卫大概率不会触发 —— 它守的是"浏览器将来放宽那个规则"。
+     */
+    const onPageHide = (event: PageTransitionEvent): void => {
+      if (event.persisted) return;
+      stopHeartbeat();
+    };
+
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('beforeunload', stopHeartbeat);
+
+    return () => {
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('beforeunload', stopHeartbeat);
+      stopHeartbeat();
+    };
+  }, []);
+
+  /**
+   * ## 应答普通分区的存活探测（ping → pong）
+   *
+   * 普通实例点扫码时会先发一个 ping（`requestLoginWindowPong()`），
+   * **本页面还活着就当场写 pong**，它就据此报 `already-open`；
+   * 本页面已经不在了（关窗 / 崩溃）就没人写 pong，它就照常建新窗口。
+   *
+   * ## 为什么用 `chrome.storage.onChanged` 而不是定时器轮询 ping
+   *
+   * `onChanged` 是**浏览器投递的事件**，不是定时器 ⇒
+   * - 不受后台节流影响（窗口被完全遮住、被判 hidden 时，`setInterval` 会被压到
+   *   每分钟一次，而事件照常投递）—— 这正是"用时间戳判断活着"不可靠的反面；
+   * - 页面对"我正在销毁"没有任何责任：不跑就是不在，语义天然正确。
+   *
+   * 这也是这条 bug 的根因给的教训：**别让"清理"成为判定活着的前提**。
+   */
+  useEffect(() => {
+    const listener = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string,
+    ): void => {
+      if (area !== 'local') return;
+      const change = changes[LOGIN_PING_KEY];
+      if (!change) return;
+      const ping = parseLoginPing(change.newValue);
+      // 读不懂就当没收到（脏数据不该让页面抛错，也不该伪造"活着"）
+      if (ping === null) return;
+      void writeLoginPong(ping.nonce);
+    };
+
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
   }, []);
 
   // 画二维码

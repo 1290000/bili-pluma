@@ -186,6 +186,41 @@ export default defineContentScript({
      * 没有 `ctx.onInvalidated` 清理：闭包随页面卸载一起消失，
      * 清理是**不需要**的（不是"忘了写"，见 `probeAlive()` 上方同样的声明）。
      */
+    /**
+     * ## ⚠️ 临时债（**将来要整段删掉**，不是既有约定）—— 2026-11-15，task-47
+     *
+     * 这个变量现在**任何地方都不会被赋值**（赋值那一行已被删除，原因见
+     * `openLogin()` 里那句 `⚠️ 这里**曾经**给「面板侧重复点击记忆」计时`）。
+     * 于是 `shouldSkipRepeatOpen()` 恒 `false`，"发消息之前靠时间拦下第二次点击"
+     * 这套推断**彻底作废**：窗口是否还开着已交给 background 的存活探测（pong）裁决。
+     *
+     * ### 本轮为什么留着（而不是现在就删）
+     *
+     * 删它要连带删掉 `lastAssumedAt` / `shouldSkipRepeatOpen` /
+     * `ALREADY_ASKED_TEXT` / `REPEAT_GUARD_MS` **四样**，以及
+     * `tests/unit/content/panel/assumed-repeat-guard.test.ts` 里
+     * 约 200 行探针（`shouldSkipBody()` 直接从源码切片，删函数就删测试）。
+     * 而当前时点是"修复已过真机验证、即将终验交付"—— **终验前不动**，
+     * 避免把一次纯清理变成一轮新回归。
+     *
+     * ### 将来怎么处理（清理边界，照做即可）
+     *
+     * **整段删除**这四样 + 对应的探针组：
+     * `lastAssumedAt`、`shouldSkipRepeatOpen`（本文件）、
+     * `ALREADY_ASKED_TEXT`、`REPEAT_GUARD_MS`（`login-outcome.ts`），
+     * 以及本文件里 `if (shouldSkipRepeatOpen()) { … }` 整块与其 import。
+     * 那时这条 `eslint-disable` 也随之消失。
+     *
+     * **绝不要**反过来"修复"它（把赋值加回去）：接活 = 用户关窗后 2 分钟内
+     * 点不出窗口 = 那个「点了没反应」原样复发（而且这次是我们主动拦的）。
+     * 行为守卫：`assumed-repeat-guard.test.ts` 的
+     * 「连续两次点击必须都发到 background」—— 谁接活，那条必红。
+     *
+     * ⚠️ lint 说明：`prefer-const` 会要求改成 `const`，但改成 `const` 后
+     * `lastAssumedAt !== null` 会被 TS 收窄、下一句 `Date.now() - lastAssumedAt`
+     * 直接报类型错。所以**临时**保留 `let` 并关掉那一条规则。
+     */
+    // eslint-disable-next-line prefer-const -- 临时债，见上方两节（为什么留着 / 将来怎么删）
     let lastAssumedAt: number | null = null;
 
     /**
@@ -394,21 +429,46 @@ export default defineContentScript({
       }
       const r = describeLoginOutcome(res);
       /**
-       * ## 记下「这次真的发出去并开过了」（2026-11-15，task-44 缺陷 2）
+       * ## ⚠️ 这里**曾经**给「面板侧重复点击记忆」计时 —— 现在**故意不计**（2026-11-15，task-47）
        *
-       * 判据是 `ok:true && reason === 'assumed'`，理由：
+       * 旧代码是 `if (r.ok && res?.reason === 'assumed') lastAssumedAt = Date.now();`
        *
-       * - **只记 `assumed`**：这是 split 模式下的**常态**（真机 4/4），
-       *   也是唯一一种"我们发了 create、但拿不到句柄"的情形。
-       * - 确定拿到窗口对象（无 `reason`）时**不记**：那种情况下 background
-       *   自己就能通过 `currentWindowId` 拦住第二次，面板不必插手。
-       * - `incognito-disabled` 等失败**不记**：什么都没开出来，
-       *   用户修好权限后当然应该能立刻再点 —— 拦住他是错的。
+       * ### 它之前为什么是死代码
        *
-       * ⚠️ 记的时间点必须在**拿到应答之后**，不能在发消息之前：
-       * 发消息失败（catch 分支）时窗口没开成，不该开始计时。
+       * task-46 把 `assumed` 的口径改成 `opened: false`，而 `describeLoginOutcome()`
+       * 对 `opened !== true` 一律返回 `ok: false` ⇒ `r.ok` 恒 false ⇒
+       * `lastAssumedAt` **永远不被赋值** ⇒ 下面的 `shouldSkipRepeatOpen()` 恒 false。
+       * 也就是说 task-44 的"防连点多开"**其实早已失效**。
+       *
+       * ### 现在它更不可能生效，而且是**故意的**
+       *
+       * task-47 把 `assumed` 改回 `ok: true`（正常路径不该报红，见
+       * `src/content/panel/login-outcome.ts`）—— 这一改会让上面那个条件**成立**，
+       * 于是这套计时器**活过来**。而它一旦活过来，后果是：
+       *
+       * > 用户关掉扫码窗后 2 分钟内再点「扫码登录」⇒ 面板**根本不发 `login/open`**，
+       * > 只显示「刚已经开过一次，别重复点」⇒ **窗口开不出来、用户被拦住**。
+       *
+       * 那正是**验收标准 1** 要禁止的行为（关窗后 ≤5 秒再点必须能开出新窗口），
+       * 也与 `assumed` 新文案里的「还是没有就再点一次」直接矛盾。
+       *
+       * ### 所以：判定权已经从"面板猜"交给 background 的**存活探测**
+       *
+       * 窗口是否还开着，现在由 `probeExistingLoginWindow()` 发 ping、页面当场回 pong
+       * 来裁决（不受节流影响）；窗口真开着 ⇒ 返回 `already-open` ⇒ **不会多开**。
+       * 于是"在发消息之前靠时间猜"这套推断**没有任何存在理由**了。
+       *
+       * ### ⚠️ 临时债（将来整段删除，见 `lastAssumedAt` 声明处的清理边界）
+       *
+       * `lastAssumedAt` / `shouldSkipRepeatOpen()` / `ALREADY_ASKED_TEXT` /
+       * `REPEAT_GUARD_MS` 现在全部是**死代码**（永不被赋值 ⇒ 永不触发）。
+       * **要修的正确方向是整段删掉这套时间推断，绝不是把它接活。**
+       * 把它接活 = 让用户在关窗后 2 分钟内点不出窗口 = 用户报的那个
+       * 「点了没反应」原样复发（而且这次是我们主动拦的）。
+       *
+       * 行为守卫：`tests/unit/content/panel/assumed-repeat-guard.test.ts` 的
+       * 「连续两次点击必须都发到 background」—— 谁把这件事接活，那条必红。
        */
-      if (r.ok && res?.reason === 'assumed') lastAssumedAt = Date.now();
       /**
        * ⚠️ 孤儿态已经由 `showOrphanHint()` 给了明确提示，
        * 这里不要再叠一条长驻红字（两条提示会互相覆盖、反而更乱）。

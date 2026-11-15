@@ -27,11 +27,28 @@ const LOGIN_URL = '/login-window.html';
 /** 记住当前登录窗口，避免连点开出一堆（仅本实例可见） */
 let currentWindowId: number | null = null;
 
+/**
+ * **正在进行的**一次"打开扫码窗口"。
+ *
+ * `null` = 当前没有进行中的调用。并发调用复用同一个 Promise（见
+ * `openLoginWindow()`）。**它不是时间窗口**：一返回就释放，
+ * 所以"关窗后立刻再点"永远能进（验收标准 1）。
+ */
+let inflight: Promise<OpenLoginResult> | null = null;
+
 export interface OpenLoginResult {
   ok: boolean;
   /**
    * - `incognito-disabled`：确定没权限（`isAllowedIncognitoAccess` 为 false）
-   * - `already-open`：窗口已存在，已聚焦
+   * - `already-open`：**扫码窗口刚刚回答了存活探测**（跨分区 ping/pong，
+   *   见 `probeExistingLoginWindow()`）⇒ 窗口确实还开着。
+   *
+   *   ⚠️ 2026-11-15（task-47）之前它不是这个含义：那时只要
+   *   `chrome.storage.local` 里有一条 90 秒内的心跳就报 `already-open`，
+   *   而心跳的写入方是**页面**，窗口关闭时页面被直接销毁、清理跑不掉 ⇒
+   *   一条冻结的旧心跳在 90 秒内会把「没有窗口」谎报成「窗口已开着」，
+   *   用户点了没反应（真机日志：连续 14 次 `already-open`，屏幕上 0 个扫码窗）。
+   *   现在**只认页面当场应答**，不再认时间戳。
    * - `assumed`：权限正常，但 `create` 返回 undefined 且本实例看不到窗口变化。
    *   **按"已创建"处理**——无痕窗口对当前分区不可见，实测窗口确实建出来了
    *   （标题 `登录播放账号-[InPrivate]`）。不要当失败。
@@ -63,8 +80,62 @@ export async function isIncognitoAllowed(): Promise<boolean> {
 }
 
 // ---------------------------------------------------------------------------
-// 扫码窗口心跳（2026-11-12，task-24 方案 A）
+// 扫码窗口心跳 + 存活应答（2026-11-12 task-24 起，2026-11-15 task-47 改造）
 // ---------------------------------------------------------------------------
+//
+// ## 两层信号，职责完全不同（**别再把它们混成一层**）
+//
+// | 层 | 谁写 | 回答的问题 | 可信度 |
+// | --- | --- | --- | --- |
+// | **心跳**（`LOGIN_HEARTBEAT_KEY`） | 页面 `setInterval` | "最近有没有过扫码窗" | **只是线索**，可能冻结 |
+// | **存活应答**（ping/pong） | 页面收到 ping 当场回 pong | "**此刻**那个页面还在跑 JS 吗" | **裁决依据** |
+//
+// ### 为什么必须两层（真机定位，不是推理）
+//
+// 2026-11-15 诊断日志（同一实例 `8ai3j9`，21:50 前后连续 14 次点击）：
+//
+// ```
+// 20:50:52.633  probe/heartbeat  alive age=49080ms instance=mwhu0yw0-qn8mwt
+// 20:50:52.634  probe/already-open  age=49082ms
+// 20:50:52.636  login/open  {"ok":true,"reason":"already-open"}
+// ...（到 20:51:05，age 涨到 62190ms，14 次全部 already-open）
+// ```
+//
+// 当时整机**只有一个 Edge 主窗口，没有任何扫码窗**。根因是心跳的清理写在
+// 页面 `useEffect` 的 cleanup 里，而**关窗时文档被直接销毁、React 根本不会
+// 卸载组件** ⇒ cleanup 不跑 ⇒ 心跳停在最后一次写入 ⇒ 90 秒内所有点击都读到
+// "活着" ⇒ 既不建窗也不提示。这就是「有概率弹不出二维码」：
+// **距最后一条心跳 90 秒内必失败，超过 90 秒就能开**。
+//
+// ⇒ 结论：把「时间戳还新」当成「窗口还活着」是错的判据。时间戳只能说明
+// "曾经有过窗口"，**证明不了此刻**。而 `chrome.storage` 的 `onChanged`
+// 事件是**浏览器投递的事件，不是定时器**，不受后台节流影响 ⇒
+// 一个活着的页面一定能当场应答。这就是 ping/pong 的依据。
+//
+// ### ⚠️⚠️ 「心跳每 15 秒会刷新」**至今没有证实** —— 判据不许依赖它
+//
+// 2026-11-15 真机采样（Lead 提供，LevelDB 直读）：
+//
+// ```
+// 20:55:19  writes=2  age=23.5s      20:55:35  writes=2  age=39.6s
+// 20:55:27  writes=2  age=31.6s      20:55:43  writes=2  age=47.6s
+//                                    20:55:51  writes=2  age=55.6s
+// ```
+//
+// 整个存储里**只有两次**心跳写入（20:50:03 / 20:54:56），age 在 32 秒内单调增长、
+// **没有任何新写入**。采样时段扫码窗是否还开着未确证（同一时刻 `tasklist /v`
+// 只看到主窗口有标题）⇒ **不能据此断定周期写坏了，但也绝不能假定它会刷新**。
+//
+// ⇒ 由此得到一条硬约束，改判据前先读：
+//
+// 1. **不许**把"活着"的阈值调小（`age` 足够小）—— 那是在赌周期刷新会准时发生；
+// 2. **也不许**升级成"写入序号在推进" —— 同一个未证实前提，只是换了写法；
+// 3. **只许**用**正向证据**：问一句，页面当场答。答话不依赖任何定时器。
+//
+// 判据对"周期刷新坏了"是**免疫**的：它读到的唯一一条记录是**页面挂载时写的那次**
+// （有证据 —— 两次开窗恰好两条记录），之后即使 `setInterval` 一次都不触发，
+// 只要页面还活着 pong 就会来。反过来，页面文件里那句"必须周期写"的注释
+// 只是**保底线索**，不是正确性前提；源码级断言也证明不了定时器真的会跑。
 
 /**
  * 心跳键 —— **新开一个键，不复用 `pluma:login-ready`**。
@@ -77,30 +148,25 @@ export async function isIncognitoAllowed(): Promise<boolean> {
 export const LOGIN_HEARTBEAT_KEY = 'pluma:login-window-alive';
 
 /**
- * 心跳过期时间。超过这个时间没有任何心跳 ⇒ 认为窗口已经关了 / 崩了。
+ * 心跳新鲜度阈值。**⚠️ 它不是"活着"的判据**（那是 pong 的活），
+ * 只用在两处：诊断日志里标注这条记录新不新，以及"从来没有过扫码窗"的快速判空。
  *
- * 为什么是 90 秒：扫码窗口每 15 秒写一次心跳（见 `LOGIN_HEARTBEAT_INTERVAL_MS`），
- * 90 秒 = 连续漏掉 6 次。够宽容（SW 被挂起、窗口在后台节流都不会误判成"关了"），
- * 又不至于让用户关窗后等太久才能重新打开。
+ * ## 为什么保持 90 秒、**不缩**
  *
- * ## ⚠️ 已知窗口期：强杀窗口后 90 秒内会误判「已开着」（task-25 记录，本轮不修）
+ * 缩 TTL 是这条 bug 最诱人的假修法，代价却更大：
+ * * 1. **一个活着的页面也可能 60 秒不写心跳**。窗口被别的窗口完全遮住时，
+ *    Chromium 的遮挡检测会把页面判成 hidden，进入 intensive throttling
+ *    （隐藏 5 分钟后定时器被压到**每分钟最多唤醒一次**）。心跳间隔 15 秒，
+ *    最坏间隔约 60 秒 ⇒ TTL 若压到 20~30 秒，**开着的窗口会被判成"关了"**。
+ *    更糟的是：**"周期写会准时发生"这件事本身还没被证实**（见文件头那段采样），
+ *    所以任何形如"age 足够小 ⇒ 活着"的判据都是在赌一个未证实的前提。
+ * 2. 判成"关了"的后果是**再建一个窗口** ⇒ 用户看到两个二维码。
+ *    本项目已明确裁决过：**多开窗口比少开一次更糟**（`openLoginWindow()`
+ *    情况 3 的注释里论证过「不许重试 create」同理）。
+ * 3. 90 秒 = 15 秒 × 6，对 60 秒的节流上界留了 1.5 倍余量。
  *
- * 正常关窗时 `closeLoginWindow()` 与页面的 `useEffect` cleanup 都会清心跳。
- * 但窗口被**强杀**（崩溃 / 进程被终止 / 任务管理器结束进程）时 cleanup 不跑 ⇒
- * 心跳残留 ⇒ TTL 过期前 `probeExistingLoginWindow()` 仍返回非 null ⇒
- * 用户会看到「扫码登录窗口已经开着了 —— 它就是上面那个窗口」**而窗口不存在**。
- *
- * **本轮有意不修**（2026-11-12，裁决：用户很急，该窗口期 ≤90 秒且会自愈）：
- * - 兜底要么需要探测"窗口是不是真的还在"（普通实例**看不到**无痕分区窗口，
- *   这正是本机制存在的理由 —— 做不到），
- * - 要么需要把 TTL 压到接近心跳间隔（会让 SW 节流误判成"关了"，
- *   反而导致**多开窗口**，比"少开一次"更糟）。
- *
- * ⇒ 能做的只有缩短窗口期与如实记录。若将来要修，方向是让**心跳写入方**
- * 在 `visibilitychange`/`pagehide` 里也清一次（覆盖面更广但仍盖不住硬杀），
- * 或改成"写入方读-改-写带序号，读取方要求序号在推进"（复杂，需另立卡）。
- * 用户若在这 90 秒内再点一次扫码，会看到"已开着"的提示而窗口不存在 ——
- * 再点一次（等 TTL 过期后）即可恢复。
+ * ⇒ 正确做法不是把 TTL 缩到能覆盖"关窗"（那做不到，关窗是事件不是时长），
+ * 而是**另外拿一条不受节流影响的信号来裁决**（见下面的 ping/pong）。
  */
 export const LOGIN_HEARTBEAT_TTL_MS = 90 * 1000;
 
@@ -110,10 +176,67 @@ export const LOGIN_HEARTBEAT_TTL_MS = 90 * 1000;
  */
 export const LOGIN_HEARTBEAT_INTERVAL_MS = 15 * 1000;
 
+/** 普通实例发存活探测（ping）用的键 */
+export const LOGIN_PING_KEY = 'pluma:login-window-ping';
+/** 扫码窗口应答存活探测（pong）用的键 */
+export const LOGIN_PONG_KEY = 'pluma:login-window-pong';
+
+/**
+ * 等 pong 的上限。超时就判「页面不在」。
+ *
+ * ## 依据：一条真机实测（**单次观测，不是上界**）
+ *
+ * ```
+ * 21:12:48.016  probe/heartbeat  record age=2276ms …
+ * 21:12:48.136  ping/pong  nonce=mwhuu7pu-9zi4nz pongNonce=mwhuu7pu-9zi4nz
+ * ```
+ *
+ * ⇒ 从写 ping 到读到 pong 约 **120ms**，其中 100ms 是轮询步长
+ * （`LOGIN_PING_POLL_MS`），真正的跨分区往返只有 ~20ms 量级。
+ *
+ * ⚠️ 这**一个样本**，不是"毫秒量级"的证明，也不构成上界：
+ * 页面被节流 / 机器繁忙时可能更慢。所以超时取 600ms（≈ 实测的 5 倍），
+ * 既给抖动留余量，又短到用户察觉不到（点在按钮上不会觉得卡）。
+ *
+ * ⚠️ 曾在这里引用「`login-handshake.ts` 的双向握手在 **8 秒**窗口内完成」
+ * 来论证"毫秒量级" —— 那个引用差 13 倍，是**推断不是实测**，已删除。
+ */
+export const LOGIN_PING_TIMEOUT_MS = 600;
+
+/** 等 pong 时的轮询步长。600 / 100 = 最多 6 次 `storage.local.get` */
+const LOGIN_PING_POLL_MS = 100;
+
 export interface LoginHeartbeat {
   at: number;
   /** 写心跳的实例标识，出问题时能看出是哪个分区写的 */
   instance: string;
+}
+
+/** ping 载荷。`at` 用于让读方判断"这次 pong 是不是在我发问之后写的" */
+export interface LoginPing {
+  nonce: string;
+  at: number;
+}
+
+/** pong 载荷 */
+export interface LoginPong {
+  nonce: string;
+  at: number;
+}
+
+/**
+ * 校验一个 `storage.onChanged` 的 `newValue` 是不是合法 ping。
+ *
+ * 页面侧用它过滤脏数据（扩展升级 / 别处写坏），**读不懂就当没收到**。
+ * 抽成纯函数是为了能单测：脏数据在真机上表现为"偶尔弹不出二维码"，
+ * 只有把判据单独钉住才排查得动。
+ */
+export function parseLoginPing(value: unknown): LoginPing | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const v = value as { nonce?: unknown; at?: unknown };
+  if (typeof v.nonce !== 'string' || v.nonce.length === 0) return null;
+  if (typeof v.at !== 'number' || !Number.isFinite(v.at)) return null;
+  return { nonce: v.nonce, at: v.at };
 }
 
 /**
@@ -125,30 +248,169 @@ export interface LoginHeartbeat {
  * 但也**有独立的 SW 实例** —— 两个 SW 的内存互不可见。要跨分区传递，
  * 只有 `storage.local` 是共享的（`login-handshake.ts` 文件头已记录这条，
  * 且真机存储里 `pluma:login-ready` 的记录证实了共享写入）。
+ *
+ * ⚠️ 心跳**只是线索**：它证明"曾经有过一个扫码窗"，**证明不了此刻**。
+ * 裁决用 `requestLoginWindowPong()`。
  */
 export async function writeLoginHeartbeat(instance: string): Promise<void> {
   const beat: LoginHeartbeat = { at: Date.now(), instance };
   await chrome.storage.local.set({ [LOGIN_HEARTBEAT_KEY]: beat }).catch(() => {});
 }
 
-/** 清除心跳（窗口正常关闭时调用，缩短"关了却还以为开着"的窗口期） */
+/**
+ * 清除心跳（关窗 / 登录成功关窗时调用）。
+ *
+ * ⚠️ **它是"尽力而为"，不是"关窗一定被感知"**：
+ * `chrome.storage.local.remove` 是异步 IPC，页面正在销毁时可能来不及完成。
+ * 所以关窗的正确性**不许**建立在这一句上 —— 真正的裁决是 pong
+ * （见 `probeExistingLoginWindow()`）。这一句的作用是让下一次点击
+ * **少付 600ms 的探测时间**，并让存储里不留垃圾。
+ */
 export async function clearLoginHeartbeat(): Promise<void> {
   await chrome.storage.local.remove(LOGIN_HEARTBEAT_KEY).catch(() => {});
 }
 
 /**
- * 读心跳。**过期的视为不存在** —— 这是整个探测机制的正确性前提：
- * 没有过期，用户关掉窗口后本实例会永远认为"还开着"，再点扫码永远没有反应。
+ * 读心跳记录（**不套 TTL**）。
+ *
+ * 判据只有一条：形状对不对。时间戳是否过期**由调用方决定** ——
+ * `probeExistingLoginWindow()` 即使读到过期记录也会再试一次 pong，
+ * 因为"过期"可能只是被节流了，而节流过的窗口**确实还开着**。
  */
-export async function readLoginHeartbeat(): Promise<LoginHeartbeat | null> {
+export async function readLoginHeartbeatRecord(): Promise<LoginHeartbeat | null> {
   const bag = await chrome.storage.local
     .get(LOGIN_HEARTBEAT_KEY)
     .catch(() => ({}) as Record<string, unknown>);
   const beat = bag[LOGIN_HEARTBEAT_KEY] as LoginHeartbeat | undefined;
-  if (!beat || typeof beat.at !== 'number') return null;
-  const age = Date.now() - beat.at;
-  if (age < 0 || age > LOGIN_HEARTBEAT_TTL_MS) return null;
-  return beat;
+  if (!beat || typeof beat.at !== 'number' || !Number.isFinite(beat.at)) return null;
+  return { at: beat.at, instance: typeof beat.instance === 'string' ? beat.instance : '' };
+}
+
+/**
+ * 形如"是否新鲜"的纯判据（可单测，不碰 `chrome`）。
+ *
+ * 时钟回拨（`at` 在未来）也判不新鲜：那种记录只会让 TTL 永远不过期。
+ */
+export function isHeartbeatFresh(beat: LoginHeartbeat | null, now: number = Date.now()): boolean {
+  if (beat === null) return false;
+  const age = now - beat.at;
+  return age >= 0 && age <= LOGIN_HEARTBEAT_TTL_MS;
+}
+
+/**
+ * 读心跳，**过期的视为不存在**。
+ *
+ * ⚠️ 2026-11-15（task-47）起，**生产路径不再用它的返回值做裁决**：
+ * `probeExistingLoginWindow()` 改用 `readLoginHeartbeatRecord()` + pong。
+ * 保留这个函数是因为"TTL 语义"仍有唯一实现处，且
+ * `tests/unit/background/login-heartbeat-probe.test.ts` 直接钉住它 ——
+ * 删掉等于让"新鲜度"这条判据失去看守。
+ */
+export async function readLoginHeartbeat(): Promise<LoginHeartbeat | null> {
+  const beat = await readLoginHeartbeatRecord();
+  return isHeartbeatFresh(beat) ? beat : null;
+}
+
+/**
+ * 由**扫码窗口页面**在收到 ping 后立即调用。
+ *
+ * 这一句就是"我还活着"的全部含义：它不是定时器，而是对浏览器投递事件的
+ * 直接响应 ⇒ **不受后台节流影响**，也不会因为"组件没卸载"而假活。
+ */
+export async function writeLoginPong(nonce: string): Promise<void> {
+  const pong: LoginPong = { nonce, at: Date.now() };
+  await chrome.storage.local.set({ [LOGIN_PONG_KEY]: pong }).catch(() => {});
+}
+
+/** 读 pong（形状不对当没有） */
+export async function readLoginPong(): Promise<LoginPong | null> {
+  const bag = await chrome.storage.local
+    .get(LOGIN_PONG_KEY)
+    .catch(() => ({}) as Record<string, unknown>);
+  const pong = bag[LOGIN_PONG_KEY] as LoginPong | undefined;
+  if (!pong || typeof pong.at !== 'number' || !Number.isFinite(pong.at)) return null;
+  return { nonce: typeof pong.nonce === 'string' ? pong.nonce : '', at: pong.at };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * 发一次存活探测，问"扫码窗口还在不在"。
+ *
+ * ## 判据是 `pong.at >= ping.at`，**不是** `nonce` 相等
+ *
+ * `nonce` 相等在并发下会误判：两次点击几乎同时发 ping A(t1) / B(t2)，
+ * 页面先回 A 再回 B ⇒ pong 被覆盖成 B 的 ⇒ 读方 A 等不到自己的 nonce，
+ * 判"页面不在" ⇒ **又开一个窗口**（正是要消灭的那个副作用）。
+ *
+ * `pong.at >= ping.at` 表达的是"**我问完之后它还写过字**"，对并发安全：
+ * 两个 pong 都晚于两个 ping，谁读到都成立。而**上一次点击留下的旧 pong**
+ * 一定早于这次的 ping ⇒ 不会被误认成应答。
+ *
+ * `nonce` 保留在载荷里只用于诊断日志。
+ *
+ * ## 🟢 地基已验证（真机，2026-11-15）：`storage.onChanged` **确实跨分区投递**
+ *
+ * 这一段曾经是**未验证假设**（"普通实例写的 ping，无痕分区的页面能不能收到？"）。
+ * 现在是实测结论 —— 判据是同一时段三条日志来自**两个不同主体**：
+ *
+ * ```
+ * probe/instance   incognito=false  (from=aktf4x)         ← 发 ping 的是**普通实例**
+ * probe/heartbeat  record instance=mwhuu5yj-o6ik9y       ← 写心跳/回 pong 的是**另一个实例**（无痕分区的页面）
+ * ping/pong        nonce=mwhuu7pu-9zi4nz pongNonce=mwhuu7pu-9zi4nz   ← ping 与 pong 的 nonce 完全一致
+ * ```
+ *
+ * ⇒ 普通实例写的 ping **确实被无痕分区页面收到并回写了 pong**。
+ * **别再怀疑这条地基**（下一个人若要重开这个疑问，先解释上面三条如何可能同时成立）。
+ *
+ * ⚠️ 反过来说：pong 侧的 `onChanged` 响应（`main.tsx` 的第二个 effect）
+ * 若是坏的，这条链路也会断 —— 但真机的 nonce 双边一致已经排除了那种可能。
+ *
+ * @returns `true` = 页面当场应答（窗口确实还开着）
+ */
+export async function requestLoginWindowPong(): Promise<boolean> {
+  const ping: LoginPing = {
+    nonce: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    at: Date.now(),
+  };
+  const wrote = await chrome.storage.local
+    .set({ [LOGIN_PING_KEY]: ping })
+    .then(() => true)
+    .catch(() => false);
+  /** 写不进去 = 问不出去。**不许乐观当活着**（那会把"点了没反应"又请回来） */
+  if (!wrote) {
+    await diag('ping/write-failed', '写 ping 失败，按"页面不在"处理');
+    return false;
+  }
+
+  /**
+   * ## 先读一次再进轮询（QA 建议，2026-11-15）
+   *
+   * `set()` 是异步 IPC：pong 有可能在我们 `await` 返回**之前**就已经落库
+   * （活窗口的往返只有 ~20ms）。旧写法先 `sleep(100)` 再读 ⇒ 活窗口也要白等
+   * 整整一个轮询步长。先读一次没有代价（一次 `storage.get`），
+   * 命中就立刻返回。
+   */
+  const immediate = await readLoginPong();
+  if (immediate !== null && immediate.at >= ping.at) {
+    await diag('ping/pong', `nonce=${ping.nonce} pongNonce=${immediate.nonce}（首读命中）`);
+    return true;
+  }
+
+  const deadline = Date.now() + LOGIN_PING_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await sleep(LOGIN_PING_POLL_MS);
+    const pong = await readLoginPong();
+    if (pong !== null && pong.at >= ping.at) {
+      await diag('ping/pong', `nonce=${ping.nonce} pongNonce=${pong.nonce}`);
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -187,18 +449,57 @@ function isIncognitoInstance(): boolean {
  *
  * ## ⚠️ 只在普通实例探测（这是本方案的安全闸）
  *
- * split 下**两个实例都会收到 `action.onClicked`**（`login-handshake.ts` 文件头）。
- * 如果无痕实例也去探测，它会读到自己写的心跳 → 返回 `already-open` →
- * **永远不创建窗口**。⇒ 首次点击就再也开不出扫码窗口，功能彻底坏掉。
+ * split 下**两个实例都会收到 `action.always` 之外的事件**（`login-handshake.ts`
+ * 文件头）。如果无痕实例也去探测，它会读到**自己的页面**应答的 pong →
+ * 返回 `already-open` → **永远不创建窗口**。⇒ 首次点击就再也开不出扫码窗口。
  *
- * 所以：**无痕实例跳过探测，照旧 `create()`**。
+ * 所以：**无痕实例跳过探测，照旧 `create()`**。这条闸**不许动**。
+ *
+ * ## 判据（2026-11-15，task-47 —— 本次修复的核心）
+ *
+ * ```
+ * 没有心跳记录            → 从没开过窗口，直接返回 null（不付 ping 的延迟）
+ * 有记录（新鲜或过期）    → 发 ping，等页面当场回 pong
+ *     有 pong             → 窗口确实还开着 → 返回心跳（调用方报 already-open）
+ *     没有 pong           → 页面不在了 → 清掉残留心跳 → 返回 null（调用方去建窗）
+ * ```
+ *
+ * ### 为什么"过期也照样 ping"（这一条很容易被"顺手优化"掉）
+ *
+ * 过期不代表窗口关了 —— 见 `LOGIN_HEARTBEAT_TTL_MS` 的注释：完全被遮住的窗口
+ * 会被节流到每分钟一次心跳，一个**活着的**窗口也可能留下 >90s 的旧记录。
+ * 若因为"过期"就直接建窗，用户会看到**两个二维码**。
+ *
+ * ### 为什么"有 pong 才判定活着"能覆盖旧 bug
+ *
+ * 旧 bug 的失败形态是「页面没了，但心跳还在」。pong 只能由**活着的页面**写出
+ * （`onChanged` 是浏览器投递的事件，不靠定时器）⇒ 该形态下必然没有 pong
+ * ⇒ 必然去建窗。**关窗后立即点击可以开出新窗口**，不再受 90 秒窗口期约束。
+ *
+ * ### 它不依赖"心跳会周期刷新"（这条前提**至今未证实**）
+ *
+ * 本函数只把心跳当**两个状态的线索**：`有记录` / `没记录`。
+ * 有记录就多问一句 pong，**不比较 age 大小、也不要求序号推进**。
+ * 那条记录本身来自**页面挂载时的第一次写**（真机证据：两次开窗 = 两条记录），
+ * 与 `setInterval` 有没有按时触发无关 ⇒ 即使周期刷新完全不工作，
+ * 只要窗口还开着 pong 就会来，判定仍然正确。
+ * 详见文件头那段 LevelDB 采样与随之而来的三条硬约束。
+ *
+ * ### 盖不住的情况（如实记录，不要当成已解决）
+ *
+ * 1. **无痕分区整个不可用**（权限被关）→ 走上面的权限闸，与本函数无关。
+ * 2. **`inIncognitoContext` 读数不可靠**：它是本方案的前提假设（见其注释）。
+ * 3. **pong 键被别的上下文写脏**：读方只认 `pong.at >= ping.at`，
+ *    伪造需要同机同时刻写入 —— 不构成实际风险。
+ * 4. **两个窗口同时开着**时 pong 只能证明"有一个活着"，无法区分是谁。
+ *    但那种局面本身是上游产生的，本函数不负责收敛。
  *
  * ## 保守兜底
  *
  * `isIncognitoInstance()` 判错时最坏是"多开一个窗口"或"少开一次"，
- * **不会**卡死建不出窗口 —— 因为普通实例探测不到心跳时照样往下走 `create()`。
+ * **不会**卡死建不出窗口 —— 因为探测返回 `null` 时照样往下走 `create()`。
  *
- * @returns 探测到活着的窗口时返回心跳，否则 `null`
+ * @returns 探测到**当场应答**的窗口时返回心跳，否则 `null`
  */
 export async function probeExistingLoginWindow(): Promise<LoginHeartbeat | null> {
   const incognito = isIncognitoInstance();
@@ -209,13 +510,46 @@ export async function probeExistingLoginWindow(): Promise<LoginHeartbeat | null>
     return null;
   }
 
-  const beat = await readLoginHeartbeat();
+  /**
+   * 两次读：先读"TTL 内的"（绝大多数情况一次命中，省一次 `storage.get`），
+   * 读不到再读"不套 TTL 的原始记录"。
+   *
+   * ⚠️ **为什么不能只用前者**：过期不代表窗口关了（可能只是被节流）。
+   * 只用前者 ⇒ 对**活着的**窗口建第二个窗 ⇒ 两个二维码。
+   */
+  const fresh = await readLoginHeartbeat();
+  const beat = fresh ?? (await readLoginHeartbeatRecord());
+  if (beat === null) {
+    await diag('probe/heartbeat', 'none（没有心跳记录 = 从没开过扫码窗口）');
+    return null;
+  }
+
+  const age = Date.now() - beat.at;
   await diag(
     'probe/heartbeat',
-    beat === null
-      ? 'none（没有活着的扫码窗口心跳）'
-      : `alive age=${Date.now() - beat.at}ms instance=${beat.instance}`,
+    `record age=${age}ms withinTtl=${String(fresh !== null)} instance=${beat.instance}`,
   );
+
+  /**
+   * ⚠️ **这一句就是本次修复的判据**：把"时间戳还新"换成"页面当场应答"。
+   *
+   * 反向验证：把它改成 `return beat;`（即退回旧的"读时间戳就算活着"）⇒
+   * `tests/unit/background/login-heartbeat-probe.test.ts` 里
+   * 「★★★ 冻结的旧心跳 + 页面已关 ⇒ 必须建新窗」与
+   * 「★★★ 硬杀后的残留心跳 ⇒ 必须建新窗」两条变红。
+   */
+  const alive = await requestLoginWindowPong();
+  if (!alive) {
+    await diag('probe/no-pong', `age=${age}ms → 页面没应答，判窗口已关，清掉残留心跳`);
+    /**
+     * 顺手清掉残留记录：下一次点击就不必再等 600ms 的 ping 超时。
+     * 清不掉也无所谓 —— 判据是 pong，不是这条记录在不在。
+     */
+    await clearLoginHeartbeat();
+    return null;
+  }
+
+  await diag('probe/alive', `age=${age}ms → 窗口应答了，判已开着`);
   return beat;
 }
 
@@ -232,7 +566,58 @@ export async function probeExistingLoginWindow(): Promise<LoginHeartbeat | null>
  *
  * 这一层的职责就到这里：把"调用结果"如实报上去，由调用方决定怎么解释。
  */
-export async function openLoginWindow(): Promise<OpenLoginResult> {
+export function openLoginWindow(): Promise<OpenLoginResult> {
+  /**
+   * ## in-flight 去重：**同一时刻**的并发点击只跑一次（2026-11-15，P0）
+   *
+   * ### 为什么必须有
+   *
+   * `entrypoints/background.ts` 的 `login/open` 分支是
+   * `handleLoginOpen().then(sendResponse); return true;` —— **完全并发、不排队**。
+   * 而 `openLoginWindow()` 内部没有任何去重：`currentWindowId` 在 split 下
+   * 恒为 `null`（`create()` 拿不到句柄），探测也要先花 ~120ms。
+   *
+   * ⇒ QA 用真实 `openLoginWindow()` 探针实测（两次**并发**调用）：
+   *
+   * | 场景 | `windows.create` 次数 |
+   * | --- | --- |
+   * | 窗口开着（页面应答） | 0 ✅ |
+   * | 关窗后残留心跳（页面不在） | **2** ❌ |
+   * | 从没开过窗 | **2** ❌ |
+   *
+   * **这不是理论风险**：这个用户报 bug 时的原始行为就是连点
+   * （真机日志：13 秒内 14 次点击）。旧 build 那些点击被冻结心跳吞掉
+   * （所以"没反应"）；新 build 不再吞，同样的连点就会**变成连开窗口**。
+   * 我们对外承诺的是"不会多开第二个窗口"，这条不补承诺就是假的。
+   *
+   * ### 为什么是"复用同一个 Promise"而不是"N 秒内不许再建"
+   *
+   * 时间窗口会把**"关窗后立刻重试"**一起拦掉 —— 那正是验收标准 1 要的行为，
+   * 也是旧 bug 的形态。in-flight 只在**同时进行中**去重：第一个调用一返回
+   * （无论成功失败）就释放，下一个点击立刻可进。
+   *
+   * ⚠️ **`finally` 里必须清空**：`create()` 抛错时若不清，一次失败会把功能
+   * **永久卡死**（之后每次点击都拿到那个已 reject 的 Promise）。
+   * 反向验证 RV10：删掉 `finally` 里的 `inflight = null` ⇒
+   * 「create 抛错之后再点一次仍然能建窗」变红。
+   */
+  if (inflight !== null) {
+    void diag('login/open/inflight', '并发点击 → 复用正在进行的那个 Promise');
+    return inflight;
+  }
+  inflight = openLoginWindowOnce().finally(() => {
+    inflight = null;
+  });
+  return inflight;
+}
+
+/**
+ * 真正的建窗流程（**只由 `openLoginWindow()` 调用一次**）。
+ *
+ * 拆出来是为了让 in-flight 去重那一层薄到没有分支 —— 它只做"复用 / 释放"，
+ * 不参与任何判定。
+ */
+async function openLoginWindowOnce(): Promise<OpenLoginResult> {
   if (currentWindowId !== null) {
     try {
       await chrome.windows.update(currentWindowId, { focused: true });
@@ -289,13 +674,18 @@ export async function openLoginWindow(): Promise<OpenLoginResult> {
    *
    * 放在 `currentWindowId` 检查**之后**、`create()` **之前**：
    * - 在这个实例里自己建过窗（拿到了 id）→ 上面的分支已经处理了，这里不必再探
-   * - 走不到上面的分支（split 常态）→ 只能靠心跳判断"另一个分区里是不是还开着"
+   * - 走不到上面的分支（split 常态）→ 只能靠跨分区的**存活应答**判断
+   *   "另一个分区里是不是还开着"
    *
    * 探测到就**不开新窗**，直接报 `already-open` —— 这正是「第二次点没反应」的修复。
+   *
+   * ⚠️ 2026-11-15（task-47）：`beat` 现在**只可能**来自"页面当场应答了 ping"，
+   * 不再是"存储里有条 90 秒内的记录"。所以 `already-open` 有了实证含义，
+   * 也所以**关窗后立刻点击会走到下面的 `create()`**。
    */
   const beat = await probeExistingLoginWindow();
   if (beat !== null) {
-    await diag('probe/already-open', `age=${Date.now() - beat.at}ms`);
+    await diag('probe/already-open', `age=${Date.now() - beat.at}ms（页面已应答）`);
     return { ok: true, reason: 'already-open' };
   }
 
@@ -430,6 +820,14 @@ export async function openLoginWindow(): Promise<OpenLoginResult> {
    * > （`poc/probe/heartbeat-check/verify-heartbeat-key.cjs`，带三个对照组）。
    * > 不是跨分区读不到，是扫码窗口里写心跳的那个 `useEffect` 没跑到。
    * > ⇒ 本条的「第二次点击靠心跳判已开」**今天并未生效**，别再假设它在工作。
+   *
+   * > 📌 2026-11-15 task-47 补上了「跨分区可观测」的前半段：现在有
+   * > `LOGIN_PING_KEY` / `LOGIN_PONG_KEY` 一对键，扫码窗口会对探测**当场应答**
+   * > （`requestLoginWindowPong()`）。**但它仍然没有改变本条判定** ——
+   * > 第一次点击时没有任何窗口可以应答，所以仍然走到这里、仍然报 `assumed`。
+   * > pong 解决的只有一件事：**"窗口还在不在"终于有了不受节流影响的证据**，
+   * > 于是"关窗后 90 秒内点不出来"那条 bug 被关掉。
+   * > 「`create()` 到底成没成」依然未知，`assumed` 的口径一个字都没变。
    */
   await diag('create 返回 undefined 且窗口数未变，交给握手判定');
 
@@ -438,8 +836,11 @@ export async function openLoginWindow(): Promise<OpenLoginResult> {
 
 /** 登录成功后关闭窗口，让 cookie 随分区销毁 */
 export async function closeLoginWindow(): Promise<void> {
-  // 心跳先清：即使本实例拿不到窗口 id（split 常态），也要让另一个分区
-  // 尽快知道"窗口没了"，而不是等 90 秒 TTL 自然过期。
+  // 心跳先清：即使本实例拿不到窗口 id（split 常态），也让下一次点击
+  // **不必先等 600ms 的 ping 超时**（`probeExistingLoginWindow()` 见无记录就立刻建窗）。
+  //
+  // ⚠️ 它**不是**正确性的依据：页面 `/login-window.html` 已经被 `close()` 掉时，
+  // 清不清得掉心跳都不影响判定 —— 裁决靠 pong，页面没了就没人应答。
   await clearLoginHeartbeat();
   if (currentWindowId === null) return;
   await chrome.windows.remove(currentWindowId).catch(() => {});

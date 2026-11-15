@@ -135,9 +135,79 @@ describe('★★★ 扫码窗口必须周期写心跳（读取端的前提）', 
     expect(tail).toContain('clearInterval');
   });
 
-  it('★★ 卸载时必须 `clearLoginHeartbeat()`，让关窗立即生效而不是等 TTL', () => {
+  it('★★ 卸载时必须 `clearLoginHeartbeat()`', () => {
     const effect = heartbeatEffect();
     expect(effect).toContain('clearLoginHeartbeat');
+  });
+
+  /**
+   * ## ⚠️ 上面那条（以及本来这条）**证明不了"关窗会清心跳"**
+   *
+   * 2026-11-15（task-47）实测的失败形态恰恰是：**"卸载时清心跳"这句话是真的
+   * 代码、却永远不执行** —— 用户关掉浏览器窗口时文档被直接销毁，
+   * React 根本不会卸载组件 ⇒ `useEffect` cleanup 不跑 ⇒ 心跳冻结 ⇒
+   * 90 秒内所有点击都报 `already-open` 而屏幕上没有窗口。
+   *
+   * 所以「源码里有这么一行」是**结构性断言，不是行为断言**。行为在哪守：
+   * - **"页面不在 ⇒ 必须建新窗"** → `login-heartbeat-probe.test.ts` 的
+   *   「★★★ 冻结的心跳不许再当闸门」那一组（跑真实 `openLoginWindow()`）。
+   * - **"页面在 ⇒ 必须应答"** → `login-window-pong.test.ts`。
+   *
+   * 下面这一组只守一件更弱的事：**兜底事件还被挂着**。删掉它们不会让
+   * 行为测试变红（pong 仍然兜得住），但会让下一次点击多等一次 600ms 超时，
+   * 且存储里留下垃圾 —— 所以值得钉住，但**别把它当成安全感的来源**。
+   */
+  it('★★ 清理必须挂在文档销毁事件上（`pagehide` + `beforeunload`），不能只靠 React cleanup', () => {
+    /**
+     * 🔁 反向验证：删掉这两个 `addEventListener` ⇒ 本条变红。
+     *
+     * 判据是"两个事件都在**心跳那个 effect** 里"—— 挂到别处（比如另一个
+     * effect）会因为拿不到 `timer` 而无法 `clearInterval`，定时器在文档销毁前
+     * 还会继续写心跳。
+     */
+    const effect = heartbeatEffect();
+    expect(effect, '没有 pagehide —— 关窗时心跳不会被清').toContain("'pagehide'");
+    expect(effect, '没有 beforeunload —— 旧内核下关窗不清心跳').toContain("'beforeunload'");
+    // 两个都必须 `addEventListener` 挂上（只写字符串不算）
+    expect(effect).toContain('addEventListener');
+    // 关闭时必须先停定时器，否则停不下来
+    expect(effect).toContain('clearInterval');
+  });
+});
+
+/**
+ * ## 扫码窗口必须应答存活探测（task-47）
+ *
+ * 普通实例的判据是"页面当场回 pong"。**页面侧不实现这个监听 = pong 永远是空**
+ * ⇒ 探测永远判"窗口不在" ⇒ 每次点击都建一个新窗口（用户看到一堆二维码）。
+ *
+ * ⚠️ 这同样是**结构性断言**（"监听被注册了"），行为侧由
+ * `login-window-pong.test.ts` 与 `login-heartbeat-probe.test.ts` 守。
+ * 但它值得单列：`main.tsx` 在 node 环境里加载不了（顶层 `render()`），
+ * 删掉这个 effect **不会让任何行为测试变红**。
+ */
+describe('★★★ 扫码窗口必须应答 ping（写入端的另一半）', () => {
+  it('★★★ 必须监听 `chrome.storage.onChanged` 并写 pong', () => {
+    expect(SRC, '没有监听 storage.onChanged —— 页面永远不会应答存活探测').toContain(
+      'chrome.storage.onChanged.addListener',
+    );
+    expect(SRC, '没有写 pong —— 探测永远判"窗口不在"，每次点击都会多开一个窗口').toContain(
+      'writeLoginPong',
+    );
+  });
+
+  it('★★★ 必须用 `parseLoginPing` 过滤脏载荷（不能把任意值直接当 nonce 用）', () => {
+    // 脏数据下若直接 `writeLoginPong(value.nonce)`，会写出一条伪造的 pong
+    // —— 而 pong 恰恰是"窗口还活着"的**唯一**证据。
+    expect(SRC).toContain('parseLoginPing');
+  });
+
+  it('★★★ 监听必须挂在 `LOGIN_PING_KEY` 上（不许硬编码键名，改键会静默失联）', () => {
+    expect(SRC).toContain('LOGIN_PING_KEY');
+  });
+
+  it('★★ 监听必须能摘掉（否则热更新/重载后叠出多个 listener）', () => {
+    expect(SRC).toContain('removeListener');
   });
 });
 
@@ -149,11 +219,32 @@ describe('★★ 探测链路接进了 openLoginWindow（不是只定义了函�
     ),
   );
 
-  it('★★ `openLoginWindow` 里必须调用 `probeExistingLoginWindow()`', () => {
-    const start = LOGIN_WINDOW_SRC.indexOf('export async function openLoginWindow()');
-    expect(start, '找不到 openLoginWindow').toBeGreaterThan(-1);
+  it('★★ 判定体（`openLoginWindowOnce`）里必须调用 `probeExistingLoginWindow()`', () => {
+    /**
+     * ⚠️ 2026-11-15：判定体从 `openLoginWindow()` 挪到了 `openLoginWindowOnce()`
+     * （外层 `openLoginWindow()` 现在只做 in-flight 去重，见 P0 并发修复）。
+     * 切外层会把这条断言变成空壳 —— 所以锚点跟到判定体。
+     */
+    const start = LOGIN_WINDOW_SRC.indexOf('async function openLoginWindowOnce');
+    expect(start, '找不到 openLoginWindowOnce（判定体）').toBeGreaterThan(-1);
     const body = LOGIN_WINDOW_SRC.slice(start);
     expect(body).toContain('await probeExistingLoginWindow()');
+  });
+
+  it('★★ 导出的 `openLoginWindow` 必须**委派**给判定体（不许留第二份实现）', () => {
+    /**
+     * in-flight 去重那一层是薄的：只做"复用 / 释放"，不参与任何判定。
+     * 若有人把建窗逻辑复制回外层，就会绕过去重 ⇒ 并发点击又开两个窗口。
+     */
+    const wrapperStart = LOGIN_WINDOW_SRC.indexOf('export function openLoginWindow');
+    const onceStart = LOGIN_WINDOW_SRC.indexOf('async function openLoginWindowOnce');
+    expect(wrapperStart, '找不到导出的 openLoginWindow').toBeGreaterThan(-1);
+    expect(onceStart, '找不到 openLoginWindowOnce').toBeGreaterThan(wrapperStart);
+    const wrapper = LOGIN_WINDOW_SRC.slice(wrapperStart, onceStart);
+    expect(wrapper, '外层没有委派给判定体').toContain('openLoginWindowOnce()');
+    expect(wrapper, '外层不许自己调 windows.create（会绕开 in-flight 去重）').not.toContain(
+      'windows.create',
+    );
   });
 
   it('★★ 探测到心跳必须返回 `already-open`，且**在 create 之前**', () => {

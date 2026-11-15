@@ -165,8 +165,13 @@ describe('★★★ 源码级：`allowed` 只许用于记录 + 一个提前返�
    */
   it('★★ 剥注释后，`allowed` 的出现点只许是声明 / diag / 那一个提前返回', () => {
     const src = readFileSync(join(process.cwd(), 'src/background/login-window.ts'), 'utf8');
-    const start = src.indexOf('export async function openLoginWindow');
-    expect(start, '找不到 openLoginWindow').toBeGreaterThan(-1);
+    /**
+     * ⚠️ 2026-11-15：判定体从 `openLoginWindow()` 挪到了
+     * `openLoginWindowOnce()`（外层只做 in-flight 去重，见 P0 并发修复）。
+     * 本条守的是**判定逻辑**，所以切判定体那一层 —— 切外层会把断言变成空壳。
+     */
+    const start = src.indexOf('async function openLoginWindowOnce');
+    expect(start, '找不到 openLoginWindowOnce（判定体）').toBeGreaterThan(-1);
 
     /** 从函数起点按花括号配平切出函数体 */
     const open = src.indexOf('{', start);

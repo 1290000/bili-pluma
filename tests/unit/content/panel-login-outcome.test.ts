@@ -18,7 +18,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { describeLoginOutcome } from '../../../src/content/panel/login-outcome';
+import { ASSUMED_TEXT, describeLoginOutcome } from '../../../src/content/panel/login-outcome';
 
 describe('★★ login/open 应答 → 用户提示', () => {
   it('★★ opened:true → 成功提示，告诉用户去扫码', () => {
@@ -306,23 +306,33 @@ describe('★★★ `assumed` 不许断言「窗口已打开」（task-24）', (
     expect(r.text).toContain('没看到');
 
     /**
-     * ## ⚠️ 口径反转了（2026-11-15，task-44 缺陷 1）—— 请勿改回去
+     * ## ✅ 终裁（2026-11-15，task-47 收尾）：`assumed` 文案**不许**含「再点一次」
      *
-     * 这里原来断言 **`toContain('再点一次')`**（task-24 立的）。
+     * ### 这条断言被推翻过两次，完整历史如下（改动前必须读完）
      *
-     * task-44 真机推翻了它：Lead 授权用户实点两次，`EnumWindows` 数到
-     * **两个** 420×600 `login-window.html - [InPrivate]` 窗口叠在一起
-     * （`windowsAfter` 4 → 6）。用户是**照着我们这句话**去点第二次的。
+     * | 时间 | 这条断言 | 依据 |
+     * | --- | --- | --- |
+     * | task-24 | `toContain('再点一次')` | 以为窗口可能被浏览器挡住 |
+     * | task-44 | `not.toContain('再点一次')` | 真机：用户照做 ⇒ `windowsAfter` 4→6，两个二维码叠在一起 |
+     * | task-47 中途 | 短暂改回 `toContain` | **错的**：那条真机日志走的是 `already-open` 路径 |
+     * | **task-47 终裁** | **`not.toContain`（本条）** | QA 探针实测：无心跳时两次**串行**点击 ⇒ `create` **2** 次 |
      *
-     * ⇒ 「再点一次」是有副作用的指令（每点一次多开一个窗口），
-     * 而「可能是被浏览器挡住了」也是假的（窗口真的开出来了，只是我们拿不到句柄）。
+     * ### 为什么中途那次反转是错的（QA 指出，Lead 采纳）
      *
-     * 现在这一组改成三条断言：**不许引导重复点击** + **必须给零副作用的定位动作**。
-     * 判定原文见 `src/content/panel/login-outcome.ts` 的 `describeSuccess()` 注释。
+     * `already-open` = "已证明有一个活页面刚应答过"。那个状态下重复点击本来
+     * 就安全（探针：两次并发 ⇒ `create` **0** 次）—— 但那句话**根本不需要**
+     * 在那里说，该说的是「它在，去任务栏找」（`ALREADY_OPEN_TEXT`）。
      *
-     * 🔁 反向验证：把文案改回「…请再点一次扫码登录」→ 本条必红。
+     * 而 `assumed` = "`create()` 没抛错，但**一条证据都没有**"。
+     * 在这个状态下重试就是多开窗口 ⇒ 那句话把用户引向副作用。
+     *
+     * 🔴 **两个状态不可外推**。谁再想把这句话加回来，必须先给出
+     * 「`assumed` 状态下重试安全」的**实测**证据。
+     *
+     * 🔁 反向验证：把「再点一次」加回 `ASSUMED_TEXT` ⇒ 本条变红。
      */
-    expect(r.text, '「再点一次」会让用户多开一个窗口（真机实测）').not.toContain('再点一次');
+    expect(r.text, '「再点一次」在 assumed 下会把用户引向多开窗口').not.toContain('再点一次');
+    expect(r.text, '定位动作必须保留').toMatch(/任务栏|Alt\+Tab/);
   });
 
   it('★★ `assumed` 与「确定打开」（无 reason）必须是**不同**的文案', () => {
@@ -391,5 +401,183 @@ describe('★★★ `shouldPoll` 与 `ok` 解耦（task-25）', () => {
     expect(alreadyOpen.shouldPoll).toBe(false);
     expect(assumed.shouldPoll).toBe(true);
     expect(sure.shouldPoll).toBe(true);
+  });
+});
+
+/**
+ * ## ★★★ `already-open` 的文案不许说谎（2026-11-15，task-47）
+ *
+ * ### 用户读到的假话
+ *
+ * 旧文案：「扫码登录窗口已经开着了 —— **它就是上面那个窗口**，请直接在那里操作」。
+ *
+ * 而当时那条分支的判据只是"`chrome.storage.local` 里有一条 90 秒内的心跳"。
+ * 心跳的清理写在页面的 React cleanup 里，**关窗时文档被直接销毁、cleanup 不跑**
+ * ⇒ 一条冻结的旧心跳把"没有窗口"说成"窗口已开着" ⇒ 用户读到"就是上面那个窗口"，
+ * 屏幕上什么都没有 ⇒ 这就是他报的「点了没反应」。
+ * 真机日志：同一实例连续 14 次 `already-open`，屏幕上 **0** 个扫码窗。
+ *
+ * ### 两件事一起改
+ *
+ * 1. **判据**：`probeExistingLoginWindow()` 现在要求页面**当场应答 ping**
+ *    （`requestLoginWindowPong()`）—— 见 `login-heartbeat-probe.test.ts`。
+ * 2. **文案**：即使证据是真的，也**不许**只断言"它就在上面" ——
+ *    跨分区拿不到窗口 id，`windows.update()` 聚焦不了，它可能压在其他窗口后面、
+ *    在别的虚拟桌面、或已最小化。用户需要的是"它在 + 去哪儿找"。
+ */
+describe('★★★ `already-open` 文案可操作、不断言看不见的东西（task-47）', () => {
+  const text = describeLoginOutcome({
+    type: 'login/open:ok',
+    opened: true,
+    reason: 'already-open',
+  }).text;
+
+  it('★★★ 必须给出**零副作用**的定位动作（任务栏 / Alt+Tab）', () => {
+    /**
+     * 🔁 反向验证：把文案改回「它就是上面那个窗口，请直接在那里操作」⇒ 本条变红。
+     *
+     * 为什么必须是"定位"动作而不是"再点一次"：重复点击会让 background 再
+     * `create()` 一个窗口（task-44 真机实测：两个二维码叠在一起）。
+     */
+    expect(text, '没告诉用户去哪里找窗口').toMatch(/任务栏|Alt\+Tab/);
+  });
+
+  it('★★★ 不许再说「它就是上面那个窗口」（跨分区聚焦做不到，这句话是假的）', () => {
+    /**
+     * `chrome.windows.update()` 需要窗口 id，而 split 模式下普通实例
+     * **永远拿不到**无痕窗口的 id（`create()` 返回 `undefined`）。
+     * 所以"它就在上面"既不成立，也会让用户一直盯着上面等。
+     */
+    expect(text, '又断言了窗口的位置').not.toContain('就是上面');
+    expect(text, '又断言了窗口的位置').not.toContain('直接在那里操作');
+  });
+
+  it('★★★ 不许引导重复点击（重复点击 = 多一个二维码窗口）', () => {
+    expect(text).not.toContain('再点一次');
+    expect(text).not.toContain('重试');
+  });
+
+  it('★★ 长度 ≤ 60 字（面板很窄，超了会折行到不可读）', () => {
+    expect(text.length).toBeLessThanOrEqual(60);
+  });
+
+  it('★★ 与 `assumed` 的文案必须不同（一个是"它在"，一个是"我们不知道"）', () => {
+    const assumed = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'assumed',
+    }).text;
+    expect(text).not.toBe(assumed);
+  });
+});
+
+/**
+ * ## ★★★ `assumed` 的**生产形状**必须走自己的分支（2026-11-15，task-47 —— P0）
+ *
+ * ### 修的是什么
+ *
+ * task-46 把 `assumed` 的口径改成 `opened: false`（"没确认 ≠ 已打开"），
+ * 但 `describeLoginOutcome()` 里 `res.opened !== true` 的通用失败分支排在前面 ⇒
+ * `assumed` 直接落进『登录窗口打不开，请重试』：
+ *
+ * - `describeSuccess()` 的 `assumed` 分支、`ASSUMED_TEXT` 全部**不可达**；
+ * - 而 split 模式下 `assumed` 是**每一次成功开窗**的形状（真机 4/4）⇒
+ *   **每次开窗成功，面板都在报错** ⇒ 用户看到红色"打不开，请重试"，
+ *   照做就多开一个窗口。
+ *
+ * ### 本组用**生产上真实出现的形状**（`opened:false` + `confirmed:false`）
+ *
+ * ⚠️ 上面那一组用的是 `opened:true`（task-46 之前的形状，生产上不再出现）。
+ * 那组继续保留是为了守住"文案形状"；**判据正确性必须用这一组**，
+ * 否则会造出"测的形状根本不存在"的假绿 —— 这次修的正是这种假绿背后的真 bug。
+ *
+ * 🔁 反向验证：把 `describeLoginOutcome()` 里新加的
+ * `if (res.reason === 'assumed') { … }` 整段删掉 ⇒ 本组 4 条同时变红。
+ */
+describe('★★★ `assumed` 生产形状（opened:false）：不许再被通用失败分支吃掉', () => {
+  const PRODUCTION_ASSUMED = {
+    type: 'login/open:ok' as const,
+    opened: false,
+    confirmed: false,
+    reason: 'assumed' as const,
+  };
+
+  it('★★★ 必须命中 `ASSUMED_TEXT`，而不是「登录窗口打不开，请重试」', () => {
+    const r = describeLoginOutcome(PRODUCTION_ASSUMED);
+    expect(r.text, 'assumed 又被通用失败文案吃掉了 —— 每次成功开窗都会报错').toBe(ASSUMED_TEXT);
+    expect(r.text).not.toContain('打不开');
+  });
+
+  it('★★★ `ok` 必须是 `true`（正常路径不许染成常驻红色）', () => {
+    /**
+     * `ok` 只决定**颜色与是否自动消失**。`assumed` 是正常路径
+     * （权限在、`create()` 没抛错、窗口很可能真开出来了）——
+     * 报红等于假警报，和"点了没反应"是同一类伤害。
+     */
+    const r = describeLoginOutcome(PRODUCTION_ASSUMED);
+    expect(r.ok, '把常态路径报成坏消息了').toBe(true);
+  });
+
+  it('★★★ `shouldPoll` 必须是 `true`（扫完码面板必须能更新）', () => {
+    /**
+     * 窗口很可能开着、用户很可能马上扫码。不轮询 = 扫完码面板一动不动
+     * ⇒ 又是一次「点了没反应」。
+     */
+    const r = describeLoginOutcome(PRODUCTION_ASSUMED);
+    expect(r.shouldPoll, '扫完码面板不会更新 —— 用户以为没生效').toBe(true);
+  });
+
+  it('★★★ 文案不得断言窗口已打开、也不得断言它的位置', () => {
+    /**
+     * `create()` 返回 `undefined` ⇒ 我们**无法确认**（task-24 的论据未被推翻）。
+     * 说「已打开」= 陈述一件不知道的事；说「就是上面那个窗口」= 指一个可能不存在的位置。
+     */
+    const r = describeLoginOutcome(PRODUCTION_ASSUMED);
+    for (const forbidden of ['已打开', '窗口已', '就是上面', '直接在那里操作']) {
+      expect(r.text, `又断言了「${forbidden}」`).not.toContain(forbidden);
+    }
+  });
+
+  it('★★★ 必须说清"为什么看不到"（无痕分区不可见，不是出错）', () => {
+    /**
+     * 不说清，用户只会以为按钮坏了 —— 而这正是他报「点了没反应」时的心理状态。
+     */
+    const r = describeLoginOutcome(PRODUCTION_ASSUMED);
+    expect(r.text, '没有解释为什么看不到窗口').toContain('看不见');
+  });
+});
+
+/**
+ * ## ★ 回归：新分支不许波及已有的失败分支
+ *
+ * `assumed` 分支插在 `opened !== true` 之前，是最容易误伤别人的位置
+ * （把判断写成"有 reason 就算 assumed"会让 `incognito-disabled` 也走好的分支）。
+ */
+describe('★ 回归：`assumed` 分支不许波及 `incognito-disabled` / `unknown`', () => {
+  it('★ `incognito-disabled` 仍然是失败：ok:false / shouldPoll:false / 说清去哪开', () => {
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: false,
+      confirmed: false,
+      reason: 'incognito-disabled',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.shouldPoll).toBe(false);
+    expect(r.text).toContain('InPrivate');
+    expect(r.text).toContain('扩展详情页');
+    expect(r.text, '被 assumed 的文案污染了').not.toBe(ASSUMED_TEXT);
+  });
+
+  it('★ `unknown` 仍然是失败：ok:false / shouldPoll:false / 笼统提示', () => {
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: false,
+      confirmed: false,
+      reason: 'unknown',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.shouldPoll).toBe(false);
+    expect(r.text).toContain('打不开');
+    expect(r.text, '被 assumed 的文案污染了').not.toBe(ASSUMED_TEXT);
   });
 });
