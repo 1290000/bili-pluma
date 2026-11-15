@@ -1,0 +1,37 @@
+task-14 二次验收 · 干净环境取证（verifier 独立执行）
+
+环境建立（严格按清单 §2）：
+  1. node poc/probe/reload-extension.mjs  -> 生效：true
+  2. bsk session start -> dgrx
+  3. bsk tab borrow + bsk reload（★ 关键：刷新页面让 content script 重新注入）
+  4. 等 12s 至页面就绪
+  5. 干净起点自检：桥 proxy/status 往返成功
+     {"bridge":"OK","proxy":{"enabled":false,"hasCredential":false,"ruleCount":0},"pageKind":"play"}
+
+诊断页读数（干净环境）：
+  InPrivate 权限        已允许        <- 可读
+  主账号昵称（页面读取）  {{主账号昵称}}      <- 可读
+  可见窗口数             1            <- 可读（上次是"读取失败（background 未返回这一项）"）
+  无痕窗口数             0            <- 可读
+  可见 cookie 分区       0            <- 可读（上次是"读取失败"）
+  取流账号凭据           未配置        <- 可读
+  播放代理总开关         已关闭
+  DNR 全局路径规则       0
+  DNR 标签页规则         0
+  manifest incognito    split        <- 可读（上次是"读取失败"）
+  代理路径白名单         r4 · 核对于 2026-10-29
+  诊断日志（最近 30 条）               <- ★ 上次是"最近 0 条"，现在 30 条
+
+关键判据：
+  - 全文 0 处 "读取失败"
+  - 0 处 "Extension context invalidated"
+  - 诊断日志从 0 条恢复为 30 条
+
+代码层复核：
+  src/platform/diagnostics/collect.ts  剥注释后与 HEAD IDENTICAL（290 非空代码行）
+  src/background/handlers/diag.handler.ts:356-380 逐项降级确实存在：
+    只有"四项全部 null"才回 :err；任一项拿到（含 false/空数组）就回 :ok
+
+=> 结论：**task-14「本卡不成立」判定成立，verifier 独立确认。**
+   上一轮我看到的"整片读取失败"确系 content script 孤儿态（我自己 reload 后未刷新所致），
+   不是产品缺陷。

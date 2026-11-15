@@ -26,9 +26,7 @@ GPL-3.0-only · Chrome 120+ / Edge · 当前 v1.1.0
 ## 它不做什么
 
 - ❌ 不绕过付费墙（会员番剧/电影仍需购买）· 不解锁地区限制 · 不伪造服务端权益
-  （上面说的"改写会员状态"只骗播放器界面，账号实际权益不变）
-- ❌ **不解锁你没有的权益**：4K / 1080P60 来自你登录的大会员账号，没有大会员就没有这些画质；
-  会员专享的番剧 / 国创 / 电影同理——**取流账号本身要有该内容的观看权**（没买的单片、地区限制的内容照样看不了）
+- ❌ **不解锁你没有的权益**：4K / 1080P60 来自你登录的大会员账号；会员专享的番剧 / 国创 / 电影同理——**取流账号本身要有该内容的观看权**
 - ✅ **番剧 / 国创 / 电影**（[ADR 0019](./docs/decisions/0019-pgc-async-playurl-injection.md) – [ADR 0023](./docs/decisions/0023-intercept-playview-durl-swap.md)）：
   主账号只能试看的集数会自动改由取流账号取流；免费集不接管——主账号本来就能看，接管只会把观看进度记到取流账号上
 - ❌ **不支持直播**——这是决定，不是遗漏
@@ -79,6 +77,7 @@ popup 里应显示「已接管」——这是生效的标志。
 - **clone 后先跑一次** `git config core.hooksPath .githooks`
   —— 提交时会自动检查敏感信息，见 [.githooks/README.md](./.githooks/README.md)
 - 改完代码跑 `node scripts/verify.mjs`（`--help` 看检查项）
+- 复核纪律（**任何 Harness 都适用**）：[docs/guides/review-discipline.md](./docs/guides/review-discipline.md)
 - 文档索引：[docs/README.md](./docs/README.md)　未决问题：[docs/03](./docs/03-open-questions.md) §0
 
 ## 致谢

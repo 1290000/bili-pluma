@@ -1,0 +1,540 @@
+@vom 1
+@view 1130x1081
+@layers 1 focus=L1
+L1 page
+  RootWebArea "“💗挑 战 B 站 画 质 上 限💗”_哔哩哔哩_bilibili"
+    @e1 link "首页"
+    @e2 link "番剧"
+    @e3 link "直播" [→ live.bilibili.com]
+    @e4 link "游戏中心" [→ game.bilibili.com]
+    @e5 link "会员购" [→ show.bilibili.com]
+    @e6 link "漫画" [→ manga.bilibili.com]
+    @e7 link "赛事"
+    @e8 link "下载客户端" [→ app.bilibili.com]
+    form
+      @e9 textbox "深空当铺" [empty] placeholder="深空当铺"
+    @e10 link [→ space.bilibili.com]
+      img
+    @e11 link "大会员" [ctx: teleport start teleport end] [→ account.bilibili.com]
+    @e12 link "2" [ctx: teleport start teleport end] [→ message.bilibili.com]
+    @e13 link "动态" [ctx: teleport start teleport end] [→ t.bilibili.com]
+    @e14 link "收藏" [ctx: teleport start teleport end] [→ space.bilibili.com]
+    @e15 link "历史"
+    @e16 link "创作中心" [→ member.bilibili.com]
+    @e17 link "投稿" [ctx: teleport start teleport end] [→ member.bilibili.com]
+    heading "“💗挑 战 B 站 画 质 上 限💗”"
+      StaticText "“💗挑 战 B 站 画 质 上 限💗”"
+    StaticText "69.3万"
+    StaticText "562"
+    StaticText "2024-03-03 20:20:00"
+    StaticText "未经作者授权，禁止转载"
+    comment "戴维多"
+      StaticText "戴维多"
+    comment "Nb"
+      StaticText "Nb"
+    comment "哟Lucy~"
+      StaticText "哟Lucy~"
+    comment "牛逼"
+      StaticText "牛逼"
+    comment "有点晕"
+      StaticText "有点晕"
+    comment "020202"
+      StaticText "020202"
+    comment "牛逼了"
+      StaticText "牛逼了"
+    comment "Lucy哟~"
+      StaticText "Lucy哟~"
+    comment "露西"
+      StaticText "露西"
+    comment "好看不火"
+      StaticText "好看不火"
+    comment "1000000k"
+      StaticText "1000000k"
+    comment "我刚刚是不是看见了小樱"
+      StaticText "我刚刚是不是看见了小樱"
+    comment "拉满了"
+      StaticText "拉满了"
+    @e18 button "播放/暂停"
+    StaticText "02:05"
+    StaticText "/"
+    StaticText "02:06"
+    group
+      @e19 button "清晰度"
+      @e20 button "倍速"
+      @e21 button "音量"
+      @e22 button "设置"
+      @e23 button "画中画"
+      @e24 button "宽屏"
+      @e25 button "网页全屏"
+      @e26 button "全屏"
+    group
+    @e27 button "打开《高能进度条》常驻" [ctx: 戴维多 Nb 哟Lucy~ 牛逼 有点晕 020202 牛逼了 Lucy哟~ 露西 好看不火 1000000k 我刚刚是不是看见了小樱 拉满了]
+    StaticText "1"
+    StaticText "人正在看"
+    @e28 checkbox [checked] ="on"
+    @e29 button "按类型过滤 滚动 固定 彩色 高级 弹幕随屏幕缩放 防挡字幕 智能防挡弹幕 弹幕观看屏蔽词 同步屏蔽列表 显示区域 25% 弹幕密度 正常 较多 重叠 不透明度 68% 弹幕字号 151% 弹幕速度 适中 高级设置 全新【硬核会员弹幕模式】 更多弹幕设置 硬核会员弹幕模式 弹幕速度同步播放倍数 弹幕字体 黑体 黑体 宋体 新宋体 仿宋 微软雅黑 微软雅黑 Light Noto Sans DemiLight Noto Sans Regular 粗体 描边类型 重墨 描边 45°"
+    @e30 button "发个友善的弹幕见证当下" [ctx: 戴维多 Nb 哟Lucy~ 牛逼 有点晕 020202 牛逼了 Lucy哟~ 露西 好看不火 1000000k 我刚刚是不是看见了小樱 拉满了 02:05 / 02:06]
+    @e31 textbox "发个友善的弹幕见证当下" [ctx: 戴维多 Nb 哟Lucy~ 牛逼 有点晕 020202 牛逼了 Lucy哟~ 露西 好看不火 1000000k 我刚刚是不是看见了小樱 拉满了 02:05 / 02:06] [empty] placeholder="发个友善的弹幕见证当下"
+    @e32 link "弹幕礼仪" [ctx: 戴维多 Nb 哟Lucy~ 牛逼 有点晕 020202 牛逼了 Lucy哟~ 露西 好看不火 1000000k 我刚刚是不是看见了小樱 拉满了 02:05 / 02:06]
+    @e33 button "发送" [ctx: 戴维多 Nb 哟Lucy~ 牛逼 有点晕 020202 牛逼了 Lucy哟~ 露西 好看不火 1000000k 我刚刚是不是看见了小樱 拉满了 02:05 / 02:06]
+    @e34 button "点赞（Q）"
+    @e35 button "投币（W）"
+    @e36 button "收藏（E）"
+    @e37 button "2181" [ctx: “💗挑 战 B 站 画 质 上 限💗” 69.3万 562 2024-03-03 20:20:00 未经作者授权，禁止转载]
+    @e38 button "稿件举报" [ctx: “💗挑 战 B 站 画 质 上 限💗” 69.3万 562 2024-03-03 20:20:00 未经作者授权，禁止转载]
+    @e39 button "记笔记" [ctx: “💗挑 战 B 站 画 质 上 限💗” 69.3万 562 2024-03-03 20:20:00 未经作者授权，禁止转载]
+    @e40 button "用手机看 稍后再看" [ctx: “💗挑 战 B 站 画 质 上 限💗” 69.3万 562 2024-03-03 20:20:00 未经作者授权，禁止转载]
+    group
+      @e41 link "@小小猫咪不爱吃鱼" [→ space.bilibili.com]
+      StaticText "自由自在，如同鸟儿翱翔在广阔的天空，没有束缚，只有纯然的自由！！！"
+      StaticText "特别感谢！！！"
+      StaticText "，的部分素材和衔接，希望大家能多多关注她，她的作品真的很好看，人更好！！！"
+      StaticText "音乐名：Catch My Breath 音乐人：Kelly Clarkson"
+      @e42 button "展开更多"
+      StaticText "展开更多"
+    @e43 button "发现《Catch My Breath》" [ctx: 2.6万 1.4万 2万 2181 稿件举报 记笔记]
+    @e44 link "动画短片群星计划" [ctx: 2.6万 1.4万 2万 2181 稿件举报 记笔记] [→ m.bilibili.com]
+    @e45 link "多素材" [→ search.bilibili.com]
+    @e46 link "新海诚" [→ search.bilibili.com]
+    @e47 link "4K" [→ search.bilibili.com]
+    StaticText "20万奖金激励，更有流量扶持！"
+    StaticText "本视频参加过"
+    StaticText "[ 动画短片群星计划 第十期 ]"
+    StaticText "活动，该活动已结束~"
+    @e48 button "20万奖金激励，更有流量扶持！"
+    heading "评论"
+      StaticText "评论"
+    StaticText "572"
+    group
+      @e49 button "最热"
+      @e50 button "最新"
+    StaticText "新的风暴已经出现，你的妙评何时再现"
+    @e51 textbox "新的风暴已经出现，你的妙评何时再现" [empty]
+    @e52 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e53 link "氧化铁的灵动漫境屋" [→ space.bilibili.com]
+    paragraph "up主做的不错，但有一说一，这视频有8K吗 （我记得手机有HDR 无8K，网页端有8K 无HDR）"
+      image "[吃瓜]"
+      StaticText "up主做的不错，但有一说一，这视频有8K吗"
+      StaticText "（我记得手机有HDR 无8K，网页端有8K 无HDR）"
+    StaticText "2024-03-03 22:34"
+    @e54 button "43"
+    @e55 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e56 button "回复" [ctx: 发现《Catch My Breath》]
+    StaticText "UP主觉得很赞"
+    @e57 link "User avatar" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e58 link "月子的微笑_Official" [→ space.bilibili.com]
+    paragraph "如果你的显示器不支持，有4k和8k也没法切换"
+      StaticText "如果你的显示器不支持，有4k和8k也没法切换"
+    StaticText "2024-03-04 03:13"
+    @e59 button "18"
+    @e60 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e61 button "回复" [ctx: 发现《Catch My Breath》]
+    @e62 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共12条回复"
+    StaticText "，"
+    @e63 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e64 link "樇_" [→ space.bilibili.com]
+    @e65 link "CD. 008546" [ctx: 发现《Catch My Breath》]
+    paragraph "杜比视界画质真的很顶"
+      StaticText "杜比视界画质真的很顶"
+    StaticText "2025-08-06 09:48"
+    @e66 button "19"
+    @e67 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e68 button "回复" [ctx: 发现《Catch My Breath》]
+    @e69 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共5条回复"
+    StaticText "，"
+    @e70 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e71 link "牧泠鸢" [→ space.bilibili.com]
+    @e72 link "@font-face { font-family: 'fans-num'; src: url('https://i0.hdslb.com/bfs/activity-plat/static/20250825/a370089fc7c797ab7a9d638df8c9cbf7/udPIK7Y9ix.ttf'); } /* 1400 ms */ @keyframes jiggle { 0% { transform: rotate(0); } 14.3% { transform: ro" [ctx: 发现《Catch My Breath》]
+    paragraph "用LG4koled显示器+杜比视界看眼快闪瞎了，不过"
+      image "[大会员专属身份表情包_超绝]"
+      StaticText "用LG4koled显示器+杜比视界看眼快闪瞎了，不过"
+    StaticText "2026-10-29 21:06"
+    @e73 button ":host { display: inline-flex; align-items: center; } ?lit$260563701$" [ctx: 发现《Catch My Breath》]
+    @e74 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e75 button "回复" [ctx: 发现《Catch My Breath》]
+    @e76 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共1条回复"
+    StaticText "，"
+    @e77 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e78 link "辉光彩" [→ space.bilibili.com]
+    paragraph "超好看的一张，开启最高画之后震惊到我。"
+      StaticText "超好看的一张，开启最高画之后震惊到我。"
+    StaticText "2026-08-17 13:02"
+    @e79 button "8" [ctx: 发现《Catch My Breath》]
+    @e80 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e81 button "回复" [ctx: 发现《Catch My Breath》]
+    @e82 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e83 link "黄炼_" [→ space.bilibili.com]
+    paragraph "bilibili的碼率控制是真的恨，這中規格的視頻，碼率才這麼點啊？？？"
+      StaticText "bilibili的碼率控制是真的恨，這中規格的視頻，碼率才這麼點啊？？？"
+    StaticText "2024-08-27 08:36"
+    @e84 button "8" [ctx: 发现《Catch My Breath》]
+    @e85 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e86 button "回复" [ctx: 发现《Catch My Breath》]
+    @e87 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e88 link "无聊的鱼零" [→ space.bilibili.com]
+    paragraph "原来4K上面还有一层画质"
+      StaticText "原来4K上面还有一层画质"
+    StaticText "2024-03-09 13:26"
+    @e89 button "36"
+    @e90 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e91 button "回复" [ctx: 发现《Catch My Breath》]
+    @e92 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共16条回复"
+    StaticText "，"
+    @e93 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e94 link "Nicholasthfour" [→ space.bilibili.com]
+    @e95 link "CD. 045740" [ctx: 发现《Catch My Breath》]
+    paragraph "想请问下这是千反田吗？好眼熟"
+      StaticText "想请问下这是千反田吗？好眼熟"
+    StaticText "2024-03-31 12:50"
+    @e96 button "5" [ctx: 发现《Catch My Breath》]
+    @e97 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e98 button "回复" [ctx: 发现《Catch My Breath》]
+    @e99 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共2条回复"
+    StaticText "，"
+    @e100 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e101 link "FIEBA_咪" [→ space.bilibili.com]
+    @e102 link "@font-face { font-family: 'fans-num'; src: url('https://i0.hdslb.com/bfs/activity-plat/static/20250825/a370089fc7c797ab7a9d638df8c9cbf7/udPIK7Y9ix.ttf'); } /* 1400 ms */ @keyframes jiggle { 0% { transform: rotate(0); } 14.3% { transform: ro" [ctx: 发现《Catch My Breath》]
+    paragraph "破iPhone"
+      image "[2233娘_耶]"
+      StaticText "破iPhone"
+    StaticText "2026-09-19 10:04"
+    @e103 button "2" [ctx: 发现《Catch My Breath》]
+    @e104 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e105 button "回复" [ctx: 发现《Catch My Breath》]
+    @e106 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e107 link "花花上班" [→ space.bilibili.com]
+    paragraph "很惊艳"
+      StaticText "很惊艳"
+    StaticText "2026-09-21 20:26"
+    @e108 button "1" [ctx: 发现《Catch My Breath》]
+    @e109 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e110 button "回复" [ctx: 发现《Catch My Breath》]
+    @e111 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e112 link "天海响-呆" [→ space.bilibili.com]
+    @e113 link "CD. 001043" [ctx: 发现《Catch My Breath》]
+    paragraph
+      image "[轻音少女第一季表情包_太好了]"
+    StaticText "2026-10-26 22:39"
+    @e114 button ":host { display: inline-flex; align-items: center; } ?lit$260563701$" [ctx: 发现《Catch My Breath》]
+    @e115 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e116 button "回复" [ctx: 发现《Catch My Breath》]
+    @e117 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e118 link "春盈秞" [→ space.bilibili.com]
+    @e119 link "CD. 000154" [ctx: 发现《Catch My Breath》]
+    paragraph
+      image "[孤独摇滚!剧场总集篇_感动]"
+    StaticText "2026-04-11 19:43"
+    @e120 button "5" [ctx: 发现《Catch My Breath》]
+    @e121 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e122 button "回复" [ctx: 发现《Catch My Breath》]
+    @e123 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e124 link "琳君大大" [→ space.bilibili.com]
+    @e125 link "NO. 006176" [ctx: 发现《Catch My Breath》]
+    paragraph "电脑怎么开杜比视界"
+      StaticText "电脑怎么开杜比视界"
+    StaticText "2025-11-21 20:07"
+    @e126 button "1" [ctx: 发现《Catch My Breath》]
+    @e127 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e128 button "回复" [ctx: 发现《Catch My Breath》]
+    @e129 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共1条回复"
+    StaticText "，"
+    @e130 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e131 link "正正小A" [→ space.bilibili.com]
+    @e132 link "NO. 002602" [ctx: 发现《Catch My Breath》]
+    paragraph "杜比视界才是真好看"
+      StaticText "杜比视界才是真好看"
+    StaticText "2026-03-21 09:48"
+    @e133 button "5" [ctx: 发现《Catch My Breath》]
+    @e134 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e135 button "回复" [ctx: 发现《Catch My Breath》]
+    @e136 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e137 link "-如你在远方-" [→ space.bilibili.com]
+    @e138 link "NO. 047816" [ctx: 发现《Catch My Breath》]
+    paragraph "求一张这个图的高清无水影的，太美了，孩子求求了"
+      image "[大哭]"
+      image "[大哭]"
+      image "[大哭]"
+      StaticText "求一张这个图的高清无水影的，太美了，孩子求求了"
+    StaticText "2024-06-28 15:22"
+    @e139 button "4"
+    @e140 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e141 button "回复" [ctx: 发现《Catch My Breath》]
+    @e142 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e143 link "爱吃大脐橙_" [→ space.bilibili.com]
+    paragraph "🉑"
+      StaticText "🉑"
+    StaticText "2026-03-05 20:37"
+    @e144 button "2" [ctx: 发现《Catch My Breath》]
+    @e145 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e146 button "回复" [ctx: 发现《Catch My Breath》]
+    @e147 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e148 link "情怀欲" [→ space.bilibili.com]
+    paragraph "这种视频以前真的会很火"
+      StaticText "这种视频以前真的会很火"
+    StaticText "2024-03-04 22:58"
+    @e149 button "611"
+    @e150 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e151 button "回复" [ctx: 发现《Catch My Breath》]
+    @e152 link "User avatar" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e153 link "拾七吖゛" [→ space.bilibili.com]
+    paragraph "直到看到你这评论我才想起来多少年没看过主页推荐amv mad这系列的视频了，可以说敬汉卿能火就是b站开始转型短视频，加上鬼畜区开始落寞，近年高质量鬼畜越来越少，总觉得少了什么味，而且番剧这删那删，这码那码的，要不是还有游戏实况up，早就想注销了"
+      image "[无语]"
+      StaticText "直到看到你这评论我才想起来多少年没看过主页推荐amv mad这系列的视频了，可以说敬汉卿能火就是b站开始转型短视频，加上鬼畜区开始落寞，近年高质量鬼畜越来越少，总觉得少了什么味，而且番剧这删那删，这码那码的，要不是还有游戏实况up，早就想注销了"
+    StaticText "2024-10-14 11:51"
+    @e154 button "38"
+    @e155 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e156 button "回复" [ctx: 发现《Catch My Breath》]
+    @e157 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共8条回复"
+    StaticText "，"
+    @e158 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e159 link "唯一正解or" [→ space.bilibili.com]
+    @e160 link "NO. 001462" [ctx: 发现《Catch My Breath》]
+    paragraph "你猜我为什么来"
+      image "[doge]"
+      StaticText "你猜我为什么来"
+    StaticText "2024-10-11 23:36"
+    @e161 button "14"
+    @e162 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e163 button "回复" [ctx: 发现《Catch My Breath》]
+    @e164 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共3条回复"
+    StaticText "，"
+    @e165 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e166 link "萧_燃" [→ space.bilibili.com]
+    paragraph "拉满啦"
+      image "[星星眼]"
+      StaticText "拉满啦"
+    StaticText "2024-03-13 20:20"
+    @e167 button "3"
+    @e168 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e169 button "回复" [ctx: 发现《Catch My Breath》]
+    @e170 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e171 link "懒体你只木薯牛" [→ space.bilibili.com]
+    paragraph "破红米"
+      image "[doge]"
+      StaticText "破红米"
+    StaticText "2026-09-08 22:23"
+    @e172 button ":host { display: inline-flex; align-items: center; } ?lit$260563701$" [ctx: 发现《Catch My Breath》]
+    @e173 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e174 button "回复" [ctx: 发现《Catch My Breath》]
+    @e175 link "?lit$260563701$ :host { display: inline-block; position: relative; width: var(--avatar-width); height: var(--avatar-height); } #canvas { width: var(--avatar-canvas-width); height: var(--avatar-canvas-height); position: absolute; left: 50%;" [ctx: 发现《Catch My Breath》] [→ space.bilibili.com]
+    @e176 link "雜魚雜魚捏" [→ space.bilibili.com]
+    @e177 link "@font-face { font-family: 'fans-num'; src: url('https://i0.hdslb.com/bfs/activity-plat/static/20250825/a370089fc7c797ab7a9d638df8c9cbf7/udPIK7Y9ix.ttf'); } /* 1400 ms */ @keyframes jiggle { 0% { transform: rotate(0); } 14.3% { transform: ro" [ctx: 发现《Catch My Breath》]
+    paragraph "本人小白，电视上的杜比视界和4K60帧那个好看?"
+      StaticText "本人小白，电视上的杜比视界和4K60帧那个好看?"
+    StaticText "2025-11-09 16:00"
+    @e178 button "1" [ctx: 发现《Catch My Breath》]
+    @e179 button ":host { display: inline-flex; align-items: center; }" [ctx: 发现《Catch My Breath》]
+    @e180 button "回复" [ctx: 发现《Catch My Breath》]
+    @e181 button "点击查看" [ctx: 发现《Catch My Breath》]
+    StaticText "共3条回复"
+    StaticText "，"
+    group
+      @e182 button "5人"
+      @e183 button "5人"
+      StaticText "创作团队"
+      StaticText "5人"
+    group
+      @e184 link "UP主 " [→ space.bilibili.com]
+      @e185 link "晨风游" [→ space.bilibili.com]
+      StaticText "UP主"
+    group
+      @e186 link "视频制作 " [→ space.bilibili.com]
+      @e187 link "小小猫咪不爱吃鱼" [→ space.bilibili.com]
+      StaticText "视频制作"
+    group
+      @e188 link "视频制作 " [→ space.bilibili.com]
+      @e189 link "嗷嗷叫的珈小鹿" [→ space.bilibili.com]
+      StaticText "视频制作"
+    group
+      @e190 link "视频制作 " [→ space.bilibili.com]
+      @e191 link "与日落共余生" [→ space.bilibili.com]
+      StaticText "视频制作"
+    group
+      @e192 link "视频制作 " [→ space.bilibili.com]
+      @e193 link "EMT爱蜜莉雅0" [→ space.bilibili.com]
+      StaticText "视频制作"
+    @e194 button "弹幕列表 弹幕列表 屏蔽设定 高级弹幕" [ctx: 创作团队 5人 UP主 视频制作 视频制作 视频制作 视频制作]
+    @e195 button "弹幕列表 弹幕列表 屏蔽设定 高级弹幕" [ctx: 创作团队 5人 UP主 视频制作 视频制作 视频制作 视频制作]
+    StaticText "接下来播放"
+    group
+      @e196 button "自动连播"
+      @e197 button "自动连播"
+    StaticText "01:55"
+    @e198 button "01:55"
+    group
+      @e199 link "“💗挑 战 B 站 画 质 上 限💗”"
+      @e200 link "嗷嗷叫的珈小鹿" [→ space.bilibili.com]
+      StaticText "212.1万"
+      StaticText "1959"
+    StaticText "16:59"
+    @e201 button "16:59"
+    group
+      @e202 link "【𝟖𝐊/𝐇𝐃𝐑/𝟏𝟐𝟎𝐅𝐏𝐒】凡人风景全合集，且看这二百多年的风景美学"
+      @e203 link "IM闪电" [→ space.bilibili.com]
+      StaticText "122.3万"
+      StaticText "2969"
+    StaticText "10:01"
+    @e204 button "10:01"
+    group
+      @e205 link "世界之美12K超高清"
+      @e206 link "4K8K画质映像馆" [→ space.bilibili.com]
+      StaticText "48.8万"
+      StaticText "457"
+    StaticText "30:09"
+    @e207 button "30:09"
+    group
+      @e208 link "📺 全球最强画质来了！ 👉 16K HDR + 120FPS + 杜比视界 + 杜比全景声 🌍 超清自然影像 + 冥想音乐 = 减压助眠神器 ⚡ 必测设"
+      @e209 link "4K休闲频道" [→ space.bilibili.com]
+      StaticText "19.3万"
+      StaticText "105"
+    StaticText "03:09"
+    @e210 button "03:09"
+    group
+      @e211 link "【8K·HDR】调亮屏幕，前方画面引起极度舒适！「生命的绽放」重制版"
+      @e212 link "8KRAW" [→ space.bilibili.com]
+      StaticText "125.5万"
+      StaticText "896"
+    StaticText "05:43"
+    @e213 button "05:43"
+    group
+      @e214 link "𝟒𝐊杜比视界/你的名字•スパークル(火花)-完整版MV"
+      @e215 link "进击のPX" [→ space.bilibili.com]
+      StaticText "4.3万"
+      StaticText "16"
+    StaticText "10:45"
+    @e216 button "10:45"
+    group
+      @e217 link "2000 尼特起步！非高端 HDR谨慎点开【4K HDR 真彩】"
+      @e218 link "像素进化论" [→ space.bilibili.com]
+      StaticText "42.7万"
+      StaticText "527"
+    StaticText "06:00"
+    @e219 button "06:00"
+    group
+      @e220 link "【𝟒𝐊 HDR】「环太平洋丨视觉盛宴」带上耳机体验极限视听【耗时60000秒近百G素材！打造极限视听盛宴】"
+      @e221 link "剪刀石投布" [→ space.bilibili.com]
+      StaticText "248.3万"
+      StaticText "3550"
+    @e222 link "B站最高画质！【杜比视界+杜比全景声】IMAX映前秀" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "02:00"
+    @e223 button "02:00"
+    group
+      @e224 link "B站最高画质！【杜比视界+杜比全景声】IMAX映前秀"
+      @e225 link "大家好我叫Lynn" [→ space.bilibili.com]
+      StaticText "74.9万"
+      StaticText "341"
+    @e226 link "鲜艳色彩的视觉盛宴｜OLED演示8K HDR超高清视频" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "05:21"
+    @e227 button "05:21"
+    group
+      @e228 link "鲜艳色彩的视觉盛宴｜OLED演示8K HDR超高清视频"
+      @e229 link "般若0999" [→ space.bilibili.com]
+      StaticText "24.5万"
+      StaticText "26"
+    @e230 link "【2026 终极 OLED 体验】4K HDR Dolby Vision｜屏幕画质测试演示" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "10:06"
+    @e231 button "10:06"
+    group
+      @e232 link "【2026 终极 OLED 体验】4K HDR Dolby Vision｜屏幕画质测试演示"
+      @e233 link "4K休闲频道" [→ space.bilibili.com]
+      StaticText "3.8万"
+      StaticText "2"
+    @e234 link "【4K杜比视界 全景声】你的名字十周年纪念「スパークル 火花」-「你的名字」AMV - RADWIMPS 「▸」FTSC沉浸式音频体验 Hi-Res" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "06:55"
+    @e235 button "06:55"
+    group
+      @e236 link "【4K杜比视界 全景声】你的名字十周年纪念「スパークル 火花」-「你的名字」AMV - RADWIMPS 「▸」FTSC沉浸式音频体验 Hi-Res"
+      @e237 link "FANTASONIC" [→ space.bilibili.com]
+      StaticText "13.8万"
+      StaticText "502"
+    @e238 link "🔥【16K超清震撼来袭】真实OLED演示 | 杜比视界 HDR 120FPS | 世界极致画质测试" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "20:50"
+    @e239 button "20:50"
+    group
+      @e240 link "🔥【16K超清震撼来袭】真实OLED演示 | 杜比视界 HDR 120FPS | 世界极致画质测试"
+      @e241 link "4K休闲频道" [→ space.bilibili.com]
+      StaticText "1.7万"
+      StaticText "6"
+    @e242 link "最具吸引力的 16K HDR 视频 超高清 120 fps 杜比视界 (4K 8K 电视)" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "12:31"
+    @e243 button "12:31"
+    group
+      @e244 link "最具吸引力的 16K HDR 视频 超高清 120 fps 杜比视界 (4K 8K 电视)"
+      @e245 link "4K极致_杜比视界" [→ space.bilibili.com]
+      StaticText "2.3万"
+      StaticText "8"
+    @e246 link "[Abao Vision]日本长野・森林溪畔列车 🚞 / 8K 60fps HDR / 放松钢琴音乐&纯环境音版" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "1:39:07"
+    @e247 button "1:39:07"
+    group
+      @e248 link "[Abao Vision]日本长野・森林溪畔列车 🚞 / 8K 60fps HDR / 放松钢琴音乐&纯环境音版"
+      @e249 link "阿鮑" [→ space.bilibili.com]
+      StaticText "52.1万"
+      StaticText "727"
+    @e250 link "《铃芽户缔》 4K 120fps 『杜比视界』" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "00:43"
+    @e251 button "00:43"
+    group
+      @e252 link "《铃芽户缔》 4K 120fps 『杜比视界』"
+      @e253 link "LEON的取景器" [→ space.bilibili.com]
+      StaticText "18.2万"
+      StaticText "37"
+    @e254 link "\"仅此134秒，带你感受动漫中那些无法超越的绝美画面！\"" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "02:15"
+    @e255 button "02:15"
+    group
+      @e256 link "\"仅此134秒，带你感受动漫中那些无法超越的绝美画面！\""
+      @e257 link "波Ki酱漫剪" [→ space.bilibili.com]
+      StaticText "8.2万"
+      StaticText "175"
+    @e258 link "点击体验杜比视界与杜比全景声呈现的风景盛宴，沉浸自然回响！" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "01:34"
+    @e259 button "01:34"
+    group
+      @e260 link "点击体验杜比视界与杜比全景声呈现的风景盛宴，沉浸自然回响！"
+      @e261 link "杜比Dolby" [→ space.bilibili.com]
+      StaticText "15.2万"
+      StaticText "104"
+    @e262 link "【杜比视界+杜比全景声】Messy (From F1® The Movie)-ROSÉ" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "03:05"
+    @e263 button "03:05"
+    group
+      @e264 link "【杜比视界+杜比全景声】Messy (From F1® The Movie)-ROSÉ"
+      @e265 link "华纳音乐国际" [→ space.bilibili.com]
+      StaticText "7.5万"
+      StaticText "87"
+    @e266 link "你的手机承受得住这画质吗" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "03:04"
+    @e267 button "03:04"
+    group
+      @e268 link "你的手机承受得住这画质吗"
+      @e269 link "天天换单推" [→ space.bilibili.com]
+      StaticText "78.8万"
+      StaticText "2203"
+    @e270 button "展开"
+    @e271 link "胜负已定在我方" [ctx: 弹幕列表 弹幕列表 屏蔽设定 高级弹幕 弹幕列表填充中... 查看历史弹幕 屏蔽广告 （选择后将优化广告展示） 不想看该内容 相似内容过多 广告质量差 我为什么会看到此广告 我要投诉]
+    StaticText "Pluma"
+    @e272 button "收起面板"
+    navigation
+      @e273 tab "画质"
+      @e274 tab "净化"
+      @e275 tab "显示"
+      @e276 tab "账号"
+    StaticText "主"
+    StaticText "{{主账号昵称}}"
+    StaticText "收藏 · 点赞 · 评论 · 历史"
+    StaticText "LV6"
+    paragraph "还没有配置取流账号"
+      StaticText "还没有配置取流账号"
+    @e277 button "扫码登录取流账号"
+    paragraph "主账号无需配置，自动沿用浏览器当前登录状态"
+      StaticText "主账号无需配置，自动沿用浏览器当前登录状态"
+@warning geometry incomplete: some page or frame content has no top-level coordinates.

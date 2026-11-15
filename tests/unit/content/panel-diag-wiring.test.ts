@@ -43,6 +43,16 @@ vi.mock('@platform/storage/diag-store', () => ({
   readDiag: (...a: unknown[]) => mocks.readDiag(...a),
   /** 第七轮新增的定位追踪通道 */
   readDiagTrace: async () => null,
+  /**
+   * 2026-11-12（task-26）：`logsMeta` 需要这两个。
+   *
+   * ⚠️ **mock 里少导出会让 `panel.ts` 的探针直接抛** →
+   * `logsMeta.ok = false` → 诊断页画"日志读取失败"而**不画 facts**。
+   * 这批用例当时就是这么红的（5 条），表现是 `expected '正在采集…' to contain
+   * 'InPrivate 权限'` —— 看现象像渲染坏了，实际是 mock 少了一个常量。
+   */
+  DIAG_LIMIT: 30,
+  instanceId: () => 'test01',
 }));
 
 vi.mock('@platform/storage/ui-prefs-store', () => ({
@@ -73,6 +83,8 @@ const ACTS = {
   toggleStreamingIdentity: () => undefined,
   feedAccountEnabled: false,
   toggleFeedAccount: () => undefined,
+  /** 本用例不关心重取时的身份来源（`undefined` = 还没读到，走既有判据） */
+  currentStreamingIdentity: () => undefined,
 } as const;
 
 function model(): PanelModel {
@@ -126,6 +138,12 @@ beforeEach(() => {
   mocks.readRawCleanOptions.mockResolvedValue({});
   vi.stubGlobal('chrome', {
     runtime: { getManifest: () => ({ version: '0.0.0-test' }), sendMessage: async () => null },
+    /**
+     * task-26 的存活探针（`probeLogsReadability()`）会调 `storage.local.get(null)`。
+     * 这里必须提供 —— 缺了它就抛 → `logsMeta.ok=false` → 诊断页转去画失败态，
+     * 这 11 条接线用例会集体变红（而且看起来像是渲染路径坏了）。
+     */
+    storage: { local: { get: async () => ({}) } },
   });
 });
 
@@ -405,5 +423,194 @@ describe('★ 角标开关接线', () => {
     await flush();
 
     expect(mocks.writeBadgeEnabled).toHaveBeenCalledWith(false);
+  });
+});
+
+/**
+ * ## ★★ 日志读失败必须**看得见**，而且不能长得像"没有日志"（2026-11-12，task-26）
+ *
+ * 用户在孤儿态（`Extension context invalidated`）下导出诊断，拿到 `"logs": []`
+ * —— 和"这台机器真的一条日志都没记"**完全一样**。界面上也是同一个问题：
+ * 旧实现只判 `logs.length === 0`，于是「读取失败」和「真的没有」都渲染成
+ * 「还没有日志。」。
+ *
+ * 这两条守的是**用户最容易看到的那一眼**：
+ * - 读失败 → 必须说"读取失败" + 给用户可执行的下一步（刷新页面）
+ * - 真没有 → 才可以显示"还没有日志。"
+ *
+ * ⚠️ 判据是 `logsMeta.ok`，**不是** `logs.length`。若实现改成用 length 推，
+ * 第一条必红（因为读失败时 logs 也是空数组）。
+ */
+describe('★★ 日志读失败 vs 真的没有日志（task-26）', () => {
+  /** 进诊断浮层并等数据回来 */
+  async function enterDiagAndFlush(c: ReturnType<typeof mountPanelBody>): Promise<void> {
+    [...c.root.querySelectorAll('.sub-entry')]
+      .find((e) => e.textContent?.includes('诊断'))
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await flush();
+  }
+
+  it('★★ 孤儿态：读不到时显示读取失败，不显示「还没有日志。」', async () => {
+    /**
+     * 模拟孤儿态：`chrome.storage` 整个不可用（真实表现就是抛这个固定串）。
+     */
+    vi.stubGlobal('chrome', {
+      runtime: { getManifest: () => ({ version: '0.0.0-test' }), sendMessage: async () => null },
+      storage: {
+        local: {
+          get: async () => {
+            throw new Error('Extension context invalidated.');
+          },
+        },
+      },
+    });
+    mocks.readDiag.mockResolvedValue([]);
+
+    const c = mountPanelBody(ACTS);
+    c.setModel(model());
+    c.showTab('display');
+    await enterDiagAndFlush(c);
+
+    const text = c.root.textContent ?? '';
+    expect(text, '读失败被渲染成了"还没有日志。"——这正是用户误判的成因').not.toContain(
+      '还没有日志',
+    );
+    expect(text).toContain('诊断日志读取失败');
+    // 必须给出用户能做的动作
+    expect(text).toContain('刷新');
+    // 自检事实仍然要画（失败的是日志通道，不是整页）
+    expect(text).toContain('InPrivate 权限');
+  });
+
+  it('★ 真的没有日志时才显示「还没有日志。」', async () => {
+    mocks.readDiag.mockResolvedValue([]);
+    const c = mountPanelBody(ACTS);
+    c.setModel(model());
+    c.showTab('display');
+    await enterDiagAndFlush(c);
+
+    const text = c.root.textContent ?? '';
+    expect(text).toContain('还没有日志');
+    expect(text).not.toContain('诊断日志读取失败');
+  });
+
+  it('★★ 导出 JSON 里 `logsMeta.ok` 是**真信号**，不是由 length 推出来的', async () => {
+    /**
+     * 这是本卡的核心理由：只加 `count` 修不了缺陷 —— 孤儿态下 count 同样是 0。
+     * 所以导出包里必须有一个**独立于 logs.length** 的 ok。
+     */
+    vi.stubGlobal('chrome', {
+      runtime: { getManifest: () => ({ version: '0.0.0-test' }), sendMessage: async () => null },
+      storage: {
+        local: {
+          get: async () => {
+            throw new Error('Extension context invalidated.');
+          },
+        },
+      },
+    });
+    mocks.readDiag.mockResolvedValue([]);
+
+    const c = mountPanelBody(ACTS);
+    c.setModel(model());
+    c.showTab('display');
+    await enterDiagAndFlush(c);
+
+    c.root.querySelector('.sub-entry')?.parentElement?.querySelector('.sub-entry');
+    /** 找「导出诊断 JSON」并点它（downloadJson 在 jsdom 里会走 Blob/URL） */
+    let exported: string | null = null;
+    const origCreate = URL.createObjectURL;
+    /**
+     * ⚠️ `revokeObjectURL` 也必须 stub —— jsdom 没有它，而 `downloadJson()`
+     * 里有一个 `setTimeout(…, 0)` 会在**用例结束之后**调它 → vitest 报
+     * Unhandled Error。那种错误不会让用例变红，但会**掩盖**真正的失败。
+     *
+     * ⚠️ 而且**不能在这里还原**：那个 `setTimeout` 是排在用例之后跑的，
+     * 一还原就又是 `undefined`。所以留在全局（本文件所有用例共用，
+     * 只有这一条会触发导出，不会互相干扰）。
+     */
+    URL.createObjectURL = ((blob: Blob) => {
+      void blob.text().then((t) => {
+        exported = t;
+      });
+      return 'blob:fake';
+    }) as typeof URL.createObjectURL;
+    URL.revokeObjectURL = (() => undefined) as typeof URL.revokeObjectURL;
+    try {
+      const btn = [...c.root.querySelectorAll('.sub-entry')].find((e) =>
+        e.textContent?.includes('导出'),
+      );
+      expect(btn, '没找到导出按钮').toBeDefined();
+      btn?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      for (let i = 0; i < 20; i += 1) await Promise.resolve();
+    } finally {
+      URL.createObjectURL = origCreate;
+    }
+
+    expect(exported, '没有捕获到导出内容').not.toBeNull();
+    const obj = JSON.parse(exported ?? '{}') as {
+      logs: unknown[];
+      logsMeta?: { ok: boolean; err: string | null; count: number; limit: number };
+    };
+    expect(obj.logs).toEqual([]);
+    expect(obj.logsMeta, '导出里没有 logsMeta，孤儿态依旧伪装成"没有日志"').toBeDefined();
+    expect(obj.logsMeta?.ok, 'logs 是空数组但 ok 却是 true —— 假正常').toBe(false);
+    expect(obj.logsMeta?.err).toBe('Extension context invalidated.');
+    expect(obj.logsMeta?.count).toBe(0);
+    /** 上限从 diag-store 导入，不许写死 */
+    expect(obj.logsMeta?.limit).toBe(30);
+  });
+
+  /**
+   * ## 为什么选导出侧兜底**函数**的单元测试，而不是端到端
+   *
+   * verifier 的 RV3 把导出兜底改成 `ok:true` / `err:null`，20 + 14 条**一条不红**。
+   * 我按它说的去补端到端，结果撞出一个更基本的事实：
+   *
+   * **`diagData === null` 时导出按钮根本不存在。** `render()` 在
+   * `panel.ts:1028` 就 `if (diagData === null) { 画「正在采集诊断信息…」; return; }`，
+   * 二级浮层（连同里面的「导出诊断 JSON」）压根没画出来。而 `openDiag` 是
+   * **先 `diagData = null` 再 `loadDiag()`** —— 进得去的那一刻永远是 null。
+   *
+   * ⇒ **那条路径在界面上点不到**（除非采集永远不回来，而那种情况下也没有按钮）。
+   * 端到端用例写出来的只会是"等采集回来再导出"，走的**不是** null 分支 ——
+   * 我第一版就是这样，导出的 `count` 是 1，`ok` 是 `true`，测了个寂寞。
+   *
+   * ## 那这段兜底还要不要守？要，但守的位置不同
+   *
+   * 它是**真实存在的防御**（`?.` 已经保证运行期不炸），只是**不可达**所以没有行为级
+   * 断言能覆盖它 —— verifier 的 RV3 零红正是这个原因，不是"忘了测"。
+   *
+   * 所以改为**源码级守两点**（剥注释后断言）：
+   * 1. 导出侧兜底**必须调用** `describeLogsMetaFallback()` —— 这一条直接杀 RV3：
+   *    变异把它写成 `ok:true, err:null` 字面量，就不再调用那个函数了。
+   * 2. 兜底**不许**自己写 `ok:` 字面量 —— 否则两处又会长出各自的判断。
+   */
+  it('★★★ 导出侧兜底必须复用 `describeLogsMetaFallback()`，不许自己写 ok/err 字面量', async () => {
+    const { readFile } = await import('node:fs/promises');
+    const src = await readFile('src/content/panel/panel.ts', 'utf8');
+    const start = src.indexOf('exportJson:');
+    expect(start, '找不到 exportJson 处理函数').toBeGreaterThan(-1);
+    /** 截到 diagnostics case 的闭合为止（花括号配平，避免切到别的回调） */
+    let depth = 0;
+    let i = src.indexOf('{', start);
+    const open = i;
+    for (; i < src.length; i += 1) {
+      if (src[i] === '{') depth += 1;
+      else if (src[i] === '}') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    const block = src.slice(open, i + 1);
+    expect(block.length, '切片为空，配平坏了').toBeGreaterThan(50);
+    const codeOnly = block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+
+    expect(codeOnly, '导出侧兜底没有复用 describeLogsMetaFallback()').toMatch(
+      /logsMeta:\s*diagData\?\.logsMeta\s*\?\?\s*\{[^}]*\.\.\.describeLogsMetaFallback\(\)/,
+    );
+    expect(codeOnly, '导出侧兜底自己写了 ok/err 字面量 —— 两侧又开始各写一份').not.toMatch(
+      /\b(?:ok|err)\s*:/,
+    );
   });
 });

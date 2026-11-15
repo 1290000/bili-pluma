@@ -1,0 +1,90 @@
+
+======================================================================
+扫描 msedge.dll  (341.5 MB)
+======================================================================
+抽出字符串: ASCII=383164  UTF16LE=7402
+
+--- needle "AllowedIncognito"  命中 2 条 (ascii=2 wide=0) ---
+  {"namespace":"extension","properties":{"lastError":{"type":"object","optional":true,"deprecated":"Please use $(ref:runtime.lastError).","properties":{"message":{"type":"string"}}},"inIncognitoContext"
+  extension.isAllowedIncognitoAccess
+
+--- needle "isAllowedIncognito"  命中 2 条 (ascii=2 wide=0) ---
+  {"namespace":"extension","properties":{"lastError":{"type":"object","optional":true,"deprecated":"Please use $(ref:runtime.lastError).","properties":{"message":{"type":"string"}}},"inIncognitoContext"
+  extension.isAllowedIncognitoAccess
+
+--- needle "incognito_access"  命中 1 条 (ascii=1 wide=0) ---
+  has_incognito_access
+
+--- needle "extensions.settings"  命中 16 条 (ascii=16 wide=0) ---
+  extensions.settings
+  Extensions.SettingsOverridden.SearchOverriddenDialogStackState
+  Extensions.SettingsOverridden.SearchOverriddenDialogUnacknowledgedChainLength
+  Extensions.SettingsOverridden.SearchOverriddenDialogResult.
+  Extensions.SettingsOverridden.DseExtensionStackState
+  Extensions.SettingsOverridden.GenericSearchOverriddenDialogResult
+  Extensions.SettingsOverridden.BackToOtherSearchOverriddenDialogResult
+  Extensions.SettingsOverridden.BackToGoogleSearchOverriddenDialogResult
+  Extensions.SettingsOverridden.MissingParams
+  Extensions.Settings.DefaultPinningStartupState
+  Extensions.SettingsOverridden.UnacknowledgedMatchingDseExtensionPresent
+  Extensions.SettingsOverrideV2.Dse.
+  Extensions.SettingsOverrideV2.Ntp.
+  Microsoft.Extensions.SettingsProtection.InstallFrictionDialogShown
+  Extensions.Settings.DefaultPinningToggled
+  extensions.settings.
+
+--- needle "incognito mode"  命中 9 条 (ascii=9 wide=0) ---
+  Chrome currently does not support the Push API in incognito mode (https://crbug.com/41124656). There is deliberately no way to feature-detect this, since incognito mode needs to be undetectable by web
+  Could not retain file entry in incognito mode
+  Incognito mode disabled by policy, launching a normal 
+  SigninDataCollector can't work without profile or in incognito mode.
+  Force Enterprise Isolated Mode to replace Incognito mode.
+  Apps cannot be installed in guest/incognito mode
+  Incognito mode is disabled.
+  Incognito mode is forced. Cannot open normal windows.
+  Can not restore sessions in incognito mode.
+
+--- needle "incognito"  命中 211 条 (ascii=211 wide=0) ---
+  incognito
+  INCOGNITO
+  policy.incognito_mode_url_allowlist
+  policy.incognito_mode_url_blocklist
+  incognito.mode_availability
+  kURLBlocklistOverridesIncognitoAllowlist
+  OmniboxOnDeviceHeadProviderIncognito
+  OmniboxOnDeviceHeadProviderNonIncognito
+  manager_->context()->is_incognito() == file_delegate_receiver.is_valid()
+  Chrome currently does not support the Push API in incognito mode (https://crbug.com/41124656). There is deliberately no way to feature-detect this, since incognito mode needs to be undetectable by web
+  !is_incognito_
+  Incognito
+  NonIncognito
+  cr_components/searchbox/icons/incognito_cr23.svg
+  cr_components/searchbox/icons/incognito_cr23_old.svg
+  .incognito.
+  declarative_rules.incognito.
+  incognito_content_settings
+  incognito_preferences
+  is_incognito
+  kExtensionAutoRejectIncognitoConnectability
+  extension.inIncognitoContext
+  Could not retain file entry in incognito mode
+  kIncognitoIcon
+  kIncognitoCircleFilledIcon
+  ...（共 211 条，已截断显示前 25）
+
+======================================================================
+扫描 resources.pak  (32.5 MB)
+======================================================================
+抽出字符串: ASCII=12672  UTF16LE=3
+
+--- needle "AllowedIncognito"  命中 0 条 (ascii=0 wide=0) ---
+
+--- needle "isAllowedIncognito"  命中 0 条 (ascii=0 wide=0) ---
+
+--- needle "incognito_access"  命中 0 条 (ascii=0 wide=0) ---
+
+--- needle "extensions.settings"  命中 0 条 (ascii=0 wide=0) ---
+
+--- needle "incognito mode"  命中 0 条 (ascii=0 wide=0) ---
+
+--- needle "incognito"  命中 0 条 (ascii=0 wide=0) ---

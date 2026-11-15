@@ -1,0 +1,93 @@
+﻿diag 目录: C:\Users\i1290\AppData\Local\Microsoft\Edge\User Data\Default\Local Extension Settings\fgmggjhdbgaclcbeaopajghpnhgkmfnf
+扫描文件: 000061.log, 000064.ldb
+
+去重后条目总数: 185
+时间范围: 2026/11/12 04:09:32.877 → 2026/11/12 14:49:50.673
+
+== isAllowedIncognitoAccess 全部读数（12 条） ==
+  2026/11/12 04:13:04.800  true    from=8zz3vd
+  2026/11/12 04:49:34.086  true    from=jfufc2
+  2026/11/12 04:50:10.697  false   from=6iqmri
+  2026/11/12 05:16:59.926  true    from=frushh
+  2026/11/12 05:23:11.143  false   from=i6q2dk
+  2026/11/12 05:30:36.491  false   from=9gbtw8
+  2026/11/12 14:25:13.189  true    from=qkcods
+  2026/11/12 14:25:34.442  false   from=iefs57
+  2026/11/12 14:40:33.718  false   from=0jyphl
+  2026/11/12 14:41:46.597  true    from=np5nnr
+  2026/11/12 14:42:04.466  false   from=jywbup
+  2026/11/12 14:43:14.943  false   from=orn2ji
+
+== true -> false 翻转共 4 次 ==
+  #1  2026/11/12 04:49:34.086 true  →  2026/11/12 04:50:10.697 false   间隔 36.6s
+  #2  2026/11/12 05:16:59.926 true  →  2026/11/12 05:23:11.143 false   间隔 6.2min
+  #3  2026/11/12 14:25:13.189 true  →  2026/11/12 14:25:34.442 false   间隔 21.3s
+  #4  2026/11/12 14:41:46.597 true  →  2026/11/12 14:42:04.466 false   间隔 17.9s
+
+==============================================================================
+#1  翻转窗口  2026/11/12 04:50:10.697  (±1.0min)
+==============================================================================
+  2026/11/12 04:49:11.980     -58.7s  [panel/page-state] from=n03yqq  | kind=timeout
+  2026/11/12 04:49:15.813     -54.9s  [panel/page-state] from=3e067k  | kind=timeout
+  2026/11/12 04:49:16.580     -54.1s  [panel/page-state] from=3e067k  | kind=timeout
+  2026/11/12 04:49:30.183     -40.5s  [panel/page-state] from=ejd9nq  | kind=timeout
+  2026/11/12 04:49:30.716     -40.0s  [panel/page-state] from=ejd9nq  | kind=timeout
+  2026/11/12 04:49:34.086     -36.6s  [isAllowedIncognitoAccess] from=jfufc2  | true
+  2026/11/12 04:49:34.630     -36.1s  [windows.create returned] from=jfufc2  | id=undefined incognito=undefined windowsBefore=1 windowsAfter=1 loginTabs=0
+  2026/11/12 04:49:34.632     -36.1s  [create 返回 undefined 且窗口数未变，交给握手判定] from=jfufc2
+  2026/11/12 04:49:34.635     -36.1s  [login/open] from=jfufc2  | {"ok":true,"reason":"assumed"}
+  2026/11/12 04:49:34.640     -36.1s  [create 返回 undefined 但权限正常 → 按已创建处理] from=jfufc2
+  2026/11/12 04:50:08.818      -1.9s  [panel/page-state] from=7q83mv  | kind=timeout
+  2026/11/12 04:50:08.820      -1.9s  [panel/page-state] from=7q83mv  | kind=timeout
+  2026/11/12 04:50:10.697      +0.0s  [isAllowedIncognitoAccess] from=6iqmri  | false
+  2026/11/12 04:50:10.699      +0.0s  [login/open] from=6iqmri  | {"ok":false,"reason":"incognito-disabled"}
+  2026/11/12 04:50:10.700      +0.0s  [权限未开启 → 弹说明页] from=6iqmri
+  2026/11/12 04:50:11.141      +0.4s  [panel/page-state] from=7q83mv  | kind=timeout
+
+==============================================================================
+#2  翻转窗口  2026/11/12 05:23:11.143  (±1.0min)
+==============================================================================
+  2026/11/12 05:23:09.488      -1.7s  [panel/page-state] from=6tli63  | kind=timeout
+  2026/11/12 05:23:10.914      -0.2s  [panel/page-state] from=6tli63  | kind=timeout
+  2026/11/12 05:23:11.143      +0.0s  [isAllowedIncognitoAccess] from=i6q2dk  | false
+  2026/11/12 05:23:11.145      +0.0s  [login/open] from=i6q2dk  | {"ok":false,"reason":"incognito-disabled"}
+  2026/11/12 05:23:11.146      +0.0s  [权限未开启 → 弹说明页] from=i6q2dk
+
+==============================================================================
+#3  翻转窗口  2026/11/12 14:25:34.442  (±1.0min)
+==============================================================================
+  2026/11/12 14:25:11.176     -23.3s  [panel/page-state] from=zl07oz  | kind=ok
+  2026/11/12 14:25:13.189     -21.3s  [isAllowedIncognitoAccess] from=qkcods  | true
+  2026/11/12 14:25:13.724     -20.7s  [windows.create returned] from=qkcods  | id=undefined incognito=undefined windowsBefore=1 windowsAfter=1 loginTabs=0
+  2026/11/12 14:25:13.726     -20.7s  [create 返回 undefined 且窗口数未变，交给握手判定] from=qkcods
+  2026/11/12 14:25:13.728     -20.7s  [login/open] from=qkcods  | {"ok":true,"reason":"assumed"}
+  2026/11/12 14:25:13.730     -20.7s  [create 返回 undefined 但权限正常 → 按已创建处理] from=qkcods
+  2026/11/12 14:25:33.211      -1.2s  [panel/page-state] from=poumqj  | kind=timeout
+  2026/11/12 14:25:34.323      -0.1s  [panel/page-state] from=poumqj  | kind=timeout
+  2026/11/12 14:25:34.442      +0.0s  [isAllowedIncognitoAccess] from=iefs57  | false
+  2026/11/12 14:25:34.444      +0.0s  [login/open] from=iefs57  | {"ok":false,"reason":"incognito-disabled"}
+  2026/11/12 14:25:34.445      +0.0s  [权限未开启 → 弹说明页] from=iefs57
+
+==============================================================================
+#4  翻转窗口  2026/11/12 14:42:04.466  (±1.0min)
+==============================================================================
+  2026/11/12 14:41:32.514     -32.0s  [panel/page-state] from=ctti3o  | kind=timeout
+  2026/11/12 14:41:46.210     -18.3s  [panel/page-state] from=ctti3o  | kind=timeout
+  2026/11/12 14:41:46.597     -17.9s  [isAllowedIncognitoAccess] from=np5nnr  | true
+  2026/11/12 14:41:47.147     -17.3s  [windows.create returned] from=np5nnr  | id=undefined incognito=undefined windowsBefore=2 windowsAfter=2 loginTabs=0
+  2026/11/12 14:41:47.150     -17.3s  [create 返回 undefined 且窗口数未变，交给握手判定] from=np5nnr
+  2026/11/12 14:41:47.152     -17.3s  [login/open] from=np5nnr  | {"ok":true,"reason":"assumed"}
+  2026/11/12 14:41:47.153     -17.3s  [create 返回 undefined 但权限正常 → 按已创建处理] from=np5nnr
+  2026/11/12 14:42:02.313      -2.2s  [panel/page-state] from=rs8ojd  | kind=timeout
+  2026/11/12 14:42:02.794      -1.7s  [panel/page-state] from=rs8ojd  | kind=timeout
+  2026/11/12 14:42:04.466      +0.0s  [isAllowedIncognitoAccess] from=jywbup  | false
+  2026/11/12 14:42:04.468      +0.0s  [login/open] from=jywbup  | {"ok":false,"reason":"incognito-disabled"}
+  2026/11/12 14:42:04.469      +0.0s  [权限未开启 → 弹说明页] from=jywbup
+
+==============================================================================
+相关性统计：翻转前 2 小时内最后一次 login/open
+==============================================================================
+  #1  最后一次 login/open = 2026/11/12 04:49:34.635  间隔 36.1s  内容 {"ok":true,"reason":"assumed"}
+  #2  最后一次 login/open = 2026/11/12 05:17:00.496  间隔 6.2min  内容 {"ok":true,"reason":"assumed"}
+  #3  最后一次 login/open = 2026/11/12 14:25:13.728  间隔 20.7s  内容 {"ok":true,"reason":"assumed"}
+  #4  最后一次 login/open = 2026/11/12 14:41:47.152  间隔 17.3s  内容 {"ok":true,"reason":"assumed"}

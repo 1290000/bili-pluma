@@ -1,0 +1,33 @@
+﻿node : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-no
+de-api-deprecated for more details.[39m
+所在位置 行:1 字符: 129
++ ... ew($false); node node_modules\vitest\vitest.mjs run --config poc\prob ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v2.1.9 D:/Projects/Pluma/poc/probe/verify-task26
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (b) 读取抛错（孤儿态）→ ok 必须为 false
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (c)【探针成功、真读失败】ok 必须为 false —— 推不出的那一格
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (d)【探针失败、真读成功】ok 必须为 false —— 反向那格
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (e)【真实孤儿态：两处都抛】ok=false 且 err 是白名单固定串
+Not implemented: navigation to another Document
+
+ ✓ ok-is-real-signal.test.ts (5 tests) 91ms
+stderr | ok-is-real-signal.test.ts
+Not implemented: navigation to another Document
+
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  18:04:08
+   Duration  2.36s (transform 234ms, setup 0ms, collect 496ms, tests 91ms, environment 1.34s, prepare 140ms)
+

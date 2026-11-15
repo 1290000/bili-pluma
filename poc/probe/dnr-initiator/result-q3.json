@@ -1,0 +1,71 @@
+{
+  "apiSurface": {
+    "keys": [
+      "DYNAMIC_RULESET_ID",
+      "DomainType",
+      "GETMATCHEDRULES_QUOTA_INTERVAL",
+      "GUARANTEED_MINIMUM_STATIC_RULES",
+      "HeaderOperation",
+      "MAX_GETMATCHEDRULES_CALLS_PER_INTERVAL",
+      "MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES",
+      "MAX_NUMBER_OF_DYNAMIC_RULES",
+      "MAX_NUMBER_OF_ENABLED_STATIC_RULESETS",
+      "MAX_NUMBER_OF_REGEX_RULES",
+      "MAX_NUMBER_OF_SESSION_RULES",
+      "MAX_NUMBER_OF_STATIC_RULESETS",
+      "MAX_NUMBER_OF_UNSAFE_DYNAMIC_RULES",
+      "MAX_NUMBER_OF_UNSAFE_SESSION_RULES",
+      "RequestMethod",
+      "ResourceType",
+      "RuleActionType",
+      "RuleConditionKeys",
+      "SESSION_RULESET_ID",
+      "UnsupportedRegexReason",
+      "getAvailableStaticRuleCount",
+      "getDisabledRuleIds",
+      "getDynamicRules",
+      "getEnabledRulesets",
+      "getMatchedRules",
+      "getSessionRules",
+      "isRegexSupported",
+      "onRuleMatchedDebug",
+      "setExtensionActionOptions",
+      "testMatchOutcome",
+      "updateDynamicRules",
+      "updateEnabledRulesets",
+      "updateSessionRules",
+      "updateStaticRules"
+    ],
+    "hasUpdateSessionRules": true,
+    "hasUpdateDynamicRules": true,
+    "hasUpdateStaticRules": true,
+    "isRegexSupported": true
+  },
+  "placeholderValue": {
+    "error": null,
+    "persisted": {
+      "action": {
+        "requestHeaders": [
+          {
+            "header": "cookie",
+            "operation": "set",
+            "value": "${PLUMA_ACCOUNT}"
+          }
+        ],
+        "type": "modifyHeaders"
+      },
+      "condition": {
+        "requestDomains": [
+          "httpbin.org"
+        ],
+        "urlFilter": "placeholder-probe"
+      },
+      "id": 99001,
+      "priority": 1
+    }
+  },
+  "redirectAccepted": {
+    "error": null,
+    "cb": null
+  }
+}

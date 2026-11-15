@@ -1,0 +1,111 @@
+{
+  "results": [
+    {
+      "label": "BASELINE",
+      "reallyRed": false,
+      "failed": 0,
+      "passed": 11,
+      "noTests": false,
+      "syntaxErr": false,
+      "matched": []
+    },
+    {
+      "label": "RV1",
+      "reallyRed": true,
+      "failed": 4,
+      "passed": 7,
+      "noTests": false,
+      "syntaxErr": false,
+      "matched": [
+        "判据 E · 不许用类型逃逸抹平 logsMeta 可缺性 > E1 diagnosticsPane 的 logsMeta 仍然是可缺（不是被改成必填） 13ms → Cannot read properties of undefined (reading 'ok')",
+        "判据 A · 缺 logsMeta 不抛且渲染\"不可信\"态 > A1 不抛 + 成对断言（必须有正骨架、必须有失败态、不许有\"还没有日志\"） 19ms → Cannot read properties of undefined (reading 'ok')",
+        "判据 C · fallback 语义必须是\"不可信\" > C2 渲染结果与 C1 同口径：缺 logsMeta 时不能显示\"一切正常\"的标题 2ms → Cannot read properties of undefined (reading 'ok')",
+        "判据 D · 导出侧与渲染侧共用同一个 fallback（观测类字段必须一致） > D1 缺 logsMeta 时，渲染侧读到的 ok/err/count 与 fallback 逐字段一致 2ms → Cannot read properties of undefined (reading 'ok')"
+      ]
+    },
+    {
+      "label": "RV1 restore",
+      "restored": true,
+      "sha": "83837391969C784309F7B5D24B74156B0602BB4C1BC02FDC0AA0CCA6D15E87C4"
+    },
+    {
+      "label": "RV2",
+      "reallyRed": true,
+      "failed": 5,
+      "passed": 6,
+      "noTests": false,
+      "syntaxErr": false,
+      "matched": [
+        "判据 A · 缺 logsMeta 不抛且渲染\"不可信\"态 > A1 不抛 + 成对断言（必须有正骨架、必须有失败态、不许有\"还没有日志\"） 23ms → 缺 logsMeta 必须报读取失败: expected '‹ 返回诊断⟳代理状态未知（这一项没有采到）。自检信息InPrivate …' to contain '诊断日志读取失败'",
+        "判据 C · fallback 语义必须是\"不可信\" > C1 describeLogsMetaFallback 的取值：ok:false / err 白名单 / count:0 3ms → ok 取 true 就是把崩溃换成谎报: expected true to be false // Object.is equality",
+        "判据 D · 导出侧与渲染侧共用同一个 fallback（观测类字段必须一致） > D1 缺 logsMeta 时，渲染侧读到的 ok/err/count 与 fallback 逐字段一致 2ms → expected '‹ 返回诊断⟳代理状态未知（这一项没有采到）。自检信息InPrivate …' to contain '诊断日志读取失败'"
+      ]
+    },
+    {
+      "label": "RV2 restore",
+      "restored": true,
+      "sha": "83837391969C784309F7B5D24B74156B0602BB4C1BC02FDC0AA0CCA6D15E87C4"
+    },
+    {
+      "label": "RV3",
+      "reallyRed": false,
+      "failed": 0,
+      "passed": 20,
+      "noTests": false,
+      "syntaxErr": false,
+      "matched": []
+    },
+    {
+      "label": "RV3 restore",
+      "restored": true,
+      "sha": "E09B757D43E76CE29E0D6F12219FFBFD2F176214D6B053C62253392E8F3BE587"
+    },
+    {
+      "label": "RV4",
+      "reallyRed": true,
+      "failed": 2,
+      "passed": 18,
+      "noTests": false,
+      "syntaxErr": false,
+      "matched": [
+        "★★★ `logsMeta` 缺失时渲染不崩（task-28） > ★★ 不传 logsMeta → 不抛，且渲染「读取失败」而不是「还没有日志。」 14ms → Cannot read properties of undefined (reading 'ok')",
+        "★★★ `logsMeta` 缺失时渲染不崩（task-28） > ★ 兜底语义必须是「不可信」：ok 不许是 true 1ms → Cannot read properties of undefined (reading 'ok')"
+      ]
+    },
+    {
+      "label": "RV4 restore",
+      "restored": true,
+      "sha": "83837391969C784309F7B5D24B74156B0602BB4C1BC02FDC0AA0CCA6D15E87C4"
+    },
+    {
+      "label": "RV5",
+      "reallyRed": true,
+      "failed": 1,
+      "passed": 10,
+      "noTests": false,
+      "syntaxErr": false,
+      "matched": [
+        "静态穷举 · `data.logsMeta.X` 链式访问 > 整个 src/content/panel/ 里不允许出现（fallback 内部与绑定点除外） 32ms → 禁止 data.logsMeta.X 的链式二次访问 —— 必须先收敛成 meta 变量："
+      ]
+    },
+    {
+      "label": "RV5 restore",
+      "restored": true,
+      "sha": "E09B757D43E76CE29E0D6F12219FFBFD2F176214D6B053C62253392E8F3BE587"
+    },
+    {
+      "label": "RV5-restored",
+      "reallyRed": false,
+      "failed": 0,
+      "passed": 11,
+      "noTests": false,
+      "syntaxErr": false,
+      "matched": []
+    }
+  ],
+  "bakLeft": 2,
+  "finalSha": {
+    "src/content/panel/diagnostics.ts": "83837391969C784309F7B5D24B74156B0602BB4C1BC02FDC0AA0CCA6D15E87C4",
+    "src/content/panel/panel.ts": "E09B757D43E76CE29E0D6F12219FFBFD2F176214D6B053C62253392E8F3BE587"
+  }
+}

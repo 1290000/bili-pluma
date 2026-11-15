@@ -1,0 +1,16 @@
+{
+  "group": "G3",
+  "steps": [
+    "[2026-11-12T08:19:09.100Z] === G3 门槛分离实验 ===",
+    "[2026-11-12T08:19:09.106Z] 独立 profile: D:\\Projects\\Pluma\\.tmp\\investigator-q4\\profile-gate-G3",
+    "[2026-11-12T08:19:09.106Z] ⛔ 用户浏览器零接触",
+    "[2026-11-12T08:19:09.124Z]   pid=32168",
+    "[2026-11-12T08:19:10.477Z] CDP 就绪",
+    "[2026-11-12T08:19:16.796Z]   权限已打开: {\"incognitoAccess\":{\"isActive\":true,\"isEnabled\":true}}",
+    "[2026-11-12T08:19:19.808Z]   --- G3: 先 create(about:blank) 激活无痕分区，再 create(chrome-extension://) ---",
+    "[2026-11-12T08:19:19.997Z]   ① about:blank → {\"ok\":true,\"created\":null}",
+    "[2026-11-12T08:19:25.023Z]   windows.getAll: [{\"id\":2055511514,\"incognito\":false,\"type\":\"normal\"}]",
+    "[2026-11-12T08:19:25.357Z]   ② chrome-extension:// → {\"ok\":true,\"created\":null}",
+    "[2026-11-12T08:19:30.404Z]   windows.getAll: [{\"id\":2055511514,\"incognito\":false,\"type\":\"normal\"}]"
+  ]
+}

@@ -32,6 +32,7 @@ import { writeFeedAccountEnabled } from '@/src/platform/storage/ui-prefs-store';
 import { normalizeStreamingIdentity } from '@/src/shared/constants/streaming-identity';
 import { recordStat } from '@/src/platform/storage/stats-store';
 import { parsePlayPage } from '@/src/shared/utils/video-page';
+import type { LoginOpenReason } from '@/src/shared/types/messages';
 
 /**
  * 是否是"需要保留标签页代理规则"的播放页。
@@ -81,47 +82,133 @@ export function isVideoPageUrl(url: string): boolean {
  * 且当前实例的 `windows.getAll()` 看不到新窗口（用户确认窗口真出现了，
  * 标题 `登录播放账号-[InPrivate]`）。
  *
- * 所以**不能**用返回值判断成败，否则会误弹说明页。
- * 判定依据只有一条：`isAllowedIncognitoAccess()`。
- *   true  → 按已创建处理（乐观，reason='assumed'）
- *   false → 确定没权限，弹说明页
+ * 所以**不能**用返回值判断成没成功。判定依据有两条，各管一段：
+ *   `isAllowedIncognitoAccess()` 读 false → 确定没权限 ⇒ 弹说明页（**不再 create**）
+ *   读 true → 建窗；建完仍拿不到证据 ⇒ `assumed`，**`opened: false`**
+ *
+ * ## ⚠️ `assumed` 在真机上是**常态**，不是兜底例外（2026-11-12，task-12 实测）
+ *
+ * 跨两天 4 次调用，**4 次全是 `assumed`**，`create()` 从未返回过 `id`，
+ * `windowsAfter === windowsBefore` 每一次都成立，`loginTabs` 恒为 0。
+ * 这不是时序问题 —— 普通实例按设计就看不见无痕分区的窗口和标签页
+ * （`login-window.ts` 文件头那两条铁律）。
+ *
+ * **已知限制**：走到 `assumed` 时，我们**无法确认**窗口真的开出来了。
+ *
+ * > 📌 2026-11-15（task-46）口径反转：以前这里回 `opened: true`（「有依据的乐观
+ * > 判断」）。那条判断的前提是权限一定开着，而当时权限读数只记日志不裁决 ——
+ * > 权限关着时照样 create，于是 **废页 + 报成功**。现在权限闸真的拦住了，
+ * > `assumed` 回 `opened: false`，由面板如实说「没能确认窗口打开」。
+ * > 完整论证见 `login-window.ts` 里 `openLoginWindow()` 情况 3 的注释。
  */
 async function handleLoginOpen(): Promise<{
   type: 'login/open:ok';
   opened: boolean;
-  reason?: 'incognito-disabled' | 'already-open' | 'assumed' | 'unknown';
+  confirmed?: boolean;
+  /** ⚠️ 别手抄取值域 —— 唯一权威定义在 `src/shared/types/messages.ts` 的 `LoginOpenReason` */
+  reason?: LoginOpenReason;
 }> {
   const result = await openLoginWindow();
   await diag('login/open', JSON.stringify(result));
 
-  if (result.ok || result.reason === 'already-open' || result.reason === 'assumed') {
-    if (result.reason === 'assumed') {
-      await diag('create 返回 undefined 但权限正常 → 按已创建处理');
-    }
+  /**
+   * ## `assumed` **不再冒充成功**（2026-11-15，task-46 —— 口径反转）
+   *
+   * ### 旧口径（现在已废）
+   *
+   * `result.ok || reason==='already-open' || reason==='assumed'` 全都
+   * `markLoginReady()` + `opened: true`。理由见下面那段历史注释。
+   *
+   * ### 为什么废了
+   *
+   * 那条「乐观判断」的前提是**权限一定开着**（上面 `isAllowedIncognitoAccess`
+   * 那道闸当时只是记日志、不拦）。task-43/46 的真机取证把这个前提拆了：
+   * 权限关着时照样 `create` 无痕窗 ⇒ 窗口里加载 `chrome-extension://…/login-window.html`
+   * 而**无痕分区里没有这个扩展** ⇒ `ERR_BLOCKED_BY_CLIENT` ⇒ 用户看到一张废页，
+   * 代码却回 `opened: true`。
+   *
+   * 现在权限闸真的拦在 `create()` 之前（`login-window.ts`），`assumed` 剩下的
+   * 唯一含义就是「权限在，`create()` 没抛错，但我们**确实没法确认窗口开出来了**」。
+   */
+  if (result.reason === 'assumed') {
+    await diag('create 返回 undefined → 交握判定，opened=false（无法确认窗口已开）');
+    /**
+     * `markLoginReady()` **照旧写**，这是关键，别顺手删：
+     * 它的作用是**抑制另一个实例误弹说明页**（`login-handshake.ts` 双向握手）。
+     * 「我们没确认」和「确定没开」是两件事 —— 后者才该弹说明页。
+     */
+    await markLoginReady();
+    return {
+      type: 'login/open:ok',
+      opened: false,
+      confirmed: false,
+      reason: 'assumed',
+    };
+  }
+
+  if (result.ok || result.reason === 'already-open') {
+    /**
+     * ## `markLoginReady()` 为什么在这里仍然要写（2026-11-15 复核）
+     *
+     * 走到这里只有两种可能：拿到了窗口对象（`ok`），或探测到心跳还活着
+     * （`already-open`）—— 两种都是**有证据的**「应该开出来了一个」。
+     * 写 `login-ready` 的作用是**抑制另一个实例误弹说明页**
+     * （`login-handshake.ts` 的双向握手）。
+     *
+     * ⚠️ 不要因为它"不够严谨"就改成不写 —— 不写会让说明页**必然**弹出，
+     * 而那正是「开了权限还看到红字」那条老 bug 的样子。
+     */
     await markLoginReady();
     return {
       type: 'login/open:ok',
       opened: true,
-      ...(result.reason ? { reason: result.reason } : {}),
+      reason: result.reason ?? ('opened' as const),
     };
   }
 
   // 只有确定没权限时才弹说明页
   if (result.reason === 'incognito-disabled') {
     await diag('权限未开启 → 弹说明页');
-    await chrome.windows
-      .create({
+    /**
+     * ## ⚠️ `create` 之后必须留痕（2026-11-12，task-22 缺陷 1）
+     *
+     * 旧代码是 `.catch(() => {})` —— **返回值和异常全被吞掉**，而 `diag` 写在
+     * `create` **之前**（上一行），所以日志里永远只有「权限未开启 → 弹说明页」，
+     * 窗口**建没建成、建在哪个坐标、有没有被浏览器拒绝，一个字都没有**。
+     *
+     * 这一行在整轮「点了没反应」的调查里反复误导判断：日志显示走到了弹说明页
+     * 的分支，但用户屏幕上没有窗口，于是只能靠猜。
+     *
+     * ⇒ 现在不管成功失败都写一条，带：
+     *   - `id`：拿到窗口对象 = 窗口真的建出来了
+     *   - `url`：确认建的是**说明页**而不是别的东西
+     *   - `error`：被拒绝时的原始原因（`Invalid value` / 策略拦截等）
+     *
+     * ⚠️ **不许再改成 `.catch(() => {})`**：那个空 catch 是这条调查链上
+     * 最贵的一个黑洞。错误可以不影响用户流程，但**必须进日志**。
+     */
+    let created: chrome.windows.Window | undefined;
+    let createError = '';
+    try {
+      created = await chrome.windows.create({
         url: chrome.runtime.getURL('/need-incognito.html'),
         type: 'popup',
         width: 460,
         height: 420,
-      })
-      .catch(() => {});
-    return { type: 'login/open:ok', opened: false, reason: 'incognito-disabled' };
+      });
+    } catch (e) {
+      createError = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    }
+    await diag(
+      'need-incognito 窗口创建结果',
+      `id=${String(created?.id)} url=${String(created?.tabs?.[0]?.url)}` +
+        (createError ? ` error=${createError.slice(0, 200)}` : ''),
+    );
+    return { type: 'login/open:ok', opened: false, confirmed: false, reason: 'incognito-disabled' };
   }
 
   await diag('openLoginWindow 未知失败');
-  return { type: 'login/open:ok', opened: false, reason: 'unknown' };
+  return { type: 'login/open:ok', opened: false, confirmed: false, reason: 'unknown' };
 }
 
 export default defineBackground(() => {

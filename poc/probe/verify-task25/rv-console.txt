@@ -1,0 +1,82 @@
+﻿[backup] OK  src/content/panel/login-outcome.ts
+[backup] OK  entrypoints/content-panel.content.ts
+[backup] DIFF src/content/panel/panel.ts
+[backup] OK  tests/unit/content/panel/entry-wiring.test.ts
+[backup] OK  tests/unit/content/panel-login-outcome.test.ts
+
+=== RV1: already-open 的 ok:true → false ===
+  totals      : Tests  2 failed | 22 passed (24)
+  no tests    : false   syntaxError: true
+  restored    : true (SHA 一致)
+  RED  × ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `already-open` 是**好消息**（`ok:true`）—— 不许再让它走危险色（task-25） 12ms
+  RED  × ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `ok` 与 `shouldPoll` 正交：already-open 是「好消息 + 不轮询」这个组合 1ms
+  RED  FAIL  tests/unit/content/panel-login-outcome.test.ts > ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `already-open` 是**好消息**（`ok:true`）—— 不许再让它走危险色（task-25）
+  RED  AssertionError: expected false to be true // Object.is equality
+  RED  FAIL  tests/unit/content/panel-login-outcome.test.ts > ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `ok` 与 `shouldPoll` 正交：already-open 是「好消息 + 不轮询」这个组合
+  AT   ❯ tests/unit/content/panel-login-outcome.test.ts:217:18
+  AT   ❯ tests/unit/content/panel-login-outcome.test.ts:247:18
+
+=== RV2: if (!r.shouldPoll) return → if (!r.ok) return ===
+  totals      : Tests  2 failed | 32 passed (34)
+  no tests    : false   syntaxError: false
+  restored    : true (SHA 一致)
+  RED  × ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退必须判 `!r.shouldPoll` 9ms
+  RED  × ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok` 1ms
+  RED  FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退必须判 `!r.shouldPoll`
+  RED  AssertionError: openLogin 不再按 shouldPoll 早退 —— 概念又被粘回去了: expected 'const openLogin = async (): Promise<v…' to match /if\s*\(\s*!r\.shouldPoll\s*\)\s*return/
+  RED  FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok`
+  RED  AssertionError: openLogin 仍在用 ok 判是否轮询 —— 没解耦: expected 'const openLogin = async (): Promise<v…' not to match /if\s*\(\s*!r\.ok\s*\)\s*return/
+  AT   ❯ tests/unit/content/panel/entry-wiring.test.ts:150:65
+  AT   ❯ tests/unit/content/panel/entry-wiring.test.ts:163:59
+
+=== RV3: 代码改回 !r.ok，注释里写 !r.shouldPoll（剥离有效性） ===
+  totals      : Tests  2 failed | 8 passed (10)
+  no tests    : false   syntaxError: false
+  restored    : true (SHA 一致)
+  RED  × ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退必须判 `!r.shouldPoll` 8ms
+  RED  × ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok` 1ms
+  RED  FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退必须判 `!r.shouldPoll`
+  RED  AssertionError: openLogin 不再按 shouldPoll 早退 —— 概念又被粘回去了: expected 'const openLogin = async (): Promise<v…' to match /if\s*\(\s*!r\.shouldPoll\s*\)\s*return/
+  RED  FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok`
+  RED  AssertionError: openLogin 仍在用 ok 判是否轮询 —— 没解耦: expected 'const openLogin = async (): Promise<v…' not to match /if\s*\(\s*!r\.ok\s*\)\s*return/
+  AT   ❯ tests/unit/content/panel/entry-wiring.test.ts:150:65
+  AT   ❯ tests/unit/content/panel/entry-wiring.test.ts:163:59
+
+=== RV4: 两行并存（if (!r.ok) return 在前，shouldPoll 在后） ===
+  totals      : Tests  1 failed | 9 passed (10)
+  no tests    : false   syntaxError: false
+  restored    : true (SHA 一致)
+  RED  × ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok` 9ms
+  RED  FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok`
+  RED  AssertionError: openLogin 仍在用 ok 判是否轮询 —— 没解耦: expected 'const openLogin = async (): Promise<v…' not to match /if\s*\(\s*!r\.ok\s*\)\s*return/
+  AT   ❯ tests/unit/content/panel/entry-wiring.test.ts:163:59
+
+=== RV5: panel.ts 的 TTL 分支 if (ok) → if (!ok)（验 notice TTL 归谁管） ===
+  totals      : Tests  2 failed | 6 passed (8)
+  no tests    : false   syntaxError: false
+  restored    : true (SHA 一致)
+  RED  × ★★ 成功类提示 5 秒后自动消失 > ★★ showNotice(ok=true) → 5 秒后节点被移除 45ms
+  RED  × ★★ 失败类提示**不**自动消失 > ★★ showNotice(ok=false) → 10 秒后仍在 5ms
+  RED  FAIL  tests/unit/content/panel-notice.test.ts > ★★ 成功类提示 5 秒后自动消失 > ★★ showNotice(ok=true) → 5 秒后节点被移除
+  RED  AssertionError: 5 秒后应该自动消失: expected <p class="panel-notice"></p> to be null
+  RED  FAIL  tests/unit/content/panel-notice.test.ts > ★★ 失败类提示**不**自动消失 > ★★ showNotice(ok=false) → 10 秒后仍在
+  RED  AssertionError: 失败提示不该自动消失: expected null not to be null
+  AT   ❯ tests/unit/content/panel-notice.test.ts:88:36
+  AT   ❯ tests/unit/content/panel-notice.test.ts:102:40
+
+=== RV6: 源码注释里塞入被测过的旧文案（已打开 / 再点一次） ===
+  totals      : Tests  24 passed (24)
+  no tests    : false   syntaxError: false
+  restored    : true (SHA 一致)
+
+=== RV6: 源码注释里塞入被测过的旧文案（已打开 / 再点一次） ===
+  totals      : Tests  24 passed (24)
+  no tests    : false   syntaxError: false
+  restored    : true (SHA 一致)
+
+=== RV8: 守卫被 skip + 调用点改坏（证明 RV2 的红来自新守卫） ===
+  totals      : Tests  8 passed | 2 skipped (10)
+  no tests    : false   syntaxError: false
+  restored    : true (SHA 一致)
+
+[双文件基线条数] Tests  34 passed (34)

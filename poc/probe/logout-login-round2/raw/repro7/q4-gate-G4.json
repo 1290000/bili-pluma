@@ -1,0 +1,18 @@
+{
+  "group": "G4",
+  "steps": [
+    "[2026-11-12T08:18:20.212Z] === G4 门槛分离实验 ===",
+    "[2026-11-12T08:18:20.218Z] 独立 profile: D:\\Projects\\Pluma\\.tmp\\investigator-q4\\profile-gate-G4",
+    "[2026-11-12T08:18:20.218Z] ⛔ 用户浏览器零接触",
+    "[2026-11-12T08:18:20.232Z]   pid=31672",
+    "[2026-11-12T08:18:21.494Z] CDP 就绪",
+    "[2026-11-12T08:18:27.754Z]   权限已打开: {\"incognitoAccess\":{\"isActive\":true,\"isEnabled\":true}}",
+    "[2026-11-12T08:18:30.780Z]   --- G4: create(chrome-extension://) 连试 3 次，看是否「第一次必失败」 ---",
+    "[2026-11-12T08:18:30.939Z]   第1次 → {\"ok\":true,\"created\":null}",
+    "[2026-11-12T08:18:34.950Z]       windows.getAll: [{\"id\":732997287,\"incognito\":false,\"type\":\"normal\"}]",
+    "[2026-11-12T08:18:35.112Z]   第2次 → {\"ok\":true,\"created\":null}",
+    "[2026-11-12T08:18:39.272Z]       windows.getAll: [{\"id\":732997287,\"incognito\":false,\"type\":\"normal\"}]",
+    "[2026-11-12T08:18:39.574Z]   第3次 → {\"ok\":true,\"created\":null}",
+    "[2026-11-12T08:18:43.592Z]       windows.getAll: [{\"id\":732997287,\"incognito\":false,\"type\":\"normal\"}]"
+  ]
+}

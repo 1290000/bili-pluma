@@ -1,0 +1,6 @@
+﻿[total diag records parsed] 9990
+[isAllowedIncognitoAccess reads] 658
+[unique reads] 24
+--- last 40 reads (time / value / instance) ---
+2026-11-11 20:13:04.800  true    from=8zz3vd
+2026-11-11 20:49:34.086  true    from=jfufc2

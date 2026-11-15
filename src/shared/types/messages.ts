@@ -192,6 +192,25 @@ export type ProxyActivateReason =
   /** 内部异常 */
   | 'error';
 
+/**
+ * `login/open:ok` 的 `reason`（2026-11-15，task-46 起具名导出）。
+ *
+ * 提成具名类型是因为 `check-messages.mjs` 会抓「手抄封闭枚举的取值域」：
+ * `entrypoints/background.ts` 的 `handleLoginOpen()` 曾把这个联合**抄了一遍**
+ * 当返回类型，于是加新值时只改一边、`tsc` 不报错。现在两边都引用这里。
+ */
+export type LoginOpenReason =
+  /** 用户要去勾选「在 InPrivate 中允许」，且说明页已弹 */
+  | 'incognito-disabled'
+  /** 窗口本来就在，已聚焦 */
+  | 'already-open'
+  /** `create()` 返回 `undefined`，**无法确认窗口是否真的开出来** */
+  | 'assumed'
+  /** `create()` 拿到了窗口对象 —— 唯一"确定开了"的成功态 */
+  | 'opened'
+  /** 其它异常，原因未知 */
+  | 'unknown';
+
 /** background → UI / content */
 export type ResponseMsg =
   /**
@@ -291,13 +310,20 @@ export type ResponseMsg =
    *
    * - `incognito-disabled` → 用户要去勾选「在 InPrivate 中允许」，且说明页已弹
    * - `already-open` → 窗口本来就在，已聚焦
-   * - `assumed` → `windows.create` 返回 undefined 但权限正常，按已创建处理
-   *   （split 模式下无痕窗口对本实例不可见，这是正常现象，不是失败）
+   * - `assumed` → `create()` 返回 `undefined`，**无法确认窗口是否真的开出来**
+   *   （split 模式下无痕窗口对本实例不可见）。⚠️ 2026-11-15（task-46）起
+   *   这种情形 **`opened` 为 `false`、`confirmed` 为 `false`** —— 不许再冒充成功。
+   *
+   * `confirmed`（2026-11-15，task-46）区分「确定开了」与「猜它开了」：
+   * - `true`：拿到了窗口对象（`opened: true`）或心跳证明窗口还活着（`already-open`）
+   * - `false`：`assumed` —— 窗口可能开着，也可能没开，我们不知道
+   * - `undefined`：老字段，调用方按 `opened` 判即可
    */
   | {
       type: 'login/open:ok';
       opened: boolean;
-      reason?: 'incognito-disabled' | 'already-open' | 'assumed' | 'unknown';
+      confirmed?: boolean;
+      reason?: LoginOpenReason;
     }
   /**
    * 总开关状态。**不回报 Cookie**。

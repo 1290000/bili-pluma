@@ -1,0 +1,360 @@
+// @vitest-environment node
+
+/**
+ * 登录窗口打开的**失败原因区分**（2026-11-10）。
+ *
+ * ## 为什么需要这个
+ *
+ * 用户真机反馈「点了没反应」。根因是面板所有消息都 `.catch(() => null)` ——
+ * **失败完全静默**，用户无法判断是网络问题、没开 InPrivate 权限、还是按钮坏了。
+ *
+ * `login/open` 有明确的 `reason`，必须转成人话。
+ *
+ * ## `incognito-disabled` 是唯一"用户能自己修"的失败
+ *
+ * 它是**最常见**的一种：用户没在扩展详情页勾「在 InPrivate 中允许」。
+ * 笼统说"登录窗口打不开"等于让他无从下手 —— 必须直接告诉他去哪里勾。
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import { describeLoginOutcome } from '../../../src/content/panel/login-outcome';
+
+describe('★★ login/open 应答 → 用户提示', () => {
+  it('★★ opened:true → 成功提示，告诉用户去扫码', () => {
+    const r = describeLoginOutcome({ type: 'login/open:ok', opened: true });
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain('扫码');
+  });
+
+  it('★★ opened:false + incognito-disabled → **必须**告诉他去扩展详情页开权限', () => {
+    /**
+     * 反例：把 `incognito-disabled` 分支删掉（退回笼统文案）→ 本条必红。
+     *
+     * 这是用户能自己修的唯一一种失败，提示里必须出现：
+     *   - 「InPrivate」（勾选项的名字）
+     *   - 「扩展详情页」（去哪里勾）
+     */
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: false,
+      reason: 'incognito-disabled',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain('InPrivate');
+    expect(r.text).toContain('扩展详情页');
+    // 不能只说"打不开"
+    expect(r.text).not.toBe('登录窗口打不开，请重试');
+  });
+
+  it('★ opened:false + 其他 reason → 笼统失败（那种用户修不了）', () => {
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: false,
+      reason: 'window-create-failed',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain('打不开');
+    // 不该误导用户去动 InPrivate 权限
+    expect(r.text).not.toContain('InPrivate');
+  });
+
+  it('★ 应答类型不对（background 异常）→ 失败提示', () => {
+    const r = describeLoginOutcome({ type: 'login/open:err' });
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain('打不开');
+  });
+
+  it('★ 应答是 null（消息发送失败）→ 失败提示，不抛', () => {
+    const r = describeLoginOutcome(null);
+    expect(r.ok).toBe(false);
+    expect(r.text).toContain('打不开');
+  });
+
+  it('★ 应答缺少 opened 字段 → 当作失败（不能乐观地报成功）', () => {
+    /**
+     * 乐观默认（`opened !== false` 就当成功）会让"窗口没打开"被报成
+     * "已打开，请扫码" —— 用户扫半天没反应。
+     */
+    const r = describeLoginOutcome({ type: 'login/open:ok' });
+    expect(r.ok).toBe(false);
+  });
+});
+
+/**
+ * ## 「点了完全没反应」的两个来源（2026-11-12，task-22）
+ *
+ * 用户报的现象是「点扫码登录取流账号完全没反应」。拆开是两个**不同**的原因：
+ *
+ * | 场景 | 旧行为 | 为什么等于没反应 |
+ * | --- | --- | --- |
+ * | 权限值读到 `false` | 提示「**再点一次**」 | 权限值会自己掉，点多少次都过不去 |
+ * | 说明页已开着 | `already-open` → 落进「已打开，请扫码」 | 窗口只被聚焦，本来就在最前面 ⇒ 屏幕无变化 |
+ */
+describe('★★★ 权限 false：必须陈述"当前事实"，不许说"再点一次"（task-22 缺陷 3）', () => {
+  it('★★★ 文案里**不许**出现「再点一次」这类错误指令', () => {
+    /**
+     * ## 为什么这条是硬指标
+     *
+     * 真机取证：`14:41:46` 权限 `true` 且成功开窗；`14:42:04`（**18 秒后**）
+     * 再读已是 `false`，用户明确回答**没动过开关**。
+     *
+     * ⇒ 权限值会自己掉。用户按「再点一次」去点，**每一次都会读到 false**，
+     * 于是每次都看到同一句红字 —— 他体验到的就是「完全没反应」。
+     *
+     * 🔁 反向验证：把文案改回「…，再点一次」→ 本条必红。
+     */
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: false,
+      reason: 'incognito-disabled',
+    });
+
+    expect(r.text, '又出现了"再点一次"这个错误指令').not.toContain('再点一次');
+  });
+
+  it('★★★ 必须明确说出「现在是关着的」这个当前事实', () => {
+    /**
+     * 只说"去哪里开"、不说"现在是什么状态"，用户无法判断
+     * 自己上次开的那一下到底生效没有 —— 那正是他反复点按钮的原因。
+     *
+     * 🔁 反向验证：删掉「关着的」→ 本条必红。
+     */
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: false,
+      reason: 'incognito-disabled',
+    });
+
+    expect(r.text, '没有陈述"权限现在是关着的"这个事实').toContain('关着的');
+  });
+
+  it('★★★ 保留「去哪里开」的路径指引（用户仍然需要知道怎么修）', () => {
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: false,
+      reason: 'incognito-disabled',
+    });
+
+    expect(r.text).toContain('InPrivate');
+    expect(r.text).toContain('扩展详情页');
+  });
+
+  it('★★★ **不断言是谁关的**（我们不知道，写了就是编造）', () => {
+    /**
+     * 可能是用户自己关的、可能是浏览器策略、可能是扩展重载后重置。
+     * 代码只知道"读到 false"，不知道"为什么变成 false"。
+     *
+     * 所以文案里不许出现任何归因，也不许让用户背锅。
+     *
+     * 🔁 反向验证：加一句「可能是你刚才关掉了」→ 本条必红。
+     */
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: false,
+      reason: 'incognito-disabled',
+    });
+
+    for (const blame of ['你关闭', '你关掉', '你手动', '被系统', '浏览器自动']) {
+      expect(r.text, `断言了归因「${blame}」—— 代码并不知道`).not.toContain(blame);
+    }
+  });
+});
+
+describe('★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2）', () => {
+  it('★★★ `already-open` 必须产生一条**与成功不同**的提示', () => {
+    /**
+     * ## 为什么这条是缺陷
+     *
+     * `openLoginWindow()` 在窗口已存在时只做 `chrome.windows.update({focused:true})`。
+     * 那个窗口**本来就在最前面** ⇒ 视觉上什么都没发生。
+     *
+     * 旧代码更糟：`describeLoginOutcome` 里 `already-open` 没有分支，
+     * 直接落进最后的成功文案「扫码窗口已打开，请用手机扫码」——
+     * **用户看到"已打开"，但屏幕上没有新窗口**，于是以为按钮坏了。
+     *
+     * 🔁 反向验证：删掉 `already-open` 分支（落回成功文案）→ 本条必红。
+     */
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'already-open',
+    });
+
+    expect(r.text).not.toBe(describeLoginOutcome({ type: 'login/open:ok', opened: true }).text);
+  });
+
+  it('★★★ 提示必须告诉用户「去那个窗口操作」，而不只是「已打开」', () => {
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'already-open',
+    });
+
+    expect(r.text, '没告诉用户窗口在哪').toContain('已经开着');
+    expect(r.text, '没告诉用户去那里操作').toContain('窗口');
+  });
+
+  it('★★★ `already-open` 是**好消息**（`ok:true`）—— 不许再让它走危险色（task-25）', () => {
+    /**
+     * ## 口径反转了，请勿改回去（2026-11-12，task-25）
+     *
+     * 旧断言是 `expect(r.ok).toBe(false)`，理由是"这次点击没打开新窗口"。
+     * 但 `ok` 同时管着**颜色**和**是否自动消失**（`panel.ts`：
+     * `classList.toggle('danger', !ok)`；只有 `ok === true` 才 setTimeout）——
+     * 于是用户看到**红色**的「扫码登录窗口已经开着了」**常驻不消失**，
+     * 以为又出错了。verifier 实测确认。
+     *
+     * 而窗口确实在，这是好消息。`ok` 现在只表达"这条提示是不是坏消息"。
+     *
+     * 🔁 反向验证：把 `already-open` 的 `ok` 改回 `false` → 本条必红。
+     */
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'already-open',
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('★★★ `already-open` 仍然不启动轮询 —— 但判据是 `shouldPoll`，不是 `ok`（task-25）', () => {
+    /**
+     * ## 这条守住的是「两件事解耦」本身
+     *
+     * 旧版本靠 `ok:false` 顺带跳过轮询，于是"不轮询"和"红字"被绑死。
+     * 现在 `shouldPoll` 独立表达它：窗口本来就在跑自己的轮询，
+     * 这里再启一轮只是重复请求。
+     *
+     * 🔁 反向验证：把 `shouldPoll` 改成 `true`（或删掉这个字段让
+     * `openLogin()` 回退判 `ok`）→ 本条必红。
+     */
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'already-open',
+    });
+    expect(r.shouldPoll).toBe(false);
+  });
+
+  it('★★★ `ok` 与 `shouldPoll` 正交：already-open 是「好消息 + 不轮询」这个组合', () => {
+    // 单独断言，防止有人把两者重新推导成同一个值：
+    // 只要出现"ok 由 shouldPoll 推出来"或反之，本组合就不可能同时成立。
+    const r = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'already-open',
+    });
+    expect(r.ok).toBe(true);
+    expect(r.shouldPoll).toBe(false);
+  });
+});
+
+describe('★★ 正常成功路径不受影响（回归保护）', () => {
+  it('★★ 首次成功（无 reason）→ 成功色 + 扫码指引', () => {
+    const r = describeLoginOutcome({ type: 'login/open:ok', opened: true });
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain('扫码');
+  });
+
+  it('★★ `assumed`（乐观成功）→ 仍是成功色，**不**被 already-open 分支误伤', () => {
+    /**
+     * `assumed` 是 `opened: true` + `reason:'assumed'`，必须走成功分支。
+     * 若把 already-open 的判断写成「有 reason 就算 already-open」→ 本条必红。
+     */
+    const r = describeLoginOutcome({ type: 'login/open:ok', opened: true, reason: 'assumed' });
+    expect(r.ok).toBe(true);
+    expect(r.text).toContain('扫码');
+  });
+});
+
+describe('★★★ `assumed` 不许断言「窗口已打开」（task-24）', () => {
+  /**
+   * ## 为什么这一组是承重的
+   *
+   * task-12 的实测统计：split 模式下 `create()` 返回 `id != null` 的次数是
+   * **0/4**，成功路径 4/4 都是 `assumed`。也就是说 **`assumed` 是常态**，
+   * 大多数用户看到的就是这一句。
+   *
+   * 原文案「扫码窗口已打开，请用手机扫码」在 `assumed` 下是在**陈述一件
+   * 我们不知道的事** —— 用户若根本没看到窗口，会对着空气找二维码。
+   */
+  it('★★★ `assumed` 不得出现「已打开」这种确定断言', () => {
+    const r = describeLoginOutcome({ type: 'login/open:ok', opened: true, reason: 'assumed' });
+    expect(r.text).not.toContain('已打开');
+    expect(r.text).not.toContain('窗口已');
+  });
+
+  it('★★★ `assumed` 必须给出「没看到窗口时怎么办」的下一步', () => {
+    const r = describeLoginOutcome({ type: 'login/open:ok', opened: true, reason: 'assumed' });
+    expect(r.text).toContain('没看到');
+    expect(r.text).toContain('再点一次');
+  });
+
+  it('★★ `assumed` 与「确定打开」（无 reason）必须是**不同**的文案', () => {
+    const assumed = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'assumed',
+    });
+    const sure = describeLoginOutcome({ type: 'login/open:ok', opened: true });
+    expect(assumed.text).not.toBe(sure.text);
+  });
+
+  it('★★ 确定打开时仍说「已打开」（别为了修 assumed 把确定路径也改弱）', () => {
+    const r = describeLoginOutcome({ type: 'login/open:ok', opened: true });
+    expect(r.text).toContain('已打开');
+  });
+});
+
+describe('★★★ `shouldPoll` 与 `ok` 解耦（task-25）', () => {
+  /**
+   * 这一组是 task-25 的核心判据：`ok`（这条提示是不是坏消息）
+   * 与 `shouldPoll`（要不要现在轮询）**不许再相互推导**。
+   *
+   * verifier 实测的代价：`already-open` 为了不轮询取 `ok: false`，
+   * 结果红色提示常驻不消失，用户以为出错了。
+   */
+  it('★★★ 失败分支一律 `shouldPoll: false`（打不开窗口，轮询没有意义）', () => {
+    const cases = [
+      null,
+      { type: 'login/open:err' },
+      { type: 'login/open:ok', opened: false },
+      { type: 'login/open:ok', opened: false, reason: 'incognito-disabled' },
+    ] as const;
+    for (const res of cases) {
+      const r = describeLoginOutcome(res as Parameters<typeof describeLoginOutcome>[0]);
+      expect(r.ok, `失败分支不该是成功色：${JSON.stringify(res)}`).toBe(false);
+      expect(r.shouldPoll, `失败分支不该轮询：${JSON.stringify(res)}`).toBe(false);
+    }
+  });
+
+  it('★★★ 真的开了窗 → `ok: true` **且** `shouldPoll: true`', () => {
+    // 反向锁：别为了「already-open 不轮询」把成功路径的 shouldPoll 也关掉。
+    for (const res of [
+      { type: 'login/open:ok', opened: true },
+      { type: 'login/open:ok', opened: true, reason: 'assumed' },
+    ] as const) {
+      const r = describeLoginOutcome(res);
+      expect(r.ok).toBe(true);
+      expect(r.shouldPoll).toBe(true);
+    }
+  });
+
+  it('★★★ 三种「窗口已开 / 已尝试 / 确定开」里，只有 already-open 不轮询', () => {
+    const alreadyOpen = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'already-open',
+    });
+    const assumed = describeLoginOutcome({
+      type: 'login/open:ok',
+      opened: true,
+      reason: 'assumed',
+    });
+    const sure = describeLoginOutcome({ type: 'login/open:ok', opened: true });
+
+    expect(alreadyOpen.shouldPoll).toBe(false);
+    expect(assumed.shouldPoll).toBe(true);
+    expect(sure.shouldPoll).toBe(true);
+  });
+});

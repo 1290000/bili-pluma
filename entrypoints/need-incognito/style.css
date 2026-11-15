@@ -1,5 +1,12 @@
 /* 说明页样式 —— 只引用 tokens.css 的变量 */
 
+/*
+ * ⚠️ `tokens.css` 里的 `--pluma-text-muted`（#6b7280，11–13px）在浅色底上是
+ * 灰到接近看不清的。本页是**要用户照着做**的说明页，不是装饰性 UI，
+ * 所以正文一律用 `--pluma-text`，`muted` 只留给"已经完成/可以忽略"的次要行。
+ * （`scripts/verify.mjs` 的 `css-tokens` 只查变量存不存在，查不出对比度问题。）
+ */
+
 * {
   box-sizing: border-box;
 }
@@ -11,123 +18,78 @@ body {
   background: var(--pluma-surface);
   color: var(--pluma-text);
   font-family: var(--pluma-font-sans);
-  font-size: var(--pluma-font-body);
+  font-size: 14px;
   line-height: 1.65;
 }
 
 .wrap {
-  padding: 26px 28px 22px;
+  padding: 24px 26px 20px;
 }
 
 .title {
-  margin: 0 0 10px;
-  font-size: 17px;
-  font-weight: 500;
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .lead {
-  margin: 0 0 16px;
-  color: var(--pluma-text-muted);
+  margin: 0 0 12px;
+  color: var(--pluma-text);
 }
 
-.why {
-  padding: 12px 14px;
-  border-left: 2px solid var(--pluma-accent);
-  background: var(--pluma-accent-bg);
-  border-radius: 0 var(--pluma-radius-control) var(--pluma-radius-control) 0;
-  margin-bottom: 18px;
-}
+/* ── 状态行（`main.ts` 的轮询写入） ──────────────────────────────
+   初始 `textContent` 为空 + 没有 `.show` → 不占任何视觉位置。
+   只有真实读到的状态才会显示，所以不会有"正在检查"这种占位文案。 */
 
-/* 折叠态：原理默认收起，别让用户先读一段科普才看到步骤 */
-.why-title {
-  margin: 0;
+.page-state {
+  margin: 10px 0 0;
+  font-size: 13px;
   font-weight: 500;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-accent);
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-}
-
-/* 去掉 Chrome / Edge 默认的三角，自己画一个，保证两边一致 */
-.why-title::-webkit-details-marker {
   display: none;
 }
 
-.why-title::before {
-  content: '▸';
-  display: inline-block;
-  margin-right: 6px;
-  transition: transform 0.15s;
+.page-state.show {
+  display: block;
 }
 
-.why[open] .why-title::before {
-  transform: rotate(90deg);
-}
-
-.why-body {
-  margin: 8px 0 0;
-  font-size: var(--pluma-font-caption);
-  line-height: 1.7;
-}
-
-/* 两段说明之间留一点呼吸，但不要和首段的 8px 叠加 */
-.why-body + .why-body {
-  margin-top: 6px;
-}
-
-.steps-title {
-  margin: 0 0 6px;
-  font-weight: 500;
-}
-
-.steps {
-  margin: 0 0 18px;
-  padding-left: 20px;
-}
-
-.steps li {
-  margin-bottom: 6px;
-}
-
-code {
-  padding: 1px 5px;
-  border-radius: 4px;
-  background: var(--pluma-accent-bg);
-  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-  font-size: 12px;
-}
-
-.footnote {
-  margin: 0;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
-}
-
-/* 8 秒后仍未就绪时高亮这条提示，强调需要手动操作 */
-.footnote.show {
-  color: var(--pluma-warning);
-  font-weight: 500;
-}
-
-/* 权限已开启（轮询 detected true）—— 用信息色，与"没开成"的警告色区分。
-   注意：tokens.css 里没有 --pluma-success，所以不用虚构的绿色变量。 */
-.footnote.show.ok {
+/* 权限已开、窗口就绪 —— 用 accent（信息色）。
+   注意：tokens.css 里没有 --pluma-success，不虚构变量。 */
+.page-state.done {
   color: var(--pluma-accent);
 }
 
-/* ── 优化 1：一键直达按钮（2026-11-10） ─────────────────────────── */
+/* 超时仍没检测到 —— 用 warning，但**不用 danger**：
+   这是"还没成"，不是"出错了"，红字会让用户以为操作失败。 */
+.page-state.timeout {
+  color: var(--pluma-warning);
+}
 
-.actions {
+/* ── 动作列表 ───────────────────────────────────────────────────
+   裁决 2：只许一个动作列表、≤ 3 步、每步一句话。 */
+
+.steps {
+  margin: 12px 0 14px;
+  padding-left: 20px;
+  font-size: 14px;
+  color: var(--pluma-text);
+}
+
+.steps li {
+  margin-bottom: 8px;
+}
+
+/* 第 1 步是按钮本身（"打开扩展详情页"就是第一个动作），
+   所以用 flex 让两个按钮并排、不与序号文字挤在一起。 */
+.steps li:first-child {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin: 12px 0 6px;
 }
 
 .btn-primary,
 .btn-ghost {
   font-family: inherit;
-  font-size: var(--pluma-font-caption);
+  font-size: 13px;
   border-radius: var(--pluma-radius-control);
   cursor: pointer;
   padding: 7px 14px;
@@ -157,10 +119,21 @@ code {
   background: var(--pluma-accent-bg);
 }
 
+code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--pluma-accent-bg);
+  color: var(--pluma-text);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: 12px;
+}
+
+/* 降级路径：默认 `hidden`，只在"打开扩展详情页"失败时由 `main.ts` 摊开。
+   不占默认可见文本（文案字数硬指标见 index.html 顶部注释）。 */
 .hint {
-  margin: 0 0 16px;
-  font-size: var(--pluma-font-caption);
-  color: var(--pluma-text-muted);
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: var(--pluma-text);
 }
 
 /* 降级到"手动复制"时，把地址高亮出来让用户一眼看到。
@@ -170,4 +143,54 @@ code.emph {
   color: var(--pluma-warning);
   font-weight: 500;
   outline: 1px solid var(--pluma-warning);
+}
+
+.footnote {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pluma-text);
+}
+
+/* ── 「为什么」折叠 ─────────────────────────────────────────────
+   技术理由的唯一一份（裁决 2）。默认收起：用户先看到动作，不先读科普。 */
+
+.why {
+  padding: 12px 14px;
+  border-left: 2px solid var(--pluma-accent);
+  background: var(--pluma-accent-bg);
+  border-radius: 0 var(--pluma-radius-control) var(--pluma-radius-control) 0;
+  margin-top: 16px;
+}
+
+.why-title {
+  margin: 0;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--pluma-accent);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+/* 去掉 Chrome / Edge 默认的三角，自己画一个，保证两边一致 */
+.why-title::-webkit-details-marker {
+  display: none;
+}
+
+.why-title::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 6px;
+  transition: transform 0.15s;
+}
+
+.why[open] .why-title::before {
+  transform: rotate(90deg);
+}
+
+.why-body {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--pluma-text);
 }

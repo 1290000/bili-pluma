@@ -1,0 +1,5 @@
+﻿[自证·正] 合格构造（controller 活着 + 两半判据都在）→ {"ok":{"hints":-1,"threw":"Unexpected token ';'","sendMessage":0},"chrome-gone":{"hints":-1,"threw":"Unexpected token ';'","sendMessage":0},"runtime-gone":{"hints":-1,"threw":"Unexpected token ';'","sendMessage":0},"id-undefined":{"hints":-1,"threw":"Unexpected token ';'","sendMessage":0},"id-null":{"hints":-1,"threw":"Unexpected token ';'","sendMessage":0}} 判定 = fail
+[自证·反] 同一构造但 controller 钉成 null（兜底会替主守卫兜底）→ 见下
+   runs = {"ok":{"hints":2,"threw":null,"sendMessage":1},"chrome-gone":{"hints":1,"threw":null,"sendMessage":0},"runtime-gone":{"hints":1,"threw":null,"sendMessage":0},"id-undefined":{"hints":1,"threw":null,"sendMessage":0},"id-null":{"hints":1,"threw":null,"sendMessage":0}}
+   判定 = fail ✅ 抓到了（分辨不出主守卫）
+🔴 自证未通过 —— 检查器结论不可用

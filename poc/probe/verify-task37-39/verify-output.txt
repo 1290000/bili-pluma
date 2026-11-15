@@ -1,0 +1,6 @@
+﻿
+  [heavy] lint         跑…
+  [heavy] lint         ✅ 5.6s    
+
+
+[verify] ✅ 21 项全绿（共 35.1s，并行墙面 35.1s，串行合计 79.2s）

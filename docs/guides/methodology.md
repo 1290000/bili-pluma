@@ -296,7 +296,7 @@ git checkout -- <file>   =  把文件恢复到 HEAD（上次提交）
    # 或者更简单：只改副本，不改原文件
    ```
 2. **`git checkout -- <file>` / `git stash` / `git reset --hard` 在共享工作区一律禁止。**
-   前两个的破坏性早就写在 `docs/guides/team-workflow.md` §5.1，
+   前两个的破坏性早就写在 `docs/guides/review-discipline.md` §3.1，
    `checkout -- <file>` 是同一类东西的**更隐蔽变体**（看起来只动一个文件，其实动的是"所有未提交改动"）。
 3. **首选"根本不碰真实文件"的做法**：把被测代码复制到独立副本 / 建临时探针文件，在副本上做反向验证。
    **不碰真实文件就永远不需要恢复** —— 这是本事故后采用的做法，也应该是默认做法。

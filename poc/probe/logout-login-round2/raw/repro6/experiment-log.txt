@@ -1,0 +1,27 @@
+[2026-11-12T07:39:02.094Z] === 实验开始  which=e2 ===
+[2026-11-12T07:39:02.098Z] 用户主浏览器 pid=2600 绝对不碰；本脚本只操作 D:\Projects\Pluma\poc\probe\logout-login-round2\raw\repro6 下的独立 profile
+[2026-11-12T07:39:02.099Z] 
+[2026-11-12T07:39:02.099Z] ======================================================================
+[2026-11-12T07:39:02.099Z] 实验 E2 开权限 → 开 incognito 窗口 → 关掉
+[2026-11-12T07:39:02.100Z] ======================================================================
+[2026-11-12T07:39:02.101Z] 启动 Edge: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe --user-data-dir=D:\Projects\Pluma\poc\probe\logout-login-round2\raw\repro6\p-e2 --no-first-run --no-default-browser-check --disable-features=msEdgeFirstRunExperience --load-extension=D:\Projects\Pluma\.output\chrome-mv3 --remote-debugging-port=0 about:blank
+[2026-11-12T07:39:02.112Z]   子进程 pid=20372
+[2026-11-12T07:39:06.148Z] 扩展是否已载入 profile: true  (D:\Projects\Pluma\poc\probe\logout-login-round2\raw\repro6\p-e2\Default\Secure Preferences)
+[2026-11-12T07:39:06.153Z]   已把 profile 里 incognito 写成 true
+[2026-11-12T07:39:06.154Z]   【已开权限】
+[2026-11-12T07:39:08.164Z]   开窗前 incognito=true
+[2026-11-12T07:39:08.164Z]   开 incognito 窗口…
+[2026-11-12T07:39:08.173Z]     incognito 进程 pid=31060
+[2026-11-12T07:39:14.184Z]   开窗后 incognito=true
+[2026-11-12T07:39:14.185Z]   关掉 incognito 窗口…
+[2026-11-12T07:39:14.185Z]   关闭自己的实例 pid=31060
+[2026-11-12T07:39:19.442Z]   关窗后 incognito=undefined
+[2026-11-12T07:39:19.442Z]   => E2 结论: 没掉
+[2026-11-12T07:39:19.443Z]   关闭自己的实例 pid=20372
+[2026-11-12T07:39:21.184Z] 实验结束，final incognito = undefined
+[2026-11-12T07:39:21.184Z] 
+[2026-11-12T07:39:21.185Z] ======================================================================
+[2026-11-12T07:39:21.185Z] 实验汇总
+[2026-11-12T07:39:21.185Z] ======================================================================
+[2026-11-12T07:39:21.186Z] E2 开权限 → 开 incognito 窗口 → 关掉: 权限没掉
+[2026-11-12T07:39:21.186Z] 结果写入 D:\Projects\Pluma\poc\probe\logout-login-round2\raw\repro6\experiment-results.json

@@ -1,0 +1,15 @@
+{
+  "group": "G1",
+  "steps": [
+    "[2026-11-12T08:16:19.959Z] === G1 门槛分离实验 ===",
+    "[2026-11-12T08:16:19.964Z] 独立 profile: D:\\Projects\\Pluma\\.tmp\\investigator-q4\\profile-gate-G1",
+    "[2026-11-12T08:16:19.964Z] ⛔ 用户浏览器零接触",
+    "[2026-11-12T08:16:19.976Z]   pid=32176",
+    "[2026-11-12T08:16:21.207Z] CDP 就绪",
+    "[2026-11-12T08:16:27.462Z]   权限已打开: {\"incognitoAccess\":{\"isActive\":true,\"isEnabled\":true}}",
+    "[2026-11-12T08:16:30.490Z]   --- G1: 权限刚开，立刻 create(chrome-extension://) ---",
+    "[2026-11-12T08:16:30.491Z]   Δt=3029ms",
+    "[2026-11-12T08:16:30.701Z]   → {\"ok\":true,\"created\":null}",
+    "[2026-11-12T08:16:34.707Z]   windows.getAll: [{\"id\":1141222919,\"incognito\":false,\"type\":\"normal\"}]"
+  ]
+}

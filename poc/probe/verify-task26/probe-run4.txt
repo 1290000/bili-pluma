@@ -1,0 +1,79 @@
+﻿node : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-no
+de-api-deprecated for more details.[39m
+所在位置 行:1 字符: 129
++ ... ew($false); node node_modules\vitest\vitest.mjs run --config poc\prob ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v2.1.9 D:/Projects/Pluma/poc/probe/verify-task26
+
+stderr | err-whitelist.test.ts > ★ 判据 3：err 白名单端到端（导出 JSON 里不许出现秘密） > ★★ 非 Error 对象 toString 带 SESSDATA → 导出 JSON 不含 SE
+SSDATA/deadbeef
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 3：err 白名单端到端（导出 JSON 里不许出现秘密） > ★★ Error 带 cause（原文藏在 cause 里）→ 导出 JSON 不含 cause 
+里的秘密
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 3：err 白名单端到端（导出 JSON 里不许出现秘密） > ★ err 只允许固定枚举值（不是自由字符串）
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 4：limit 必须来自 DIAG_LIMIT（这里是 7，不是 30） > ★★ 导出 JSON 的 logsMeta.limit 跟着常量走
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 4：limit 必须来自 DIAG_LIMIT（这里是 7，不是 30） > ★★ 面板标题里的条数也来自同一个值
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 4：limit 必须来自 DIAG_LIMIT（这里是 7，不是 30） > ★★ 成功态：标题显示"最近 7 条"，不是 30
+Not implemented: navigation to another Document
+
+ ✓ err-whitelist.test.ts (7 tests) 110ms
+ ❯ render-robust.test.ts (4 tests | 1 failed) 94ms
+   × ★ 判据 5：logsMeta 缺字段不许崩渲染 > ★★★ 直接调 diagnosticsPane：data 里没有 logsMeta 时不许抛 10ms
+     → diagnosticsPane 在缺 logsMeta 时抛了：TypeError: Cannot read properties of undefined (reading 'ok'): expected TypeError: Cannot read properties of unde… to be null
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (b) 读取抛错（孤儿态）→ ok 必须为 false
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (c)【探针成功、真读失败】ok 必须为 false —— 推不出的那一格
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (d)【探针失败、真读成功】ok 必须为 false —— 反向那格
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (e)【真实孤儿态：两处都抛】ok=false 且 err 是白名单固定串
+Not implemented: navigation to another Document
+
+ ✓ ok-is-real-signal.test.ts (5 tests) 121ms
+stderr | ok-is-real-signal.test.ts
+Not implemented: navigation to another Document
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  render-robust.test.ts > ★ 判据 5：logsMeta 缺字段不许崩渲染 > ★★★ 直接调 diagnosticsPane：data 里没有 logsMeta 时不许抛
+AssertionError: diagnosticsPane 在缺 logsMeta 时抛了：TypeError: Cannot read properties of undefined (reading 'ok'): expected
+ TypeError: Cannot read properties of unde… to be null
+
+- Expected: 
+null
+
++ Received: 
+[TypeError: Cannot read properties of undefined (reading 'ok')]
+
+ ❯ render-robust.test.ts:189:71
+ Test Files  1 failed | 2 passed (3)
+    187|       threw = e;
+    188|     }
+    189|     expect(threw, `diagnosticsPane 在缺 logsMeta 时抛了：${String(thre…
+       |                                                                       ^
+    190|     expect(box, '没画出任何东西').not.toBeNull();
+    191|     expect(box?.textContent ?? '', '缺字段时连自检信息都没画出来').toC…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+      Tests  1 failed | 15 passed (16)
+   Start at  18:07:09
+   Duration  5.95s (transform 262ms, setup 0ms, collect 621ms, tests 326ms, environment 3.89s, prepare 367ms)
+

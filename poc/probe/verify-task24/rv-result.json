@@ -1,0 +1,61 @@
+﻿[
+  {
+    "id": "RV1",
+    "label": "isIncognitoInstance 恒返回 false（安全闸失效 → 无痕实例也探测）",
+    "file": "src/background/login-window.ts",
+    "mutatedLines": 1,
+    "total": 16,
+    "failed": [
+      "probeExistingLoginWindow：分区分流 无痕实例即使能看到自己的心跳也**不探测**"
+    ],
+    "sampleMsg": "AssertionError: expected { at: 1794474527707, …(1) } to be null\n    at D:\\Projects\\Pluma\\tests\\unit\\background\\login-heartbeat-probe.test.ts:153:18\n    at processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at file:///D:/Projects/Pluma/node_modules/@vitest/runner/dist/index.js:53",
+    "verdict": "真红（AssertionError）",
+    "restored": true,
+    "sha": "8017F606261DAAFCF4786D383BDFEBF09F955F0000F6F0BCF2B8F6E7401FE96B"
+  },
+  {
+    "id": "RV2",
+    "label": "probeExistingLoginWindow 恒返回 null（回到「第二次点没反应」）",
+    "file": "src/background/login-window.ts",
+    "mutatedLines": 1,
+    "total": 16,
+    "failed": [
+      "openLoginWindow：第二次点击不再静默 心跳活着时返回 already-open，且**不调用** windows.create"
+    ],
+    "sampleMsg": "AssertionError: expected 'assumed' to be 'already-open' // Object.is equality\n    at D:\\Projects\\Pluma\\tests\\unit\\background\\login-heartbeat-probe.test.ts:164:24\n    at file:///D:/Projects/Pluma/node_modules/@vitest/runner/dist/index.js:533:5\n    at runTest (file:///D:/Projects/Pluma/node_modules/@v",
+    "verdict": "真红（AssertionError）",
+    "restored": true,
+    "sha": "8017F606261DAAFCF4786D383BDFEBF09F955F0000F6F0BCF2B8F6E7401FE96B"
+  },
+  {
+    "id": "RV3",
+    "label": "describeSuccess 对 assumed 不再走中性文案（回到「扫码窗口已打开」）",
+    "file": "src/content/panel/login-outcome.ts",
+    "mutatedLines": 1,
+    "total": 20,
+    "failed": [
+      "★★★ `assumed` 不许断言「窗口已打开」（task-24） ★★★ `assumed` 不得出现「已打开」这种确定断言",
+      "★★★ `assumed` 不许断言「窗口已打开」（task-24） ★★★ `assumed` 必须给出「没看到窗口时怎么办」的下一步",
+      "★★★ `assumed` 不许断言「窗口已打开」（task-24） ★★ `assumed` 与「确定打开」（无 reason）必须是**不同**的文案"
+    ],
+    "sampleMsg": "AssertionError: expected '扫码窗口已打开，请用手机扫码。成功后这里会自动更新' not to contain '已打开'\n    at D:\\Projects\\Pluma\\tests\\unit\\content\\panel-login-outcome.test.ts:257:24\n    at file:///D:/Projects/Pluma/node_modules/@vitest/runner/dist/index.js:146:14\n    at file:///D:/Projects/Pluma/node_modules/@vitest/runner/dist",
+    "verdict": "真红（AssertionError）",
+    "restored": true,
+    "sha": "F7AC5334C4BF39208F0E2AB431D4D3B0EB98791777DCBB3701EEEFCF4FB5C68C"
+  },
+  {
+    "id": "RV4",
+    "label": "main.tsx 不再周期写心跳（只在注释里保留函数名，验证 stripComments 有效）",
+    "file": "entrypoints/login-window/main.tsx",
+    "mutatedLines": 2,
+    "total": 8,
+    "failed": [
+      "★★★ 扫码窗口必须周期写心跳（读取端的前提） ★★★ 必须用 `setInterval` 周期写，**不能只写一次**",
+      "★★★ 扫码窗口必须周期写心跳（读取端的前提） ★★★ 间隔必须取自 `LOGIN_HEARTBEAT_INTERVAL_MS`，不许在这里硬编码数字"
+    ],
+    "sampleMsg": "AssertionError: expected 'useEffect(() => {\\n    let cancelled …' to contain 'setInterval'\n    at D:\\Projects\\Pluma\\tests\\unit\\background\\login-heartbeat-wiring.test.ts:120:20\n    at file:///D:/Projects/Pluma/node_modules/@vitest/runner/dist/index.js:146:14\n    at file:///D:/Projects/Pluma/node_modu",
+    "verdict": "真红（AssertionError）",
+    "restored": true,
+    "sha": "954D1AC86B740BC9B73BE40D67A167F357EA430BE8D812D657E315CF7C9B9ED4"
+  }
+]

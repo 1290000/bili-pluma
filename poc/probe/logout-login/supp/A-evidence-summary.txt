@@ -1,0 +1,36 @@
+=== A 退出取证（真机）===
+时间: 2026-11-12 00:38 前后
+
+【退出前】
+proxy         : {"enabled":true,"hasCredential":true,"ruleCount":4}
+playbackAccount: {"uname":"{{取流账号昵称}}","mid":{{取流账号mid}},"vipLabel":"annual","expireAt":1811520000000,"healthy":true}
+面板语义树:
+  StaticText "主" / "读取中…" / "收藏 · 点赞 · 评论 · 历史" / "只读"
+  StaticText "取" / "{{取流账号昵称}}" / "仅取流 · 6 个月后到期" / "1 分钟前校验" / "年度大会员"
+  @e327 button "取流：扩展账号"
+  @e328 button "重新登录"
+  @e329 button "退出取流账号"
+
+【第一步点击后（确认态）】
+  @e328 button "重新登录"
+  @e329 button "确认退出"
+  @e330 button "取消"
+  => 第一步有可见反馈（按钮文案 + 多出取消按钮）
+
+【第二步点击后：高频轮询（22 次采样，t=393ms..110711ms）】
+  每一次采样: card=False logoutBtn=False notice=False login=扫码登录
+  => .acct-result 文案（"已退出取流账号，取流回退到主账号身份"）一次都没被观测到
+
+【退出后最终状态】
+proxy         : {"enabled":false,"hasCredential":false,"ruleCount":0}
+playbackAccount: null
+面板语义树:
+  StaticText "主" / "读取中…" / "收藏 · 点赞 · 评论 · 历史" / "只读"
+  paragraph "还没有配置取流账号"
+  @e327 button "扫码登录取流账号"
+  paragraph "主账号无需配置，自动沿用浏览器当前登录状态"
+  => 卡片消失 / 按钮文案变 / 提示段出现；但无 .acct-result
+
+【关键副作用】
+proxy.enabled 从 true -> false（由 account-remove.handler.ts:32 的 disableProxy() 主动关闭）
+=> 与面板文案"取流回退到主账号身份"不符：实际是整个扩展的代理被关闭

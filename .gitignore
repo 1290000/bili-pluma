@@ -95,3 +95,24 @@ poc/probe/result-*.json
 # 摘要已入库（见上面的例外），需要明细时重跑即可。
 poc/verify/result-q2-auto.full.json
 poc/verify/q2-lab*.png
+
+# ---------- 排查时临时起的 Edge profile ----------
+# 2026-11-15：`poc/probe/logout-login-round2/raw/repro6/` 下留了两个完整 Edge
+# 用户数据目录（`p-probe/` `p-e2/`），合计 **131.6 MB** —— 是排查时为了隔离
+# 掉留的本地浏览器状态，不是成果。同目录的 `probe-ext/`（8 行的假扩展）、
+# `experiment-*.json/txt` 是结论，照常入库。
+#
+# 判据写成模式而不是具体路径：以后任何 probe 目录里再留下 profile 都会被拦。
+poc/probe/**/p-probe/
+poc/probe/**/p-e2/
+poc/probe/**/profile/
+poc/probe/**/user-data/
+poc/probe/**/Crashpad/
+# Edge profile 内部的东西（万一目录名不叫上面那些）
+poc/probe/**/Default/Cache/
+poc/probe/**/Default/Code Cache/
+poc/probe/**/Default/Service Worker/
+poc/probe/**/BrowserMetrics/
+poc/probe/**/*.pma
+poc/probe/**/*.dmp
+

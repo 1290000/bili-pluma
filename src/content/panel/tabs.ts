@@ -52,6 +52,41 @@ export function qualityTab(
   q: QualityView,
   actions: {
     toggleProxy: (next: boolean) => void;
+    /**
+     * ── 总开关能不能点（2026-11-12，task-10）──
+     *
+     * ## 用户裁决（原话）
+     *
+     * > 「可以保留这个开关原本的状态，但是因为退出了扩展账号所以这个开关
+     * > 即便是开着也是没有用了，所以整个开关应变为灰色不可点击」
+     *
+     * 即：**开关值照旧保留**（不许为了"看起来一致"去改 `ENABLED_KEY`），
+     * 但**没有可用账号时它必须灰掉**，因为开着也没用。
+     *
+     * ## ⚠️ 判据**不许在本函数里写**
+     *
+     * 三种情况必须区分，而只有一处实现（`streaming-identity.ts`）：
+     *
+     * | 取流身份 | 有凭据 | 能用吗 | 开关 |
+     * | --- | --- | --- | --- |
+     * | `page` | 无 | **能**（本就不需要扩展参与） | **可点** |
+     * | `extension` | 有 | 能 | 可点 |
+     * | `extension` | 无 | 不能（真的没配） | **灰** |
+     *
+     * ⚠️ **`page` 身份下 `hasCredential` 恒为 `false`** —— 只看 `hasCredential`
+     * 会把一个**完全可用**的配置误禁（这正是 `isStreamingReady()` 被抽出来的原因）。
+     *
+     * 所以本函数只接收**算好的结论**（`proxyUsable`）与**算好的原因**，
+     * 判据在 `panel.ts` 里走 `isStreamingReady()`。
+     */
+    proxyUsable: boolean;
+    /**
+     * 开关灰掉时要给用户看的那句话。`null` = 不需要解释（可点）。
+     *
+     * ⚠️ **必须给文字**（不许只灰不说）：handoff §2.3 记过"开关永久禁用
+     * 且不说明原因"这一类，用户会以为控件坏了。
+     */
+    proxyDisabledReason: string | null;
   },
 ): HTMLElement {
   const box = el('div', 'tab-pane');
@@ -90,19 +125,44 @@ export function qualityTab(
    *
    * ⚠️ `proxyEnabled === null`（读不到 `proxy/status`）时**禁用**，而不是画成"关"。
    * 把"未知"画成"关"，用户会以为功能自己关掉了 —— 与角标开关同一个纪律。
+   *
+   * ## 两种"禁用"要分开（2026-11-12，task-10）
+   *
+   * | 情况 | 禁用？ | 解释 |
+   * | --- | --- | --- |
+   * | 状态读不到（`proxyEnabled === null`） | ✅ | 「状态读取失败，暂时无法切换」 |
+   * | **没有可用账号**（`!proxyUsable`） | ✅ | 由 `proxyDisabledReason` 给（task-10） |
+   *
+   * 两者可以同时成立（读不到状态 + 没账号），那时优先说"读不到状态"——
+   * 那是更基础的问题，说"先去扫码"会让用户白折腾一次。
    */
+  const proxyDisabled = q.proxyEnabled === null || !actions.proxyUsable;
   box.appendChild(
     switchRow({
       label: '自动接管取流',
       hint: '只替换取流接口的身份，收藏 / 点赞 / 历史不受影响',
+      /**
+       * ⚠️ 灰掉时**仍然渲染开关本身**（不是不渲染）。
+       *
+       * handoff §2.3 第 9 条：控件消失是隐形 bug —— 用户看不见就以为功能没做。
+       * `checked` 照旧反映用户设的值（task-10 的要求：**保留原本的状态**）。
+       */
       checked: q.proxyEnabled === true,
-      disabled: q.proxyEnabled === null,
+      disabled: proxyDisabled,
       onToggle: actions.toggleProxy,
     }),
   );
 
   if (q.proxyEnabled === null) {
     box.appendChild(el('p', 'pane-note', '状态读取失败，暂时无法切换'));
+  } else if (!actions.proxyUsable && actions.proxyDisabledReason) {
+    /**
+     * 没有可用账号 → 说清原因（**不许只灰不说**）。
+     *
+     * 文案由 `panel.ts` 给，与「账号」Tab 的引导语同一套说法（"扫码登录取流账号"），
+     * 不制造第二套术语。
+     */
+    box.appendChild(el('p', 'pane-note', actions.proxyDisabledReason));
   }
 
   return box;
@@ -251,6 +311,8 @@ export function cleanTab(
  * `BADGE_ENABLED_KEY` 的 `storage.onChanged` 并立刻重画角标。
  *
  * @param badgeEnabled 角标开关。`null` = 还没读出来 → 禁用，**不画成"关"**
+ * @param badgeReadFailed 角标开关**读失败**（`true` 时禁用态要说明原因）。
+ *   默认 `false`：区分"正在读"与"读不到" —— 见 `panel.ts` 的 `badgeReadFailed`。
  */
 export function displayTab(
   badgeEnabled: boolean | null,
@@ -278,6 +340,19 @@ export function displayTab(
     toggleFeedAccount: (next: boolean) => void;
     /** 有没有扫码登录过扩展账号 —— 决定推荐流开关能否点 */
     hasCredential: boolean;
+    /**
+     * 角标开关**读失败**（`true` 时禁用态必须说明原因）。
+     *
+     * ## 为什么必须是显式字段而不是从 `badgeEnabled === null` 推
+     *
+     * `badgeEnabled === null` 同时表示「正在读」与「读不到」：
+     *   - 正在读 → 灰几毫秒是正常的，不该弹一句"失败"
+     *   - 读不到 → **必须解释**，否则用户面对一个永远点不动的开关
+     *
+     * 两者混在一起，就写不出"只在真的失败时才说话"的断言
+     * （那正是 task-5 卡里提醒的"很容易写成永远为真的断言"）。
+     */
+    badgeReadFailed: boolean;
   },
 ): HTMLElement {
   const box = el('div', 'tab-pane');
@@ -292,30 +367,68 @@ export function displayTab(
       onToggle: actions.toggleBadge,
     }),
   );
+  /**
+   * ## 读不到时**说出原因**（2026-11-12，task-5 静默点 2）
+   *
+   * 旧实现：读失败 → 开关永久灰着 → **面板上一个字都没有**。
+   * 用户不知道是加载中、坏了、还是自己关掉了。
+   *
+   * ⚠️ 只在 `badgeReadFailed === true` 时渲染 —— 别在"正在读"那一瞬
+   * 就弹一句失败（那会让每次进 Tab 都闪一下红字）。
+   */
+  if (actions.badgeReadFailed) {
+    box.appendChild(el('p', 'pane-note', '读不到角标开关的当前设置 —— 收起重开面板可重试'));
+  }
 
   /**
    * ## 首页推荐流（2026-11-11 从「账号」Tab 迁来）
    *
-   * ### hint 从 62 字压到 14 字
+   * ⚠️ **开关下面没有任何说明文字**（2026-11-12，task-11）。
    *
-   * 用户原话：「描述太复杂了，必须精简、精简、再精简」。
-   * 且用户明确否决了写机制：「**这个开关的说明没有必要写清"首屏也会换"，按我说的来**」。
+   * 用户原话：
+   * > 「把首页推荐流使用取流账号这个开关的"打开后首页推荐完成取流账号的"
+   * > 这些详细描述删掉，**标题已经能够完美解释这个开关的含义了**」
    *
-   * 机制细节（首屏藏 / 滚动换 Cookie）**保留在 [ADR 0035] 里给维护者**，
-   * 界面只留"打开会发生什么"。
+   * 所以 `hint` 被**整个去掉**（不是传空串），下方那句「先扫码登录取流账号，
+   * 才能用它来换首页推荐流」也一并删除。
    *
-   * ⚠️ **旧 hint 里有一句「与上面的取流身份是两个独立设置」—— 已删除。**
-   * 那句话在「账号」Tab 里指代成立（"上面"就是账号卡），
-   * **迁到「显示」Tab 后"上面"是「页内角标」，指代完全错位。**
-   * 这是迁位置时最容易漏的一处：**文案里的空间指代会随着位置失效**。
+   * ⚠️ **不要自己再造一句更短的说明代替它。** 用户要求的是删除，
+   * "换个说法"违背需求；删完这里就是空的。
+   *
+   * ### 已知副作用（用户已明确接受）
+   *
+   * 无凭据时这个开关是**灰的且没有原因说明**。用户看过这条取舍并要求删除。
+   *
+   * 机制细节（首屏藏 / 滚动换 Cookie）在 [ADR 0035] 里给维护者，**不在界面上**。
    */
   box.appendChild(el('p', 'diag-section', '首页推荐流'));
   box.appendChild(
     switchRow({
       label: '首页推荐流使用取流账号',
-      // 14 字。不写"首屏""滚动加载""隐藏"—— 那是机制，不是用户要理解的东西。
-      hint: '打开后，首页推荐换成取流账号的',
-      checked: actions.feedAccountEnabled,
+      /**
+       * ## ⚠️ 渲染的必须是**生效状态**，不是"用户选的开关值"（2026-11-12，task-5）
+       *
+       * 旧写法是 `checked: actions.feedAccountEnabled` —— 于是「用户开过这个开关、
+       * 后来退出了取流账号」时，控件渲染成**「开 + 灰」**，而功能其实没在生效。
+       *
+       * 真机证据（`poc/probe/logout-login/REPORT.md` E-3）：
+       * `@e267 checkbox [disabled] [checked]="on"` —— **陈述了一件没发生的事**。
+       *
+       * 判据在 `rule-plan.ts` 的 `buildRulePlan()`：
+       * ```
+       * if (!state.hasCredential) return { feedStreaming: false, feedAccount: false };
+       * ```
+       * 没有凭据时 `feedAccount` **恒为 `false`**。
+       *
+       * ### 所以 `checked` 与 `disabled` 用**同一个与逻辑**
+       *
+       * ⚠️ **判据一行没改**（裁决文件「定稿 C」）：`disabled` 仍然只判
+       * `hasCredential`，`rule-plan.ts` 里那个"只看 `feedAccountEnabled`"的
+       * 独立防线也一个字没动。这里改的只是**这一个控件渲染什么值**。
+       *
+       * ⚠️ 也**没有**去改通用的 `switchRow()`（`dom.ts`）。
+       */
+      checked: actions.hasCredential && actions.feedAccountEnabled,
       /**
        * 没有托管账号 → 灰掉。
        *
@@ -326,10 +439,6 @@ export function displayTab(
       onToggle: actions.toggleFeedAccount,
     }),
   );
-
-  if (!actions.hasCredential) {
-    box.appendChild(el('p', 'pane-note', '先扫码登录取流账号，才能用它来换首页推荐流'));
-  }
 
   /**
    * 诊断入口。
@@ -350,9 +459,17 @@ export function displayTab(
   });
   box.appendChild(diag);
 
-  box.appendChild(
-    el('p', 'pane-note', '诊断里有 InPrivate 权限、DNR 规则与诊断日志 —— 出问题时先看那里。'),
-  );
+  /**
+   * ⚠️ 这里**曾经有一句**：「诊断里有 InPrivate 权限、DNR 规则与诊断日志 ——
+   * 出问题时先看那里。」（2026-11-12，task-11 按用户要求删除）
+   *
+   * 用户原话：
+   * > 「"诊断里有 InPrivate权限、DNR规则与诊断日志 -- 出问题 时先看那里。"
+   * > 这些字都可以删掉」
+   *
+   * ⚠️ **删的是那句解释，不是入口**。上面那个 `diag` 按钮必须保留 ——
+   * 它是排查 InPrivate 权限的**唯一入口**（`wxt.config.ts` 的注释原话）。
+   */
 
   return box;
 }
@@ -459,6 +576,37 @@ export interface AccountActions {
   login: () => void;
   /** 退出播放账号（`account/remove`）。**调用前 UI 必须已经过两步确认** */
   logout: () => Promise<{ ok: boolean; detail?: string }>;
+  /**
+   * ── 退出结果的**出口**（2026-11-12，task-3 修路径②）──
+   *
+   * ## 为什么不能继续写在 `box` 里
+   *
+   * 旧实现把结果写进 `box` 的 `.acct-result`（本文件末尾那段）。而
+   * `panel.ts` 的 `render()` 每次切 Tab / `setModel` 都会
+   * `replaceChildren(content, [accountTab(...)])` —— **整个 `box` 被丢弃**，
+   * 刚写的结果文案随之消失。
+   *
+   * 更糟的是**退出成功本身会触发重画**：`logout` 的实现会重新取数并
+   * `setModel()`，那次重画必然把 `.acct-result` 冲掉。于是用户点了
+   * 「确认退出」，面板看起来**什么都没发生**（取证 A 节路径②）。
+   *
+   * 而竞态（重画先到还是文案先写）决定了文案能不能被看到**一瞬** ——
+   * 这正是用户说的「**有些时候**点击退出……没有任何变化」。
+   *
+   * ## 怎么修 / 修成什么样
+   *
+   * 由**编排层**（`panel.ts`）把结果交给 `PanelController.showNotice()`：
+   * 它挂在 `root` 上（**跨 `replaceChildren` 存活**，见那条的注释），
+   * 与登录结果同一条通道，不另造第二套提示机制。
+   *
+   * ⚠️ 本模块**不认识** `PanelController`（`tabs.ts` 是纯 DOM 层，
+   * 不 import 编排层）—— 所以这里只声明一个回调，实现由调用方注入。
+   * 这与 `toggleStreamingIdentity` 同一个手法。
+   *
+   * @param text 给用户看的一句话
+   * @param ok   `true` 中性/成功色，`false` 危险色
+   */
+  notifyResult: (text: string, ok: boolean) => void;
   /**
    * ── 取流身份（2026-11-11，步骤 4）──
    *
@@ -577,7 +725,47 @@ export function accountTab(
      */
     playbackRow.appendChild(el('span', 'acct-avatar accent', '取'));
     const bMain = el('span', 'acct-main');
-    bMain.appendChild(el('span', 'acct-name', pb?.uname ?? '取流账号已配置'));
+    /**
+     * ## ⚠️ `pb === null && hasCredential` 时**只能有一个结论**（2026-11-12，task-3 修 B-4）
+     *
+     * 这个组合是真实存在的：`hasCredential` 来自 `proxy/status`（vault 里有没有密文），
+     * 而 `pb` 来自 `account/summary`（账号资料读没读出来）。两者**各有各的失败方式**，
+     * 于是会出现「密文还在，但资料读不出」。
+     *
+     * ### 旧实现在这张卡上放了**三句互相矛盾**的话
+     *
+     * | 位置 | 旧文案 | 读起来 |
+     * | --- | --- | --- |
+     * | 昵称（`:580`） | 「取流账号已配置」 | 已配置 |
+     * | 标签（`:626`） | 「已配置」 | 已配置 |
+     * | 副标题（`:608`） | 「读不出账号资料 · 点下方重新登录」 | **没配置** |
+     *
+     * 同一张卡同时说"配好了"和"读不出来"，用户不知道该信哪句 ——
+     * 这正是「界面自相矛盾」类缺陷（与 `pb`/`hasCredential` 那轮同类）。
+     *
+     * ### 现在的规则：卡上**统一说"已配置，但资料暂时读不出"**
+     *
+     * 事实是：密文在（功能可用），只是这次没读到昵称/到期日。
+     * 所以三处都按「已配置」这一侧说话，**不出现"未配置"的暗示**；
+     * 唯一的例外是把"为什么没有昵称"讲清楚（那才是用户会疑惑的点）。
+     *
+     * ⚠️ **不改判据结构**（裁决文件「定稿 B」）：`if (pb || hasCredential)`
+     * 这个入口条件一行不动，`AccountView` 的形状也不动。
+     * 本轮只要求"文案不自相矛盾"，不是重做数据模型。
+     */
+    bMain.appendChild(
+      el(
+        'span',
+        'acct-name',
+        pb?.uname ??
+          /**
+           * ⚠️ 只有 `hasCredential` 为真才会走到这里（外层 `if (pb || a.hasCredential)`）。
+           * 此时**不能**写「取流账号已配置」当昵称 —— 那是个**占位符冒充昵称**，
+           * 而下方标签已经说了「已配置」。昵称位说"资料没读出来"才是准确的信息。
+           */
+          '取流账号（昵称暂未读出）',
+      ),
+    );
     const exp = pb ? describeExpiry(pb.expireAt, now) : '';
     /**
      * ## ⚠️ 副标题**保持原样**，不要在这里缩短（2026-11-11 回退）
@@ -605,7 +793,22 @@ export function accountTab(
       el(
         'span',
         'acct-sub',
-        pb ? (exp ? `仅取流 · ${exp}` : '仅取流 · 无到期日') : '读不出账号资料 · 点下方重新登录',
+        pb
+          ? exp
+            ? `仅取流 · ${exp}`
+            : '仅取流 · 无到期日'
+          : /**
+             * `pb === null` 但密文在（见上面 `acct-name` 的注释）。
+             *
+             * ⚠️ 旧文案「读不出账号资料 · 点下方重新登录」与同卡的
+             * 「已配置」并列 → 自相矛盾（B-4）。而且"重新登录"这个建议
+             * 也不成立：密文在、功能可用，用户没有必须重扫的理由。
+             *
+             * 现在说的是**事实**：账号已配置，只是这次没读到资料；
+             * 并给出一个**用户真能做的**动作（重开面板会重取一次，
+             * 与 `loadOnce` 的超时重试同一路径）。
+             */
+            '已配置 · 账号资料暂时读不出，收起重开面板可重试',
       ),
     );
     /**
@@ -930,23 +1133,44 @@ export function accountTab(
         cancelBtn.disabled = false;
 
         /**
-         * 结果提示挂在按钮**下方**（不是替换整块）——
-         * 换掉整块会让用户看不到刚才点的按钮去哪了。
+         * ## 结果交给 `root` 级的提示条，**不再写进 `box`**（2026-11-12，路径②）
+         *
+         * 旧实现写 `.acct-result`，而它随 `box` 一起被 `replaceChildren` 丢弃 ——
+         * 而退出成功**必然**触发一次重画（`logout` 实现会重取并 `setModel`），
+         * 所以文案几乎总是被自己触发的那次重画冲掉。
+         * 用户看到的就是「点了没反应」，与「有些时候」吻合（竞态）。
+         *
+         * `notifyResult` 由 `panel.ts` 注入，实现在 `showNotice()` ——
+         * 挂在 `root`，**跨 `replaceChildren` 存活**。
+         *
+         * ⚠️ 文案是裁决文件钉死的那两句，一字不改（权威顺序：
+         * 裁决文件 > 任务卡 > 聊天消息）：
+         *   - 成功 → 「已退出取流账号，取流回退到浏览器当前账号」
+         *   - 失败 → 「退出失败：<detail>」
+         *
+         * ⚠️ 说法必须是「浏览器当前账号」不是「主账号」——
+         * 用户能读懂前者，后者是内部术语（裁决 1 第 2 条）。
          */
-        let note = box.querySelector('.acct-result');
-        if (!note) {
-          note = el('p', 'acct-result');
-          box.appendChild(note);
-        }
-        note.textContent = r.ok
-          ? '已退出取流账号，取流回退到主账号身份'
-          : `退出失败：${r.detail ?? '未知原因'}`;
-        note.classList.toggle('danger', !r.ok);
-
+        /**
+         * ⚠️ 这两句与 `panel.ts` 的 `NOTICE_LOGOUT_OK` 必须**逐字一致**。
+         *
+         * 为什么不是 import 那个常量：`panel.ts` import 本文件（`accountTab` 等），
+         * 反向 import 会形成循环依赖（ESLint 的 import 规则也会红）。
+         *
+         * 契约靠测试守：`tests/unit/content/panel/logout-notice-contract.test.ts`
+         * 断言界面上的文字 === `NOTICE_LOGOUT_OK` —— 两边任何一处漂移都会红。
+         */
+        actions.notifyResult(
+          r.ok ? '已退出取流账号，取流回退到浏览器当前账号' : `退出失败：${r.detail ?? '未知原因'}`,
+          r.ok,
+        );
         /**
          * 成功后**不用**这里手动刷新：`logout` 的实现（`content-panel.content.ts`）
-         * 会重新取数并重画面板，这一块会随整棵树重建。
-         * 这里只负责把"刚才发生了什么"说清楚。
+         * 会重新取数并重画面板。这里只负责把"刚才发生了什么"说清楚。
+         *
+         * ⚠️ 重取**失败**时的那句「已退出，但界面刷新失败」由实现方负责
+         * （它才知道 `loadOnce()` 的结局，见 `content-panel.content.ts`）——
+         * 本模块拿不到那个信息，不要在这里编。
          */
       });
     });

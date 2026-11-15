@@ -1,20 +1,29 @@
 /**
  * 「需要开启 InPrivate 权限」说明页。
  *
- * ## 为什么它可能会自己关掉
+ * ## 这个页面为什么会自己关掉（2026-11-12 重写）
  *
  * split 模式下普通/无痕 background 是两个互不通信的实例，都会收到图标点击。
  * 通常的情况是：**无痕实例成功开出了二维码窗口，普通实例没开成**，
  * 于是这个说明页被误弹。
  *
- * 所以这里做两件事：
- *   1. 监听 `pluma:login-ready` —— 一旦二维码窗口就绪，**自动关闭自己**
- *   2. 超过 8 秒仍未就绪 → 保留在屏幕上，此时说明确实没有权限
+ * 旧实现靠 `watchForLoginReady()` 的一次性 `chrome.storage.onChanged` 监听器自关，
+ * 但那个监听器 **8 秒后就永久摘掉**（`src/background/login-handshake.ts`），
+ * 而用户开权限的实测耗时远超 8 秒 → 说明页**再也关不掉**，只能刷新页面。
+ * 用户原话：「必须重新刷新整个界面之后再次点击扫码登录取流账号」。
  *
- * 用户看到的效果：说明页闪一下 → 二维码窗口出现 → 说明页消失。
+ * 现在改成**自己轮询**（`incognito-watch.ts`，判据与时间常数都在那儿）：
+ *   每 1.5s 同时查 `isAllowedIncognitoAccess()` 与 `readLoginReady()`，
+ *   两个都为真 → 切成"已完成"状态 → 再尝试 `window.close()`。
  *
- * ⚠️ **第 1 条的自动关闭不能删。** 它是处理"误弹"的关键 —— 删了之后
- * 正常用户可以成功登录，却会永远看到一个说"你没权限"的页面。
+ * ⚠️ **轮询不能删。** 它是"误弹"场景下唯一能让说明页自己消失的东西；
+ * 删了之后正常用户可以成功登录，却会永远看到一个说"你没权限"的页面。
+ *
+ * ⚠️ **`window.close()` 不能当成必成功。** 这个页面是 `chrome.windows.create()`
+ * 开的，不是脚本 `window.open()` 开的，浏览器**允许直接忽略** close 且不报错，
+ * 而且关没关**无法在页面内确认**（DOM 还活着）。所以顺序是：
+ * **先把页面切成显式完成态，再尝试 close** —— 关不掉时用户看到的是
+ * "可以关掉这个窗口"，而不是一个还在说"去开权限"的页面。
  *
  * ## 一键直达：主路径 + 一层理论保险（2026-11-10）
  *
@@ -36,16 +45,30 @@
  * 版本真拒绝了，就把地址显示出来让用户手动粘贴，而不是"点了没反应"。
  */
 
-import { readLoginReady, watchForLoginReady } from '@/src/background/login-handshake';
+import { readLoginReady } from '@/src/background/login-handshake';
 
 import '@/src/design/tokens.css';
 import './style.css';
 
-const tipEl = document.getElementById('auto-tip');
+import { startIncognitoWatch, type WatchState } from './incognito-watch';
+
+const stateEl = document.getElementById('page-state');
 const openBtn = document.getElementById('open-ext-page') as HTMLButtonElement | null;
 const copyBtn = document.getElementById('copy-ext-url') as HTMLButtonElement | null;
 const codeEl = document.getElementById('ext-url-code');
 const hintEl = document.getElementById('open-hint');
+
+/**
+ * 三种状态的文案。**只有这三个** —— 任何一个都不许是"正在检查"这种占位：
+ * 用户进来时权限就没开，显示"正在检查"等于先骗他一句。
+ *
+ * `done` 是 `window.close()` 关不掉时的**兜底**（见文件头），所以它必须自成一句
+ * 能让人照做的指引，而不是"已完成"这种只描述内部状态的话。
+ */
+const STATE_TEXT: Record<Exclude<WatchState, 'waiting'>, string> = {
+  done: '✅ 权限已开启 —— 回到 B站 页面点「扫码登录取流账号」，本窗口可以直接关掉。',
+  timeout: '还没检测到权限开启 —— 回到 B站 页面点「扫码登录取流账号」时可以再试一次。',
+};
 
 /** 本扩展的详情页地址。`?id=` 让浏览器直接展开它，省掉在列表里找。 */
 function extDetailUrl(): string {
@@ -54,30 +77,32 @@ function extDetailUrl(): string {
   return id ? `chrome://extensions/?id=${id}` : 'chrome://extensions/';
 }
 
-function setHint(text: string): void {
-  if (hintEl) hintEl.textContent = text;
+/** 摊开降级路径（把地址显示出来），并把显示用的地址写进去。 */
+function showFallbackHint(text: string, url: string): void {
+  if (hintEl) hintEl.hidden = false;
+  if (codeEl) {
+    codeEl.textContent = url;
+    codeEl.classList.add('emph');
+  }
+  if (hintEl) hintEl.setAttribute('data-reason', text);
 }
 
 /** 兜底（理论保险，实测未触发）：把地址显示出来并选中，用户 Ctrl+C 粘贴即可。 */
 async function fallbackCopy(url: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(url);
-    setHint('已复制扩展地址 —— 粘贴到地址栏回车即可。');
+    showFallbackHint('已复制', url);
   } catch {
-    setHint('请手动复制下面的地址，粘贴到地址栏回车。');
+    showFallbackHint('手动复制', url);
   }
-  if (codeEl) {
-    codeEl.textContent = url;
-    codeEl.classList.add('emph');
-    try {
-      const range = document.createRange();
-      range.selectNodeContents(codeEl);
-      const sel = window.getSelection();
-      sel?.removeAllRanges();
-      sel?.addRange(range);
-    } catch {
-      /* 选区失败不影响主流程 */
-    }
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(codeEl as Node);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  } catch {
+    /* 选区失败不影响主流程 */
   }
 }
 
@@ -95,90 +120,47 @@ async function openExtensionsPage(): Promise<void> {
   }
 }
 
-/**
- * 轮询检测权限是否已经开启（优化 3，2026-11-10）。
- *
- * 原来是「8 秒后如果还没就绪就提示没开」——**只检测失败，不检测成功**。
- * 用户勾选之后页面没有任何反应，不知道到底成没成。
- *
- * 现在改成每秒查一次 `isAllowedIncognitoAccess()`，最多 60 秒：
- * 一旦变 true 就把提示改成绿色「已开启」，并停下轮询。
- *
- * ⚠️ 只改文案，**不自动开窗口**（2026-11-10 决定）：
- * split 模式下普通/无痕是两个实例，从说明页发消息再开无痕窗口链路更长、时序更脆；
- * 而「重新点一次工具栏图标」本来就是正常操作流。
- */
-const POLL_INTERVAL_MS = 1000;
-const POLL_TIMEOUT_MS = 60_000;
-
-function watchIncognitoAccess(): void {
-  const startedAt = Date.now();
-  /** 先声明再赋值：`tick()` 会在下面被**立即调用一次**，那时必须已经能访问到 timer */
-  let timer: number | undefined;
-
-  const stop = (): void => {
-    if (timer !== undefined) {
-      window.clearInterval(timer);
-      timer = undefined;
-    }
-  };
-
-  const tick = (): void => {
-    void chrome.extension
-      .isAllowedIncognitoAccess()
-      .then((allowed) => {
-        if (allowed) {
-          if (tipEl) {
-            tipEl.textContent = '✅ 已开启，请重新点一次工具栏图标即可开始登录。';
-            tipEl.classList.add('show', 'ok');
-          }
-          // 权限已开 → 不需要继续盯着了
-          stop();
-          return;
-        }
-        if (Date.now() - startedAt >= POLL_TIMEOUT_MS) stop();
-      })
-      .catch(() => {
-        // 读不到就当没开，继续等到超时
-        if (Date.now() - startedAt >= POLL_TIMEOUT_MS) stop();
-      });
-  };
-
-  timer = window.setInterval(tick, POLL_INTERVAL_MS);
-  tick(); // 进页面先查一次，避免要等满 1 秒才有初始反馈
+/** 把状态写进页面。**先于** `window.close()` 调用（见文件头顺序说明）。 */
+function renderState(state: WatchState): void {
+  if (!stateEl) return;
+  if (state === 'waiting') {
+    // 首轮"还在等"不作任何显示：用户此时刚打开页面，页面本身已经说明该做什么。
+    stateEl.textContent = '';
+    stateEl.className = 'page-state';
+    return;
+  }
+  stateEl.textContent = STATE_TEXT[state];
+  stateEl.className = `page-state show ${state}`;
 }
 
-/** 已经在别的实例里成功了 → 关掉自己 */
-function closeIfReadyElsewhere(): void {
-  if (!tipEl) return;
+/**
+ * 完成态：**先渲染，再尝试关闭**。
+ *
+ * 顺序不能反 —— 关成功了页面没了，兜底文案也就无所谓；关不掉时用户必须已经
+ * 看到 `done` 那句，否则就是"页面还在，但已经不再轮询"，和旧 bug 一模一样。
+ */
+function finish(): void {
+  // 走到这里时状态已经渲染过了（`renderState('done')` 由 onState 先调用），
+  // 这里只负责"尝试关自己"。关不掉**不做任何事**：兜底文案已经在屏幕上。
+  window.close();
+}
 
-  watchForLoginReady(() => {
-    // 二维码窗口出现了，说明这个说明页是误弹的
-    window.close();
+function startWatch(): void {
+  startIncognitoWatch({
+    // `readLoginReady()` 返回标记对象或 null，这里只关心"在不在"
+    readReady: async () => (await readLoginReady()) !== null,
+    readAllowed: () => chrome.extension.isAllowedIncognitoAccess(),
+    onState: (state) => {
+      renderState(state);
+      if (state === 'done') finish();
+    },
+    now: () => Date.now(),
+    setTimer: (fn, ms) => window.setTimeout(fn, ms),
+    clearTimer: (handle) => window.clearTimeout(handle as number),
   });
-
-  // 如果进页面时就已经就绪（时序错开），直接关
-  void readLoginReady().then((m) => {
-    if (m) window.close();
-  });
-
-  // 8 秒后还没就绪 → 说明权限确实没开，把提示高亮出来
-  window.setTimeout(() => {
-    void readLoginReady().then((m) => {
-      if (m) return;
-      // 已经因为权限开启而变绿的话，不要用这句覆盖掉
-      if (tipEl.classList.contains('ok')) return;
-      // 只说"还没开成"，不再复述步骤 —— 上面就是步骤列表
-      tipEl.textContent = '登录窗口还没打开 —— 上面的权限应该没生效，开完记得重新点图标。';
-      tipEl.classList.add('show');
-    });
-  }, 8000);
 }
 
 function wireButtons(): void {
-  // 页面上显示的地址就是实际会打开的那个，不带 `?id=` 的部分给用户看更干净
-  if (codeEl) codeEl.textContent = 'chrome://extensions/';
-
   openBtn?.addEventListener('click', () => {
     void openExtensionsPage();
   });
@@ -189,5 +171,4 @@ function wireButtons(): void {
 }
 
 wireButtons();
-watchIncognitoAccess();
-closeIfReadyElsewhere();
+startWatch();

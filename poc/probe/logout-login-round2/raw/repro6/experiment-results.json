@@ -1,0 +1,9 @@
+[
+  {
+    "name": "E2 开权限 → 开 incognito 窗口 → 关掉",
+    "ok": true,
+    "before": true,
+    "during": true,
+    "dropped": false
+  }
+]

@@ -39,7 +39,13 @@ import {
   writeCleanOptionFlags,
 } from '@platform/storage/ui-prefs-store';
 import { collectFacts, readLastDiagEcho, type DiagRow } from '@platform/diagnostics/collect';
-import { readDiag, readDiagTrace, type DiagEntry } from '@platform/storage/diag-store';
+import {
+  readDiag,
+  readDiagTrace,
+  DIAG_LIMIT,
+  instanceId,
+  type DiagEntry,
+} from '@platform/storage/diag-store';
 import { el, replaceChildren } from './dom';
 import {
   patchCleanOption,
@@ -48,8 +54,16 @@ import {
   type PanelModel,
 } from './panel-data';
 import { accountTab, cleanTab, displayTab, homeCleanPane, qualityTab } from './tabs';
-import type { StreamingIdentity } from '@shared/constants/streaming-identity';
-import { buildExportPayload, diagnosticsPane, downloadJson, exportFileName } from './diagnostics';
+import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
+import {
+  buildExportPayload,
+  describeLogsError,
+  describeLogsMetaFallback,
+  diagnosticsPane,
+  downloadJson,
+  exportFileName,
+  type LogsMeta,
+} from './diagnostics';
 
 /**
  * 四个一级 Tab。
@@ -120,6 +134,16 @@ export interface PanelController {
    * @param ok   `true` 中性/成功色，`false` 危险色
    */
   showNotice(text: string, ok: boolean): void;
+  /**
+   * 立刻清掉提示条（**不区分成败色**）。
+   *
+   * 用于"用户刚点了一个会带来新提示的按钮"的那一刻 ——
+   * 先清掉上一次的残留，避免"两条红字长得一样、分不清新旧"（裁决 3）。
+   *
+   * ⚠️ 它**不是**"给失败提示加超时"：失败提示照旧常驻，
+   * 这里清的是**上一条**。
+   */
+  clearNotice(): void;
   /** 整块根节点（塞进 sidebar 的 sheet 里） */
   root: HTMLElement;
 }
@@ -176,6 +200,36 @@ export interface PanelActions {
   toggleStreamingIdentity: (next: StreamingIdentity) => void;
 
   /**
+   * ── 重取模型时用的**取流身份**（2026-11-12，task-3 修 B-1/B-2/B-3）──
+   *
+   * ## 为什么不能复用 `streamingIdentity`
+   *
+   * 那个字段是**挂载那一刻**的初值（见上面 `panel.ts` 里本地镜像的注释）。
+   * 用户点过胶囊之后它就过期了，而 `refreshModel()` 在任何写操作之后都会跑
+   * （总开关 / 净化开关 / 退出）。拿一份过期初值去重取，就是
+   * 「切了身份，一拨开关就显示错」—— 取证 B.4 的原样复发。
+   *
+   * ## 为什么不硬编码 `'extension'`
+   *
+   * `loadPanelModel()` 的 `streamingIdentity` 三态语义里，`undefined` 与
+   * `'extension'` **不等价**：
+   *   - `undefined` → `panel-data.ts` 的 `streamingIdentity ?? 'extension'`
+   *     会用 `'extension'` 算 `configured`，同时**不透传**给 `describePopup()`
+   *   - `'extension'` → 同上算 `configured`，但**会透传**，画质 Tab 说真话
+   *
+   * 而 `'page'` 身份下缺省成 `'extension'` 会让 `isStreamingReady()` 得 `false`
+   * → 把一个**完全可用**的配置报成「还没有配置取流账号」。
+   *
+   * 所以这里必须拿到**当前的真实身份**，与 `loadOnce()` 同口径 ——
+   * 唯一真相源是 `content-panel.content.ts` 的 `streamingIdentityCache`，
+   * 由实现方经闭包传入（**不是**面板自己读）。
+   *
+   * 返回 `undefined` = 还没读到 → 走 `loadPanelModel()` 的既有判据
+   * （与"缺省 = 调用方没给"那条纪律一致，见 `panel-data.ts` 的注释）。
+   */
+  currentStreamingIdentity: () => StreamingIdentity | null | undefined;
+
+  /**
    * ── 首页推荐流开关（2026-11-11，**与上面两项完全独立**）──
    *
    * 用户原话：「首页推荐流的变化与取流身份是完全独立的两个功能」。
@@ -202,6 +256,62 @@ export interface PanelActions {
  * ⚠️ **失败类不自动消失** —— 见 `PanelController.showNotice` 的注释。
  */
 const NOTICE_TTL_MS = 5000;
+
+/**
+ * ── 退出 / 取数失败时用户必须看到的那几句话（2026-11-12，task-3）──
+ *
+ * ## 为什么是常量
+ *
+ * 这几句是**裁决文件钉死的**（权威顺序：裁决文件 > 任务卡 > 聊天消息）。
+ * 抽成常量后，测试断言"界面上的文字 === 这个常量"，
+ * 实现改一个字就会红 —— 这是"文案也是契约"在代码里的落点。
+ *
+ * ## 为什么定义在 `panel.ts` 而不是 `tabs.ts`
+ *
+ * `tabs.ts` 是纯 DOM 层（不 import 编排层），而这三句里有两条的
+ * **结局判定**（"成功但刷新失败"）在入口层才有。放在编排层：
+ * `tabs.ts` 经 `PanelActions` 的 `notifyResult` 接收结果，
+ * 入口（`content-panel.content.ts`）也从这里 import 文案 —— 一处定义、两处使用。
+ *
+ * ⚠️ 说法必须是「浏览器当前账号」，不是「主账号」「主浏览器账号」：
+ * 用户能读懂前者；后者是内部术语（裁决 1 第 2 条）。也不许出现「凭据」「配置」。
+ */
+
+/** 退出**成功**：用户必须当场看到这句 */
+export const NOTICE_LOGOUT_OK = '已退出取流账号，取流回退到浏览器当前账号';
+
+/**
+ * 退出**成功**了，但退出后的界面刷新（`loadOnce()`）失败。
+ *
+ * 用户此时面板上还画着旧账号卡片 —— 不说清楚，他就分不清
+ * 是"退出没生效"还是"界面没刷新"。这句同时给出**唯一真能做的动作**。
+ */
+export const NOTICE_LOGOUT_REFRESH_FAILED = '已退出，但界面刷新失败 —— 收起重开面板可刷新';
+
+/**
+ * 任意一次面板取数失败（`loadOnce()` 抛错）时的那句话。
+ *
+ * ⚠️ **不归因**：面板拿不到"是哪一步坏了"（消息没应答 / 并发一条失败 / 解析抛错），
+ * 编原因就是陈述错误事实。只说"这次没取到"，并给出用户能做的动作。
+ */
+export const NOTICE_LOAD_FAILED = '界面数据刷新失败 —— 收起重开面板可重试';
+
+/**
+ * 退出结果 → 该显示什么（**纯函数**）。
+ *
+ * 把"报哪一句、用什么色"从 `tabs.ts` 的 DOM 回调里拆出来，
+ * 这样三种结局的文案都**可单测**。
+ *
+ * ⚠️ 账号 Tab 只知道前两种（它拿不到 `loadOnce()` 的结局）；
+ * 「成功但刷新失败」由入口在重取失败时**覆盖**。
+ */
+export function describeLogoutNotice(result: { ok: boolean; detail?: string }): {
+  text: string;
+  ok: boolean;
+} {
+  if (result.ok) return { text: NOTICE_LOGOUT_OK, ok: true };
+  return { text: `退出失败：${result.detail ?? '未知原因'}`, ok: false };
+}
 
 export function mountPanelBody(actions: PanelActions): PanelController {
   const root = el('div', 'panel-body');
@@ -247,7 +357,33 @@ export function mountPanelBody(actions: PanelActions): PanelController {
    * 理由：`collectFacts()` 要发多次 chrome API 调用（窗口 / cookie / DNR / manifest…），
    * 面板每次展开都跑一遍是浪费。诊断是排查时才看的东西。
    */
-  let diagData: { rows: readonly DiagRow[]; logs: readonly DiagEntry[] } | null = null;
+  let diagData: {
+    rows: readonly DiagRow[];
+    logs: readonly DiagEntry[];
+    /**
+     * 这一次**读日志这件事本身**成没成（2026-11-12，task-26）。
+     *
+     * ## 为什么不由 `logs.length` 推
+     *
+     * `readDiag()` 内部是 `catch { return [] }` —— 读失败与"真的一条都没有"
+     * 返回同一个 `[]`。用 `length > 0` 推 `ok` 的话，**孤儿态会被推成"没有日志"**，
+     * 而这正是用户两次导出 `"logs": []` 却以为"没记录"的原因。
+     *
+     * ## 那怎么拿到这个"成没成"：在调用点做一次**存活探针**
+     *
+     * 两条路都不行：
+     * - 改 `readDiag()` 的返回值 → **越权**（本卡硬边界），且"读不到就给空数组"
+     *   被别处依赖
+     * - 在本文件自己把环形缓冲的读取逻辑写一遍 → 复制读取口径，
+     *   违背 `diagnostics.ts` 文件头"读取口径只有一处"
+     *
+     * ⇒ 用第三条：`readDiag()` 照原样调（口径仍只有一处），另外单独做一次
+     * `chrome.storage.local.get(null)` **只判断它抛不抛错**，返回值直接丢弃。
+     * 它不解释数据、不过滤，所以没有复制任何口径 —— 只是一次
+     * "存储还活着吗"的存活探针，而这正是被 `readDiag()` 吞掉的唯一信息。
+     */
+    logsMeta: LogsMeta;
+  } | null = null;
   /** 定位追踪（`pluma:diag-trace`）。`null` = 还没有记录 */
   let diagTrace: { at: number; step: string; detail: string; from: string } | null = null;
   /**
@@ -257,29 +393,146 @@ export function mountPanelBody(actions: PanelActions): PanelController {
   let diagEcho: string | null = null;
   let diagLoading = false;
 
-  /** 读一次角标开关（进入净化 Tab 或重画前用） */
+  /**
+   * 探一次"存储还能不能碰"，产出 `logsMeta` 里除 `count` 之外的字段。
+   *
+   * ## 为什么是 `chrome.storage.local.get(null)`
+   *
+   * `readDiag()` 读的就是它。孤儿态下 `chrome.storage` 整个不可用
+   * （抛 `Extension context invalidated`），这是**唯一与日志读取同路**的存活信号。
+   *
+   * ⚠️ 返回值丢弃 —— 本函数**不读数据、不解释数据**，只问"抛不抛"。
+   * 因此它没有复制"读取口径"（那条在 `diagnostics.ts` 文件头）。
+   *
+   * @param failure 采集**整体失败**时的原因（`loadDiag` 的 catch 分支传）；
+   *                正常路径不传，靠探针自己判断
+   */
+  const probeLogsReadability = async (failure?: unknown): Promise<Omit<LogsMeta, 'count'>> => {
+    const base = { instanceId: instanceId(), readAt: Date.now(), limit: DIAG_LIMIT };
+    /**
+     * 采集整体失败 = 日志**不可能**读到（连第一个 await 都炸了），直接如实报失败。
+     * 不去探针，是因为此时 `chrome.storage` 可能都不存在，探针本身的异常
+     * 不代表日志通道的原因（真正的原因在 `failure` 里）。
+     */
+    if (failure !== undefined) {
+      return { ...base, ok: false, err: describeLogsError(failure) };
+    }
+    try {
+      await chrome.storage.local.get(null);
+      return { ...base, ok: true, err: null };
+    } catch (error) {
+      return { ...base, ok: false, err: describeLogsError(error) };
+    }
+  };
+
+  /**
+   * 读角标开关的结局：`null` = 还没读到，`'unreadable'` = **读失败**。
+   *
+   * ## 为什么需要三态（2026-11-12，task-5 静默点 2）
+   *
+   * 旧实现只有 `badgeEnabled: boolean | null`：`null` 同时表示
+   * "还没读"和"读失败"。而渲染层拿不到区分 → 开关**永久灰着**，
+   * 面板上**没有任何一句话说明为什么**。
+   *
+   * 用户看到的是一个点不动的开关，不知道是"加载中"还是"坏了"——
+   * 这正是「点了没反应」里最难排查的一类：**控件既然不可点，就永远
+   * 不会产生"点击"，用户连抱怨的入口都没有**。
+   */
+  let badgeReadFailed = false;
+
+  /**
+   * 是否已经有一次读取**在飞**。
+   *
+   * ## ⚠️ 没有它就是无限递归（2026-11-12，task-5 实测踩到）
+   *
+   * 失败分支会 `render()`，而 `render()` 在 `display` Tab 里会再调
+   * `ensureBadgeRead()` —— 此时 `badgeEnabled` **仍然是 `null`**（我们刻意不猜成
+   * `false`），于是早退不命中 → 再发一次请求 → 再失败 → 再 render() →
+   * **无限同步递归**，整个面板卡死（单测表现为整份文件挂住、一行都不出）。
+   *
+   * 早退条件 `badgeEnabled !== null` 只能挡住"读成功之后"，挡不住"读失败之后"。
+   *
+   * ⚠️ 它**不会**让一次失败永久锁死：请求结束时复位为 `false`，
+   * 用户下次进这个 Tab（`showTab` → `render` → `ensureBadgeRead`）会重试。
+   */
+  let badgeReading = false;
+
+  /**
+   * 读一次角标开关（进入净化 Tab 或重画前用）。
+   *
+   * ## ⚠️ 三重早退，缺一个就是死循环（2026-11-12，task-5 实测踩到）
+   *
+   * `render()` 在 `display` Tab 里**每次**都会调本函数。而本函数的 `.finally`
+   * 又调 `render()` —— 两者构成一个环。只要有一条路径能让"读"重新发起，
+   * 就是无限同步递归：整个面板卡死（单测表现：整份文件挂住、一行都不出）。
+   *
+   * | 早退条件 | 挡住的场景 |
+   * | --- | --- |
+   * | `badgeEnabled !== null` | 已读到真实值 → 不必再读 |
+   * | `badgeReading` | 已有一次在飞 → 不并发 |
+   * | **`badgeReadFailed`** | **已失败过 → 不再自动重试**（关键的一条） |
+   *
+   * 第三条不能省：失败时 `badgeEnabled` 仍是 `null`（刻意不猜成 `false`），
+   * 前两条都不命中 → `render()` 会再次触发读 → 再失败 → 再 `render()`。
+   *
+   * ## 那失败之后怎么重试
+   *
+   * 由**用户动作**驱动，而不是自动：`showTab('display')` 时把
+   * `badgeReadFailed` 复位（见 `showTab`），于是"再进一次这个 Tab"就是重试。
+   * 这比自动重试更合适 —— 失败多半是 storage/SW 暂时不可用，
+   * 高频自旋只会烧 CPU，而用户重新点一下 Tab 是零成本的明确重试意愿。
+   */
   const ensureBadgeRead = (): void => {
-    if (badgeEnabled !== null) return;
+    if (badgeEnabled !== null || badgeReading || badgeReadFailed) return;
+    badgeReading = true;
     void readBadgeEnabled()
       .then((v) => {
         badgeEnabled = v;
-        render();
+        badgeReadFailed = false;
       })
       .catch(() => {
-        /* 读不到就保持禁用，不画成"关" */
+        /**
+         * ## 读不到**不能只留一个灰开关**（2026-11-12，task-5 静默点 2）
+         *
+         * 旧实现这里是空 `catch`（注释写"读不到就保持禁用，不画成关"）——
+         * 保持禁用是对的，但**不解释就是静默失败**。
+         *
+         * 现在：记下"读失败"这个结局，让渲染层能画一句原因；
+         * 同时**仍然**保持 `badgeEnabled === null`（不猜成 `false`，
+         * 那会让用户以为角标被自己关掉了）。
+         */
+        badgeReadFailed = true;
+      })
+      .finally(() => {
+        /**
+         * ⚠️ 复位 `badgeReading` 之后 `render()` 不会复发 ——
+         * 因为失败路径上 `badgeReadFailed` 已是 `true`，第三条早退命中。
+         * （若把那条早退删掉，这里就会无限递归。）
+         */
+        badgeReading = false;
+        render();
       });
   };
 
   /** 角标开关写入：不需要面板做别的，`content.ts` 监听 `onChanged` 自己重画 */
   const writeBadge = async (next: boolean): Promise<void> => {
     const prev = badgeEnabled;
-    badgeEnabled = next; // 乐观更新：开关要跟手
+    badgeEnabled = next; // 乐观更新：开关要跟手（开关类控件必须 300ms 内有反应）
     render();
     try {
       await writeBadgeEnabled(next);
     } catch {
       badgeEnabled = prev;
       render();
+      /**
+       * ## 写入失败也要说（2026-11-12，task-5）
+       *
+       * 旧实现只回滚、**一句话都没有**。用户看到开关自己弹回去，
+       * 不知道是"点错了"还是"没保存上"。
+       *
+       * 回滚 + 说明才是完整的：回滚保证界面不撒谎，说明让用户知道发生了什么。
+       */
+      showNotice('页内角标没保存成功 —— 稍后再拨一次', false);
     }
   };
 
@@ -356,6 +609,20 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     } catch {
       feedAccountEnabled = prev;
       render();
+      /**
+       * ## ⚠️ 这个 `catch` 实际上**几乎不会进入**（2026-11-12，task-5 发现）
+       *
+       * `PanelActions.toggleFeedAccount` 的签名是 `(next: boolean) => void`，
+       * 所以 `await` 拿到的是 `undefined` —— 实现方的失败**抛不到这里**。
+       *
+       * 于是「开关失败时既不回滚也不提示」的真实修法在**实现方**：
+       * `content-panel.content.ts` 的 `setFeedAccount()` 失败时自己
+       * `showNotice(...)`（已修，见那里）。
+       *
+       * 这里保留 catch + 回滚 + 提示，是为了将来签名改成返回 Promise 时
+       * 行为**已经是对的**（防御性冗余，不是死代码——签名一变它立刻生效）。
+       */
+      showNotice('首页推荐流开关没保存成功 —— 稍后再拨一次', false);
     }
   };
 
@@ -389,8 +656,13 @@ export function mountPanelBody(actions: PanelActions): PanelController {
          * 传 `null` = "本页就是没有"，不会被当成"没传"。
          */
         const rows = await collectFacts({ pageView: model?.pageView ?? null });
+        /**
+         * ⚠️ **探针必须在 `readDiag()` 之前**：后者会吞掉异常，
+         * 之后就没有任何线索能判断"这次到底读到没有"了。见 `diagData` 的注释。
+         */
+        const logsMeta = { ...(await probeLogsReadability()), count: 0 };
         const logs = await readDiag();
-        diagData = { rows, logs };
+        diagData = { rows, logs, logsMeta: { ...logsMeta, count: logs.length } };
         /**
          * ## echo：绕开 storage 的调试回显（2026-11-10 第八轮）
          *
@@ -409,10 +681,33 @@ export function mountPanelBody(actions: PanelActions): PanelController {
          * 写进去了就是额外收益。
          */
         diagTrace = await readDiagTrace();
-      } catch {
-        diagData = { rows: [], logs: [] };
+      } catch (error) {
+        /**
+         * 采集整体失败 —— 日志也**一定**读不到。`logsMeta` 必须如实 `ok: false`，
+         * 否则导出里会出现"facts 全空 + logs 空数组 + ok: true"这种自相矛盾的包，
+         * 而那正是这次要消灭的"假正常"。
+         */
+        diagData = {
+          rows: [],
+          logs: [],
+          logsMeta: { ...(await probeLogsReadability(error)), count: 0 },
+        };
         diagTrace = null;
         diagEcho = null;
+        /**
+         * ## 采集失败**不能只交一张空表**（2026-11-12，task-5 静默点 4）
+         *
+         * 旧实现 catch 里只 `diagData = { rows: [], logs: [] }` —— 于是诊断页
+         * 渲染出**一张空表**，用户以为"这台机器什么都没有"，而实际是**采集挂了**。
+         *
+         * 诊断工具的全部价值就是"现在这一刻是什么样"，把失败渲染成"没有数据"
+         * 比不显示更糟：它会让人以为问题已经解决了（那句注释自己写过这一点，
+         * 只是漏在失败分支上）。
+         *
+         * 这里加一条提示说清"采集失败"，与表格的空态区分开。
+         * ⚠️ 走同一个 `showNotice` 通道，不另造第二套提示机制。
+         */
+        showNotice('诊断信息采集失败 —— 点浮层里的「刷新」再试一次', false);
       } finally {
         diagLoading = false;
         render();
@@ -427,7 +722,27 @@ export function mountPanelBody(actions: PanelActions): PanelController {
    * 那时也必须传 `null` 而不是 `undefined`（后者会让 collectFacts 去查标签页）。
    */
 
-  /** 当前动作集：所有写操作统一从这里过，保证写前重读 */
+  /**
+   * 净化开关写入。
+   *
+   * ## ⚠️ 刻意**没有**乐观更新（2026-11-12，task-5）
+   *
+   * 这是读—改—写：先 `readRawCleanOptions()` 拿**最新的整块**偏好，
+   * 改一个键，再整块写回。理由在下面那段注释里（别的标签页可能刚改过）。
+   *
+   * 正因为它先把真实值读回来，**乐观更新反而会撒谎**：
+   * 如果读失败、我们却先把开关翻过去，用户会看到一个 storage 里**不存在**的状态。
+   * 所以本轮**只加失败可见，不加乐观**（Lead 明确要求）。
+   *
+   * ## 旧实现为什么是"点了没反应"（静默点 3）
+   *
+   * 旧写法里 `await readRawCleanOptions()` / `writeCleanOptionFlags()` 抛错时，
+   * 异常一路冒泡到 `render()` 之外 —— 于是：
+   *   - `refreshModel()` **不会跑** → 开关**视觉不动**
+   *   - 面板上**一个字都没有**
+   *
+   * 用户看到的就是"点了一下，什么也没发生"。
+   */
   const writeOption = async (key: CleanOptionKey, next: boolean): Promise<void> => {
     /**
      * ## 必须**重新读**，不能复用 `model.clean`
@@ -436,27 +751,90 @@ export function mountPanelBody(actions: PanelActions): PanelController {
      * 也可能这中间 `storage.onChanged` 又触发了一次。
      * 用旧快照做"改一个键"，写回去的就是**过期数据** —— 那是"读—改—写"的经典错误。
      */
-    const fresh = normalizeCleanPreferences(await readRawCleanOptions());
-    const updated = patchCleanOption(fresh.options, key, next);
+    try {
+      const fresh = normalizeCleanPreferences(await readRawCleanOptions());
+      const updated = patchCleanOption(fresh.options, key, next);
 
-    await writeCleanOptionFlags(updated);
-    applyCleanNow();
-    await refreshModel();
+      await writeCleanOptionFlags(updated);
+      applyCleanNow();
+      await refreshModel();
+    } catch {
+      /**
+       * 失败：开关**拉回模型里的值**（模型没变，所以就是原值），
+       * 再把原因说给用户听。
+       *
+       * ## 为什么必须 `render()`
+       *
+       * 净化开关**没有乐观更新**，但用户点的那一下已经把 checkbox 翻过去了
+       * （那是浏览器对 checkbox 的默认行为）。不重画的话，界面就停在
+       * **一个 storage 里并不存在的值**上 —— 正是"不加乐观更新"要防的事。
+       *
+       * ⚠️ 成功路径不用在这里 `render()`：`refreshModel()` 会重取并重画。
+       */
+      render();
+      showNotice('净化设置没保存成功 —— 稍后再点一次', false);
+    }
   };
 
-  /** 分类切换：同样是读—改—写，但写的是另一半（`hideCategories`） */
+  /**
+   * 分类切换：同样是读—改—写，但写的是另一半（`hideCategories`）。
+   *
+   * 失败处理与 `writeOption` 完全同理（见上面那段注释）。
+   */
   const writeCategory = async (cat: string, next: boolean): Promise<void> => {
-    const fresh = normalizeCleanPreferences(await readRawCleanOptions());
-    const cats = toggleHideCategory(fresh.hideCategories, cat, next);
+    try {
+      const fresh = normalizeCleanPreferences(await readRawCleanOptions());
+      const cats = toggleHideCategory(fresh.hideCategories, cat, next);
 
-    await writeCleanHideCategories(cats);
-    applyCleanNow();
-    await refreshModel();
+      await writeCleanHideCategories(cats);
+      applyCleanNow();
+      await refreshModel();
+    } catch {
+      // 同理：分类开关也要拉回模型里的值（见 `writeOption` 的注释）
+      render();
+      showNotice('净化分类设置没保存成功 —— 稍后再点一次', false);
+    }
   };
 
-  /** 总开关：走 background 消息（与 popup 同一条通道，不新增消息类型） */
+  /**
+   * 总开关：走 background 消息（与 popup 同一条通道，不新增消息类型）。
+   *
+   * ## 🔴 这是扩展最核心的开关，旧实现失败时**一个字都没有**（2026-11-12，task-5）
+   *
+   * 旧写法 `await sendMessage(...).catch(() => null)` 之后直接 `refreshModel()`：
+   *
+   * | 失败方式 | 用户看到 |
+   * | --- | --- |
+   * | 消息抛错（SW 挂了 / 上下文失效） | `.catch(() => null)` 吞掉 → 开关**视觉不动**，无文字 |
+   * | 应答是失败 type | 完全没检查 → 同上 |
+   *
+   * 两种都表现为「点了没反应」——而这是用户最常拨的那个开关。
+   *
+   * ## ⚠️ 不加乐观更新（刻意）
+   *
+   * 总开关的状态来自 `proxy/status`（background 是唯一真相源），`refreshModel()`
+   * 读回真实值才算数。先乐观翻转再失败回滚，会出现「开关闪一下又弹回去」——
+   * 那比"点了没反应"更容易让用户以为点坏了。
+   *
+   * 所以这里只做两件事：**检查应答类型** + **失败时说清**。
+   * 成功路径保持原样（`refreshModel` 读回真实值重画）。
+   */
   const toggleProxy = async (next: boolean): Promise<void> => {
-    await chrome.runtime.sendMessage({ type: 'proxy/set', enabled: next }).catch(() => null);
+    const res = (await chrome.runtime
+      .sendMessage({ type: 'proxy/set', enabled: next })
+      .catch(() => null)) as { type?: string } | null;
+
+    /**
+     * 失败判据：没有应答，或应答 type 不是 `proxy/set:ok`。
+     *
+     * ⚠️ 不编原因 —— 面板拿不到"是 SW 没醒还是权限问题"。
+     * 但必须让用户知道**这次没生效**，并且有一个真能做的动作。
+     */
+    if (res?.type !== 'proxy/set:ok') {
+      showNotice('总开关没切换成功 —— 稍后再点一次，或刷新页面试试', false);
+    }
+
+    // 无论成败都重取：成功要读回真实值；失败要确认开关停在真实状态
     await refreshModel();
   };
 
@@ -483,8 +861,33 @@ export function mountPanelBody(actions: PanelActions): PanelController {
       });
   };
 
-  /** 重取一次模型并重画 */
+  /**
+   * 重取一次模型并重画。
+   *
+   * ## ⚠️ 必须透传**当前**取流身份（2026-11-12，task-3 修 B-1/B-2/B-3）
+   *
+   * 旧实现**不传** `streamingIdentity`，于是：
+   *   - `panel-data.ts` 的 `streamingIdentity ?? 'extension'` 拿 `'extension'` 算
+   *     `configured` → `page` 身份（`hasCredential === false`）被判成「未配置」
+   *   - `panel-data.ts` 的透传条件 `streamingIdentity !== undefined` 为假 →
+   *     `describePopup()` 里 `if (snap.streamingIdentity === 'page')` 永不触发 →
+   *     画质 Tab 说「已接管」而 `page` 模式下**什么都没换 Cookie**（假话）
+   *
+   * 触发时机：`toggleProxy` / `writeOption` / `writeCategory` 之后都会调这里，
+   * 即「用户拨一下开关，身份判据就退回缺省」。
+   *
+   * ⚠️ 值必须来自 `actions.currentStreamingIdentity()`（实现在入口文件里，
+   * 读 `streamingIdentityCache`），**不许在这里写死 `'extension'` / `'page'`** ——
+   * 那只是把"缺省"换成一个看起来更具体的错值。
+   */
   const refreshModel = async (): Promise<void> => {
+    /**
+     * `currentStreamingIdentity()` 可能返回 `undefined`（还没读到），
+     * 而 `loadPanelModel()` 在 `exactOptionalPropertyTypes` 下**不接受**
+     * 显式 `undefined`。两者语义相同（都是"调用方没给"），
+     * 所以这里用条件展开把它换回"字段缺席"的形状。
+     */
+    const identity = actions.currentStreamingIdentity();
     const next = await loadPanelModel({
       pageKind: model?.pageKind ?? 'other',
       primary: model?.account.primary ?? {
@@ -493,10 +896,93 @@ export function mountPanelBody(actions: PanelActions): PanelController {
         loggedIn: 'unknown',
         source: 'none',
       },
+      ...(identity !== undefined ? { streamingIdentity: identity } : {}),
     });
     model = next;
     render();
   };
+
+  /**
+   * 在面板底部显示一条提示（登录 / 退出的结果）。
+   *
+   * ## 为什么需要它（2026-11-10）
+   *
+   * 旧实现所有消息都是 `.catch(() => null)` —— **失败完全静默**。
+   * 用户点「扫码登录」后什么也没发生，无法判断是没开 InPrivate 权限、
+   * 网络问题、还是按钮坏了。
+   *
+   * ## 自动消失：成功 5 秒，**失败不消失**
+   *
+   * | 类型 | 自动清除 | 为什么 |
+   * | --- | --- | --- |
+   * | 成功 / 中性（`ok: true`） | ✅ 5 秒 | 用户看一眼就够，留着占地方 |
+   * | **失败（`ok: false`）** | ❌ **常驻** | 用户可能正在读、或已经去开权限了 —— 回来时提示还在 |
+   *
+   * 失败常驻的代价是"要占一块地方"，但它带来的是**用户不会错过原因**。
+   * 下一次 `showNotice` 会替换掉它，所以不会无限堆积。
+   *
+   * ⚠️ 不放在 `content` 里 —— 那个容器每次 `render()` 都会 `replaceChildren`，
+   * 提示会跟着消失。放在 `root` 末尾，跨越整棵子树存活。
+   *
+   * ## 为什么是具名函数而不是返回对象里的方法（2026-11-12）
+   *
+   * `render()` 内部要把**退出结果**也交给这条通道（`accountTab` 的
+   * `notifyResult`），而 `render()` 定义在返回对象**之前** ——
+   * 那时方法还不存在。提升成具名函数后两处共用同一份实现，
+   * 而不是在 `render` 里复制一段。
+   *
+   * @param text 提示文案
+   * @param ok   `true` 中性/成功色，`false` 危险色
+   */
+  function showNotice(text: string, ok: boolean): void {
+    let bar = root.querySelector('.panel-notice');
+    if (!bar) {
+      bar = el('p', 'panel-notice');
+      root.appendChild(bar);
+    }
+    bar.textContent = text;
+    bar.classList.toggle('danger', !ok);
+
+    // 清掉上一条的定时器 —— 否则新的成功提示会被旧的定时器提前抹掉
+    if (noticeTimer !== null) {
+      clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
+
+    if (ok) {
+      noticeTimer = setTimeout(() => {
+        noticeTimer = null;
+        // 只在它还是**这一条**时移除（期间可能被新提示替换过）
+        if (bar.textContent === text) bar.remove();
+      }, NOTICE_TTL_MS);
+    }
+  }
+
+  /**
+   * 立刻清掉提示条（**不区分成败色**）。
+   *
+   * ## 为什么需要"清"这个动作（2026-11-12，裁决 3）
+   *
+   * 取证 D.2 实测：用户点「扫码登录取流账号」，底下还挂着**上一次**的红色提示
+   * （「等了 3 分钟还没检测到新账号…」）。新提示确实会替换旧的，但
+   * **两条红字长得一样** —— 用户分不清这是"这次的失败"还是"上次留下的"。
+   *
+   * 裁决：点按钮的**第一时间**先清掉上一条，之后无论成功失败都写新的。
+   * 于是"屏幕上出现一条红字"永远意味着"刚刚那次失败了"。
+   *
+   * ⚠️ 失败提示本身**仍然常驻**（见上面那条的论证）—— 这里清的是
+   * **上一次**的，不是给"这一次"加超时。
+   *
+   * ⚠️ **不许**用时间戳 / 序号来"区分新旧"（裁决 3 明令禁止）：
+   * 那是把内部状态推给用户。
+   */
+  function clearNotice(): void {
+    if (noticeTimer !== null) {
+      clearTimeout(noticeTimer);
+      noticeTimer = null;
+    }
+    root.querySelector('.panel-notice')?.remove();
+  }
 
   const render = (): void => {
     // Tab 高亮
@@ -545,7 +1031,12 @@ export function mountPanelBody(actions: PanelActions): PanelController {
       }
       replaceChildren(content, [
         diagnosticsPane(
-          { rows: diagData.rows, logs: diagData.logs, version: diagVersion() },
+          {
+            rows: diagData.rows,
+            logs: diagData.logs,
+            version: diagVersion(),
+            logsMeta: diagData.logsMeta,
+          },
           {
             back: () => {
               stack = stack.slice(0, -1);
@@ -566,6 +1057,19 @@ export function mountPanelBody(actions: PanelActions): PanelController {
                 buildExportPayload({
                   rows: diagData?.rows ?? [],
                   logs: diagData?.logs ?? [],
+                  /**
+                   * `diagData === null`（还没采完就点了导出）= **没读过**。
+                   * 兜底**必须和渲染侧共用 `describeLogsMetaFallback()`**
+                   * （task-28：两侧各写一份，正是 `logsMeta` 缺失时崩溃的根因）。
+                   * 唯一差别是这里多填了 `limit` / `readAt` —— 它们只用于展示与定位，
+                   * **不参与"是否可信"的判断**（`ok` / `err` 与渲染侧完全一致）。
+                   */
+                  logsMeta: diagData?.logsMeta ?? {
+                    ...describeLogsMetaFallback(),
+                    limit: DIAG_LIMIT,
+                    instanceId: instanceId(),
+                    readAt: now.getTime(),
+                  },
                   version: diagVersion(),
                   now,
                   trace: diagTrace,
@@ -581,11 +1085,49 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     }
 
     switch (tab) {
-      case 'quality':
+      case 'quality': {
+        /**
+         * ── 总开关能不能点（2026-11-12，task-10）──
+         *
+         * ## 判据走 `isStreamingReady()`，**不在这里另写一份**
+         *
+         * | 取流身份 | 有凭据 | `isStreamingReady` | 开关 |
+         * | --- | --- | --- | --- |
+         * | `page` | 无 | **`true`** | 可点（本就不需要扩展参与） |
+         * | `extension` | 有 | `true` | 可点 |
+         * | `extension` | 无 | `false` | **灰** |
+         *
+         * ⚠️ **`page` 身份下 `hasCredential` 恒为 `false`** —— 只看它会把一个
+         * **完全可用**的配置误禁。这正是 `isStreamingReady()` 存在的理由
+         * （`streaming-identity.ts` 的注释：「这是一条判据，只许有一处实现」）。
+         *
+         * ⚠️ 身份用**面板本地镜像** `streamingIdentity`（与账号 Tab 的胶囊同源）：
+         * `actions.streamingIdentity` 是挂载时的初值，用户点过胶囊后就过期了。
+         *
+         * ## 身份未知（`null`）时**不禁**
+         *
+         * 读不到身份 = 不知道"要不要代理"。此时禁用会让一个可能完全可用的配置
+         * 变成不可用；而"不禁"最强也就是让用户点一下，`toggleProxy` 会照常发消息。
+         * 与 `panel-data.ts` 的"缺参数不改口"同一纪律：**不知道就别替他下结论**。
+         */
+        const known = streamingIdentity;
+        const proxyUsable = known === null || isStreamingReady(known, model.account.hasCredential);
+
         replaceChildren(content, [
-          qualityTab(model.quality, { toggleProxy: (n) => void toggleProxy(n) }),
+          qualityTab(model.quality, {
+            toggleProxy: (n) => void toggleProxy(n),
+            proxyUsable,
+            /**
+             * 文案与「账号」Tab 的引导语**同一套说法**（「扫码登录取流账号」），
+             * 不制造第二套术语。也不出现"凭据"/"proxy"/"DNR" 这类实现词。
+             */
+            proxyDisabledReason: proxyUsable
+              ? null
+              : '还没有可用的取流账号 —— 到「账号」Tab 扫码登录取流账号后就能打开',
+          }),
         ]);
         break;
+      }
       case 'clean':
         replaceChildren(content, [
           cleanTab(model.clean, {
@@ -619,6 +1161,7 @@ export function mountPanelBody(actions: PanelActions): PanelController {
             feedAccountEnabled,
             toggleFeedAccount: (next) => void toggleFeedAccount(next),
             hasCredential: model?.account.hasCredential ?? false,
+            badgeReadFailed,
             openDiag: () => {
               /**
                * ## 进入诊断浮层 = 重新采集（2026-11-10 第七轮）
@@ -652,6 +1195,14 @@ export function mountPanelBody(actions: PanelActions): PanelController {
              */
             streamingIdentity,
             toggleStreamingIdentity: (next) => void toggleStreamingIdentity(next),
+            /**
+             * 退出结果走 `showNotice()`（`root` 级，跨 `replaceChildren` 存活）。
+             *
+             * ⚠️ 这里**不能**写进 `content`（那个容器每次 `render()` 都被
+             * `replaceChildren`），也不能让账号 Tab 自己往 `box` 里塞 ——
+             * 那正是取证 A 节路径②的成因。
+             */
+            notifyResult: (text, ok) => showNotice(text, ok),
           }),
         ]);
         break;
@@ -662,6 +1213,16 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     tab = t;
     // 切 Tab 时清栈：用户点 Tab 的意思是"我要看那个 Tab"，不是"在浮层里切后台"
     stack = [];
+    /**
+     * 进「显示」Tab = **一次明确的重试意愿**（2026-11-12，task-5）。
+     *
+     * 角标开关读失败后 `badgeReadFailed` 会挡住自动重试（见 `ensureBadgeRead`
+     * 的三重早退）。若不复位，用户就**永远**只能看到那个灰开关 + 那句"读不到"，
+     * 只能靠重开面板恢复 —— 那是把一个瞬时故障变成永久故障。
+     *
+     * 复位后 `render()` → `ensureBadgeRead()` 会重新发一次请求。
+     */
+    if (t === 'display') badgeReadFailed = false;
     render();
   };
 
@@ -675,54 +1236,8 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     },
     currentTab: () => tab,
     depth: () => stack.length,
-    /**
-     * 在面板底部显示一条提示（登录 / 退出的结果）。
-     *
-     * ## 为什么需要它（2026-11-10）
-     *
-     * 旧实现所有消息都是 `.catch(() => null)` —— **失败完全静默**。
-     * 用户点「扫码登录」后什么也没发生，无法判断是没开 InPrivate 权限、
-     * 网络问题、还是按钮坏了。
-     *
-     * ## 自动消失：成功 5 秒，**失败不消失**
-     *
-     * | 类型 | 自动清除 | 为什么 |
-     * | --- | --- | --- |
-     * | 成功 / 中性（`ok: true`） | ✅ 5 秒 | 用户看一眼就够，留着占地方 |
-     * | **失败（`ok: false`）** | ❌ **常驻** | 用户可能正在读、或已经去开权限了 —— 回来时提示还在 |
-     *
-     * 失败常驻的代价是"要占一块地方"，但它带来的是**用户不会错过原因**。
-     * 下一次 `showNotice` 会替换掉它，所以不会无限堆积。
-     *
-     * ⚠️ 不放在 `content` 里 —— 那个容器每次 `render()` 都会 `replaceChildren`，
-     * 提示会跟着消失。放在 `root` 末尾，跨越整棵子树存活。
-     *
-     * @param text 提示文案
-     * @param ok   `true` 中性/成功色，`false` 危险色
-     */
-    showNotice(text: string, ok: boolean): void {
-      let bar = root.querySelector('.panel-notice');
-      if (!bar) {
-        bar = el('p', 'panel-notice');
-        root.appendChild(bar);
-      }
-      bar.textContent = text;
-      bar.classList.toggle('danger', !ok);
-
-      // 清掉上一条的定时器 —— 否则新的成功提示会被旧的定时器提前抹掉
-      if (noticeTimer !== null) {
-        clearTimeout(noticeTimer);
-        noticeTimer = null;
-      }
-
-      if (ok) {
-        noticeTimer = setTimeout(() => {
-          noticeTimer = null;
-          // 只在它还是**这一条**时移除（期间可能被新提示替换过）
-          if (bar.textContent === text) bar.remove();
-        }, NOTICE_TTL_MS);
-      }
-    },
+    showNotice,
+    clearNotice,
     root,
   };
 }

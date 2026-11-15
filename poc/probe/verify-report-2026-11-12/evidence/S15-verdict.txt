@@ -1,0 +1,24 @@
+﻿task-15 复核 · verifier 独立实验（不因 Lead 已判定就跳过）
+
+疑问：Lead 原判「.prettierignore 漏 .tmp/」，被 engineer-tests 推翻，理由是
+      「Prettier 3 默认读 .gitignore，.tmp/ 本就被忽略」。Lead 说复核过它是对的。
+
+我的独立实验（同一份坏格式文件，只改位置）：
+
+  对照组 A —— 放在 .tmp/verifier-prettier-probe/bad.ts（.gitignore 第 74 行有 .tmp/）
+    $ prettier --check .tmp/verifier-prettier-probe/bad.ts
+    All matched files use Prettier code style!          exit=0   <- 被忽略
+
+  对照组 B —— 同一个文件内容，放在仓库根 verifier-prettier-control.ts（不被忽略）
+    $ prettier --check verifier-prettier-control.ts
+    [warn] verifier-prettier-control.ts
+    [warn] Code style issues found ...                   exit=1   <- 判据有效
+
+结论：
+  1. Prettier 确实能发现这份坏格式（B 证明了探针有效）
+  2. 同样的文件在 .tmp/ 下被忽略（A）
+  => 「Prettier 3 读 .gitignore，.tmp/ 本就被忽略」成立。
+  => task-15「本卡不成立、零改动」判定正确，git diff 为空是正确结果。
+
+环境版本：prettier 3.9.10（package.json ^3.9.10）; .gitignore L74 含 .tmp/
+探针文件已清理，未留在仓库。

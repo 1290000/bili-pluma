@@ -1,0 +1,212 @@
+{
+  "mode": "open-window-close",
+  "steps": [
+    {
+      "at": "2026-11-12T08:08:34.574Z",
+      "name": "初始 isAllowedIncognitoAccess",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": false
+        },
+        "dp": {
+          "isActive": false,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:08:34.582Z",
+      "name": "初始 developerPrivate",
+      "data": {
+        "isActive": false,
+        "isEnabled": true,
+        "pending": false,
+        "state": "ENABLED"
+      }
+    },
+    {
+      "at": "2026-11-12T08:08:35.410Z",
+      "name": "setAllowedIncognitoAccess(true)",
+      "data": {
+        "isActive": true,
+        "isEnabled": true,
+        "pending": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:08:37.442Z",
+      "name": "打开后 isAllowedIncognitoAccess",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:08:41.147Z",
+      "name": "开窗前 OS 层 InPrivate 窗口",
+      "data": []
+    },
+    {
+      "at": "2026-11-12T08:08:41.259Z",
+      "name": "windows.create(incognito:true)",
+      "data": {
+        "ok": true,
+        "created": {
+          "id": null,
+          "incognito": null
+        }
+      }
+    },
+    {
+      "at": "2026-11-12T08:08:48.349Z",
+      "name": "开窗后 OS 层 InPrivate 窗口",
+      "data": []
+    },
+    {
+      "at": "2026-11-12T08:08:48.350Z",
+      "name": "OS 层验证",
+      "data": {
+        "开窗前数": 0,
+        "开窗后数": 0,
+        "真的开出来了": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:08:53.381Z",
+      "name": "开窗 t≈5s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:08:58.417Z",
+      "name": "开窗 t≈10s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:09:08.453Z",
+      "name": "开窗 t≈20s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:09:18.478Z",
+      "name": "开窗 t≈30s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:09:27.812Z",
+      "name": "关窗后 OS 层 InPrivate 窗口",
+      "data": []
+    },
+    {
+      "at": "2026-11-12T08:09:32.843Z",
+      "name": "关窗后 +5s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:09:42.877Z",
+      "name": "关窗后 +15s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:09:57.909Z",
+      "name": "关窗后 +30s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    }
+  ]
+}

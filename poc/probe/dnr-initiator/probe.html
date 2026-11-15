@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>DNR initiator probe</title>
+  </head>
+  <body>
+    <p>探针扩展的页面上下文（用于让 service worker 保持活跃、以及调用 chrome.tabs 等 API）。</p>
+    <p>本页不发起任何业务请求，全部由 <code>run.cjs</code> 通过 <code>chrome.runtime.sendMessage</code> 驱动。</p>
+  </body>
+</html>

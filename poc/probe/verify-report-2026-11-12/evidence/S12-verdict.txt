@@ -1,0 +1,48 @@
+﻿task-12 二次验收 · verifier 独立取证
+
+## A. 零逻辑改动（Lead 要求：剥注释逐行比对，用状态机不用正则）
+
+工具：tools/strip-comments-diff.mjs（自写字符级状态机，处理 // /* */ ' " ` 与转义）
+工具自验证（先证明探针有效，再拿它判"相同"）：
+  阳性对照：两份只差注释的文件 -> RESULT: IDENTICAL  exit=0
+  阴性对照：同一份差一个字符   -> RESULT: DIFFERENT  exit=1，并打印差异行
+  另验证：字符串 "含 /* 的不是注释" 未被误当注释起点
+
+实测结果：
+  src/background/login-window.ts : 85 非空代码行 vs 85  -> IDENTICAL
+  entrypoints/background.ts      : 281 非空代码行 vs 281 -> IDENTICAL
+
+git diff 被删除的行（共 7 条，全部是 // 注释）：
+  - // 情况 3：返回 undefined 且本实例看不到窗口数变化。
+  - // 这**不能**判定为失败——无痕窗口可能对当前分区实例不可见
+  - // （用户实测：窗口标题 `登录播放账号-[InPrivate]` 确实出现了，但本实例 windowsAfter 没变）。
+  - // 交给调用方通过 storage 握手确认：成功的实例会写 login-ready。
+  - // 重要：即便如此也要**乐观地**报告"可能成功"。
+  - // 因为本实例看不到无痕窗口，不代表它没建出来。
+  - // 调用方会用它来写 login-ready，从而抑制另一个实例误弹说明页。
+=> 没有删除任何一行可执行代码。**零逻辑改动成立。**
+
+## B. 注释声称的统计是否属实（我实测复现了一条）
+
+注释声称：assumed 4/4 次、create() 返回 id 0 次、loginTabs 4/4 为 0。
+
+我在干净环境下点了一次「扫码登录取流账号」，当场采集到（04:13:04-05）：
+
+  isAllowedIncognitoAccess        true
+  windows.create returned         id=undefined incognito=undefined windowsBefore=1 windowsAfter=1 loginTabs=0
+  create 返回 undefined 且窗口数未变，交给握手判定
+  login/open                      {"ok":true,"reason":"assumed"}
+  create 返回 undefined 但权限正常 → 按已创建处理
+
+同时用修好的探针查 OS 层窗口：
+  INCOGNITO_COUNT=1
+    hwnd=4524346 size=420x600 title=登录播放账号 - [InPrivate]
+  PROCESS_MAINTITLE_COUNT=1
+
+=> 关键事实：**reason:'assumed' 时窗口其实是真的开出来的**（这一次）。
+   与注释描述一致（id 未返回、窗口数未变、loginTabs=0，但窗口确实存在）。
+
+限制（如实标注）：
+  - 我只复现了 1 次点击，不是注释说的"4/4 次"。原始 LevelDB 日志我未逐条统计。
+  - 因此我确认的是"该现象真实存在且形状与注释一致"，
+    不是"4 次全部如此"这个计数本身。

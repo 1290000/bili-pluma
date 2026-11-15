@@ -52,6 +52,10 @@ const ACTS = {
   toggleStreamingIdentity: () => undefined,
   feedAccountEnabled: false,
   toggleFeedAccount: () => undefined,
+  /** 本用例不关心重取时的身份来源（`undefined` = 还没读到，走既有判据） */
+  currentStreamingIdentity: () => undefined,
+  /** 退出结果的出口（这些用例不点退出）。`ACTS` 同时喂给 `accountTab` 与 `mountPanelBody` */
+  notifyResult: () => undefined,
 } as const;
 
 const NOW = 1_800_000_000_000;

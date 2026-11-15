@@ -10,6 +10,11 @@
 import { render } from 'preact';
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 
+import {
+  LOGIN_HEARTBEAT_INTERVAL_MS,
+  clearLoginHeartbeat,
+  writeLoginHeartbeat,
+} from '@/src/background/login-window';
 import { POLL_INTERVAL_MS, isTerminal } from '@/src/core/auth/qrcode';
 import { buildQrMatrix } from '@/src/platform/qr/qrcode';
 import type { QrLoginStatus } from '@/src/shared/types/login';
@@ -93,6 +98,44 @@ function App() {
   useEffect(() => {
     void regenerate();
   }, [regenerate]);
+
+  /**
+   * ## 心跳：告诉普通分区"这个扫码窗口还活着"（2026-11-12，task-24 方案 A）
+   *
+   * 背景：`incognito: "split"` 下普通实例**看不到**无痕分区的窗口和标签页
+   * （`loginTabs` 恒为 0，`windows.create()` 返回 `undefined`），所以它无法
+   * 直接判断"扫码窗口是不是已经开着"。结果用户第二次点扫码时什么都不发生。
+   *
+   * 唯一跨分区共享的通道是 `chrome.storage.local`（`login-handshake.ts` 已记录）。
+   * 由**本页面**（唯一确定运行在无痕分区里的东西）周期写时间戳，普通实例读它
+   * 并配合 90 秒 TTL 判断"还开着"（见 `src/background/login-window.ts` 的
+   * `probeExistingLoginWindow()`）。
+   *
+   * ⚠️ **必须周期写，不能只写一次**：一次性标记在窗口关掉后仍然留着，
+   * 会让普通实例永远误判"还开着" → 再点扫码永远没反应。TTL 是兜底，
+   * 周期写才是"活着"的证据。
+   *
+   * 卸载时清掉心跳（`clearLoginHeartbeat`），让关窗立即生效而不用等 TTL。
+   */
+  useEffect(() => {
+    let cancelled = false;
+    const instance = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const beat = (): void => {
+      if (cancelled) return;
+      void writeLoginHeartbeat(instance);
+    };
+
+    // 立刻写一次：让"窗口刚开出来"就能被下一次点击探测到
+    beat();
+    const timer = window.setInterval(beat, LOGIN_HEARTBEAT_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      void clearLoginHeartbeat();
+    };
+  }, []);
 
   // 画二维码
   useEffect(() => {

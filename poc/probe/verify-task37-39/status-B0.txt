@@ -1,0 +1,58 @@
+﻿ M entrypoints/background.ts
+ M entrypoints/content-panel.content.ts
+ M entrypoints/login-window/main.tsx
+ M entrypoints/need-incognito/index.html
+ M entrypoints/need-incognito/main.ts
+ M entrypoints/need-incognito/style.css
+ M src/background/handlers/account-remove.handler.ts
+ M src/background/login-window.ts
+ M src/content/panel/diagnostics.ts
+ M src/content/panel/login-outcome.ts
+ M src/content/panel/panel.ts
+ M src/content/panel/tabs.ts
+ M src/platform/diagnostics/collect.ts
+ M src/platform/http/dnr.ts
+ M tests/unit/content/panel-account-mapping.test.ts
+ M tests/unit/content/panel-diagnostics-export.test.ts
+ M tests/unit/content/panel-diag-wiring.test.ts
+ M tests/unit/content/panel-login-outcome.test.ts
+ M tests/unit/content/panel-notice.test.ts
+ M tests/unit/content/panel-tabs.test.ts
+ M tests/unit/content/panel-write.test.ts
+?? entrypoints/need-incognito/incognito-watch.ts
+?? poc/probe/api-inventory/
+?? poc/probe/blocked-by-client/
+?? poc/probe/dnr-initiator/
+?? poc/probe/feed-boundary/
+?? poc/probe/feed-boundary-anchor/
+?? poc/probe/feed-cover/
+?? poc/probe/history-entry/
+?? poc/probe/incognito-api-probe/
+?? poc/probe/INVENTORY.md
+?? poc/probe/logout-login/
+?? poc/probe/logout-login-round2/
+?? poc/probe/realdevice/
+?? poc/probe/s3/
+?? poc/probe/search-identity/
+?? poc/probe/ui-impact/
+?? poc/probe/ui-optimize/
+?? poc/probe/verify-report/
+?? poc/probe/verify-report-2026-11-12/
+?? poc/probe/verify-task22/
+?? poc/probe/verify-task24/
+?? poc/probe/verify-task25/
+?? poc/probe/verify-task26/
+?? poc/probe/verify-task28/
+?? poc/probe/verify-task30/
+?? poc/probe/verify-task33/
+?? poc/probe/verify-task37-39/
+?? src/content/panel/orphan-hint.ts
+?? tests/unit/background/account-remove-keeps-toggle.test.ts
+?? tests/unit/background/incognito-permission-gate.test.ts
+?? tests/unit/background/login-heartbeat-probe.test.ts
+?? tests/unit/background/login-heartbeat-wiring.test.ts
+?? tests/unit/background/need-incognito-create-diag.test.ts
+?? tests/unit/content/need-incognito-copy.test.ts
+?? tests/unit/content/need-incognito-watch.test.ts
+?? tests/unit/content/panel/
+?? tests/unit/content/panel-logsmeta-chain.test.ts

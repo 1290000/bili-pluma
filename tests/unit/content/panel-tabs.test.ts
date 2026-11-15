@@ -77,6 +77,19 @@ function checkboxFor(root: HTMLElement, label: string): HTMLInputElement | null 
 }
 
 describe('画质 Tab', () => {
+  /**
+   * `qualityTab()` 在 task-10 加了两个**必填**参数（`proxyUsable` /
+   * `proxyDisabledReason`），它们决定总开关能不能点。
+   *
+   * 本文件测的是**画质卡渲染**，不关心 task-10 的禁用判据，所以默认给
+   * "可点"（`proxyUsable: true`）。禁用判据的测试在
+   * `tests/unit/content/panel/proxy-usable.test.ts`。
+   */
+  const QUALITY_ACTS_EXTRA = {
+    proxyUsable: true,
+    proxyDisabledReason: null,
+  } as const;
+
   it('★ 非播放页不渲染解锁卡，也不补一句"当前页不是播放页"', () => {
     /**
      * `02-ui-spec.md` §3 状态 5 定稿：非视频页**两处都不渲染**。
@@ -84,6 +97,7 @@ describe('画质 Tab', () => {
      */
     const box = qualityTab(quality({ unlock: null, pageKind: 'other', pill: '未生效' }), {
       toggleProxy: () => undefined,
+      ...QUALITY_ACTS_EXTRA,
     });
     expect(box.querySelector('.unlock-card')).toBeNull();
     // 不许出现任何解释"你在哪个页面"的话
@@ -92,7 +106,7 @@ describe('画质 Tab', () => {
   });
 
   it('播放页渲染解锁卡：标题 / 锚点 / 徽章都在', () => {
-    const box = qualityTab(quality(), { toggleProxy: () => undefined });
+    const box = qualityTab(quality(), { toggleProxy: () => undefined, ...QUALITY_ACTS_EXTRA });
     expect(box.querySelector('.unlock-card')).not.toBeNull();
     expect(box.querySelector('.unlock-title')?.textContent).toBe('已解锁');
     expect(box.querySelector('.unlock-anchor')?.textContent).toBe('主账号仅可用 1080P');
@@ -107,6 +121,7 @@ describe('画质 Tab', () => {
      */
     const box = qualityTab(quality({ proxyEnabled: null, pill: '未知', tone: 'neutral' }), {
       toggleProxy: () => undefined,
+      ...QUALITY_ACTS_EXTRA,
     });
     const cb = checkboxFor(box, '自动接管取流');
     expect(cb).not.toBeNull();
@@ -116,7 +131,10 @@ describe('画质 Tab', () => {
   });
 
   it('proxyEnabled 为 true 时开关可用且勾上', () => {
-    const box = qualityTab(quality({ proxyEnabled: true }), { toggleProxy: () => undefined });
+    const box = qualityTab(quality({ proxyEnabled: true }), {
+      toggleProxy: () => undefined,
+      ...QUALITY_ACTS_EXTRA,
+    });
     const cb = checkboxFor(box, '自动接管取流');
     expect(cb?.checked).toBe(true);
     expect(cb?.disabled).toBe(false);
@@ -124,7 +142,10 @@ describe('画质 Tab', () => {
 
   it('点总开关会回调（且阻断冒泡）', () => {
     const spy = vi.fn();
-    const box = qualityTab(quality({ proxyEnabled: true }), { toggleProxy: spy });
+    const box = qualityTab(quality({ proxyEnabled: true }), {
+      toggleProxy: spy,
+      ...QUALITY_ACTS_EXTRA,
+    });
     const cb = checkboxFor(box, '自动接管取流');
     if (!cb) throw new Error('没找到总开关');
     cb.checked = false;
@@ -135,10 +156,14 @@ describe('画质 Tab', () => {
   it('有 line 时才渲染那一行（已接管不写解释）', () => {
     const withLine = qualityTab(quality({ line: '需要重新扫码', tone: 'bad' }), {
       toggleProxy: () => undefined,
+      ...QUALITY_ACTS_EXTRA,
     });
     expect(withLine.querySelector('.pane-line')?.textContent).toBe('需要重新扫码');
 
-    const noLine = qualityTab(quality({ line: null }), { toggleProxy: () => undefined });
+    const noLine = qualityTab(quality({ line: null }), {
+      toggleProxy: () => undefined,
+      ...QUALITY_ACTS_EXTRA,
+    });
     expect(noLine.querySelector('.pane-line')).toBeNull();
   });
 });
@@ -383,6 +408,14 @@ const ACTS = {
   logout: async () => ({ ok: true }),
   streamingIdentity: null,
   toggleStreamingIdentity: () => undefined,
+  /**
+   * 退出结果的出口（2026-11-12 加）。
+   *
+   * 账号 Tab 不再把结果写进 `box`（那会被 `render()` 的 `replaceChildren` 冲掉），
+   * 改成回调交给编排层 —— 所以这里必须给一个，否则类型不过。
+   * 断言"结果是否被送到界面上"的用例见 `panel/account-logout-notice.test.ts`。
+   */
+  notifyResult: () => undefined,
 } as const;
 
 /**
@@ -407,6 +440,8 @@ const DISPLAY_ACTS = {
   feedAccountEnabled: false,
   toggleFeedAccount: () => undefined,
   hasCredential: false,
+  /** 默认不是"读失败"态（大多数用例不关心角标读取结局） */
+  badgeReadFailed: false,
 } as const;
 
 describe('账号 Tab', () => {
@@ -1036,8 +1071,23 @@ describe('显示 Tab：首页推荐流开关（2026-11-11 从账号 Tab 迁来�
     expect(el?.disabled).toBe(true);
   });
 
-  it('没有凭据时给出**下一步动作**（不只是灰着）', () => {
-    expect(renderDisplay({ hasCredential: false }).textContent).toContain('先扫码登录取流账号');
+  it('★★ 没有凭据时**不再**给出引导语（2026-11-12 task-11 按用户要求删除）', () => {
+    /**
+     * ## 这条测试的口径**反过来了**，请勿"修回去"
+     *
+     * 旧版断言：「没有凭据时给出下一步动作」→ `toContain('先扫码登录取流账号')`。
+     *
+     * 用户原话（task-11）：
+     * > 「"先扫码登录取流账号，才能用它来换首页推荐流"…… 这些字都可以删掉」
+     *
+     * 所以现在断言的是**它不在了**。
+     *
+     * ⚠️ 已知副作用（用户已确认接受）：无凭据时开关灰着且无解释。
+     * **不要**自己再造一句替代文案 —— 用户要求的是删除。
+     *
+     * 🔁 反向验证：把那句 `pane-note` 加回 `displayTab()` → 本用例红。
+     */
+    expect(renderDisplay({ hasCredential: false }).textContent).not.toContain('先扫码登录取流账号');
   });
 
   it('勾选态来自 feedAccountEnabled', () => {
@@ -1065,32 +1115,32 @@ describe('显示 Tab：首页推荐流开关（2026-11-11 从账号 Tab 迁来�
     expect(actsKeys).toContain('hasCredential');
   });
 
-  it('★★ hint 只有 14 字，且**不提机制词**（用户裁决）', () => {
+  it('★★ 推荐流开关**没有 hint**（2026-11-12 task-11 按用户要求删除）', () => {
     /**
-     * ## 用户原话
+     * ## 用户原话（task-11）
      *
-     * > 「描述太复杂了，必须精简、精简、再精简」
-     * > 「**这个开关的说明没有必要写清"首屏也会换"，按我说的来**」
+     * > 「把首页推荐流使用取流账号这个开关的"打开后首页推荐完成取流账号的"
+     * > 这些详细描述删掉，**标题已经能够完美解释这个开关的含义了**」
      *
-     * 所以：62 字 → 14 字，且**不许出现**"首屏""滚动加载""隐藏"这类机制词。
+     * ## 这条测试的口径**反转了**，请勿"修回去"
      *
-     * ## 为什么这条替换了原来那条"从实现推导预期"
+     * 旧版断言：「hint 只有 14 字，且不提机制词」→ `toContain('打开后，首页推荐换成取流账号的')`。
+     * 现在断言的是**它完全不在了**。
      *
-     * 原来那条断言的是「若隐藏首屏 → 文案须含"含首屏"」——
-     * **那套逻辑在用户裁决下已经失效**：用户明确不要机制描述。
+     * ⚠️ **不要自己再造一句更短的说明代替它** —— 用户要求的是删除。
      *
-     * 但**机制本身没变**（\`shouldHideFeedCards\` 仍然是 true），
-     * 见下一条"实现事实"用例。
+     * 🔁 反向验证：给 `switchRow` 加回 `hint: '打开后，首页推荐换成取流账号的'` → 本用例红。
      */
     const box = renderDisplay();
     const text = box.textContent ?? '';
 
-    // 14 字的那句必须在
-    expect(text).toContain('打开后，首页推荐换成取流账号的');
+    expect(text, 'hint 还在 —— 用户要求删掉全部说明文字').not.toContain(
+      '打开后，首页推荐换成取流账号的',
+    );
 
-    // 机制词一个都不许出现
+    // 机制词当然也不许出现（本来就在 hint 里，hint 没了它自然也没了）
     for (const banned of ['首屏', '滚动加载', '隐藏']) {
-      expect(text, `hint 里出现了机制词「${banned}」—— 用户明确不要`).not.toContain(banned);
+      expect(text, `出现了机制词「${banned}」`).not.toContain(banned);
     }
   });
 

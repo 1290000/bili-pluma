@@ -1,0 +1,16 @@
+{
+  "steps": [
+    "[2026-11-12T08:20:10.088Z] === 时间序列：create({incognito:true}) 什么时候开始成功 ===",
+    "[2026-11-12T08:20:10.094Z] 独立 profile: D:\\Projects\\Pluma\\.tmp\\investigator-q4\\profile-timing",
+    "[2026-11-12T08:20:10.094Z] ⛔ 用户浏览器零接触",
+    "[2026-11-12T08:20:10.105Z]   主进程 pid=40948",
+    "[2026-11-12T08:20:11.266Z]   CDP 就绪 @ t=1171ms",
+    "[2026-11-12T08:20:17.506Z]   权限已开 @ t=7411ms  {\"incognitoAccess\":{\"isActive\":true,\"isEnabled\":true}}",
+    "[2026-11-12T08:20:17.517Z]   [0] t=7s  SW 不在，跳过",
+    "[2026-11-12T08:20:35.364Z]   [1] t=25s  about:blank → {\"ok\":true,\"created\":null}   OS=[\"40948|首页 | Tampermonkey 和另外 3 个页面 - 个人 - Microsoft​ Edge\"]",
+    "[2026-11-12T08:20:50.151Z]   [2] t=40s  about:blank → {\"ok\":true,\"created\":{\"id\":1602937619,\"incognito\":true}}   OS=[\"40948|about:blank - [InPrivate]\"]",
+    "[2026-11-12T08:20:50.152Z]   ✅ about:blank 成功，接着试 chrome-extension://",
+    "[2026-11-12T08:20:57.139Z]   chrome-extension:// → {\"ok\":true,\"created\":{\"id\":1602937621,\"incognito\":true}}   OS=[\"40948|开启无痕窗口权限 · Pluma - [InPrivate]\"]",
+    "[2026-11-12T08:20:57.140Z]   ✅ chrome-extension:// 也成功"
+  ]
+}

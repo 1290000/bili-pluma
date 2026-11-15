@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Pluma DNR initiator probe",
+  "version": "0.1.0",
+  "description": "实验探针：declarativeNetRequest 能否按发起方（initiator）区分 Cookie。仅本地实验，不采集任何数据。",
+  "minimum_chrome_version": "120",
+  "permissions": [
+    "declarativeNetRequest",
+    "declarativeNetRequestFeedback",
+    "storage",
+    "cookies",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "https://httpbin.org/*",
+    "https://postman-echo.com/*",
+    "https://api.bilibili.com/*",
+    "https://www.bilibili.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://httpbin.org/*", "https://postman-echo.com/*"],
+      "js": ["content-probe.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ]
+}

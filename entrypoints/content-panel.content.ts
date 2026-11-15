@@ -34,10 +34,20 @@
 
 import { ensurePanelHost, removePanelHost } from '@/src/content/panel/host';
 import { mountSidebar, PANEL_CSS } from '@/src/content/panel/sidebar';
-import { mountPanelBody, type PanelController } from '@/src/content/panel/panel';
+import {
+  mountPanelBody,
+  NOTICE_LOAD_FAILED,
+  NOTICE_LOGOUT_REFRESH_FAILED,
+  type PanelController,
+} from '@/src/content/panel/panel';
 import { loadPanelModel } from '@/src/content/panel/panel-data';
 import { createOpenCycler, type LoadResult } from '@/src/content/panel/open-cycler';
-import { describeLoginOutcome, type LoginOpenReply } from '@/src/content/panel/login-outcome';
+import {
+  ALREADY_ASKED_TEXT,
+  describeLoginOutcome,
+  REPEAT_GUARD_MS,
+  type LoginOpenReply,
+} from '@/src/content/panel/login-outcome';
 import {
   startLoginPolling,
   type AccountSnapshot,
@@ -52,6 +62,14 @@ import {
   readFeedAccountEnabled,
   readPanelEntryEnabled,
 } from '@platform/storage/ui-prefs-store';
+/**
+ * 孤儿态自愈提示（task-33）。
+ *
+ * ⚠️ 这条路径**必须不依赖 `controller`** —— 孤儿态下它最容易是 null，
+ * 而旧代码写的是 `if (controller) controller.showNotice(...)`（等于静默）。
+ * 详见 `src/content/panel/orphan-hint.ts` 文件头。
+ */
+import { isOrphanError, isOrphanHintShown, showOrphanHint } from '@/src/content/panel/orphan-hint';
 // tokens.css 的**原始文本**，注入 shadow root 用。
 // ⚠️ 不能用 <link>：CSS 变量不穿透 shadow 边界，必须把规则塞进 shadow 内部
 import tokensCss from '@/src/design/tokens.css?raw';
@@ -96,6 +114,17 @@ async function readPrimary(
   return resolvePrimaryCard({ kind: pageKind === 'play' ? 'play' : 'other', primary: null }, cache);
 }
 
+/**
+ * 活跃探活的心跳间隔 —— **已于 task-35 删除**。
+ *
+ * 曾有 `const PANEL_ALIVE_PROBE_MS = 20_000` 配一个 `setInterval`。撤掉的理由：
+ * 没有 `document.hidden` 判断 ⇒ 每个后台 B 站标签页永久每 20s 唤醒 SW；
+ * 且清理它的 `ctx.onInvalidated` 从不触发 ⇒ 心跳没有回收点。
+ * 现在改成**动作驱动**（启动一次 / 点击 / `visibilitychange`），见 `main()`。
+ *
+ * ⚠️ 不要因为"探活不频繁了"就把这个常量加回来 —— 加了就等于恢复常驻轮询。
+ */
+
 export default defineContentScript({
   /**
    * ⚠️ 字面量，不能引用共享常量：WXT 生成 manifest 时对入口文件做**静态分析**，
@@ -125,6 +154,49 @@ export default defineContentScript({
      * 还会每 3 秒发一次 `account/summary`，白白唤醒 background。
      */
     let poller: LoginPoller | null = null;
+
+    /**
+     * ## 面板侧「刚点过扫码登录」的记忆（2026-11-15，task-44 缺陷 2）
+     *
+     * 存**上一次 `ok:true / reason:'assumed'` 的时间戳**；`null` = 没点过或已过期。
+     *
+     * ### 为什么需要它
+     *
+     * 真机实测（task-44 卡）：两次点击 ⇒ `windows.create` 跑两次 ⇒
+     * 屏幕上多出**两个** 420×600 的二维码窗叠在一起（`windowsAfter` 4 → 6）。
+     * 用户付了代价，只得到一次"我更确认了"。
+     *
+     * background 侧本来有 `probeExistingLoginWindow()` 想拦住第二次，
+     * 但它靠**跨分区心跳**，而 split 模式下实测 `probe/heartbeat` **永远是 `none`**
+     * —— 那条路在本机不存在。所以第二次点击必然又开一个窗口。
+     *
+     * 面板这一侧**知道一件事**：用户在这个 tab 刚点过。这就够拦第二次了。
+     * 不需要知道窗口在不在（知道的话就轮到 background 了）。
+     *
+     * ### 为什么放这里（而不是 storage / 模块级 / 面板 controller）
+     *
+     * - **`main(ctx)` 闭包变量** ⇒ 天然「按 tab」：每个标签页各有一份 content script 实例。
+     * - **内存级** ⇒ 页面刷新 / 扩展重载自动归零。这正是想要的：
+     *   刷新页面 = 用户明确表示"我要重来"，此时**不该**继续拦他。
+     * - **不写 storage**（卡里的硬约束）⇒ 不引入新的持久化面、不需要清理、
+     *   不会跨标签页串味、也不会在扩展更新后留下一条过期的"刚点过"。
+     * - 放在 `main()` 里而不是模块顶层：模块顶层在**同一页面**内也是单例，
+     *   但 `main()` 更明确地表达"跟随这个页面实例"，和外层 `poller` 同一生命周期。
+     *
+     * 没有 `ctx.onInvalidated` 清理：闭包随页面卸载一起消失，
+     * 清理是**不需要**的（不是"忘了写"，见 `probeAlive()` 上方同样的声明）。
+     */
+    let lastAssumedAt: number | null = null;
+
+    /**
+     * 判断这次点击是否该被拦下（task-44 缺陷 2）。
+     *
+     * 只在**未过期**时返回 true。判据是**纯时间**，不看 background 的应答
+     * —— 这正是它与 `already-open` 的区别：那个要等消息回来且依赖心跳，
+     * 这个在**发消息之前**就能下结论。
+     */
+    const shouldSkipRepeatOpen = (): boolean =>
+      lastAssumedAt !== null && Date.now() - lastAssumedAt < REPEAT_GUARD_MS;
 
     const pageKind = detectPageKind();
 
@@ -164,24 +236,207 @@ export default defineContentScript({
      * ⚠️ **先停旧的再开新的** —— 连点两次「重新登录」不能叠加两个轮询。
      */
     const openLogin = async (): Promise<void> => {
+      /**
+       * ## 同步孤儿守卫（task-39 / task-41-B，必须排在**一切**前面）
+       *
+       * 判据：`chrome` 本身没了，或者 `chrome.runtime` 没了 / `id` 读不到。
+       *
+       * ### 为什么必须写 `typeof chrome === 'undefined'`
+       *
+       * 运行时探针实测（verifier 报回的真机形态）：`chrome` **整体不存在**时
+       * `chrome.runtime?.id` 会先抛 `TypeError: Cannot read properties of
+       * undefined (reading 'runtime')` —— `?.` 只保护 `runtime` 那一侧，
+       * 管不住 `chrome` 本身。守卫在自己那行同步抛，`showOrphanHint()`
+       * 永远轮不到 ⇒ 用户看到的就是**"点了完全没反应"**，而这正是本报的缺陷。
+       * 所以 `typeof` 判断必须在前，且**不能**写成 `chrome?.runtime?.id`。
+       *
+       * ### 为什么必须是同步的、而且必须在这里
+       *
+       * 下面 `controller?.clearNotice()`、`stopPolling()`、`await readAccountMid()`
+       * 和 `await sendMessage(...)` 全都在之后。面板半失活（controller 还在、
+       * 扩展上下文已换人）时 `sendMessage` 可能是**同步抛**的，`.catch()` 根本不跑。
+       * 守卫挂晚了就轮不到它，所以放在**第一行** —— 连 `stopPolling()` 之前。
+       *
+       * ### 已知边界（不是缺陷，是取舍）
+       *
+       * 「`chrome` 与 `runtime` 都还在、但 handler 已经换人」这种形态本守卫**不覆盖**。
+       * 那需要跨代可观测信号（例如 DOM 上的代次标记），而该机制**没有任何实测证据
+       * 证明这个形态真实存在**，误报代价却是给正常用户弹「请刷新」。
+       * 本轮裁决：不引入没证据的机制去守没证据的形态（详见 task-41 卡）。
+       * 这一形态若真出现，落点在后面的 `.catch`（修 C）。
+       */
+      const orphan = typeof chrome === 'undefined' || chrome.runtime?.id == null;
+      if (orphan) {
+        showOrphanHint();
+        return;
+      }
+
       // 先停旧的：用户可能是因为上一次没反应才又点的一次
       stopPolling();
+
+      /**
+       * ## 点下去的第一时间**先清掉上一条提示**（2026-11-12，裁决 3）
+       *
+       * 取证 D.2：用户开完 InPrivate 权限回到网页再点这个按钮，底下还挂着
+       * **上一次**的红字（「等了 3 分钟还没检测到新账号…」）。新提示确实会替换旧的，
+       * 但两条红字长得一样 —— 用户分不清"这次的失败"还是"上次留下的"，
+       * 于是以为"权限开了也没用"，只能刷新整页。
+       *
+       * 清掉之后，**屏幕上出现一条红字就只可能是这一次的失败**。
+       *
+       * ⚠️ 清的是**上一次**，不是给"这一次"的失败加超时 ——
+       * 失败提示照旧常驻（`panel.ts` 的论证成立，裁决 3 明令不许改）。
+       * ⚠️ 也**不许**用时间戳/序号区分新旧（那是把内部状态推给用户）。
+       *
+       * 顺序：先清、再读 mid、再发消息。清必须发生在**任何 await 之前**，
+       * 否则用户看到的是"红字还留着，过了几百毫秒才消失"。
+       */
+      controller?.clearNotice();
+
+      /**
+       * ## 缺陷 2：第二次点击**不再发 `login/open`**（2026-11-15，task-44）
+       *
+       * ### 为什么拦在**这里**（发消息之前）
+       *
+       * 位置决定代价：拦在 `sendMessage` 之前 ⇒ **background 根本不知道有这次点击**
+       * ⇒ 不会有第二次 `windows.create` ⇒ 屏幕上不会多出第二个二维码窗。
+       * 拦在后面就等于"开了再关"，那既晚了也有新问题（关哪个？）。
+       *
+       * 顺序也很重要：**在 `clearNotice()` 之后**。用户看到的行为是
+       * 「上一条提示先清空 → 立刻出现这一条」，而不是"旧的还挂着，新的叠上来"。
+       *
+       * ### 为什么不复用 `already-open`
+       *
+       * `already-open` 是 background 侧的结论，依赖 `probeExistingLoginWindow()`
+       * 读跨分区心跳；真机实测**永远是 `none`**（task-44 卡），那条分支从未命中。
+       * 本判据只看**面板自己记得的"我刚点过"**，在发消息之前就能下结论，
+       * 不依赖任何跨分区通道 —— 这正是"面板侧能自己做的事"。
+       *
+       * ### 拦住之后**不**更新 `lastAssumedAt`
+       *
+       * 让窗口的起点固定在第一下点击。否则用户连点十次就把 2 分钟越推越远，
+       * 变成"越点越开不出来"。现在最坏情况是：用户干等 2 分钟自动放行。
+       */
+      if (shouldSkipRepeatOpen()) {
+        /**
+         * `shouldPoll: false` 由这里直接表达（不经过 `describeLoginOutcome`）：
+         * 我们要的是"好消息 + 不轮询"，但**没有**任何 `login/open` 应答可翻译。
+         * 走 `describeLoginOutcome` 会需要一个假的 `already-open` 应答，
+         * 那等于把"面板猜的"伪装成"background 说的"—— 两层混淆，不干。
+         */
+        if (!isOrphanHintShown()) controller?.showNotice(ALREADY_ASKED_TEXT, true);
+        if (!isOrphanHintShown() && controller === null) showOrphanHint();
+        return;
+      }
 
       /**
        * 记下点之前的 mid —— 轮询靠"mid 变了"判断成功。
        * ⚠️ 在发 `login/open` **之前**读：读得晚可能已经把新号读到了，
        * 那样 `before` 就是新的，轮询会误判成"没变化"。
+       *
+       * ## 修 A（task-41）：同步抛也必须兜住
+       *
+       * 原来只写 `.catch(() => ({ mid: null }))` —— 那只管**异步** reject。
+       * 上下文失效时 `chrome.runtime.sendMessage` 可能是**同步抛**的，
+       * `.catch()` 根本来不及挂上，异常直接冲出 `openLogin`（一个未被捕获的
+       * rejected promise ⇒ 用户看到"点了完全没反应"）。所以外面再包一层 try/catch，
+       * 两层都归一到 `{ mid: null }` —— `mid` 读不到只影响"能不能判断轮询成功"，
+       * 不该让整次点击中止。
        */
-      const before = (await readAccountMid().catch(() => ({ mid: null }))).mid;
+      /**
+       * 记下点之前的 mid —— 轮询靠"mid 变了"判断成功。
+       * ⚠️ 在发 `login/open` **之前**读：读得晚可能已经把新号读到了，
+       * 那样 `before` 就是新的，轮询会误判成"没变化"。
+       *
+       * 不需要额外的 try/catch：`readAccountMid()` 内部自带 `.catch`，
+       * 这里再挂一层 `.catch`。产物里它是**内联在 `let` 初始化式里**直接调用的
+       * （investigator 拆产物确认），抛不出来（task-41 修 A 已作废）。
+       */
+      const beforeMid = (await readAccountMid().catch(() => ({ mid: null }))).mid;
 
-      const res = (await chrome.runtime
-        .sendMessage({ type: 'login/open' })
-        .catch(() => null)) as LoginOpenReply | null;
+      /**
+       * ## 发 `login/open`：**任何失败都必须留痕**（task-41 修 C，本轮真正的洞）
+       *
+       * ### 为什么不能写 `.catch(...)`
+       *
+       * `chrome.runtime.sendMessage({...})` 是**普通函数调用**。孤儿态下它
+       * **同步抛**，而同步抛发生在 `.catch(...)` 被挂上**之前** ——
+       * `.catch` 里的 `showOrphanHint()` 一次都不会执行，异常冲出 `openLogin`
+       * 变成一个没人处理的 rejected promise（`:590` 的 `void openLogin()` 直接丢掉）
+       * ⇒ **零提示 + 零 diag + 零心跳**。
+       *
+       * 这正是 20:04 那次的指纹：`pluma:build-proof3` 320 次（扩展活着）、
+       * `pluma:diag` 0 次、20:04:00 有心跳（+928ms），而 20:04 点击零记录。
+       * 消息根本没发到 background，异常在上游就没了。
+       *
+       * ### 判据：走到 catch = 点了没反应 = 必须告诉用户
+       *
+       * **不许**再写 `if (isOrphanError(e)) { … } res = null;` 那种
+       * "不是孤儿错就静默继续"的写法 —— 对用户来说两者没有区别，
+       * 都是"点了一下，什么都没发生"。所以 catch 里**所有路径**都挂提示后返回，
+       * 不再往下走 `describeLoginOutcome(null)`（那条路要依赖 `controller`，
+       * 而孤儿态下它偏偏最可能是 null，等于又回到静默）。
+       */
+      let res: LoginOpenReply | null = null;
+      try {
+        res = (await chrome.runtime.sendMessage({ type: 'login/open' })) as LoginOpenReply | null;
+      } catch (e) {
+        /**
+         * 走到这里 = 消息没发出去。同步抛与异步 reject 都在这里。
+         *
+         * `e` 只用来写注释级诊断，**不参与判据** —— 判据就是"catch 到了"。
+         * `isOrphanError` 仍然引用一下，避免它成为只有别处用的死导入；
+         * 同时把真实错误串留在异常上下文里，便于真机排查。
+         */
+        void isOrphanError(e);
+        showOrphanHint();
+        return;
+      }
       const r = describeLoginOutcome(res);
-      if (controller) controller.showNotice(r.text, r.ok);
+      /**
+       * ## 记下「这次真的发出去并开过了」（2026-11-15，task-44 缺陷 2）
+       *
+       * 判据是 `ok:true && reason === 'assumed'`，理由：
+       *
+       * - **只记 `assumed`**：这是 split 模式下的**常态**（真机 4/4），
+       *   也是唯一一种"我们发了 create、但拿不到句柄"的情形。
+       * - 确定拿到窗口对象（无 `reason`）时**不记**：那种情况下 background
+       *   自己就能通过 `currentWindowId` 拦住第二次，面板不必插手。
+       * - `incognito-disabled` 等失败**不记**：什么都没开出来，
+       *   用户修好权限后当然应该能立刻再点 —— 拦住他是错的。
+       *
+       * ⚠️ 记的时间点必须在**拿到应答之后**，不能在发消息之前：
+       * 发消息失败（catch 分支）时窗口没开成，不该开始计时。
+       */
+      if (r.ok && res?.reason === 'assumed') lastAssumedAt = Date.now();
+      /**
+       * ⚠️ 孤儿态已经由 `showOrphanHint()` 给了明确提示，
+       * 这里不要再叠一条长驻红字（两条提示会互相覆盖、反而更乱）。
+       */
+      if (!isOrphanHintShown()) controller?.showNotice(r.text, r.ok);
+      /**
+       * ⚠️ 还有一种形状：`controller` 为 null 且**不是**孤儿态
+       * （例如面板刚被开关逻辑卸掉、或 `paint()` 还没建出 body）。
+       * 那时 `showNotice` 整句被跳过 —— 用户点了还是没反应。
+       * 所以补一条与 controller 无关的兜底：提示接不上就自己挂到 document 上。
+       * 这不是孤儿也必须给反馈（任务卡三-B：**绝对不许静默失败**）。
+       */
+      if (!isOrphanHintShown() && controller === null) showOrphanHint();
 
-      // 只有真的打开了窗口才轮询
-      if (!r.ok) return;
+      /**
+       * ## 跳过轮询看 `shouldPoll`，**不看** `ok`（2026-11-12，task-25）
+       *
+       * 原来是 `if (!r.ok) return;` —— 拿"这条提示是不是坏消息"当
+       * "要不要轮询"用。两件事被一个布尔量绑死，于是 `already-open`
+       * 为了不轮询只能取 `ok: false`，结果红色常驻、用户以为出错了。
+       *
+       * 现在分开了：`ok` 只决定提示的颜色与是否自动消失，
+       * `shouldPoll` 才决定这里要不要早退。
+       *
+       * 判据本意仍是「只有真的打开了窗口才轮询」：
+       * 窗口已开着（`already-open`）时它自己就在跑轮询，再启一轮只是重复请求。
+       */
+      if (!r.shouldPoll) return;
 
       poller = startLoginPolling(
         {
@@ -202,7 +457,7 @@ export default defineContentScript({
             // cancelled：面板收起时的正常停止，不打扰用户
           },
         },
-        before,
+        beforeMid,
       );
     };
 
@@ -226,8 +481,26 @@ export default defineContentScript({
         /**
          * 成功后重新取数：账号卡要变回"未配置"态。
          * ⚠️ 不 `await` 后再返回 —— 取数失败不该让"退出成功"变成"退出失败"。
+         *
+         * ## 但重取失败**必须告诉用户**（2026-11-12，task-3 裁决 1 第 4 条）
+         *
+         * 旧实现 `void loadOnce()` 完全不管结局。而退出后界面能不能变
+         * **完全取决于这次重取**：失败 → 面板保持旧模型 → 取流卡片还在、
+         * 按钮还是「重新登录」→ 用户看到的就是「点了确认退出，什么都没变」。
+         *
+         * `loadOnce()` 成功时会 `setModel()` 重画，而**成功提示由账号 Tab 自己发**
+         * （`notifyResult`，见 `tabs.ts`）。所以这里只兜**失败**那一侧，
+         * 且必须**覆盖**刚写的那句成功提示 —— 否则用户读到的"已退出"
+         * 搭配的是一张还画着旧账号的卡，自相矛盾。
+         *
+         * ⚠️ 文案一字不改（裁决文件）：
+         * 「已退出，但界面刷新失败 —— 收起重开面板可刷新」
          */
-        void loadOnce();
+        void loadOnce().then((r) => {
+          if (r === null) {
+            controller?.showNotice(NOTICE_LOGOUT_REFRESH_FAILED, false);
+          }
+        });
         return { ok: true };
       }
       return { ok: false, detail: res?.detail ?? '消息没有返回成功的应答' };
@@ -383,7 +656,36 @@ export default defineContentScript({
         controller.setModel(model);
         return { pageStateKind: model.pageStateKind };
       } catch {
-        // 取不到就保持上一次的画面（或"正在读取…"），不做任何编造
+        /**
+         * ## 取数失败**不再静默**（2026-11-12，task-3 修路径①）
+         *
+         * 旧实现是裸 `catch { return null; }`：既不重画也不提示，
+         * 面板**保持上一帧的模型**。退出路径上这表现为
+         * 「点了确认退出，界面什么都没变」（取证 A 节路径①）——
+         * 因为旧模型里 `hasCredential` 仍是 true、`pb` 仍非空。
+         *
+         * ## 为什么**不**改成 `throw`
+         *
+         * `open-cycler` 把返回值当判据：`null` = 普通失败、**不排 `not-ready` 重试**
+         * （见 `:354-355` 那段注释与 `open-cycler.ts` 的 `scheduleRetry`）。
+         * 改成抛会让异常穿过 `load()` 进入 `cycler.run()` 的 `catch`，
+         * 虽然结果同样是 `null`，但**语义**从"这次取数失败"变成"抛了个异常"，
+         * 而且以后任何调用方都会被迫处理异常 —— 修一个 bug 引入另一个。
+         *
+         * **要的是让失败可见，不是让失败变响。** 所以返回值形状**一个字不变**，
+         * 只多一条用户能看见的提示。
+         *
+         * ## 提示文案为什么是这句
+         *
+         * 它同时覆盖三种原因（消息没应答 / 并发任一条失败 / 解析抛错），
+         * 而**失败归因**不能编 —— 面板拿不到"是哪一步坏了"。
+         * 但用户至少要知道"不是你没点到，是这次没取到"，
+         * 并且有一个**真能做的动作**（收起重开 = 再取一次）。
+         *
+         * ⚠️ 走 `showNotice`（`root` 级、跨 `replaceChildren` 存活），
+         * 不另造第二套提示机制。失败色 → **常驻**，用户不会错过。
+         */
+        controller?.showNotice(NOTICE_LOAD_FAILED, false);
         return null;
       }
     };
@@ -465,6 +767,26 @@ export default defineContentScript({
         .sendMessage({ type: 'feed-account/set', enabled: next })
         .catch(() => null)) as { type?: string; detail?: string } | null;
       if (res?.type !== 'feed-account/set:ok') {
+        /**
+         * ## 失败必须让用户知道（2026-11-12，task-5 静默点 6）
+         *
+         * 旧实现只 `throw`，而调用方是：
+         * ```
+         * void setFeedAccount(next).then(...).catch(() => { /* 失败由面板回滚 *\/ });
+         * ```
+         * **那个注释是错的**：`PanelActions.toggleFeedAccount` 的签名是
+         * `(next: boolean) => void` —— 面板 `await` 到的是 `undefined`，
+         * 它的 `try/catch` **永远不会进入**：
+         *   - 不会回滚（开关停在用户拨的新值上）
+         *   - 不会提示（一个字都没有）
+         *
+         * 而**规则根本没重建** —— 用户看到开关是"开"，实际没生效。
+         * 这是本项目的典型形状：「界面说 A、实际做 B」。
+         *
+         * 修法对齐 `setStreamingIdentity`（那个失败时会 `showNotice`）：
+         * 在这里说人话，然后**仍然抛出去**（保持调用链的失败语义不变）。
+         */
+        controller?.showNotice('首页推荐流开关没保存成功 —— 稍后再拨一次', false);
         throw new Error(res?.detail ?? 'feed-account/set failed');
       }
       feedAccountCache = next;
@@ -525,6 +847,18 @@ export default defineContentScript({
                 /* 失败由面板回滚 + setFeedAccount 抛错 */
               });
           },
+          /**
+           * ⚠️ 每次 `refreshModel()` 都**重新读缓存**，不是把值拷进去。
+           *
+           * `mountPanelBody()` 只在面板**首次挂载**时跑一次，而
+           * `streamingIdentityCache` 会被 `toggleStreamingIdentity` 在之后更新
+           * （见上面那个 `.then`）。传值 → 重取永远用挂载那一刻的旧身份；
+           * 传取值函数 → 重取用的就是**当前**身份。
+           *
+           * 这正是 `refreshModel()` 缺参数那条缺陷（取证 B-1/B-2/B-3）的修法：
+           * 值来自唯一真相源，**不硬编码** `'extension'` / `'page'`。
+           */
+          currentStreamingIdentity: () => streamingIdentityCache,
         });
         controller = body;
         sidebar = mountSidebar(s, {
@@ -599,10 +933,97 @@ export default defineContentScript({
     chrome.storage.onChanged.addListener(onChanged);
 
     /**
+     * ## 主动探活：扩展有没有被重新加载过（2026-11-12，task-33）
+     *
+     * 为什么必须**主动**：`devtools`/`wxt` 的失效通知在这条路径上不触发 ——
+     * 见任务卡 §二.4 引用的 `content-script-context.mjs:57-60`（`isInvalid`
+     * 是被动 getter）与 `:183-190`（`listenForNewScripts` 要求页面刷新）。
+     * 所以下面那个 `ctx.onInvalidated` **从来没被调用过**。
+     *
+     * 判据只有一条：**消息能否往返**。`chrome.runtime.sendMessage` 在孤儿上下文里
+     * 会抛 `Extension context invalidated`，而 `chrome.runtime` 对象本身、
+     * `chrome.storage` 的旧监听器都还在 —— 所以只查 `chrome.runtime.id`
+     * 不足以判定（它在部分形态下仍非空）。
+     *
+     * 探的是 `proxy/status` —— 一条**纯只读**消息（`proxy.handler.ts:66-113`
+     * 只读 storage + 数规则，不写任何东西），所以探活不改变系统状态，
+     * 也不会像写消息那样留下"探测副作用"。失败时才渲染提示；成功路径零额外 UI。
+     */
+    /**
+     * 触发时机：① 启动时一次；② `document` capture 阶段任意点击（用户动作
+     * 永远以点击开始）；③ 页面**重新变可见**时一次（用户从
+     * `edge://extensions` 切回来正好命中，这是他实际的操作路径）。
+     *
+     * ## 🔴 为什么**没有**常驻心跳（2026-11-12，task-35 撤掉）
+     *
+     * 上一版有个 `setInterval(probeAlive, 20_000)`。verifier 裁决 + Lead 批准撤掉：
+     * - `proxy/status` 虽然只读，但**没有 `document.hidden` 判断** ⇒ 每个后台
+     *   B 站标签页都会永久每 20 秒唤醒一次 SW；
+     * - 更要命的：清理它的 `ctx.onInvalidated` **本身就从不触发**（见下），
+     *   所以 `clearInterval` 是死代码，心跳**没有回收点**。
+     *
+     * ⇒ 换成"动作驱动"：只在用户**真有动作**（点击 / 切回前台）时探一次，
+     * 零后台开销，且覆盖了用户实际能遇到孤儿的全部路径
+     * （孤儿态下他必然要么点一下、要么切回来）。
+     *
+     * ## ⚠️ 如实声明：这两个监听**没有显式回收点**
+     *
+     * `onInvalidated` 不触发（task-17 已证明），所以它们在页面生命周期内
+     * 一直挂着，**随页面卸载自然消失**。这是可接受的：两个都是轻量监听、
+     * 不开定时器、不持有外部引用；而唯一的"回收点"（`onInvalidated`）本身是假的 ——
+     * 假装有回收点比没有更糟。**不要为了"对称"再加一个假的清理块。**
+     */
+    const probeAlive = (): void => {
+      void chrome.runtime
+        .sendMessage({ type: 'proxy/status' })
+        /**
+         * `Receiver not found` / `undefined` 都**不算孤儿**：前者是老版本
+         * background 没有这个 handler（升级中途的正常态），后者是 handler
+         * 没写 return —— 真孤儿是**抛异常**那一种。
+         */
+        .catch((e: unknown) => {
+          if (isOrphanError(e)) showOrphanHint();
+        });
+    };
+
+    /** 启动时先探一次（页面可能是在扩展重载之后才加载完的） */
+    void probeAlive();
+
+    /**
+     * 点击兜底：任何一次点击前都探一次活。
+     *
+     * 事件监听挂在 `document` 上、**capture 阶段**：比面板自己的 click handler
+     * 先跑，所以提示会先出现、再轮到那次注定失败的业务调用。
+     *
+     * ⚠️ 必须 capture：shadow DOM 里的 click 在冒泡阶段才到 document，
+     * 那时业务 handler 已经跑完并静默失败了。
+     */
+    const onAnyClick = (): void => probeAlive();
+    document.addEventListener('click', onAnyClick, true);
+
+    /**
+     * 切回前台探一次 —— **一次性，不是轮询**。
+     *
+     * 这正是用户的真实路径：去 `edge://extensions` 开/关 InPrivate 权限
+     * （浏览器此时重载扩展）→ 切回 B 站标签页 → `visibilitychange` 触发 →
+     * 发现自己是孤儿 → 立刻出提示。**他连点都不用点就能看到变化。**
+     */
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') probeAlive();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    /**
      * 扩展被重新加载时摘掉面板 —— 否则页面上会留一个点了没反应的死壳
      * （旧 content script 的 chrome API 已失效，但 DOM 还在）。
+     *
+     * ⚠️ **实测这条回调不会触发**（task-17 已证明）。保留它是因为：① 将来 WXT
+     * 若改成主动轮询它会自动生效，成本为零；② 它做的清理正是孤儿态该做的事，
+     * 一旦触发就是对的。**真正的兜底是 `probeAlive()`，不是这里。**
      */
     ctx.onInvalidated(() => {
+      document.removeEventListener('click', onAnyClick, true);
+      document.removeEventListener('visibilitychange', onVisible);
       chrome.storage.onChanged.removeListener(onChanged);
       cycler.dispose();
       // 摘掉 sidebar 在 document 上挂的点击监听（见 `paint()` 里的同段注释）

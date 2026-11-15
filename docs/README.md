@@ -35,7 +35,8 @@
 | 取流链路是怎么走通的 | [01](./01-architecture.md) §4 |
 | 这个 bug 怎么查 | [guides/methodology.md](./guides/methodology.md) |
 | 某个命令/脚本怎么跑 | **[AGENTS-TOOLS.md](../AGENTS-TOOLS.md)**（脚本清单的唯一权威位置） |
-| 组队怎么组、怎么干 | [guides/team-workflow.md](./guides/team-workflow.md) |
+| 组队怎么组、怎么干（**仅 DSH 智能体团队模式**） | [guides/team-workflow.md](./guides/team-workflow.md) |
+| 怎么算验过了 / 复核纪律（**任何 Harness 都适用**） | [guides/review-discipline.md](./guides/review-discipline.md) |
 | 怎么读扩展状态 / 拨总开关 | [guides/bsk-page-bridges.md](./guides/bsk-page-bridges.md) |
 | 发版前要过哪些验收 | [guides/v1-acceptance-checklist.md](./guides/v1-acceptance-checklist.md) |
 

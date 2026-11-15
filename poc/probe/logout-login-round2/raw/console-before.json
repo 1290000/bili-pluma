@@ -1,0 +1,136 @@
+﻿{
+  "tab_id": 1673239795,
+  "entries": [
+    {
+      "sequence": 1,
+      "kind": "console",
+      "level": "log",
+      "text": "[GD Media] attribution started in frame https://www.bilibili.com/video/BV1jt421t7XH/",
+      "url": "chrome-extension://ffdegaeaoghhddelmdbhhipcmpnaodlk/content-script.js",
+      "line": 710,
+      "column": 15,
+      "timestamp": 1794430967680.744,
+      "truncated": false
+    },
+    {
+      "sequence": 2,
+      "kind": "console",
+      "level": "info",
+      "text": "%c%s line-height: 30px; color: #FF6699 bili-fe-fp: 1.1.4",
+      "url": "https://s1.hdslb.com/bfs/seed/jinkela/short/user-fingerprint/bili-user-fingerprint.min.js",
+      "line": 1,
+      "column": 34199,
+      "timestamp": 1794430968430.51,
+      "truncated": false
+    },
+    {
+      "sequence": 3,
+      "kind": "console",
+      "level": "info",
+      "text": "%c bili-fe-mirror %c v2.1.0  padding: 2px 6px; border-radius: 3px 0 0 3px; color: #fff; background: #FF6699; font-weight: bold; padding: 2px 6px; border-radius: 0 3px 3px 0; color: #fff; background: #FF9999; font-weight: bold;",
+      "url": "https://s1.hdslb.com/bfs/seed/jinkela/short/b-mirror/biliMirror.umd.mini.js",
+      "line": 2,
+      "column": 83649,
+      "timestamp": 1794430969014.363,
+      "truncated": false
+    },
+    {
+      "sequence": 4,
+      "kind": "console",
+      "level": "log",
+      "text": "白屏检测是否正常 Object",
+      "url": "https://www.bilibili.com/video/BV1jt421t7XH/",
+      "line": 5,
+      "column": 196955,
+      "timestamp": 1794430969014.739,
+      "truncated": false
+    },
+    {
+      "sequence": 5,
+      "kind": "exception",
+      "level": "error",
+      "text": "TypeError: Cannot use 'in' operator to search for 'durl' in suee",
+      "url": "chrome-extension://fgmggjhdbgaclcbeaopajghpnhgkmfnf/content-scripts/content.js",
+      "line": 58,
+      "column": 7879,
+      "timestamp": 1794430969206.579,
+      "truncated": false
+    },
+    {
+      "sequence": 6,
+      "kind": "exception",
+      "level": "error",
+      "text": "TypeError: Cannot use 'in' operator to search for 'durl' in suee",
+      "url": "chrome-extension://fgmggjhdbgaclcbeaopajghpnhgkmfnf/content-scripts/content.js",
+      "line": 58,
+      "column": 7879,
+      "timestamp": 1794430972716.007,
+      "truncated": false
+    },
+    {
+      "sequence": 7,
+      "kind": "log",
+      "level": "error",
+      "text": "Failed to load resource: net::ERR_CACHE_READ_FAILURE",
+      "url": "https://s1.hdslb.com/bfs/static/player/main/core.a3c66791.js",
+      "timestamp": 1794430967857.305,
+      "truncated": false
+    },
+    {
+      "sequence": 8,
+      "kind": "log",
+      "level": "error",
+      "text": "Failed to load resource: net::ERR_CACHE_READ_FAILURE",
+      "url": "https://s1.hdslb.com/bfs/static/jinkela/video/css/video.0.1db771781ee838fb7043ed37d224be7afd1ad4b8.css",
+      "timestamp": 1794430967925.175,
+      "truncated": false
+    },
+    {
+      "sequence": 9,
+      "kind": "log",
+      "level": "error",
+      "text": "Failed to load resource: net::ERR_CACHE_READ_FAILURE",
+      "url": "https://i0.hdslb.com/bfs/static/jinkela/long/images/512.png",
+      "timestamp": 1794430967949.569,
+      "truncated": false
+    },
+    {
+      "sequence": 10,
+      "kind": "log",
+      "level": "error",
+      "text": "Failed to load resource: net::ERR_CACHE_READ_FAILURE",
+      "url": "https://s1.hdslb.com/bfs/seed/fehub/loki/unpkg/svgaplayerweb/svga.min.js",
+      "timestamp": 1794430968192.077,
+      "truncated": false
+    },
+    {
+      "sequence": 11,
+      "kind": "log",
+      "level": "error",
+      "text": "Failed to load resource: net::ERR_CACHE_READ_FAILURE",
+      "url": "https://i1.hdslb.com/bfs/archive/2a1c24ad8566ac3bc8caab791a7efe56f88ee710.jpg@1200w_630h",
+      "timestamp": 1794430968464.323,
+      "truncated": false
+    },
+    {
+      "sequence": 12,
+      "kind": "log",
+      "level": "error",
+      "text": "Failed to load resource: net::ERR_CACHE_READ_FAILURE",
+      "url": "https://s1.hdslb.com/bfs/static/jinkela/video/video.1db771781ee838fb7043ed37d224be7afd1ad4b8.js",
+      "timestamp": 1794430970834.987,
+      "truncated": false
+    },
+    {
+      "sequence": 13,
+      "kind": "log",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 412 ()",
+      "url": "https://data.bilibili.com/log/web?00220317944309708352026-11-11T21:02:50.835Z|ERROR|main.frontend.bilibili-log-report-seed|resource|2|Mozilla/5.0%20(Windows%20NT%2010.0;%20Win64;%20x64)%20AppleWebKit/537.36%20(KHTML,%20like%20Gecko)%20Chrome/157.0.0.0%20Safari/537.36%20Edg/157.0.0.0|https://www.bilibili.com/video/BV1jt421t7XH/||{%22url%22:%22https://www.bilibili.com/video/BV1jt421t7XH/%22,%22errorMsg%22:%22%3Cscript%20type=\\%22text/javascript\\%22%20src=\\%22//s1.hdslb.com/bfs/static/jinkela/video/video.1db771781ee838fb7043ed37d224be7afd1ad4b8.js\\%22%3E%3C/script%3E%22}",
+      "timestamp": 1794430971315.495,
+      "truncated": false
+    }
+  ],
+  "next_since": 13,
+  "truncated": false
+}

@@ -1,0 +1,19 @@
+﻿node : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-no
+de-api-deprecated for more details.[39m
+所在位置 行:1 字符: 151
++ ... ects\Pluma; node node_modules\vitest\vitest.mjs run tests/unit/conten ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v2.1.9 D:/Projects/Pluma
+
+ ✓ tests/unit/content/panel/orphan-guard.test.ts (7 tests) 21ms
+ ✓ tests/unit/content/panel/orphan-hint.test.ts (16 tests) 163ms
+
+ Test Files  2 passed (2)
+      Tests  23 passed (23)
+   Start at  20:52:20
+   Duration  2.57s (transform 113ms, setup 0ms, collect 198ms, tests 184ms, environment 3.23s, prepare 418ms)
+

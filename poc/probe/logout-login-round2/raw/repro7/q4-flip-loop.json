@@ -1,0 +1,237 @@
+{
+  "mode": "flip-loop",
+  "steps": [
+    {
+      "at": "2026-11-12T08:03:35.765Z",
+      "name": "初始 isAllowedIncognitoAccess",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": false
+        },
+        "dp": {
+          "isActive": false,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:03:35.775Z",
+      "name": "初始 developerPrivate",
+      "data": {
+        "isActive": false,
+        "isEnabled": true,
+        "pending": false,
+        "state": "ENABLED"
+      }
+    },
+    {
+      "at": "2026-11-12T08:03:36.611Z",
+      "name": "setAllowedIncognitoAccess(true)",
+      "data": {
+        "isActive": true,
+        "isEnabled": true,
+        "pending": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:03:38.633Z",
+      "name": "打开后 isAllowedIncognitoAccess",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:03:58.555Z",
+      "name": "第1轮收尾",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": false
+        },
+        "dp": {
+          "isActive": false,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:04:19.551Z",
+      "name": "第2轮收尾",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": false
+        },
+        "dp": {
+          "isActive": false,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:04:40.562Z",
+      "name": "第3轮收尾",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": false
+        },
+        "dp": {
+          "isActive": false,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": false
+      }
+    }
+  ],
+  "rounds": [
+    {
+      "round": 1,
+      "beforeWin": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      },
+      "opened": {
+        "ok": true,
+        "created": {
+          "id": null,
+          "incognito": null
+        }
+      },
+      "afterWin": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      },
+      "developerPrivate": {
+        "isActive": true,
+        "isEnabled": true,
+        "pending": false,
+        "state": "ENABLED"
+      }
+    },
+    {
+      "round": 2,
+      "beforeWin": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      },
+      "opened": {
+        "ok": true,
+        "created": {
+          "id": null,
+          "incognito": null
+        }
+      },
+      "afterWin": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      },
+      "developerPrivate": {
+        "isActive": true,
+        "isEnabled": true,
+        "pending": false,
+        "state": "ENABLED"
+      }
+    },
+    {
+      "round": 3,
+      "beforeWin": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      },
+      "opened": {
+        "ok": true,
+        "created": {
+          "id": null,
+          "incognito": null
+        }
+      },
+      "afterWin": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      },
+      "developerPrivate": {
+        "isActive": true,
+        "isEnabled": true,
+        "pending": false,
+        "state": "ENABLED"
+      }
+    }
+  ]
+}

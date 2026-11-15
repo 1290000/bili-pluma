@@ -1,0 +1,228 @@
+{
+  "mode": "idle",
+  "steps": [
+    {
+      "at": "2026-11-12T08:02:05.838Z",
+      "name": "初始 isAllowedIncognitoAccess",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": false
+        },
+        "dp": {
+          "isActive": false,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:02:05.846Z",
+      "name": "初始 developerPrivate",
+      "data": {
+        "isActive": false,
+        "isEnabled": true,
+        "pending": false,
+        "state": "ENABLED"
+      }
+    },
+    {
+      "at": "2026-11-12T08:02:06.668Z",
+      "name": "setAllowedIncognitoAccess(true)",
+      "data": {
+        "isActive": true,
+        "isEnabled": true,
+        "pending": false
+      }
+    },
+    {
+      "at": "2026-11-12T08:02:08.683Z",
+      "name": "打开后 isAllowedIncognitoAccess",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:02:38.703Z",
+      "name": "t=30s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:03:08.734Z",
+      "name": "t=60s",
+      "data": {
+        "sw": {
+          "ok": false,
+          "err": "ext SW not listed"
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:03:38.765Z",
+      "name": "t=90s",
+      "data": {
+        "sw": {
+          "ok": false,
+          "err": "ext SW not listed"
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:04:08.800Z",
+      "name": "t=120s",
+      "data": {
+        "sw": {
+          "ok": false,
+          "err": "ext SW not listed"
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:04:38.829Z",
+      "name": "t=150s",
+      "data": {
+        "sw": {
+          "ok": false,
+          "err": "ext SW not listed"
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:05:08.852Z",
+      "name": "t=180s",
+      "data": {
+        "sw": {
+          "ok": true,
+          "allowed": true
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:05:38.873Z",
+      "name": "t=210s",
+      "data": {
+        "sw": {
+          "ok": false,
+          "err": "ext SW not listed"
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:06:08.896Z",
+      "name": "t=240s",
+      "data": {
+        "sw": {
+          "ok": false,
+          "err": "ext SW not listed"
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:06:38.918Z",
+      "name": "t=270s",
+      "data": {
+        "sw": {
+          "ok": false,
+          "err": "ext SW not listed"
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T08:07:08.937Z",
+      "name": "t=300s",
+      "data": {
+        "sw": {
+          "ok": false,
+          "err": "ext SW not listed"
+        },
+        "dp": {
+          "isActive": true,
+          "isEnabled": true,
+          "pending": false,
+          "state": "ENABLED"
+        },
+        "allowed": true
+      }
+    }
+  ]
+}

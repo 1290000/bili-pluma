@@ -1,0 +1,503 @@
+﻿node : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-no
+de-api-deprecated for more details.[39m
+所在位置 行:1 字符: 129
++ ... ew($false); node node_modules\vitest\vitest.mjs run tests/unit/conten ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v2.1.9 D:/Projects/Pluma
+
+ ✓ tests/unit/content/panel/silent-controls.test.ts (12 tests) 181ms
+ ❯ tests/unit/content/panel-diag-wiring.test.ts (11 tests | 5 failed) 189ms
+   × ★ 诊断浮层接线 > 数据到了之后画出自检行与日志 13ms
+     → expected '画质净化显示账号正在采集诊断信息…' to contain 'InPrivate 权限'
+   × ★ 诊断浮层接线 > ★ 点返回弹栈，回到净化 Tab 22ms
+     → expected 1 to be +0 // Object.is equality
+   × ★ 诊断浮层接线 > ok===true 的行带 ok class（绿），ok===false 带 bad（红） 19ms
+     → expected null not to be null
+   × ★ 诊断浮层接线 > ★★ 第二次进入诊断浮层会**重新**取数（不是只拉一次） 8ms
+     → expected "spy" to be called 2 times, but got 1 times
+   × ★ 诊断浮层接线 > ★ 点「⟳」刷新按钮会重新取数 9ms
+     → 没找到刷新按钮: expected null not to be null
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 5 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > 数据到了之后画出自检行与日志
+AssertionError: expected '画质净化显示账号正在采集诊断信息…' to contain 'InPrivate 权限'
+
+Expected: "InPrivate 权限"
+Received: "画质净化显示账号正在采集诊断信息…"
+
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:193:32
+    191|     await flush();
+    192| 
+    193|     expect(c.root.textContent).toContain('InPrivate 权限');
+       |                                ^
+    194|     expect(c.root.textContent).toContain('已允许');
+    195|     // 日志里的 panel/page-state 要出现（阶段 3 的目的之一）
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > ★ 点返回弹栈，回到净化 Tab
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:212:23
+    210|     c.root.querySelector('.sub-back')?.dispatchEvent(new MouseEvent('c…
+    211|     await flush();
+    212|     expect(c.depth()).toBe(0);
+       |                       ^
+    213|   });
+    214| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > ok===true 的行带 ok class（绿），ok===false 带 bad（红）
+AssertionError: expected null not to be null
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:229:54
+    227|     await flush();
+    228| 
+    229|     expect(c.root.querySelector('.diag-row.ok')).not.toBeNull();
+       |                                                      ^
+    230|     expect(c.root.querySelector('.diag-row.bad')).not.toBeNull();
+    231|     // 中性行既不是 ok 也不是 bad
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > ★★ 第二次进入诊断浮层会**重新**取数（不是只拉一次）
+AssertionError: expected "spy" to be called 2 times, but got 1 times
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:268:32
+    266| 
+    267|     // ★ 必须第二次也拉了
+    268|     expect(mocks.collectFacts).toHaveBeenCalledTimes(2);
+       |                                ^
+    269|   });
+    270| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > ★ 点「⟳」刷新按钮会重新取数
+AssertionError: 没找到刷新按钮: expected null not to be null
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:281:36
+    279|     // 找刷新按钮（aria-label="重新采集"）
+    280|     const refresh = c.root.querySelector('[aria-label="重新采集"]');
+    281|     expect(refresh, '没找到刷新按钮').not.toBeNull();
+       |                                    ^
+    282|     refresh?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    283|     await flush();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 21 unhandled errors during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+ ❯ processTicksAndRejections node:internal/process/task_queues:104:5
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点「诊断」进入二级浮层，并懒加载 collectFacts". It might mean one of the following
+:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+ ❯ processTicksAndRejections node:internal/process/task_queues:104:5
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点「诊断」进入二级浮层，并懒加载 collectFacts". It might mean one of the following
+:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★ collectFacts 收到的是 pageView: null，不是 undefined". It might mean one
+ of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★ collectFacts 收到的是 pageView: null，不是 undefined". It might mean one
+ of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "数据到了之后画出自检行与日志". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "数据到了之后画出自检行与日志". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点返回弹栈，回到净化 Tab". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点返回弹栈，回到净化 Tab". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "ok===true 的行带 ok class（绿），ok===false 带 bad（红）". It might mean one of
+ the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "ok===true 的行带 ok class（绿），ok===false 带 bad（红）". It might mean one of
+ the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+
+This error originated in "tests/unit/content/panel/silent-controls.test.ts" test file. It doesn't mean the error was th
+rown inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★★ 采集抛错 → 有文字说明（旧实现渲染一张空表）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+
+This error originated in "tests/unit/content/panel/silent-controls.test.ts" test file. It doesn't mean the error was th
+rown inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★★ 采集抛错 → 有文字说明（旧实现渲染一张空表）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+ ❯ runNextTicks node:internal/process/task_queues:65:5
+ ❯ processTimers node:internal/timers:615:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★ 第二次进入诊断浮层会**重新**取数（不是只拉一次）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+ ❯ runNextTicks node:internal/process/task_queues:65:5
+ ❯ processTimers node:internal/timers:615:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★ 第二次进入诊断浮层会**重新**取数（不是只拉一次）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点「⟳」刷新按钮会重新取数". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点「⟳」刷新按钮会重新取数". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+
+This error originated in "tests/unit/content/panel/silent-controls.test.ts" test file. It doesn't mean the error was th
+rown inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 采集成功时**不**弹失败提示（不误报）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+ Test Files  1 failed | 1 passed (2)
+      Tests  5 failed | 18 passed (23)
+     Errors  21 errors
+   Start at  17:31:33
+   Duration  2.65s (transform 292ms, setup 0ms, collect 995ms, tests 370ms, environment 2.58s, prepare 379ms)
+
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+
+This error originated in "tests/unit/content/panel/silent-controls.test.ts" test file. It doesn't mean the error was th
+rown inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 采集成功时**不**弹失败提示（不误报）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "多次刷新不会并发堆积（in-flight 去重）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:441:9
+ ❯ runNextTicks node:internal/process/task_queues:65:5
+ ❯ processTimers node:internal/timers:615:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 进净化 Tab 才懒读角标开关". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+TypeError: Cannot read properties of undefined (reading 'ok')
+ ❯ Module.diagnosticsPane src/content/panel/diagnostics.ts:342:22
+    340|    * ⚠️ `ok === false` 与 `count === 0` **必须分开判**：前者是故障，后…
+    341|    */
+    342|   if (!data.logsMeta.ok) {
+       |                      ^
+    343|     box.appendChild(el('p', 'diag-section', '诊断日志'));
+    344|     const failed = el('div', 'diag-row bad');
+ ❯ render src/content/panel/panel.ts:947:9
+ ❯ src/content/panel/panel.ts:627:9
+ ❯ runNextTicks node:internal/process/task_queues:65:5
+ ❯ processTimers node:internal/timers:615:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 进净化 Tab 才懒读角标开关". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+

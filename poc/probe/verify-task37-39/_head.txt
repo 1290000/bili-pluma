@@ -1,0 +1,69 @@
+﻿*：
+ *
+ *   - `content.ts` —— 规则 2 强制它只能 `video` + `bangumi/play`
+ *   - `content-home.content.ts` —— 只 `www`，不含直播域
+ *   - `content-live.content.ts` —— 规则 2c 反向断言**禁止**它含播放页模式
+ *
+ * 面板要在"任何 B站 页面"都能唤起（首页 / 视频 / 直播），所以只能新开。
+ *
+ * ## ⚠️ 文件名必须带 `.content.`
+ *
+ * WXT 靠文件名判定入口类型（`PATH_GLOB_TO_TYPE_MAP`：`*.content.[jt]s` →
+ * `content-script`）。叫 `content-panel.ts` 时它会**正常构建出一个 js 文件，
+ * 但不进 manifest 的 `content_scripts`** —— 面板永远不会注入，且**构建不报任何错**。
+ * 2026-10-31 实测踩过（记录在 `check-page-gate.mjs` 的 `NON_PLAY_PAGE_ENTRIES` 注释里）。
+ *
+ * ## 边界：本入口只负责"画壳"，不做取流
+ *
+ * 它**不碰** `parsePlayPage()`、不发消息、不读 cookie、不碰播放器节点。
+ * 取流由 `content.ts` 负责。两者互不调用、各自独立失效 ——
+ * 与 `content-home.content.ts` 的边界划分同一个原则（ADR 0031）。
+ *
+ * ## 为什么是 `document_idle`
+ *
+ * 面板不抢任何时序：它不参与页面首屏布局，也不需要在解析期插入。
+ * `document_start` 只会让解析期多一次 DOM 操作，还会把
+ * `document.body === null` 那条兜底路径真的走上（见 `panel/host.ts` 的注释）。
+ */
+
+import { ensurePanelHost, removePanelHost } from '@/src/content/panel/host';
+import { mountSidebar, PANEL_CSS } from '@/src/content/panel/sidebar';
+import {
+  mountPanelBody,
+  NOTICE_LOAD_FAILED,
+  NOTICE_LOGOUT_REFRESH_FAILED,
+  type PanelController,
+} from '@/src/content/panel/panel';
+import { loadPanelModel } from '@/src/content/panel/panel-data';
+import { createOpenCycler, type LoadResult } from '@/src/content/panel/open-cycler';
+import { describeLoginOutcome, type LoginOpenReply } from '@/src/content/panel/login-outcome';
+import {
+  startLoginPolling,
+  type AccountSnapshot,
+  type LoginPoller,
+} from '@/src/content/panel/login-poller';
+import { resolvePrimaryCard } from '@shared/utils/primary-card';
+import type { StreamingIdentity } from '@shared/constants/streaming-identity';
+import { parsePlayPage } from '@shared/utils/video-page';
+import { readPrimaryProfile } from '@platform/storage/primary-profile-store';
+import {
+  PANEL_ENTRY_ENABLED_KEY,
+  readFeedAccountEnabled,
+  readPanelEntryEnabled,
+} from '@platform/storage/ui-prefs-store';
+/**
+ * 孤儿态自愈提示（task-33）。
+ *
+ * ⚠️ 这条路径**必须不依赖 `controller`** —— 孤儿态下它最容易是 null，
+ * 而旧代码写的是 `if (controller) controller.showNotice(...)`（等于静默）。
+ * 详见 `src/content/panel/orphan-hint.ts` 文件头。
+ */
+import { isOrphanError, isOrphanHintShown, showOrphanHint } from '@/src/content/panel/orphan-hint';
+// tokens.css 的**原始文本**，注入 shadow root 用。
+// ⚠️ 不能用 <link>：CSS 变量不穿透 shadow 边界，必须把规则塞进 shadow 内部
+import tokensCss from '@/src/design/tokens.css?raw';
+
+/**
+ * 当前页是不是受支持的播放页。
+ *
+ * ⚠️ **必须走 `pa

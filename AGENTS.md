@@ -61,7 +61,8 @@ API 语义不确定 → 写最小复现脚本（✗ 按名字猜，如 `(dynamic
 | 我要做什么 | 必读（按序） | 可跳过 |
 | --- | --- | --- |
 | **任何事**（公共前缀） | 本文件 §0 → §1.5 → **§3** → §7 → §8 | —— |
-| 组队 / 新会话开局 | 公共前缀 + [team-workflow.md](./docs/guides/team-workflow.md) | 01 / 02 |
+| **验收 / 复核任何改动**（**不分有无团队**） | 公共前缀 + [review-discipline.md](./docs/guides/review-discipline.md) | 01 / 02 |
+| 只有 DSH 团队模式才读 / 新会话组队开局 | 公共前缀 + [team-workflow.md](./docs/guides/team-workflow.md) | 01 / 02 |
 | 改 PGC 注入 / 番剧页 | 公共前缀 + §4.3 + [01-architecture](./docs/01-architecture.md) §4 | 02-ui-spec |
 | 改 UI / popup | 公共前缀 + §5.3 + [02-ui-spec](./docs/02-ui-spec.md) | 01-architecture |
 | 改 DNR / 换 Cookie | 公共前缀 + §4.1 + §4.3 + [ADR 0006](./docs/decisions/0006-no-per-request-nonce.md) + [0029](./docs/decisions/0029-updatesessionrules-atomic-combined-call.md) | 02-ui-spec |

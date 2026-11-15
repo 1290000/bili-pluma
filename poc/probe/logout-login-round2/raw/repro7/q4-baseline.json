@@ -1,0 +1,58 @@
+{
+  "mode": "baseline",
+  "steps": [
+    {
+      "at": "2026-11-12T07:52:33.632Z",
+      "name": "初始 isAllowedIncognitoAccess",
+      "data": {
+        "ok": true,
+        "allowed": false
+      }
+    },
+    {
+      "at": "2026-11-12T07:52:33.646Z",
+      "name": "初始 developerPrivate",
+      "data": {
+        "isActive": false,
+        "isEnabled": true,
+        "pending": false,
+        "state": "ENABLED"
+      }
+    },
+    {
+      "at": "2026-11-12T07:52:34.467Z",
+      "name": "setAllowedIncognitoAccess(true)",
+      "data": {
+        "isActive": true,
+        "isEnabled": true,
+        "pending": false
+      }
+    },
+    {
+      "at": "2026-11-12T07:52:36.490Z",
+      "name": "打开后 isAllowedIncognitoAccess",
+      "data": {
+        "ok": true,
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T07:52:41.498Z",
+      "name": "5 秒后再读",
+      "data": {
+        "ok": true,
+        "allowed": true
+      }
+    },
+    {
+      "at": "2026-11-12T07:52:41.504Z",
+      "name": "5 秒后 developerPrivate",
+      "data": {
+        "isActive": true,
+        "isEnabled": true,
+        "pending": false,
+        "state": "ENABLED"
+      }
+    }
+  ]
+}

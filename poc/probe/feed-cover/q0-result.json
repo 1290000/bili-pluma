@@ -1,0 +1,350 @@
+{
+  "steps": [
+    {
+      "name": "SSR-HTML",
+      "htmlLen": 177974,
+      "rcmdOccur": 10,
+      "cardCount": 10,
+      "S": [
+        "BV1DzHK6xEm7",
+        "BV1vZxi68Erg",
+        "BV15hxh6CEgh",
+        "BV1XYHK68EnM",
+        "BV1sJnB6iE2z",
+        "BV1E2nA6cEUa",
+        "BV14maMzNEp3",
+        "BV1EJ4t67E2Y",
+        "BV1xMWu6wE3a"
+      ],
+      "ssrCards": [
+        {
+          "bv": "BV1DzHK6xEm7",
+          "title": "755元的AirPods5，2026 年苹果最值的单品？"
+        },
+        {
+          "bv": "BV1vZxi68Erg",
+          "title": "4.7全局抽卡攻略：补强欢愉，还是备战终末？"
+        },
+        {
+          "bv": "BV15hxh6CEgh",
+          "title": "“老大，我们用这个真的会有吃不完的白饭吗？”"
+        },
+        {
+          "bv": null,
+          "title": "月包仅39元，夜间折扣更低"
+        },
+        {
+          "bv": "BV1XYHK68EnM",
+          "title": "能不能让我单独关闭塔露拉的限定卡池？她之所以能上岛，纯粹就是黑蛇出得早占了坑但凡她出得晚一些，别说上岛了，能在剧情里多给你写几个字的戏份都算奇迹。"
+        },
+        {
+          "bv": "BV1sJnB6iE2z",
+          "title": "【果壳术群】Vocaloid演唱会（初音未来&amp;洛天依）打call教学 高清重置版"
+        },
+        {
+          "bv": "BV1E2nA6cEUa",
+          "title": "四色可选，星月影新款射灯有哪些巧思设计？【智能家居】"
+        },
+        {
+          "bv": "BV14maMzNEp3",
+          "title": "我在南通开了一个特别的眼镜店"
+        },
+        {
+          "bv": "BV1EJ4t67E2Y",
+          "title": "明河初步体验，又破防又附着又导电，新版混伤队爆发已经看不懂了【终末地】"
+        },
+        {
+          "bv": "BV1xMWu6wE3a",
+          "title": "一些东西在发明之前 世界是什么样子的？Ⅲ"
+        }
+      ]
+    },
+    {
+      "name": "rcmd-R1",
+      "label": "R1",
+      "status": 0,
+      "rawCount": 12,
+      "bvs": [
+        "BV1KyxQ6sE7R",
+        "BV1oeWs6bEND",
+        "BV1v6JC6YEkZ",
+        "BV1h5nh6dE5A",
+        "BV1L1p16UEky",
+        "BV1vyxE6LEMq",
+        "BV1GSpu6gE2q",
+        "BV1dt4z66EPp",
+        "BV1cnJt6wETw",
+        "BV1RQWg6DEUm",
+        "BV1o1xX6kEM1",
+        "BV1DVJe6cEba"
+      ],
+      "gotos": [
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av"
+      ]
+    },
+    {
+      "name": "rcmd-R2",
+      "label": "R2",
+      "status": 0,
+      "rawCount": 12,
+      "bvs": [
+        "BV1CM4q62EJ8",
+        "BV1crn26WE47",
+        "BV1Hjaf6EE3r",
+        "BV1H7np6QE3w",
+        "BV1BrWM6SEwp",
+        "BV1DwWu6KEuy",
+        "BV1nrnc6dE83",
+        "BV1YmnJ6eEcR",
+        "BV1PC4Y6TEqt",
+        "BV1yrh26SE3L",
+        "BV1wAWG6AEqx",
+        "BV1WhJB6NEQ8"
+      ],
+      "gotos": [
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av",
+        "av"
+      ]
+    },
+    {
+      "name": "DOM",
+      "domCardCount": 39,
+      "domSeq": [
+        "BV18c486MEJu",
+        "BV1Jq4B62Erx",
+        "BV15Y486jEkJ",
+        "BVERTWkZCZlE",
+        "BV1zfWj6gEgx",
+        "BV18X4p6JEyd",
+        "BV1Ranw6DEYW",
+        "BVWQBdQBkAWO",
+        "BV1eyW46hEbe",
+        "BV1aXpC6KEGb",
+        "BV1prnN6GEtg",
+        "BV1WDnC6SEuy",
+        "BV15HxS6aEMh",
+        "BV1abWx6QELn",
+        "BV1VsnE6hEV7",
+        "BV1ZqpX6TEoM",
+        "BV1CDWE6WEyN",
+        "BV11QpU63E2q",
+        "BV1naH56PEmn",
+        "BVzFlIn07NzA",
+        "BV1TFpy6hEJk",
+        "BV1ZHWE6VE59",
+        "BV1QdxR6CEqs",
+        "BV1eRxR65Ejz",
+        "BV1nbnb6BEVu",
+        "BV17TnG6UEgo",
+        "BV1A9Wu6hELZ",
+        "BVlV5ZfaC6yB"
+      ],
+      "domCards": [
+        {
+          "idx": 0,
+          "isRcmd": false,
+          "bv": null,
+          "title": ""
+        },
+        {
+          "idx": 1,
+          "isRcmd": false,
+          "bv": null,
+          "title": ""
+        },
+        {
+          "idx": 2,
+          "isRcmd": true,
+          "bv": "BV18c486MEJu",
+          "title": "4.7视觉大升级！仙舟舰队齐鸣，梦境交织共舞！货币战争特效鉴赏！"
+        },
+        {
+          "idx": 3,
+          "isRcmd": true,
+          "bv": "BV1Jq4B62Erx",
+          "title": "【公主连结】国服26年11月PJJC盲打&防守推荐"
+        },
+        {
+          "idx": 4,
+          "isRcmd": true,
+          "bv": "BV15Y486jEkJ",
+          "title": "超⚡️级⚡️充⚡️充⚡️电"
+        },
+        {
+          "idx": 5,
+          "isRcmd": true,
+          "bv": "BVERTWkZCZlE",
+          "title": "配眼镜的宝藏地方，又是价格便宜，又是技术专业！"
+        },
+        {
+          "idx": 6,
+          "isRcmd": true,
+          "bv": "BV1zfWj6gEgx",
+          "title": "手机在自动玩原神？现已支持地图追踪与自动剧情！"
+        },
+        {
+          "idx": 7,
+          "isRcmd": true,
+          "bv": "BV18X4p6JEyd",
+          "title": "CFM新生计划丨即将上线CF手游"
+        },
+        {
+          "idx": 8,
+          "isRcmd": true,
+          "bv": "BV1Ranw6DEYW",
+          "title": "《人间异想计划》22分钟实机首曝｜间章：如果之事与未践之约"
+        },
+        {
+          "idx": 9,
+          "isRcmd": true,
+          "bv": "BVWQBdQBkAWO",
+          "title": "有想法不会写代码？Qoder 帮你把创意落地！"
+        },
+        {
+          "idx": 10,
+          "isRcmd": true,
+          "bv": "BV1eyW46hEbe",
+          "title": "黄仁勋出轨惊动美国国会？冷战里的美人计，比这离谱一百倍"
+        },
+        {
+          "idx": 11,
+          "isRcmd": true,
+          "bv": "BV1aXpC6KEGb",
+          "title": "【双十一蓝牙耳机推荐2026】为什么蓝牙耳机会成为必需品？不同形态的耳机该怎么选"
+        },
+        {
+          "idx": 12,
+          "isRcmd": true,
+          "bv": "BV1prnN6GEtg",
+          "title": "DeepSeek Harness 教程：AI连Blender做3D模型"
+        },
+        {
+          "idx": 13,
+          "isRcmd": true,
+          "bv": "BV1WDnC6SEuy",
+          "title": "【共频jump】超长二连跳！！mjm+同频Melody全曲翻跳—莎糖橘"
+        },
+        {
+          "idx": 14,
+          "isRcmd": true,
+          "bv": "BV15HxS6aEMh",
+          "title": "所以说，是火花花赢了！火神王单C6金0T王棋归寂"
+        },
+        {
+          "idx": 15,
+          "isRcmd": true,
+          "bv": "BV1abWx6QELn",
+          "title": "【星穹铁道】虚照buff提升多少？火花爻光如何选择？星神·阿哈超详细配队测评攻略"
+        },
+        {
+          "idx": 16,
+          "isRcmd": true,
+          "bv": "BV1VsnE6hEV7",
+          "title": "宿舍网络迎来真神"
+        },
+        {
+          "idx": 17,
+          "isRcmd": true,
+          "bv": "BV1ZqpX6TEoM",
+          "title": "「收藏向」数码博主国庆出游自己都带啥？自用好物分享！"
+        },
+        {
+          "idx": 18,
+          "isRcmd": true,
+          "bv": "BV1CDWE6WEyN",
+          "title": "我的心已经等你好多年 #圣采儿 #神印王座 #cos #国漫 #婚纱 生日快乐采"
+        },
+        {
+          "idx": 19,
+          "isRcmd": true,
+          "bv": "BV11QpU63E2q",
+          "title": "可变光圈真拉了？iPhone 18 Pro影像 3A游戏深度体验"
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "url": "https://www.bilibili.com/",
+    "at": "2026-11-11T05:39:38.730Z"
+  },
+  "calc": {
+    "a": {
+      "size_S": 9,
+      "size_R1": 12,
+      "intersection_S_R1": 0,
+      "ratio_S_in_R1": 0,
+      "S_in_R1_bvs": [],
+      "S_not_in_R1_bvs": [
+        "BV1DzHK6xEm7",
+        "BV1vZxi68Erg",
+        "BV15hxh6CEgh",
+        "BV1XYHK68EnM",
+        "BV1sJnB6iE2z",
+        "BV1E2nA6cEUa",
+        "BV14maMzNEp3",
+        "BV1EJ4t67E2Y",
+        "BV1xMWu6wE3a"
+      ]
+    },
+    "b": {
+      "size_R1": 12,
+      "size_R2": 12,
+      "intersection_R1_R2": 0,
+      "baseline_ratio": 0,
+      "R1_R2_common_bvs": []
+    },
+    "a2": {
+      "intersection_S_R2": 0,
+      "ratio_S_in_R2": 0
+    },
+    "c": {
+      "domFirst10": [
+        "BV18c486MEJu",
+        "BV1Jq4B62Erx",
+        "BV15Y486jEkJ",
+        "BVERTWkZCZlE",
+        "BV1zfWj6gEgx",
+        "BV18X4p6JEyd",
+        "BV1Ranw6DEYW",
+        "BVWQBdQBkAWO",
+        "BV1eyW46hEbe",
+        "BV1aXpC6KEGb"
+      ],
+      "ssrFirst10": [
+        "BV1DzHK6xEm7",
+        "BV1vZxi68Erg",
+        "BV15hxh6CEgh",
+        "BV1XYHK68EnM",
+        "BV1sJnB6iE2z",
+        "BV1E2nA6cEUa",
+        "BV14maMzNEp3",
+        "BV1EJ4t67E2Y",
+        "BV1xMWu6wE3a"
+      ],
+      "domMatchesSsrExactly": false,
+      "ssr_10_all_in_dom": false,
+      "dom_first10_all_in_ssr": false
+    }
+  }
+}

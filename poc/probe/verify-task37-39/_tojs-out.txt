@@ -1,0 +1,173 @@
+
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      const orphan = typeof chrome === 'undefined' || chrome.runtime?.id == null;
+      if (orphan) {
+        showOrphanHint();
+        return;
+      }
+
+      
+      stopPolling();
+
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      controller?.clearNotice();
+
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+      
+
+
+
+
+
+
+
+
+      const beforeMid = (await readAccountMid().catch(() => ({ mid: null }))).mid;
+
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+      let res = null;
+      try {
+        res = (await chrome.runtime.sendMessage({ type: 'login/open' }));
+      } catch (e) {
+        
+
+
+
+
+
+
+        void isOrphanError(e);
+        showOrphanHint();
+        return;
+      }
+      const r = describeLoginOutcome(res);
+      
+
+
+
+      if (!isOrphanHintShown()) controller?.showNotice(r.text, r.ok);
+      
+
+
+
+
+
+
+      if (!isOrphanHintShown() && controller === null) showOrphanHint();
+
+      
+
+
+
+
+
+
+
+
+
+
+
+
+      if (!r.shouldPoll) return;
+
+      poller = startLoginPolling(
+        {
+          read: readAccountMid,
+          onDone: (outcome) => {
+            poller = null;
+            if (!controller) return;
+            if (outcome.kind === 'configured') {
+              controller.showNotice('取流账号已配置，可以开始用了', true);
+              
+              void loadOnce();
+            } else if (outcome.kind === 'timeout') {
+              controller.showNotice(
+                '等了 3 分钟还没检测到新账号 —— 扫码成功了吗？也可以点「重新登录」再试一次',
+                false,
+              );
+            }
+            
+          },
+        },
+        beforeMid,
+      );
+    

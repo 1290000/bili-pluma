@@ -22,7 +22,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { readFile } from 'node:fs/promises';
-import { buildExportPayload, exportFileName } from '../../../src/content/panel/diagnostics';
+import {
+  buildExportPayload,
+  describeLogsError,
+  diagnosticsPane,
+  exportFileName,
+} from '../../../src/content/panel/diagnostics';
 import type { DiagEntry, DiagRow } from '../../../src/platform/diagnostics/collect';
 
 /** 会被当作"泄漏"的敏感串。大小写都算。 */
@@ -72,6 +77,15 @@ function payload(rows: DiagRow[], logs: DiagEntry[]): string {
       from: 'ab12cd',
     },
     echo: 'entered | incognito=ok:true windows=nil cookies=ok:["0"] dnr=ok:{"path":[],"tab":[]}',
+    /** 第七个字段（2026-11-12，task-26）：日志这一次**读成没读成** */
+    logsMeta: {
+      ok: true,
+      err: null,
+      count: logs.length,
+      limit: 30,
+      instanceId: 'ab12cd',
+      readAt: NOW.getTime(),
+    },
   });
 }
 
@@ -106,7 +120,7 @@ describe('★ 面板诊断导出不含凭据', () => {
 });
 
 describe('★ 形状守卫：顶层字段固定', () => {
-  it('payload 的顶层键恰好是 exportedAt / version / facts / logs / trace / echo', () => {
+  it('payload 的顶层键恰好是 exportedAt / version / facts / logs / trace / echo / logsMeta', () => {
     /**
      * 多一个字段就可能多一条泄漏路径，少了也不会报错 —— 两边都得钉住。
      * 反例：往 `buildExportPayload` 里加 `credential: ...` → 本条必红。
@@ -114,6 +128,10 @@ describe('★ 形状守卫：顶层字段固定', () => {
      * ⚠️ 两个调试字段是 2026-11-10 加的，理由：主日志是环形缓冲会被冲掉，
      * 定位信息必须有一条挤不掉的通道 —— `trace` 走 storage（可能写不进），
      * `echo` 走消息应答（没丢过）。**加字段就要改这里**，这正是本断言的作用。
+     *
+     * ⚠️ `logsMeta` 是 2026-11-12（task-26）加的第一个**含自由文本**的字段。
+     * 它的 `err` 必须走 `describeLogsError()` 的白名单，绝不能是 `String(e)` ——
+     * 下面的「err 白名单」用例守着这一点。
      */
     const obj = JSON.parse(payload(realRows(), realLogs())) as Record<string, unknown>;
     expect(Object.keys(obj).sort()).toEqual([
@@ -121,6 +139,7 @@ describe('★ 形状守卫：顶层字段固定', () => {
       'exportedAt',
       'facts',
       'logs',
+      'logsMeta',
       'trace',
       'version',
     ]);
@@ -198,6 +217,189 @@ describe('导出内容本身', () => {
 
   it('导出的文本是合法 JSON（能被打包/解析）', () => {
     expect(() => JSON.parse(payload(realRows(), realLogs()))).not.toThrow();
+  });
+});
+
+/**
+ * ## ★ `logsMeta.err` 的白名单边界（2026-11-12，task-26）
+ *
+ * 这是本项目**第一个含自由文本**的导出字段。`buildExportPayload()` 那道
+ * "只包固定字段"的防线原本靠"字段都是计数/布尔/固定串"成立 ——
+ * 一旦有人把 `String(e)` 直接放进去，防线就破了一个口子，而且**无声**。
+ *
+ * 下面三条是成对的：前两条证明"已知串识得出"，第三条证明"未知内容带不出去"。
+ * 只有第三条的话它可能永远绿（`describeLogsError` 什么都不返回也算不带出去）；
+ * 只有前两条的话，反而证明不了防线。
+ */
+describe('★ logsMeta.err 白名单（task-26）', () => {
+  it('孤儿态的固定串被识别（这就是我们要能看出来的那个）', () => {
+    expect(describeLogsError(new Error('Extension context invalidated.'))).toBe(
+      'Extension context invalidated.',
+    );
+  });
+
+  it('★ 未知错误串一律归成 unknown —— 哪怕它里面带着凭据', () => {
+    /**
+     * verifier 会喂的正是这种：如果实现里写了 `String(e)`，`abc123` 就会
+     * 出现在导出 JSON 里，本断言 + 下面的 payload 级断言会一起红。
+     */
+    expect(describeLogsError(new Error('token=abc123'))).toBe('unknown');
+    expect(describeLogsError('SESSDATA=deadbeef,1700000000,1*FAKEsessdata')).toBe('unknown');
+    /**
+     * ⚠️ 第三例原本逐字抄了 `SECRETS` 里那条假 cookie 值的形状，
+     * 被 `check-secrets` 判成「bili_jct 真实值」（它按**形状**匹配，
+     * 分辨不出这是测试向量）。这里改成不含凭据形状的串 —— 它测的是
+     * 「未命中白名单就归 unknown」，串长什么样无关紧要。
+     */
+    expect(describeLogsError({ toString: () => 'RECV-FAILED at frame 7' })).toBe('unknown');
+  });
+
+  it('★ 端到端：`err` 带进去一个敏感串，导出的 JSON 里搜不到它', () => {
+    const obj = JSON.parse(
+      buildExportPayload({
+        rows: [],
+        logs: [],
+        version: 't',
+        now: NOW,
+        trace: null,
+        echo: null,
+        logsMeta: {
+          ok: false,
+          err: describeLogsError(new Error('token=abc123')),
+          count: 0,
+          limit: 30,
+          instanceId: 'ab12cd',
+          readAt: NOW.getTime(),
+        },
+      }),
+    ) as { logsMeta: { err: string } };
+    const json = JSON.stringify(obj).toLowerCase();
+    expect(json).not.toContain('abc123');
+    expect(json).not.toContain('sessdata');
+  });
+
+  it('★ 源码级（剥注释后）：返回值只能来自白名单，不能返回原始错误串', async () => {
+    /**
+     * ⚠️ **必须剥注释**：本函数上方的注释里写着 `String(e)` 这个词
+     * （它在解释"为什么不能这么做"）。不剥的话，把实现改成 `String(e)` 仍然
+     * 能匹配到注释里的那一处 → **假绿**。这个项目踩过两次了。
+     *
+     * ## 为什么不断言"不许出现 `String(e)`"
+     *
+     * 第一版就是这么写的，**被我自己的实现搞红了**：`String(e)` 出现在函数开头
+     * 用来做**输入归一化**（非 Error 的异常也要能读），那是合法的。
+     *
+     * 真正要守的判据是：**返回出去的值只有一个来源 —— 白名单常量表 `KNOWN`**。
+     * 所以断言：
+     * 1. `return` 语句里只允许 `'unknown'` 字面量或变量 `label`
+     * 2. 存在 `KNOWN` 常量表，且它只由**字符串字面量对**构成
+     */
+    const src = await readFile('src/content/panel/diagnostics.ts', 'utf8');
+    const start = src.indexOf('export function describeLogsError');
+    expect(start, '找不到 describeLogsError').toBeGreaterThan(-1);
+    const rest = src.slice(start);
+    const end = rest.indexOf('\n}');
+    const codeOnly = rest
+      .slice(0, end)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/[^\n]*/g, '');
+    expect(codeOnly.length, '剥注释后函数体为空，切片坏了').toBeGreaterThan(20);
+
+    /**
+     * 所有 `return` 出来的是什么东西。
+     *
+     * ## 为什么不写死变量名 `label`（2026-11-12，task-28）
+     *
+     * 第一版写的是 `/^(?:'unknown'|label)$/` —— 它依赖 `for (const [needle, label] of …)`
+     * 里那个**局部变量名**。有人把 `label` 改名成 `mapped`（纯改名，行为不变），
+     * 这条守卫就**假红**；更糟的是有人可能为了让守卫变绿去改实现。
+     *
+     * 放宽成「`'unknown'` 字面量 **或 一个裸标识符**」，但**没有放宽到"随便匹配"**：
+     * 参数只允许是单一标识符 —— 出现 `String(e)` / `raw` / `` `${…}` `` / 函数调用
+     * 都会**不匹配**（它们带括号、点号、模板符号或反引号）。这才是真正要守的判据：
+     * **`describeLogsError` 只能返回白名单表里的值，不能返回任何"经过加工的原串"**。
+     */
+    const returns = [...codeOnly.matchAll(/return\s+([^;]+);/g)].map((m) => (m[1] ?? '').trim());
+    expect(returns.length, '没有找到任何 return，切片坏了').toBeGreaterThan(0);
+    for (const r of returns) {
+      expect(r, `describeLogsError 返回了白名单之外的值：${r}`).toMatch(
+        /^(?:'unknown'|[A-Za-z_$][\w$]*)$/,
+      );
+    }
+    /** 白名单表本身必须是字符串字面量对（不是拼出来的、不是拿去 stringify 的） */
+    expect(codeOnly).toMatch(/const\s+KNOWN[^=]*=\s*\[/);
+  });
+});
+
+describe('★★★ `logsMeta` 缺失时渲染不崩（task-28）', () => {
+  const acts = { back: () => undefined, exportJson: () => undefined, refresh: () => undefined };
+
+  /** 一份最小的渲染输入；`logsMeta` 故意**不给** */
+  function paneWithoutMeta(): HTMLElement {
+    return diagnosticsPane(
+      {
+        rows: [{ label: 'InPrivate 权限', value: '已允许', ok: true }],
+        logs: [],
+        version: '0.0.0-test',
+        // 这里**不传** logsMeta —— 正是 task-26 崩掉的那个输入形状
+      },
+      acts,
+    );
+  }
+
+  /**
+   * ## 为什么这条守卫必须**直接调 `diagnosticsPane()`**
+   *
+   * 走面板 UI（`mountPanelBody` → 点「诊断」）是测不到的：`panel.ts` 的 render 传的是
+   * `diagData.logsMeta`，那条链上**一直有值**。崩溃只发生在"调用方没给"的形状上，
+   * 所以只能直接喂缺字段的 data。
+   *
+   * 反向验证：把 `diagnosticsPane` 里的 `?? describeLogsMetaFallback()` 去掉，
+   * 本组三条**全部**变红（`TypeError … reading 'ok'`，之后 `:357` 还会再崩一次
+   * `reading 'err'`）。
+   */
+  it('★★ 不传 logsMeta → 不抛，且渲染「读取失败」而不是「还没有日志。」', () => {
+    /**
+     * ⚠️ 写 `let box; expect(() => { box = … }).not.toThrow()` 会让 TS 把 `box`
+     * 收窄成 `never`（它看不到闭包里的赋值）—— 所以直接取返回值，不去闭包里赋值。
+     */
+    const box = paneWithoutMeta();
+
+    const text = box.textContent ?? '';
+    expect(text, '缺 logsMeta 必须报读取失败').toContain('诊断日志读取失败');
+    expect(text, '缺 logsMeta 不许说"还没有日志"（那是把崩溃换成谎报）').not.toContain(
+      '还没有日志',
+    );
+    expect(text, '失败态要给出用户能做的事（刷新）').toContain('刷新');
+  });
+
+  it('★★ 残缺的 logsMeta（只有 ok:false，缺 err）→ 走到 .err 这条路也不崩', () => {
+    /**
+     * verifier 的判据 B 要验的正是这一条：`ok:false` 分支里访问 `.err`。
+     * 只补 `:341`（`.ok`）的话，崩点会**后移到** `reading 'err'` @ `:357`。
+     */
+    const box = diagnosticsPane(
+      {
+        rows: [],
+        logs: [],
+        version: '0.0.0-test',
+        // 故意只给一半：TypeScript 拦得住，但运行期（旧缓存 / 跨版本 SW）拦不住
+        logsMeta: { ok: false } as never,
+      },
+      acts,
+    );
+    expect(box.textContent ?? '').toContain('诊断日志读取失败');
+  });
+
+  it('★ 兜底语义必须是「不可信」：ok 不许是 true', () => {
+    /**
+     * 这条守的是 `describeLogsMetaFallback()` 的**取值本身**，不是渲染结果。
+     * 若有人为了"让页面好看点"把 `ok` 改成 `true`，这里变红 ——
+     * 那等于拿不到数据却告诉用户"日志一切正常"。
+     */
+    const text = paneWithoutMeta().textContent ?? '';
+    expect(text, 'ok:true 时不会渲染失败态').toContain('诊断日志读取失败');
+    expect(text).toContain('unknown');
   });
 });
 

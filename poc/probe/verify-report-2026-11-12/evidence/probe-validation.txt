@@ -1,0 +1,17 @@
+﻿探针有效性验证（2026-11-12）
+
+验证目的：证明 check-incognito-window.ps1 **两个方向都灵** ——
+  上一次的假阴性，就是因为从来没验证过'探针能不能看到存在'。
+
+=== 阳性对照（无痕窗口存在时）===
+INCOGNITO_COUNT=1
+  hwnd=20123414 size=420x600 title=登录播放账号 - [InPrivate]
+PROCESS_MAINTITLE_COUNT=1
+  pid=28620 title=登录播放账号 - [InPrivate]
+
+=== 阴性对照（关掉该窗口后）===
+INCOGNITO_COUNT=0
+PROCESS_MAINTITLE_COUNT=0
+
+结论：探针在'存在'与'不存在'两种情况下给出不同结果 => 判据有效。
+对比：旧的 Win32_Process CommandLine 判据在'存在'时也给 0 => 恒假阴性。

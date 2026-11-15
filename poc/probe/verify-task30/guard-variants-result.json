@@ -1,0 +1,75 @@
+[
+  {
+    "name": "V0 原样（对照）",
+    "expectRed": false,
+    "actual": false,
+    "verdict": "✅ 符合预期",
+    "why": "基线，必须绿",
+    "mutated": {
+      "occurrences": 1
+    },
+    "failures": []
+  },
+  {
+    "name": "V1 改缩进与换行（语义不变）",
+    "expectRed": false,
+    "actual": false,
+    "verdict": "✅ 符合预期",
+    "why": "合法重排版；`[^}]*` 应跨得过多行",
+    "mutated": {
+      "occurrences": 1
+    },
+    "failures": []
+  },
+  {
+    "name": "V2 展开不带对象包裹（语义变了：多余字段丢失）",
+    "expectRed": true,
+    "actual": true,
+    "verdict": "✅ 符合预期",
+    "why": "读起来等价，但**动作类覆盖被抹掉**是行为变化；正则要求 `?\\.logsMeta ?? {` 直接不匹配 ⇒ 会红。判定：红是**正确**的（写法变了、行为也变了）",
+    "mutated": {
+      "occurrences": 1
+    },
+    "failures": [
+      {
+        "name": "★★ 日志读失败 vs 真的没有日志（task-26） > ★★★ 导出侧兜底必须复用 `describeLogsMetaFallback()`，不许自己写 ok/err 字面量 14ms",
+        "msg": "→ 导出侧兜底没有复用 describeLogsMetaFallback(): expected '{\\n              const now = new Date…' to match /logsMeta:\\s*diagData\\?\\.logsMeta\\s*\\?…/"
+      },
+      {
+        "name": "FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★★ 日志读失败 vs 真的没有日志（task-26） > ★★★ 导出侧兜底必须复用 `describeLogsMetaFallback()`，不许自己写 ok/err 字面量",
+        "msg": "AssertionError: 导出侧兜底没有复用 describeLogsMetaFallback(): expected '{\\n              const now = new Date…' to match /logsMeta:\\s*diagData\\?\\.logsMeta\\s*\\?…/"
+      }
+    ]
+  },
+  {
+    "name": "V3 别处（不在 exportJson 块内）再写一份 ok: 字面量",
+    "expectRed": false,
+    "actual": false,
+    "verdict": "✅ 符合预期",
+    "why": "块外自有合法的 ok: 字面量；切片只取 exportJson 块 ⇒ 不应波及。**这是它\"切片\"设计的边界，必须绿**",
+    "mutated": {
+      "occurrences": 1
+    },
+    "failures": []
+  },
+  {
+    "name": "V4 真危险写法：兜底里同时写 ok: 覆盖观测类（@ts-expect-error 让它能编译）",
+    "expectRed": true,
+    "actual": true,
+    "verdict": "✅ 符合预期",
+    "why": "`\\b(?:ok|err)\\s*:` 应命中 ⇒ 真红。**这是\"两侧同源\"被破坏的唯一真实途径**，必须红",
+    "mutated": {
+      "occurrences": 1
+    },
+    "failures": [
+      {
+        "name": "★★ 日志读失败 vs 真的没有日志（task-26） > ★★★ 导出侧兜底必须复用 `describeLogsMetaFallback()`，不许自己写 ok/err 字面量 14ms",
+        "msg": "→ 导出侧兜底自己写了 ok/err 字面量 —— 两侧又开始各写一份: expected '{\\n              const now = new Date…' not to match /\\b(?:ok|err)\\s*:/"
+      },
+      {
+        "name": "FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★★ 日志读失败 vs 真的没有日志（task-26） > ★★★ 导出侧兜底必须复用 `describeLogsMetaFallback()`，不许自己写 ok/err 字面量",
+        "msg": "AssertionError: 导出侧兜底自己写了 ok/err 字面量 —— 两侧又开始各写一份: expected '{\\n              const now = new Date…' not to match /\\b(?:ok|err)\\s*:/"
+      }
+    ]
+  }
+]

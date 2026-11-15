@@ -1,0 +1,100 @@
+{
+  "__VOID__": true,
+  "__void_reason__": "v1 实验用 :nth-of-type(-n+10) 过度匹配（实际命中 28 张而非 10 张），visible 从 48 掉到 11，测的不是目标场景。其中 newRcmdRequests:0 是错误数据。复测（probe-r-reconcile.mjs）得到 rcmdDelta:1，滚动正常。本文件仅作追溯，不要采信。",
+  "__void_by__": "engineer-api 2026-11-11",
+  "__valid_reference__": "RESULT.md §0-§9 与 附录 A",
+  "__original_data__": [
+    {
+      "key": "D-control",
+      "label": "对照组：不隐藏",
+      "css": "",
+      "before": {
+        "total": 57,
+        "visible": 48,
+        "bodyHeight": 3530,
+        "inViewport": 22,
+        "maxScroll": 2449
+      },
+      "after": {
+        "total": 75,
+        "visible": 64,
+        "bodyHeight": 4453,
+        "inViewport": 22,
+        "maxScroll": 3372
+      },
+      "newRcmdRequests": 1,
+      "newCards": 18,
+      "visibleDelta": 16,
+      "bodyHeightDelta": 923
+    },
+    {
+      "key": "A-display-none",
+      "label": "A display:none —— 隐藏前 10 张 is-rcmd",
+      "css": ".bili-video-card.is-rcmd:nth-of-type(-n+10){display:none!important}",
+      "before": {
+        "total": 75,
+        "visible": 11,
+        "bodyHeight": 2314,
+        "inViewport": 2,
+        "maxScroll": 1233
+      },
+      "after": {
+        "total": 93,
+        "visible": 11,
+        "bodyHeight": 2394,
+        "inViewport": 9,
+        "maxScroll": 1313
+      },
+      "newRcmdRequests": 0,
+      "newCards": 18,
+      "visibleDelta": 0,
+      "bodyHeightDelta": 80
+    },
+    {
+      "key": "B-visibility-hidden",
+      "label": "B visibility:hidden —— 隐藏前 10 张",
+      "css": ".bili-video-card.is-rcmd:nth-of-type(-n+10){visibility:hidden!important}",
+      "before": {
+        "total": 93,
+        "visible": 80,
+        "bodyHeight": 5359,
+        "inViewport": 13,
+        "maxScroll": 4278
+      },
+      "after": {
+        "total": 111,
+        "visible": 96,
+        "bodyHeight": 6281,
+        "inViewport": 22,
+        "maxScroll": 5200
+      },
+      "newRcmdRequests": 0,
+      "newCards": 18,
+      "visibleDelta": 16,
+      "bodyHeightDelta": 922
+    },
+    {
+      "key": "C-height-0",
+      "label": "C height:0;overflow:hidden —— 塌陷前 10 张",
+      "css": ".bili-video-card.is-rcmd:nth-of-type(-n+10){height:0!important;overflow:hidden!important;margin:0!important;padding:0!important}",
+      "before": {
+        "total": 111,
+        "visible": 11,
+        "bodyHeight": 2696,
+        "inViewport": 2,
+        "maxScroll": 1615
+      },
+      "after": {
+        "total": 129,
+        "visible": 11,
+        "bodyHeight": 3018,
+        "inViewport": 9,
+        "maxScroll": 1937
+      },
+      "newRcmdRequests": 0,
+      "newCards": 18,
+      "visibleDelta": 0,
+      "bodyHeightDelta": 322
+    }
+  ]
+}

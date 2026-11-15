@@ -1,0 +1,5 @@
+Pluma\"\n    @e322 button \"收起面板\"\n    navigation\n      @e323 tab \"画质\"\n      @e324 tab \"净化\"\n      @e325 tab \"显示\"\n      @e326 tab \"账号\"\n    StaticText \"主\"\n    StaticText \"读取中…\"\n    StaticText \"收藏 · 点赞 · 评论 · 历史\"\n    StaticText \"只读\"\n    StaticText \"取\"\n    StaticText \"{{取流账号昵称}}\"\n    StaticText \"仅取流 · 6 个月后到期\"\n    StaticText \"1 分钟前校验\"\n    StaticText \"年度大会员\"\n    @e327 button \"取流：扩展账号\"\n    group\n      @e328 button \"重新登录\"\n      @e329 button \"确认退出\"\n      @e330 button \"取消\"\n@warning geometry incomplete: some page or frame content has no top-level coordinates.",
+  "ref_count": 330,
+  "tab_id": 1673238705,
+  "truncated": false
+}

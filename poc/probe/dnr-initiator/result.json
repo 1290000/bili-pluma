@@ -1,0 +1,383 @@
+{
+  "meta": {
+    "startedAt": "2026-11-10T16:34:11.854Z",
+    "browserArg": "edge",
+    "extPath": "D:\\Projects\\Pluma\\poc\\probe\\dnr-initiator",
+    "userData": "C:\\Users\\i1290\\AppData\\Local\\Temp\\pluma-dnr-initiator-1794328451853",
+    "executablePath": "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    "extId": "odebiapnogaoelompgcejfplcifbihjm",
+    "browserVersion": "157.0.4341.42"
+  },
+  "steps": [
+    {
+      "step": "A0-tabs",
+      "at": "2026-11-10T16:34:16.701Z",
+      "tabs": [
+        {
+          "id": 788232258,
+          "url": "about:blank"
+        },
+        {
+          "id": 788232260,
+          "url": "chrome-extension://odebiapnogaoelompgcejfplcifbihjm/probe.html"
+        },
+        {
+          "id": 788232264,
+          "url": "https://httpbin.org/html"
+        },
+        {
+          "id": 788232267,
+          "url": "https://postman-echo.com/get?x=1"
+        }
+      ],
+      "idA": 788232264,
+      "idB": 788232267
+    },
+    {
+      "step": "A1-baseline",
+      "at": "2026-11-10T16:34:19.387Z",
+      "sw": {
+        "headers": {
+          "Accept": "*/*",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+          "Cache-Control": "no-cache",
+          "Host": "httpbin.org",
+          "Pragma": "no-cache",
+          "Priority": "u=1, i",
+          "Sec-Fetch-Dest": "empty",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Site": "none",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0"
+        },
+        "probe": null,
+        "url": "https://httpbin.org/anything"
+      },
+      "a": {
+        "headers": {
+          "Accept": "*/*",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+          "Cache-Control": "no-cache",
+          "Host": "httpbin.org",
+          "Pragma": "no-cache",
+          "Priority": "u=1, i",
+          "Referer": "https://httpbin.org/html",
+          "Sec-Ch-Ua": "\"Not-A.Brand\";v=\"99\", \"Microsoft Edge\";v=\"157\", \"Chromium\";v=\"157\"",
+          "Sec-Ch-Ua-Mobile": "?0",
+          "Sec-Ch-Ua-Platform": "\"Windows\"",
+          "Sec-Fetch-Dest": "empty",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Site": "same-origin",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0"
+        },
+        "probe": null,
+        "url": "https://httpbin.org/anything"
+      },
+      "b": {
+        "headers": {
+          "Accept": "*/*",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+          "Cache-Control": "no-cache",
+          "Host": "httpbin.org",
+          "Origin": "https://postman-echo.com",
+          "Pragma": "no-cache",
+          "Priority": "u=1, i",
+          "Referer": "https://postman-echo.com/",
+          "Sec-Ch-Ua": "\"Not-A.Brand\";v=\"99\", \"Microsoft Edge\";v=\"157\", \"Chromium\";v=\"157\"",
+          "Sec-Ch-Ua-Mobile": "?0",
+          "Sec-Ch-Ua-Platform": "\"Windows\"",
+          "Sec-Fetch-Dest": "empty",
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Site": "cross-site",
+          "Sec-Fetch-Storage-Access": "active",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36 Edg/157.0.0.0"
+        },
+        "probe": null,
+        "url": "https://httpbin.org/anything"
+      }
+    },
+    {
+      "step": "B1-field-acceptance",
+      "at": "2026-11-10T16:34:19.424Z",
+      "initiatorDomains": {
+        "accepted": true,
+        "error": null,
+        "persistedCondition": {
+          "initiatorDomains": [
+            "httpbin.org"
+          ],
+          "requestDomains": [
+            "httpbin.org"
+          ],
+          "urlFilter": "anything"
+        }
+      },
+      "excludedInitiatorDomains": {
+        "accepted": true,
+        "error": null,
+        "persistedCondition": {
+          "excludedInitiatorDomains": [
+            "postman-echo.com"
+          ],
+          "requestDomains": [
+            "httpbin.org"
+          ],
+          "urlFilter": "anything"
+        }
+      },
+      "requestDomains": {
+        "accepted": true,
+        "error": null,
+        "persistedCondition": {
+          "requestDomains": [
+            "httpbin.org"
+          ],
+          "urlFilter": "anything"
+        }
+      },
+      "excludedRequestDomains": {
+        "accepted": true,
+        "error": null,
+        "persistedCondition": {
+          "excludedRequestDomains": [
+            "postman-echo.com"
+          ],
+          "requestDomains": [
+            "httpbin.org"
+          ],
+          "urlFilter": "anything"
+        }
+      },
+      "tabIds": {
+        "accepted": true,
+        "error": null,
+        "persistedCondition": {
+          "requestDomains": [
+            "httpbin.org"
+          ],
+          "tabIds": [
+            788232264
+          ],
+          "urlFilter": "anything"
+        }
+      },
+      "initiatorDomains+tabIds": {
+        "accepted": true,
+        "error": null,
+        "persistedCondition": {
+          "initiatorDomains": [
+            "httpbin.org"
+          ],
+          "requestDomains": [
+            "httpbin.org"
+          ],
+          "tabIds": [
+            788232264
+          ],
+          "urlFilter": "anything"
+        }
+      }
+    },
+    {
+      "step": "B2-validation-controls",
+      "at": "2026-11-10T16:34:19.435Z",
+      "missingValue": {
+        "accepted": false,
+        "error": "Rule with id 90000 must provide a value for a header to be appended/set."
+      },
+      "badPriority": {
+        "accepted": false,
+        "error": "Rule with id 90000 has an invalid value for priority key. This should be greater than or equal to 1."
+      },
+      "unknownField": {
+        "accepted": true,
+        "error": null
+      }
+    },
+    {
+      "step": "C1-initiatorDomains-discriminates",
+      "at": "2026-11-10T16:34:20.090Z",
+      "install": {
+        "accepted": true,
+        "error": null,
+        "persisted": [
+          {
+            "id": 90000,
+            "priority": 1,
+            "condition": {
+              "initiatorDomains": [
+                "httpbin.org"
+              ],
+              "requestDomains": [
+                "httpbin.org"
+              ],
+              "urlFilter": "anything"
+            }
+          },
+          {
+            "id": 90001,
+            "priority": 1,
+            "condition": {
+              "initiatorDomains": [
+                "postman-echo.com"
+              ],
+              "requestDomains": [
+                "httpbin.org"
+              ],
+              "urlFilter": "anything"
+            }
+          }
+        ]
+      },
+      "a": {
+        "probe": "FROM_A",
+        "referer": "https://httpbin.org/html"
+      },
+      "b": {
+        "probe": "FROM_B",
+        "referer": "https://postman-echo.com/"
+      },
+      "verdict": {
+        "aGotA": true,
+        "bGotB": true
+      }
+    },
+    {
+      "step": "D1-negative-control-no-initiator",
+      "at": "2026-11-10T16:34:20.737Z",
+      "install": {
+        "accepted": true,
+        "error": null
+      },
+      "a": {
+        "probe": "FROM_B"
+      },
+      "b": {
+        "probe": "FROM_B"
+      },
+      "verdict": {
+        "bothSame": true,
+        "explanation": "两条规则无条件重叠 → 两者都拿到同一个值，证明区分只能来自 initiatorDomains"
+      }
+    },
+    {
+      "step": "E1-tabIds-same-domain-two-tabs",
+      "at": "2026-11-10T16:34:22.437Z",
+      "idA": 788232264,
+      "idA2": 788232270,
+      "install": {
+        "accepted": true,
+        "error": null
+      },
+      "a": {
+        "probe": "TAB_A"
+      },
+      "a2": {
+        "probe": "TAB_A2"
+      },
+      "verdict": {
+        "aGotTabA": true,
+        "a2GotTabA2": true
+      }
+    },
+    {
+      "step": "F1-cookies-api",
+      "at": "2026-11-10T16:34:22.443Z",
+      "surface": {
+        "ok": true,
+        "keys": [
+          "OnChangedCause",
+          "SameSiteStatus",
+          "get",
+          "getAll",
+          "getAllCookieStores",
+          "getPartitionKey",
+          "onChanged",
+          "remove",
+          "set"
+        ],
+        "hasGetAll": true,
+        "hasSet": true,
+        "hasGetAllCookieStores": true
+      },
+      "stores": {
+        "ok": true,
+        "stores": [
+          {
+            "id": "0",
+            "tabIds": [
+              788232258,
+              788232260,
+              788232264,
+              788232267,
+              788232270
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "step": "G1-initiator-scope",
+      "at": "2026-11-10T16:34:27.847Z",
+      "tabIdTop": 788232264,
+      "tabIdPostman": 788232267,
+      "iframeInfo": {
+        "iframeSrc": "https://httpbin.org/anything?via=iframe-from-httpbin-top",
+        "topOrigin": "https://httpbin.org"
+      },
+      "topFetchProbe": "FROM_A",
+      "separatePostmanTabProbe": "FROM_B",
+      "matchedRows": [
+        {
+          "at": 1794328463390,
+          "ruleId": 90000,
+          "url": "https://httpbin.org/anything",
+          "type": "xmlhttprequest",
+          "tabId": 788232264,
+          "initiator": "https://httpbin.org",
+          "documentId": "4B5E383FD0569F0C9ED8AABF49C02870"
+        },
+        {
+          "at": 1794328463702,
+          "ruleId": 90001,
+          "url": "https://httpbin.org/anything",
+          "type": "xmlhttprequest",
+          "tabId": 788232267,
+          "initiator": "https://postman-echo.com",
+          "documentId": "28013D7289D22A45368114DE2F460D34"
+        },
+        {
+          "at": 1794328464039,
+          "ruleId": 90000,
+          "url": "https://httpbin.org/anything?via=iframe-from-httpbin-top",
+          "type": "sub_frame",
+          "tabId": 788232273,
+          "initiator": "https://httpbin.org",
+          "documentId": null
+        }
+      ],
+      "note": "判据：matchedRows 里每条 request.initiator 与 type 的组合。XMLHttpRequest 的 initiator 已验证=直接发起方（C 组）；这里补看 sub_frame（iframe 导航）算谁的。"
+    },
+    {
+      "step": "H1-rule-limits",
+      "at": "2026-11-10T16:34:28.605Z",
+      "constants": {
+        "MAX_NUMBER_OF_DYNAMIC_AND_SESSION_RULES": 5000,
+        "MAX_NUMBER_OF_DYNAMIC_RULES": 30000,
+        "MAX_NUMBER_OF_SESSION_RULES": 5000,
+        "MAX_NUMBER_OF_STATIC_RULESETS": 100,
+        "GUARANTEED_MINIMUM_STATIC_RULES": 30000,
+        "hasGetAvailableStaticRuleCount": true
+      },
+      "sessionRuleCeiling": {
+        "addedBeforeFail": 5000,
+        "failedAt": 5000,
+        "error": "Session rule count exceeded.",
+        "sessionRulesAfterAdd": 5000,
+        "sessionRulesBeforeTest": 0
+      }
+    }
+  ]
+}

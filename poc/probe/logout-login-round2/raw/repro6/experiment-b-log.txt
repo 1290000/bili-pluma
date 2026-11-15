@@ -1,0 +1,26 @@
+[2026-11-12T07:40:08.184Z] 用户主浏览器与本实验完全隔离（独立 --user-data-dir）
+[2026-11-12T07:40:08.186Z] 已生成探测扩展: D:\Projects\Pluma\poc\probe\logout-login-round2\raw\repro6\probe-ext  (incognito: "spanning")
+[2026-11-12T07:40:08.186Z] 启动: C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe --user-data-dir=D:\Projects\Pluma\poc\probe\logout-login-round2\raw\repro6\p-probe --no-first-run --no-default-browser-check --disable-features=msEdgeFirstRunExperience --load-extension=D:\Projects\Pluma\poc\probe\logout-login-round2\raw\repro6\probe-ext about:blank
+[2026-11-12T07:40:08.199Z]   pid=31364
+[2026-11-12T07:40:08.200Z] 等待扩展启动并开始轮询…
+[2026-11-12T07:40:23.257Z] 首次读数检查: ok=true extId=abpjidapfcjnbngfggmjhhhpimednopn count=7
+[2026-11-12T07:40:23.258Z] 静置期读数去重: false
+[2026-11-12T07:40:23.259Z] 
+[2026-11-12T07:40:23.259Z] --- E2: 开 incognito 窗口 → 关掉 → 看读数有没有变 false ---
+[2026-11-12T07:40:23.264Z]   开窗前: false
+[2026-11-12T07:40:23.271Z]   incognito 窗口 pid=30636，等 20 秒让探测扩展轮询
+[2026-11-12T07:40:43.352Z]   开窗期间读数: false
+[2026-11-12T07:40:43.352Z]   关闭 incognito 窗口
+[2026-11-12T07:40:43.353Z]   关闭自己的实例 pid=30636
+[2026-11-12T07:40:58.619Z]   关窗后读数: false
+[2026-11-12T07:40:58.620Z]   => E2 结论: 权限掉了
+[2026-11-12T07:40:58.620Z] 
+[2026-11-12T07:40:58.620Z] --- E3: 开 incognito 窗口 → 不关 → 观察 60 秒 ---
+[2026-11-12T07:40:58.626Z]   incognito 窗口 pid=8224
+[2026-11-12T07:41:58.658Z]   开窗 60 秒后读数: false
+[2026-11-12T07:41:58.659Z]   => E3 结论: 权限掉了
+[2026-11-12T07:41:58.659Z]   关闭自己的实例 pid=8224
+[2026-11-12T07:41:58.875Z]   关闭自己的实例 pid=31364
+[2026-11-12T07:42:00.646Z] 最终 Secure Preferences 里探测扩展: {"id":"abpjidapfcjnbngfggmjhhhpimednopn"}
+[2026-11-12T07:42:00.647Z] 结果写入 D:\Projects\Pluma\poc\probe\logout-login-round2\raw\repro6\experiment-b-result.json
+[2026-11-12T07:42:00.648Z] === 结束 ===

@@ -1,0 +1,72 @@
+﻿[verify] ⚠️  这次改动命中了 AGENTS.md §4.3 路由表：
+
+  src/platform/http/dnr.ts 被改动
+    → 必须重跑 `node poc/verify/run-q2-auto.cjs`（并发安全，约 3 分钟）**和** `node poc/verify/dnr-disable-clears-tab-rules.cjs`（关开关后两类规则清零，约 15 秒）。**两个都不需要登录态**；单测测不到 DNR 行为（AGENTS.md §5.4），不跑等于没验。
+
+[verify] 共 21 项
+
+  [heavy] typecheck    跑…
+  [static] boundaries   跑…
+  [test] test         跑…
+  [static] boundaries   ✅ 0.5s    
+
+  [static] messages     跑…
+  [static] messages     ✅ 0.2s    
+
+  [static] design       跑…
+  [static] design       ✅ 0.1s    
+
+  [static] css-tokens   跑…
+  [static] css-tokens   ✅ 0.1s    
+
+  [static] docs         跑…
+  [static] docs         ✅ 5.9s    
+
+  [static] secrets      跑…
+  [static] secrets      ✅ 1.6s    
+
+  [static] patch        跑…
+  [static] patch        ✅ 0.6s    
+
+  [static] doc-sections 跑…
+  [static] doc-sections ✅ 0.5s    
+
+  [static] adr-refs     跑…
+  [static] adr-refs     ✅ 0.5s    
+
+  [static] tools        跑…
+  [static] tools        ✅ 0.4s    
+
+  [static] rule-map     跑…
+  [static] rule-map     ✅ 0.5s    
+
+  [static] required-files 跑…
+  [static] required-files ✅ 0.3s    
+
+  [static] dnr-regression 跑…
+  [static] dnr-regression ✅ 1.0s    
+
+  [static] page-gate    跑…
+  [static] page-gate    ✅ 2.7s    
+
+  [static] workflow-logs 跑…
+  [static] workflow-logs ✅ 0.5s    
+
+  [static] artifact     跑…
+  [static] artifact     ✅ 1.1s    
+
+  [static] ad-selectors 跑…
+  [heavy] typecheck    ✅ 18.0s   
+
+  [heavy] format       跑…
+  [static] ad-selectors ✅ 4.8s    
+
+  [test] test         ✅ 23.7s   
+
+  [heavy] format       ✅ 12.2s   
+
+  [heavy] lint         跑…
+  [heavy] lint         ✅ 5.6s    
+
+
+[verify] ✅ 21 项全绿（共 35.8s，并行墙面 35.8s，串行合计 80.8s）

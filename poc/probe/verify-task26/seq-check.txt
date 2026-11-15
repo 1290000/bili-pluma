@@ -1,0 +1,3 @@
+﻿SEQ1（只补 .ok）       {"verified":"caught:TypeError: Cannot read properties of undefined (reading 'err')","summary":"n/a"}
+SEQ1+2（两处都补）     {"verified":"called","summary":"16 passed (16)"}
+restored BE73B53930D8EEE0CB7C0F0FBD4150F1AEF54E551B738240FC8579469793452B OK

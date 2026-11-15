@@ -1,0 +1,12 @@
+﻿=== 采集时刻: 2026-11-12 05:17:27.080 ===
+总 Chrome_WidgetWin_1 窗口数(含隐藏): 6
+可见窗口数: 6
+msedge 窗口数(可见): 5
+
+=== 可见窗口明细 ===
+HWND=527168 Min=False Size=1296x828 Pos=632,286 PID=25152 Title=AI字幕卡顿修复与上游同步 — DeepSeek Harness
+HWND=4393142 Min=False Size=420x600 Pos=287,105 PID=25576 Title=登录播放账号 - [InPrivate]
+HWND=133214 Min=False Size=1470x1363 Pos=277,95 PID=25576 Title=扩展 和另外 2 个页面 - 个人 - Microsoft​ Edge
+HWND=1181808 Min=False Size=1470x1363 Pos=287,29 PID=25576 Title=“💗挑 战 B 站 画 质 上 限💗”_哔哩哔哩_bilibili 和另外 1 个页面 - 个人 - Microsoft​ Edge
+HWND=1182566 Min=False Size=1470x1363 Pos=647,29 PID=25576 Title=哔哩哔哩 (゜-゜)つロ 干杯~-bilibili 和另外 2 个页面 - 个人 - Microsoft​ Edge
+HWND=133228 Min=True Size=160x28 Pos=-32000,-32000 PID=25576 Title=新建标签页 - 个人 - Microsoft​ Edge

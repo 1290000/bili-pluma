@@ -1,0 +1,31 @@
+{
+  "steps": [
+    "[2026-11-12T08:14:18.033Z] === InPrivate 窗口创建门槛诊断 ===",
+    "[2026-11-12T08:14:18.037Z] 独立 profile: D:\\Projects\\Pluma\\.tmp\\investigator-q4\\profile-incog-gate",
+    "[2026-11-12T08:14:18.037Z] ⛔ 用户浏览器零接触",
+    "[2026-11-12T08:14:18.049Z]   主实例 pid=32304",
+    "[2026-11-12T08:14:19.265Z] CDP 就绪",
+    "[2026-11-12T08:14:25.615Z]   打开权限: {\"incognitoAccess\":{\"isActive\":true,\"isEnabled\":true}}",
+    "[2026-11-12T08:14:25.616Z] ",
+    "[2026-11-12T08:14:25.617Z] ═══ 阶段 1：全新 profile（从未开过 InPrivate 窗口）═══",
+    "[2026-11-12T08:14:30.502Z]   OS 层: [\"32304|扩展 - 用户配置 1 - Microsoft​ Edge\"]",
+    "[2026-11-12T08:14:30.679Z]   ① chrome-extension://…/need-incognito.html → {\"ok\":true,\"created\":null}",
+    "[2026-11-12T08:14:40.310Z]      OS 层: [\"32304|无标题 和另外 3 个页面 - 个人 - Microsoft​ Edge\"]",
+    "[2026-11-12T08:14:40.434Z]   ② about:blank → {\"ok\":true,\"created\":{\"id\":617468903,\"incognito\":true,\"type\":\"popup\"}}",
+    "[2026-11-12T08:14:48.865Z]      OS 层: [\"32304|about:blank - [InPrivate]\"]",
+    "[2026-11-12T08:14:48.967Z]   ③ https://example.com → {\"ok\":true,\"created\":{\"id\":617468905,\"incognito\":true,\"type\":\"popup\"}}",
+    "[2026-11-12T08:14:57.487Z]      OS 层: [\"32304|Example Domain - [InPrivate]\"]",
+    "[2026-11-12T08:14:57.488Z] ",
+    "[2026-11-12T08:14:57.488Z] ═══ 阶段 2：先命令行 --inprivate 开一个真无痕窗口（激活无痕分区），再试 API ═══",
+    "[2026-11-12T08:14:57.498Z]   --inprivate 实例 pid=35424",
+    "[2026-11-12T08:15:09.311Z]   OS 层: [\"32304|about:blank - [InPrivate] - Microsoft​ Edge\"]",
+    "[2026-11-12T08:15:09.407Z]   ① chrome-extension://…/need-incognito.html → {\"ok\":true,\"created\":{\"id\":617468911,\"incognito\":true,\"type\":\"popup\"}}",
+    "[2026-11-12T08:15:17.810Z]      OS 层: [\"32304|开启无痕窗口权限 · Pluma - [InPrivate]\"]",
+    "[2026-11-12T08:15:17.923Z]   ② about:blank → {\"ok\":true,\"created\":{\"id\":617468913,\"incognito\":true,\"type\":\"popup\"}}",
+    "[2026-11-12T08:15:26.380Z]      OS 层: [\"32304|about:blank - [InPrivate]\"]",
+    "[2026-11-12T08:15:26.381Z] ",
+    "[2026-11-12T08:15:26.381Z] ═══ 阶段 3：对照 —— 不带 incognito 字段 ═══",
+    "[2026-11-12T08:15:26.475Z]   chrome-extension://…/need-incognito.html（无 incognito 字段）→ {\"ok\":true,\"created\":{\"id\":617468915,\"incognito\":true,\"type\":\"popup\"}}",
+    "[2026-11-12T08:15:35.048Z]      OS 层: [\"32304|开启无痕窗口权限 · Pluma - [InPrivate]\"]"
+  ]
+}

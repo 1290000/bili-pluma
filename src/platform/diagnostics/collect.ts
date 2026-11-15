@@ -340,6 +340,38 @@ async function diagFacts(): Promise<{
     const detail =
       e instanceof Error ? `${e.name}: ${e.message}` : typeof e === 'string' ? e : String(e);
     trace(`send-error: ${detail.slice(0, 200)}`);
+    /**
+     * ## ⚠️ 走到这里时，先确认是不是「content script 孤儿态」（2026-11-12，task-14）
+     *
+     * **这不是产品缺陷，是观测环境的污染。** 2026-11-12 的二次验收里，
+     * verifier 报「诊断页整表读不出 InPrivate 权限」，排查后归因被它自己撤回：
+     *
+     * > 真因是它自己执行了**重载扩展**，已注入的 content script 从那一刻起
+     * > **孤儿化**；而它为「不许刷新」那条判据**全程没刷新 B 站页面** ⇒
+     * > content script 一直是孤儿态（报 `Extension context invalidated`）。
+     *
+     * ### 怎么一眼区分「孤儿态」与「真故障」
+     *
+     * | 现象 | 含义 |
+     * | --- | --- |
+     * | 这里记的是 **`Extension context invalidated`** | **孤儿态** → 刷新页面即可，不是 bug |
+     * | 四项里只有一项 `null`，其他有值 | **正常**的逐项降级（`diag.handler.ts` 明确设计） |
+     * | 四项**全** `null` 且**没有**这条 send-error | 真的到了 background 但全项读失败 —— 那才要看 handler 日志 |
+     *
+     * ### 干净环境下的实测基线（2026-11-12，task-14 取证）
+     *
+     * 重载扩展 → **刷新一次 B站页面** → 打开面板「显示 → 诊断」：
+     * ```
+     * InPrivate 权限      已允许
+     * 可见窗口数          3
+     * 可见 cookie 分区    0
+     * diag/facts  reply:  {"type":"diag/facts:ok","facts":{"incognitoAllowed":true,
+     *                      "windows":{"total":3,"incognito":0},"cookieStores":["0"],…}}
+     * ```
+     * **三项全部正常** ⇒ 那条"整表读不出"的现象在干净环境下**不复现**。
+     *
+     * ⚠️ 所以：看到整表失败时**先刷一次页面**再判断，别在孤儿态上建卡。
+     */
     return none;
   }
 

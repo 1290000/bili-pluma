@@ -1,0 +1,217 @@
+{
+  "generatedAt": "2026-11-12T09:29:07.516Z",
+  "preflight": [
+    {
+      "file": "src/content/panel/login-outcome.ts",
+      "worktree": "71B2C1B3C2B6A3BA82D6495C8BAA9D741D8322BA959A3FA5B9B87B037DD8FBAB",
+      "backup": "71B2C1B3C2B6A3BA82D6495C8BAA9D741D8322BA959A3FA5B9B87B037DD8FBAB"
+    },
+    {
+      "file": "entrypoints/content-panel.content.ts",
+      "worktree": "F76CEF6CF87B9818B290FD7C7C7A695697B5CC88B3D270EB6DF052125C0BFD74",
+      "backup": "F76CEF6CF87B9818B290FD7C7C7A695697B5CC88B3D270EB6DF052125C0BFD74"
+    },
+    {
+      "file": "src/content/panel/panel.ts",
+      "worktree": "53B4B89ECFE156F71A5530AB5D10C416D03DB1927ED9A68B7EAE84AAAE3F2471",
+      "backup": "B006A8934A93AB5AF4AF63AEA5FC592FFCE6131553C090B757E7F2B3B910BA4F"
+    },
+    {
+      "file": "tests/unit/content/panel/entry-wiring.test.ts",
+      "worktree": "28816B9348D8A93DE033F3FDF26EA499895CA93366A45AB35D190F41A33E437C",
+      "backup": "28816B9348D8A93DE033F3FDF26EA499895CA93366A45AB35D190F41A33E437C"
+    },
+    {
+      "file": "tests/unit/content/panel-login-outcome.test.ts",
+      "worktree": "51972704A8F3D3F7B05A0380E67A382E39BBC2FC63BA8BBB2CC0EE3F22907217",
+      "backup": "51972704A8F3D3F7B05A0380E67A382E39BBC2FC63BA8BBB2CC0EE3F22907217"
+    }
+  ],
+  "bothFilesTotals": "Tests  34 passed (34)",
+  "cases": [
+    {
+      "id": "RV1: already-open 的 ok:true → false",
+      "file": "src/content/panel/login-outcome.ts",
+      "find": "    return {\n      ok: true,\n      shouldPoll: false,\n      text: '扫码登录窗口已经开着了 —— 它就是上面那个窗口，请直接在那里操作',\n    };",
+      "replaceWith": "    return {\n      ok: false,\n      shouldPoll: false,\n      text: '扫码登录窗口已经开着了 —— 它就是上面那个窗口，请直接在那里操作',\n    };",
+      "testFiles": [
+        "tests/unit/content/panel-login-outcome.test.ts"
+      ],
+      "mutatedSha": "A7A8CBAC97256F121809E151B690A9F58FFD69EB2E71562C57D9AC6843E2418D",
+      "result": {
+        "noTests": false,
+        "syntaxError": true,
+        "totals": "Tests  2 failed | 22 passed (24)",
+        "failLines": [
+          "× ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `already-open` 是**好消息**（`ok:true`）—— 不许再让它走危险色（task-25） 12ms",
+          "× ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `ok` 与 `shouldPoll` 正交：already-open 是「好消息 + 不轮询」这个组合 1ms",
+          "FAIL  tests/unit/content/panel-login-outcome.test.ts > ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `already-open` 是**好消息**（`ok:true`）—— 不许再让它走危险色（task-25）",
+          "AssertionError: expected false to be true // Object.is equality",
+          "FAIL  tests/unit/content/panel-login-outcome.test.ts > ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `ok` 与 `shouldPoll` 正交：already-open 是「好消息 + 不轮询」这个组合"
+        ],
+        "atLines": [
+          "❯ tests/unit/content/panel-login-outcome.test.ts:217:18",
+          "❯ tests/unit/content/panel-login-outcome.test.ts:247:18"
+        ],
+        "rawTail": "    218|   });\n    219| \n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯\n\n FAIL  tests/unit/content/panel-login-outcome.test.ts > ★★★ 说明页已开着：必须给出可见反馈（task-22 缺陷 2） > ★★★ `ok` 与 `shouldPoll` 正交：already-open 是「好消息 + 不轮询」这个组合\nAssertionError: expected false to be true // Object.is equality\n\n- Expected\n+ Received\n\n- true\n+ false\n\n ❯ tests/unit/content/panel-login-outcome.test.ts:247:18\n    245|       reason: 'already-open',\n    246|     });\n    247|     expect(r.ok).toBe(true);\n       |                  ^\n    248|     expect(r.shouldPoll).toBe(false);\n    249|   });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯\n\n"
+      },
+      "restored": true,
+      "restoredSha": "71B2C1B3C2B6A3BA82D6495C8BAA9D741D8322BA959A3FA5B9B87B037DD8FBAB",
+      "baselineSha": "71B2C1B3C2B6A3BA82D6495C8BAA9D741D8322BA959A3FA5B9B87B037DD8FBAB"
+    },
+    {
+      "id": "RV2: if (!r.shouldPoll) return → if (!r.ok) return",
+      "file": "entrypoints/content-panel.content.ts",
+      "find": "      if (!r.shouldPoll) return;",
+      "replaceWith": "      if (!r.ok) return;",
+      "testFiles": [
+        "tests/unit/content/panel/entry-wiring.test.ts",
+        "tests/unit/content/panel-login-outcome.test.ts"
+      ],
+      "mutatedSha": "000C966CD13F995DA7F256B84AC751D27CAEAC74404B66B180D0A0AD4E957819",
+      "result": {
+        "noTests": false,
+        "syntaxError": false,
+        "totals": "Tests  2 failed | 32 passed (34)",
+        "failLines": [
+          "× ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退必须判 `!r.shouldPoll` 9ms",
+          "× ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok` 1ms",
+          "FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退必须判 `!r.shouldPoll`",
+          "AssertionError: openLogin 不再按 shouldPoll 早退 —— 概念又被粘回去了: expected 'const openLogin = async (): Promise<v…' to match /if\\s*\\(\\s*!r\\.shouldPoll\\s*\\)\\s*return/",
+          "FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok`",
+          "AssertionError: openLogin 仍在用 ok 判是否轮询 —— 没解耦: expected 'const openLogin = async (): Promise<v…' not to match /if\\s*\\(\\s*!r\\.ok\\s*\\)\\s*return/"
+        ],
+        "atLines": [
+          "❯ tests/unit/content/panel/entry-wiring.test.ts:150:65",
+          "❯ tests/unit/content/panel/entry-wiring.test.ts:163:59"
+        ],
+        "rawTail": "              \n              void loadOnce();\n            } else if (outcome.kind === 'timeout') {\n              controller.showNotice(\n                '等了 3 分钟还没检测到新账号 —— 扫码成功了吗？也可以点「重新登录」再试一次',\n                false,\n              );\n            }\n            \n          },\n        },\n        before,\n      );\"\n\n ❯ tests/unit/content/panel/entry-wiring.test.ts:163:59\n    161|      */\n    162|     const codeOnly = openLoginCodeOnly();\n    163|     expect(codeOnly, 'openLogin 仍在用 ok 判是否轮询 —— 没解耦').not.t…\n       |                                                           ^\n    164|       /if\\s*\\(\\s*!r\\.ok\\s*\\)\\s*return/,\n    165|     );\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯\n\n"
+      },
+      "restored": true,
+      "restoredSha": "F76CEF6CF87B9818B290FD7C7C7A695697B5CC88B3D270EB6DF052125C0BFD74",
+      "baselineSha": "F76CEF6CF87B9818B290FD7C7C7A695697B5CC88B3D270EB6DF052125C0BFD74"
+    },
+    {
+      "id": "RV3: 代码改回 !r.ok，注释里写 !r.shouldPoll（剥离有效性）",
+      "file": "entrypoints/content-panel.content.ts",
+      "find": "      if (!r.shouldPoll) return;",
+      "replaceWith": "      /* if (!r.shouldPoll) return; <- 这一行只是注释，用来验剥离是否有效 */\n      if (!r.ok) return;",
+      "testFiles": [
+        "tests/unit/content/panel/entry-wiring.test.ts"
+      ],
+      "mutatedSha": "E68CD7DA5ABD70CC3559831A1CAC6B975FBC7D6138FE5AE44B3ECF3EF7D01870",
+      "result": {
+        "noTests": false,
+        "syntaxError": false,
+        "totals": "Tests  2 failed | 8 passed (10)",
+        "failLines": [
+          "× ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退必须判 `!r.shouldPoll` 8ms",
+          "× ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok` 1ms",
+          "FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退必须判 `!r.shouldPoll`",
+          "AssertionError: openLogin 不再按 shouldPoll 早退 —— 概念又被粘回去了: expected 'const openLogin = async (): Promise<v…' to match /if\\s*\\(\\s*!r\\.shouldPoll\\s*\\)\\s*return/",
+          "FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok`",
+          "AssertionError: openLogin 仍在用 ok 判是否轮询 —— 没解耦: expected 'const openLogin = async (): Promise<v…' not to match /if\\s*\\(\\s*!r\\.ok\\s*\\)\\s*return/"
+        ],
+        "atLines": [
+          "❯ tests/unit/content/panel/entry-wiring.test.ts:150:65",
+          "❯ tests/unit/content/panel/entry-wiring.test.ts:163:59"
+        ],
+        "rawTail": "              \n              void loadOnce();\n            } else if (outcome.kind === 'timeout') {\n              controller.showNotice(\n                '等了 3 分钟还没检测到新账号 —— 扫码成功了吗？也可以点「重新登录」再试一次',\n                false,\n              );\n            }\n            \n          },\n        },\n        before,\n      );\"\n\n ❯ tests/unit/content/panel/entry-wiring.test.ts:163:59\n    161|      */\n    162|     const codeOnly = openLoginCodeOnly();\n    163|     expect(codeOnly, 'openLogin 仍在用 ok 判是否轮询 —— 没解耦').not.t…\n       |                                                           ^\n    164|       /if\\s*\\(\\s*!r\\.ok\\s*\\)\\s*return/,\n    165|     );\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯\n\n"
+      },
+      "restored": true,
+      "restoredSha": "F76CEF6CF87B9818B290FD7C7C7A695697B5CC88B3D270EB6DF052125C0BFD74",
+      "baselineSha": "F76CEF6CF87B9818B290FD7C7C7A695697B5CC88B3D270EB6DF052125C0BFD74"
+    },
+    {
+      "id": "RV4: 两行并存（if (!r.ok) return 在前，shouldPoll 在后）",
+      "file": "entrypoints/content-panel.content.ts",
+      "find": "      if (!r.shouldPoll) return;",
+      "replaceWith": "      if (!r.ok) return;\n      if (!r.shouldPoll) return;",
+      "testFiles": [
+        "tests/unit/content/panel/entry-wiring.test.ts"
+      ],
+      "mutatedSha": "E04D0F533F18E49593A400888D621931CDD7820F3B3E87C1D1AB636DEEE94D13",
+      "result": {
+        "noTests": false,
+        "syntaxError": false,
+        "totals": "Tests  1 failed | 9 passed (10)",
+        "failLines": [
+          "× ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok` 9ms",
+          "FAIL  tests/unit/content/panel/entry-wiring.test.ts > ★★★ 跳过轮询的判据是 shouldPoll，不是 ok（task-25） > ★★★ openLogin 的早退**不许**再判 `!r.ok`",
+          "AssertionError: openLogin 仍在用 ok 判是否轮询 —— 没解耦: expected 'const openLogin = async (): Promise<v…' not to match /if\\s*\\(\\s*!r\\.ok\\s*\\)\\s*return/"
+        ],
+        "atLines": [
+          "❯ tests/unit/content/panel/entry-wiring.test.ts:163:59"
+        ],
+        "rawTail": "              \n              void loadOnce();\n            } else if (outcome.kind === 'timeout') {\n              controller.showNotice(\n                '等了 3 分钟还没检测到新账号 —— 扫码成功了吗？也可以点「重新登录」再试一次',\n                false,\n              );\n            }\n            \n          },\n        },\n        before,\n      );\"\n\n ❯ tests/unit/content/panel/entry-wiring.test.ts:163:59\n    161|      */\n    162|     const codeOnly = openLoginCodeOnly();\n    163|     expect(codeOnly, 'openLogin 仍在用 ok 判是否轮询 —— 没解耦').not.t…\n       |                                                           ^\n    164|       /if\\s*\\(\\s*!r\\.ok\\s*\\)\\s*return/,\n    165|     );\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯\n\n"
+      },
+      "restored": true,
+      "restoredSha": "F76CEF6CF87B9818B290FD7C7C7A695697B5CC88B3D270EB6DF052125C0BFD74",
+      "baselineSha": "F76CEF6CF87B9818B290FD7C7C7A695697B5CC88B3D270EB6DF052125C0BFD74"
+    },
+    {
+      "id": "RV5: panel.ts 的 TTL 分支 if (ok) → if (!ok)（验 notice TTL 归谁管）",
+      "file": "src/content/panel/panel.ts",
+      "find": "    if (ok) {\n      noticeTimer = setTimeout(",
+      "replaceWith": "    if (!ok) {\n      noticeTimer = setTimeout(",
+      "testFiles": [
+        "tests/unit/content/panel-notice.test.ts"
+      ],
+      "mutatedSha": "7AB8A32C53DAFFB967916A087D32A7C1CC6CFED5A628C9A677284C85DFBFAAD0",
+      "result": {
+        "noTests": false,
+        "syntaxError": false,
+        "totals": "Tests  2 failed | 6 passed (8)",
+        "failLines": [
+          "× ★★ 成功类提示 5 秒后自动消失 > ★★ showNotice(ok=true) → 5 秒后节点被移除 45ms",
+          "× ★★ 失败类提示**不**自动消失 > ★★ showNotice(ok=false) → 10 秒后仍在 5ms",
+          "FAIL  tests/unit/content/panel-notice.test.ts > ★★ 成功类提示 5 秒后自动消失 > ★★ showNotice(ok=true) → 5 秒后节点被移除",
+          "AssertionError: 5 秒后应该自动消失: expected <p class=\"panel-notice\"></p> to be null",
+          "FAIL  tests/unit/content/panel-notice.test.ts > ★★ 失败类提示**不**自动消失 > ★★ showNotice(ok=false) → 10 秒后仍在",
+          "AssertionError: 失败提示不该自动消失: expected null not to be null"
+        ],
+        "atLines": [
+          "❯ tests/unit/content/panel-notice.test.ts:88:36",
+          "❯ tests/unit/content/panel-notice.test.ts:102:40"
+        ],
+        "rawTail": "</p>\n\n ❯ tests/unit/content/panel-notice.test.ts:88:36\n     86| \n     87|     vi.advanceTimersByTime(2);\n     88|     expect(notice(), '5 秒后应该自动消失').toBeNull();\n       |                                    ^\n     89|   });\n     90| });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯\n\n FAIL  tests/unit/content/panel-notice.test.ts > ★★ 失败类提示**不**自动消失 > ★★ showNotice(ok=false) → 10 秒后仍在\nAssertionError: 失败提示不该自动消失: expected null not to be null\n ❯ tests/unit/content/panel-notice.test.ts:102:40\n    100| \n    101|     vi.advanceTimersByTime(60_000);\n    102|     expect(notice(), '失败提示不该自动消失').not.toBeNull();\n       |                                        ^\n    103|     expect(notice()?.textContent).toContain('InPrivate');\n    104|   });\n\n⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯\n\n"
+      },
+      "restored": true,
+      "restoredSha": "B006A8934A93AB5AF4AF63AEA5FC592FFCE6131553C090B757E7F2B3B910BA4F",
+      "baselineSha": "B006A8934A93AB5AF4AF63AEA5FC592FFCE6131553C090B757E7F2B3B910BA4F"
+    },
+    {
+      "id": "RV6: 源码注释里塞入被测过的旧文案（已打开 / 再点一次）",
+      "file": "src/content/panel/login-outcome.ts",
+      "find": "export function describeLoginOutcome(",
+      "replaceWith": "/* 假注释：扫码窗口已打开，请用手机扫码。成功后这里会自动更新。再点一次 */\nexport function describeLoginOutcome(",
+      "testFiles": [
+        "tests/unit/content/panel-login-outcome.test.ts"
+      ],
+      "mutatedSha": "095D0FBFB1E0CFBAC972D5F05F4F472C08081F6E41363A304939698F4384CD4A",
+      "result": {
+        "noTests": false,
+        "syntaxError": false,
+        "totals": "Tests  24 passed (24)",
+        "failLines": [],
+        "atLines": [],
+        "rawTail": "\n RUN  v2.1.9 D:/Projects/Pluma\n\n ✓ tests/unit/content/panel-login-outcome.test.ts (24 tests) 10ms\n\n Test Files  1 passed (1)\n      Tests  24 passed (24)\n   Start at  17:29:03\n   Duration  686ms (transform 71ms, setup 0ms, collect 93ms, tests 10ms, environment 0ms, prepare 219ms)\n\n"
+      },
+      "restored": true,
+      "restoredSha": "71B2C1B3C2B6A3BA82D6495C8BAA9D741D8322BA959A3FA5B9B87B037DD8FBAB",
+      "baselineSha": "71B2C1B3C2B6A3BA82D6495C8BAA9D741D8322BA959A3FA5B9B87B037DD8FBAB"
+    },
+    {
+      "id": "RV8: 守卫被 skip + 调用点改坏（证明 RV2 的红来自新守卫）",
+      "result": {
+        "noTests": false,
+        "syntaxError": false,
+        "totals": "Tests  8 passed | 2 skipped (10)",
+        "failLines": [],
+        "atLines": [],
+        "rawTail": "\n RUN  v2.1.9 D:/Projects/Pluma\n\n ✓ tests/unit/content/panel/entry-wiring.test.ts (10 tests | 2 skipped) 6ms\n\n Test Files  1 passed (1)\n      Tests  8 passed | 2 skipped (10)\n   Start at  17:29:06\n   Duration  663ms (transform 61ms, setup 0ms, collect 66ms, tests 6ms, environment 0ms, prepare 240ms)\n\n"
+      },
+      "restored": true
+    }
+  ]
+}

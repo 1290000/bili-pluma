@@ -1,0 +1,25 @@
+﻿⚠️  tests/unit/content/main-world-pgc.test.ts · loadPlayviewPredicate#0 切不出来：模板里没找到 openLogin（切法失效）
+🔴 tests/unit/content/panel/incognito-panel-notice.test.ts · buildProbe#0
+      ok             hint= 0 sendMessage=2
+      chrome-gone    hint= 0 sendMessage=1
+      runtime-gone   hint= 0 sendMessage=1
+      id-undefined   hint= 0 sendMessage=1
+      id-null        hint= 0 sendMessage=1
+🔴 tests/unit/content/panel/orphan-guard.test.ts · buildProbe#0
+      ok             hint= 0 sendMessage=2
+      chrome-gone    hint= 0 sendMessage=1
+      runtime-gone   hint= 0 sendMessage=1
+      id-undefined   hint= 0 sendMessage=1
+      id-null        hint= 0 sendMessage=1
+🔴 tests/unit/content/panel/orphan-hint.test.ts · buildProbe#0
+      ok             hint= 0 sendMessage=2
+      chrome-gone    hint= 0 sendMessage=1
+      runtime-gone   hint= 0 sendMessage=1
+      id-undefined   hint= 0 sendMessage=1
+      id-null        hint= 0 sendMessage=1
+🔴 tests/unit/content/panel/orphan-hint.test.ts · buildFallbackProbe#0
+      ok             hint= 0 sendMessage=2
+      chrome-gone    hint= 0 sendMessage=1
+      runtime-gone   hint= 0 sendMessage=1
+      id-undefined   hint= 0 sendMessage=1
+      id-null        hint= 0 sendMessage=1

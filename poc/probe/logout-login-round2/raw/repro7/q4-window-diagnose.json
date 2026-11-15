@@ -1,0 +1,23 @@
+{
+  "steps": [
+    "[2026-11-12T08:12:44.820Z] === 窗口诊断：windows.create({incognito:true}) 到底开出什么 ===",
+    "[2026-11-12T08:12:44.825Z] 独立 profile: D:\\Projects\\Pluma\\.tmp\\investigator-q4\\profile-window-diag",
+    "[2026-11-12T08:12:44.826Z] ⛔ 用户浏览器零接触",
+    "[2026-11-12T08:12:45.606Z]   pid=34668",
+    "[2026-11-12T08:12:46.496Z] CDP 就绪",
+    "[2026-11-12T08:12:52.733Z]   tabs: [{\"type\":\"background_page\",\"url\":\"chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold/_generated_backgro\"},{\"type\":\"background_page\",\"url\":\"chrome-extension://ncbjelpjchkpbikbpkcchkhkblodoama/_generated_backgro\"},{\"type\":\"background_page\",\"url\":\"chrome-extension://fikbjbembnmfhppjfnmfkahdhfohhjmg/_generated_backgro\"},{\"type\":\"background_page\",\"url\":\"chrome-extension://ihmafllikibpmigkcoadcmckbfhibefp/_generated_backgro\"},{\"type\":\"page\",\"url\":\"edge://extensions/\"},{\"type\":\"service_worker\",\"url\":\"chrome-extension://nkeimhogjdpnpccoofpliimaahmaaome/thunk.js\"},{\"type\":\"service_worker\",\"url\":\"chrome-extension://ndcpkimcihhghdcddljkfmmjccdmcmof/background.rollup.\"},{\"type\":\"service_worker\",\"url\":\"chrome-extension://admccjkmockfdflocgggjfgdacdodkdf/background.js\"},{\"type\":\"service_worker\",\"url\":\"chrome-extension://fgmggjhdbgaclcbeaopajghpnhgkmfnf/background.js\"}]",
+    "[2026-11-12T08:12:52.733Z]   edge://extensions 已加载",
+    "[2026-11-12T08:12:52.767Z]   打开权限: {\"incognitoAccess\":{\"isActive\":true,\"isEnabled\":true}}",
+    "[2026-11-12T08:12:52.768Z]   --- OS 层（本 profile 全部带标题窗口）---",
+    "[2026-11-12T08:12:56.862Z]   开窗前: [\"34668|扩展 - 用户配置 1 - Microsoft​ Edge\"]",
+    "[2026-11-12T08:12:56.872Z]   API 开窗前 windows.getAll: [{\"id\":882589937,\"incognito\":false,\"type\":\"normal\",\"state\":\"normal\",\"tabs\":0}]",
+    "[2026-11-12T08:12:57.003Z]   windows.create(incognito:true): {\"created\":null}",
+    "[2026-11-12T08:13:07.474Z]   开窗后: [\"34668|首页 | Tampermonkey 和另外 3 个页面 - 个人 - Microsoft​ Edge\"]",
+    "[2026-11-12T08:13:07.484Z]   API 开窗后 windows.getAll: [{\"id\":882589937,\"incognito\":false,\"type\":\"normal\",\"state\":\"normal\",\"tabs\":0}]",
+    "[2026-11-12T08:13:17.673Z]   +6s 再读: [\"34668|首页 | Tampermonkey 和另外 3 个页面 - 个人 - Microsoft​ Edge\"]",
+    "[2026-11-12T08:13:17.787Z]   对照 incognito:false: {\"created\":{\"id\":882590076,\"incognito\":false,\"type\":\"popup\"}}",
+    "[2026-11-12T08:13:25.262Z]   对照后 OS 层: [\"34668|about:blank\"]",
+    "[2026-11-12T08:13:25.264Z]   对照后 windows.getAll: [{\"id\":882589937,\"incognito\":false,\"type\":\"normal\",\"state\":\"normal\",\"tabs\":0},{\"id\":882590076,\"incognito\":false,\"type\":\"popup\",\"state\":\"normal\",\"tabs\":0}]",
+    "[2026-11-12T08:13:25.275Z] 结果 -> raw/repro7/q4-window-diagnose.json"
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "method": "B: manifest incognito:spanning",
+  "sitValues": [
+    "false"
+  ],
+  "e2": {
+    "before": [
+      "false"
+    ],
+    "after": [
+      "false"
+    ],
+    "dropped": true
+  },
+  "e3": {
+    "after60s": [
+      "false"
+    ],
+    "dropped": true
+  },
+  "finalPref": {
+    "id": "abpjidapfcjnbngfggmjhhhpimednopn"
+  },
+  "note": "incognito:spanning 是 manifest 声明，不是用户点 UI 开的开关。结论只能说明 Edge 对 spanning 扩展的态度，不能直接等同于手动开关的权限。"
+}

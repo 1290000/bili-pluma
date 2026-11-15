@@ -27,6 +27,8 @@ const ACTS = {
   toggleStreamingIdentity: () => undefined,
   feedAccountEnabled: false,
   toggleFeedAccount: () => undefined,
+  /** 本用例不关心重取时的身份来源（`undefined` = 还没读到，走既有判据） */
+  currentStreamingIdentity: () => undefined,
 } as const;
 
 /** 最小可用模型（提示条测试不关心内容） */

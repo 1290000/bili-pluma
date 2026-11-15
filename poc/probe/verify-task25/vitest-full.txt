@@ -1,0 +1,430 @@
+﻿node : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-no
+de-api-deprecated for more details.[39m
+所在位置 行:1 字符: 129
++ ... g]::new($false); node node_modules\vitest\vitest.mjs run 2>&1 | Out-F ...
++                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v2.1.9 D:/Projects/Pluma
+
+ ✓ tests/unit/content/panel-open-reload.test.ts (16 tests) 22ms
+ ✓ tests/unit/content/panel-pin.test.ts (18 tests) 96ms
+ ✓ tests/unit/platform/diag-facts-trace.test.ts (9 tests) 16ms
+ ✓ tests/unit/content/pgc-three-layer-chain.test.ts (13 tests) 20ms
+ ✓ tests/unit/platform/collect-injected-view.test.ts (17 tests) 31ms
+ ✓ tests/unit/content/panel-quality-page-identity.test.ts (11 tests) 21ms
+ ✓ tests/unit/content/panel-data.test.ts (28 tests) 22ms
+ ✓ tests/unit/content/panel-page-channel.test.ts (13 tests) 232ms
+ ✓ tests/unit/content/panel-write.test.ts (9 tests) 217ms
+ ✓ tests/unit/content/panel/refresh-identity.test.ts (4 tests) 300ms
+ ❯ tests/unit/content/panel-diag-wiring.test.ts (11 tests | 5 failed) 296ms
+   × ★ 诊断浮层接线 > 数据到了之后画出自检行与日志 18ms
+     → expected '画质净化显示账号正在采集诊断信息…' to contain 'InPrivate 权限'
+   × ★ 诊断浮层接线 > ★ 点返回弹栈，回到净化 Tab 18ms
+     → expected 1 to be +0 // Object.is equality
+   × ★ 诊断浮层接线 > ok===true 的行带 ok class（绿），ok===false 带 bad（红） 25ms
+     → expected null not to be null
+   × ★ 诊断浮层接线 > ★★ 第二次进入诊断浮层会**重新**取数（不是只拉一次） 18ms
+     → expected "spy" to be called 2 times, but got 1 times
+   × ★ 诊断浮层接线 > ★ 点「⟳」刷新按钮会重新取数 20ms
+     → 没找到刷新按钮: expected null not to be null
+ ❯ tests/unit/content/panel/silent-controls.test.ts (12 tests | 1 failed) 305ms
+   × 🟠 静默点 4：诊断采集失败不能只给空表 > ★★★ 采集抛错 → 有文字说明（旧实现渲染一张空表） 47ms
+     → 诊断采集失败却没有任何说明: expected null not to be null
+ ✓ tests/unit/content/panel-tabs.test.ts (65 tests) 326ms
+ ✓ tests/unit/content/panel/account-logout-notice.test.ts (11 tests) 292ms
+ ✓ tests/unit/content/main-world-progress.test.ts (13 tests) 1272ms
+ ✓ tests/unit/content/main-world-real.test.ts (44 tests) 1420ms
+ ✓ tests/unit/content/panel-diagnostics-export.test.ts (13 tests) 42ms
+ ✓ tests/unit/content/pgc-proxy-off.test.ts (24 tests) 29ms
+ ✓ tests/unit/content/panel/logout-notice-contract.test.ts (15 tests) 148ms
+ ✓ tests/unit/content/feed-hide.test.ts (23 tests) 157ms
+ ✓ tests/unit/content/pgc-proxy-off-sync-read.test.ts (15 tests) 20ms
+ ✓ tests/unit/platform/collect-proxy-row-consistency.test.ts (10 tests) 20ms
+ ✓ tests/unit/core/feed-identity.test.ts (18 tests) 16ms
+ ✓ tests/unit/content/main-world-pgc.test.ts (55 tests) 3985ms
+   ✓ ssr-playinfo 带 pgcPatched 标记 > 注入成功后 pgcPatched === true，且上报的 data 里已经是完整流 1619ms
+ ✓ tests/unit/content/main-world-playview.test.ts (6 tests) 438ms
+ ✓ tests/unit/background/diag-handler.test.ts (32 tests) 4119ms
+   ✓ ★ echo 回显：绕开 storage 的调试通道（2026-11-10 第八轮） > ★★ 超时 → TIMEOUT（第三种来源，也区别于 ERR） 811ms
+   ✓ ★ echo 回显：绕开 storage 的调试通道（2026-11-10 第八轮） > ★ 四种状态在同一条 echo 里互不混淆 815ms
+   ✓ ★ 超时竞速（2026-11-10 第六轮，真机日志定位） > ★★ 永不 resolve 的 API → 超时后降级为 null，并写日志 807ms
+   ✓ ★ 超时竞速（2026-11-10 第六轮，真机日志定位） > ★★ 四项全部永不 resolve → 仍然返回（不挂住） 814ms
+   ✓ ★ 超时竞速（2026-11-10 第六轮，真机日志定位） > 超时项的日志带项名，四项可分别定位 822ms
+ ✓ tests/unit/platform/diag-queue-hang.test.ts (9 tests) 28ms
+ ✓ tests/unit/platform/collect-same-identity.test.ts (8 tests) 19ms
+ ✓ tests/unit/platform/tip-for.test.ts (12 tests) 15ms
+ ✓ tests/unit/content/panel/feed-account-effective-state.test.ts (7 tests) 90ms
+ ✓ tests/unit/content/need-incognito-copy.test.ts (10 tests) 294ms
+ ✓ tests/unit/content/panel-account-mapping.test.ts (11 tests) 4147ms
+   ✓ ★★★ 端到端：走真实消息路径 fetchPanelReplies → 映射 → 渲染 > ★★★ 真实 account/summary 应答 → 账号 Tab 不出现「凭据异常」 2020ms
+   ✓ ★★★ 端到端：走真实消息路径 fetchPanelReplies → 映射 → 渲染 > ★★★ 反向：真实的 healthy:false 走完整路径仍然报异常 2004ms
+ ✓ tests/unit/content/panel-mount.test.ts (9 tests) 380ms
+ ✓ tests/unit/content/panel/display-text-removed.test.ts (16 tests) 127ms
+ ✓ tests/unit/core/playinfo/summary-view.test.ts (62 tests) 55ms
+ ✓ tests/unit/core/ui/popup-state.test.ts (61 tests) 38ms
+ ✓ tests/unit/content/panel-login-outcome.test.ts (24 tests) 26ms
+ ✓ tests/unit/content/badge-content.test.ts (62 tests) 45ms
+ ✓ tests/unit/content/pgc-cache-inject.test.ts (67 tests) 41ms
+ ✓ tests/unit/content/main-world-pure.test.ts (17 tests) 751ms
+ ✓ tests/unit/scripts/check-messages-inline-union.test.ts (27 tests) 24ms
+ ✓ tests/unit/content/pgc-reload-plan.test.ts (31 tests) 22ms
+ ✓ tests/unit/background/page-activate-self.test.ts (16 tests) 20ms
+ ✓ tests/unit/platform/http/dnr-tab-identity-cross.test.ts (12 tests) 31ms
+ ✓ tests/unit/content/page-state-same-identity.test.ts (16 tests) 18ms
+ ✓ tests/unit/content/page-state.test.ts (23 tests) 24ms
+ ✓ tests/unit/content/login-poller.test.ts (10 tests) 17ms
+ ✓ tests/unit/core/playinfo/quality-anchor-and-id-gain.test.ts (19 tests) 17ms
+ ✓ tests/unit/content/need-incognito-watch.test.ts (9 tests) 17ms
+ ✓ tests/unit/content/panel/entry-wiring.test.ts (10 tests) 14ms
+ ✓ tests/unit/platform/http/dnr-tab-merge.test.ts (15 tests) 24ms
+ ✓ tests/unit/background/account-remove-keeps-toggle.test.ts (11 tests) 19ms
+ ✓ tests/unit/content/panel/account-card-consistency.test.ts (6 tests) 83ms
+ ✓ tests/unit/content/content-entry.test.ts (14 tests) 17ms
+ ✓ tests/unit/core/playinfo/parse.test.ts (28 tests) 25ms
+ ✓ tests/unit/platform/panel-entry-store.test.ts (8 tests) 25ms
+ ✓ tests/unit/content/badge-render-mount.test.ts (5 tests) 239ms
+ ✓ tests/unit/shared/video-page.test.ts (38 tests) 29ms
+ ✓ tests/unit/content/panel/proxy-usable-wiring.test.ts (5 tests) 101ms
+stderr | tests/unit/platform/http/dnr-rule-id.test.ts > DNR 路径规则 ID —— 止式分配（B-05） > 不在白名单里的路径被丢弃（不产生 ID 为 -1 的规则）
+[dnr] 路径不在白名单里，无法分配规则 ID：/x/player/playurl/（已忽略）
+
+ ✓ tests/unit/platform/http/dnr-rule-id.test.ts (7 tests) 15ms
+ ✓ tests/unit/content/panel/proxy-usable.test.ts (9 tests) 123ms
+ ✓ tests/unit/platform/diag-trace.test.ts (10 tests) 20ms
+ ✓ tests/unit/platform/background-play-page.test.ts (14 tests) 31ms
+ ✓ tests/unit/content/main-world-codec.test.ts (25 tests) 1087ms
+ ✓ tests/unit/core/identity/router.test.ts (36 tests) 23ms
+ ✓ tests/unit/shared/streaming-identity.test.ts (18 tests) 21ms
+ ✓ tests/unit/core/playinfo/rank.test.ts (17 tests) 20ms
+ ✓ tests/unit/content/main-world-exports.test.ts (9 tests) 285ms
+ ✓ tests/unit/platform/primary-profile-store.test.ts (20 tests) 47ms
+ ✓ tests/unit/core/auth/account-info.test.ts (25 tests) 20ms
+ ✓ tests/unit/content/panel-notice.test.ts (8 tests) 134ms
+ ✓ tests/unit/content/pgc-gate-observability.test.ts (7 tests) 12ms
+ ✓ tests/unit/background/login-heartbeat-wiring.test.ts (8 tests) 11ms
+ ✓ tests/unit/content/hello-timing-sync-value.test.ts (9 tests) 15ms
+ ✓ tests/unit/background/login-heartbeat-probe.test.ts (16 tests) 852ms
+   ✓ openLoginWindow：第二次点击不再静默 > 心跳过期后照常开窗（关窗后必须还能重新打开） 419ms
+   ✓ openLoginWindow：第二次点击不再静默 > 无痕实例不因心跳而跳过建窗（否则首次点击就开不出窗口） 407ms
+ ✓ tests/unit/content/hello-timing.test.ts (10 tests) 18ms
+ ✓ tests/unit/core/ui/page-snapshot.test.ts (11 tests) 17ms
+ ✓ tests/unit/content/pgc-sync-cache-expected-ms.test.ts (9 tests) 10ms
+ ✓ tests/unit/platform/http/dnr-path-rule-cleanup.test.ts (6 tests) 16ms
+ ✓ tests/unit/background/need-incognito-create-diag.test.ts (4 tests) 10ms
+ ✓ tests/unit/platform/http/dnr-switch-identity.test.ts (9 tests) 17ms
+ ✓ tests/unit/content/rewrite-gate.test.ts (13 tests) 17ms
+ ✓ tests/unit/core/describe-health.test.ts (14 tests) 14ms
+ ✓ tests/unit/core/ui/popup-state-unknown-reason.test.ts (7 tests) 13ms
+ ✓ tests/unit/content/pgc-reload-guard-reenable.test.ts (10 tests) 13ms
+ ✓ tests/unit/core/vault/vault.test.ts (16 tests) 82ms
+ ✓ tests/unit/platform/rule-plan.test.ts (10 tests) 33ms
+ ✓ tests/unit/shared/primary-card.test.ts (15 tests) 17ms
+ ✓ tests/unit/content/pgc-truncation-reconcile.test.ts (26 tests) 823ms
+   ✓ PGC 截断判据对账（O4） > 三份实现在共同场景下结论一致 > 完整 dash：ISOLATED 与主世界两份结论相同 321ms
+ ✓ tests/unit/core/playinfo/pgc-merge.test.ts (17 tests) 17ms
+ ✓ tests/unit/content/pgc-entry-wiring-c.test.ts (9 tests) 12ms
+ ✓ tests/unit/content/badge-input.test.ts (11 tests) 13ms
+ ✓ tests/unit/content/pgc-cache-entry-wiring.test.ts (4 tests) 10ms
+ ✓ tests/unit/content/pgc-fetch.test.ts (12 tests) 19ms
+ ✓ tests/unit/core/wbi/signer.test.ts (32 tests) 29ms
+ ✓ tests/unit/content/pgc-guard-outcome.test.ts (12 tests) 15ms
+ ✓ tests/unit/core/playinfo/stats.test.ts (14 tests) 18ms
+ ✓ tests/unit/content/ssr-gate.test.ts (10 tests) 14ms
+ ✓ tests/unit/core/vault/crypto.test.ts (13 tests) 53ms
+ ✓ tests/unit/core/auth/qrcode.test.ts (12 tests) 17ms
+ ✓ tests/unit/core/ui/streaming-pill.test.ts (9 tests) 12ms
+ ✓ tests/unit/content/pgc-cache-ttl.test.ts (4 tests) 9ms
+ ✓ tests/unit/content/badge-state.test.ts (6 tests) 14ms
+ ✓ tests/unit/content/quality-watch.test.ts (6 tests) 21ms
+ ✓ tests/unit/core/auth/health.test.ts (10 tests) 12ms
+ ✓ tests/unit/content/diagnostic-text.test.ts (13 tests) 14ms
+ ✓ tests/unit/content/diagnostic-routes.test.ts (17 tests) 14ms
+ ✓ tests/unit/shared/cookie.test.ts (16 tests) 14ms
+ ✓ tests/unit/core/playinfo/pgc-duration.test.ts (9 tests) 12ms
+ ✓ tests/unit/platform/http/playurl.test.ts (8 tests) 12ms
+ ✓ tests/unit/platform/qr/qrcode.test.ts (8 tests) 105ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 6 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > 数据到了之后画出自检行与日志
+AssertionError: expected '画质净化显示账号正在采集诊断信息…' to contain 'InPrivate 权限'
+
+Expected: "InPrivate 权限"
+Received: "画质净化显示账号正在采集诊断信息…"
+
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:193:32
+    191|     await flush();
+    192| 
+    193|     expect(c.root.textContent).toContain('InPrivate 权限');
+       |                                ^
+    194|     expect(c.root.textContent).toContain('已允许');
+    195|     // 日志里的 panel/page-state 要出现（阶段 3 的目的之一）
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > ★ 点返回弹栈，回到净化 Tab
+AssertionError: expected 1 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:212:23
+    210|     c.root.querySelector('.sub-back')?.dispatchEvent(new MouseEvent('c…
+    211|     await flush();
+    212|     expect(c.depth()).toBe(0);
+       |                       ^
+    213|   });
+    214| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > ok===true 的行带 ok class（绿），ok===false 带 bad（红）
+AssertionError: expected null not to be null
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:229:54
+    227|     await flush();
+    228| 
+    229|     expect(c.root.querySelector('.diag-row.ok')).not.toBeNull();
+       |                                                      ^
+    230|     expect(c.root.querySelector('.diag-row.bad')).not.toBeNull();
+    231|     // 中性行既不是 ok 也不是 bad
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > ★★ 第二次进入诊断浮层会**重新**取数（不是只拉一次）
+AssertionError: expected "spy" to be called 2 times, but got 1 times
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:268:32
+    266| 
+    267|     // ★ 必须第二次也拉了
+    268|     expect(mocks.collectFacts).toHaveBeenCalledTimes(2);
+       |                                ^
+    269|   });
+    270| 
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯
+
+ FAIL  tests/unit/content/panel-diag-wiring.test.ts > ★ 诊断浮层接线 > ★ 点「⟳」刷新按钮会重新取数
+AssertionError: 没找到刷新按钮: expected null not to be null
+ ❯ tests/unit/content/panel-diag-wiring.test.ts:281:36
+    279|     // 找刷新按钮（aria-label="重新采集"）
+    280|     const refresh = c.root.querySelector('[aria-label="重新采集"]');
+    281|     expect(refresh, '没找到刷新按钮').not.toBeNull();
+       |                                    ^
+    282|     refresh?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    283|     await flush();
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯
+
+ FAIL  tests/unit/content/panel/silent-controls.test.ts > 🟠 静默点 4：诊断采集失败不能只给空表 > ★★★ 采集抛错 → 有文字说明（旧实现渲染一张空表）
+AssertionError: 诊断采集失败却没有任何说明: expected null not to be null
+ ❯ tests/unit/content/panel/silent-controls.test.ts:414:43
+    412|     await flush();
+    413| 
+    414|     expect(notice(), '诊断采集失败却没有任何说明').not.toBeNull();
+       |                                           ^
+    415|     expect(notice()?.textContent).toContain('诊断');
+    416|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 11 unhandled errors during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+ ❯ processTicksAndRejections node:internal/process/task_queues:104:5
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点「诊断」进入二级浮层，并懒加载 collectFacts". It might mean one of the following
+:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★ collectFacts 收到的是 pageView: null，不是 undefined". It might mean one
+ of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "数据到了之后画出自检行与日志". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点返回弹栈，回到净化 Tab". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "ok===true 的行带 ok class（绿），ok===false 带 bad（红）". It might mean one of
+ the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+ ❯ runNextTicks node:internal/process/task_queues:65:5
+ ❯ processTimers node:internal/timers:615:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★ 第二次进入诊断浮层会**重新**取数（不是只拉一次）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 点「⟳」刷新按钮会重新取数". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+ ❯ runNextTicks node:internal/process/task_queues:65:5
+ ❯ processTimers node:internal/timers:615:9
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "多次刷新不会并发堆积（in-flight 去重）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+
+This error originated in "tests/unit/content/panel-diag-wiring.test.ts" test file. It doesn't mean the error was thrown
+ inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 进净化 Tab 才懒读角标开关". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+
+This error originated in "tests/unit/content/panel/silent-controls.test.ts" test file. It doesn't mean the error was th
+rown inside the file itself, but while it was running.
+The latest test that might've caused the error is "★★★ 采集抛错 → 有文字说明（旧实现渲染一张空表）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+ReferenceError: probeFailedBase is not defined
+ ❯ src/content/panel/panel.ts:646:57
+    645|          * 否则导出里会出现"facts 全空 + logs 空数组但 ok: true"这种自…
+    646|          */
+    647|         diagData = { rows: [], logs: [], logsMeta: { ...probeFailedBas…
+       |                                             ^
+    648|         diagTrace = null;
+    649|         diagEcho = null;
+
+This error originated in "tests/unit/content/panel/silent-controls.test.ts" test file. It doesn't mean the error was th
+rown inside the file itself, but while it was running.
+The latest test that might've caused the error is "★ 采集成功时**不**弹失败提示（不误报）". It might mean one of the following:
+- The error was thrown, while Vitest was running this test.
+- If the error occurred after the test had been completed, this was the last documented test before it was thrown.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+ Test Files  2 failed | 109 passed (111)
+      Tests  6 failed | 1827 passed (1833)
+     Errors  11 errors
+   Start at  17:26:35
+   Duration  14.26s (transform 12.34s, setup 0ms, collect 31.62s, tests 24.96s, environment 117.68s, prepare 27.07s)
+

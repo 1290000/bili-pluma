@@ -1,0 +1,12 @@
+﻿
+=== buildProbe ===
+  controller 实参       : controllerStub
+  isOrphanHintShown 实参: () => true
+  → controller 是 null  : false
+  → isOrphanHintShown 恒值: true 
+
+=== buildFallbackProbe ===
+  controller 实参       : null
+  isOrphanHintShown 实参: () => shown.flag
+  → controller 是 null  : true
+  → isOrphanHintShown 恒值: true 

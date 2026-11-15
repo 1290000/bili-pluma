@@ -1,0 +1,101 @@
+﻿node : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-no
+de-api-deprecated for more details.[39m
+所在位置 行:1 字符: 129
++ ... ew($false); node node_modules\vitest\vitest.mjs run --config poc\prob ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v2.1.9 D:/Projects/Pluma/poc/probe/verify-task26
+
+stderr | err-whitelist.test.ts > ★ 判据 3：err 白名单端到端（导出 JSON 里不许出现秘密） > ★★ 非 Error 对象 toString 带 SESSDATA → 导出 JSON 不含 SE
+SSDATA/deadbeef
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 3：err 白名单端到端（导出 JSON 里不许出现秘密） > ★★ Error 带 cause（原文藏在 cause 里）→ 导出 JSON 不含 cause 
+里的秘密
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 3：err 白名单端到端（导出 JSON 里不许出现秘密） > ★ err 只允许固定枚举值（不是自由字符串）
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 4：limit 必须来自 DIAG_LIMIT（这里是 7，不是 30） > ★★ 导出 JSON 的 logsMeta.limit 跟着常量走
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 4：limit 必须来自 DIAG_LIMIT（这里是 7，不是 30） > ★★ 面板标题里的条数也来自同一个值
+Not implemented: navigation to another Document
+
+stderr | err-whitelist.test.ts > ★ 判据 4：limit 必须来自 DIAG_LIMIT（这里是 7，不是 30） > ★★ 成功态：标题显示"最近 7 条"，不是 30
+Not implemented: navigation to another Document
+
+ ❯ err-whitelist.test.ts (7 tests | 1 failed) 130ms
+   × ★ 判据 4：limit 必须来自 DIAG_LIMIT（这里是 7，不是 30） > ★★ 成功态：标题显示"最近 7 条"，不是 30 24ms
+     → 标题里的上限没跟着 DIAG_LIMIT（7）走: expected '画质净化显示账号‹ 返回诊断⟳规则齐全。自检信息InPrivate 权限已…' to match /最近 7 条/
+ ❯ render-robust.test.ts (4 tests | 1 failed) 89ms
+   × ★ 判据 5：logsMeta 缺字段不许崩渲染 > ★★★ 直接调 diagnosticsPane：data 里没有 logsMeta 时不许抛 11ms
+     → diagnosticsPane 在缺 logsMeta 时抛了：TypeError: Cannot read properties of undefined (reading 'ok'): expected TypeError: Cannot read properties of unde… to be null
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (b) 读取抛错（孤儿态）→ ok 必须为 false
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (c)【探针成功、真读失败】ok 必须为 false —— 推不出的那一格
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (d)【探针失败、真读成功】ok 必须为 false —— 反向那格
+Not implemented: navigation to another Document
+
+stderr | ok-is-real-signal.test.ts > ★ 判据 1：ok 必须是真读取信号 > ★★ (e)【真实孤儿态：两处都抛】ok=false 且 err 是白名单固定串
+Not implemented: navigation to another Document
+
+ ✓ ok-is-real-signal.test.ts (5 tests) 113ms
+stderr | ok-is-real-signal.test.ts
+Not implemented: navigation to another Document
+
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  err-whitelist.test.ts > ★ 判据 4：limit 必须来自 DIAG_LIMIT（这里是 7，不是 30） > ★★ 成功态：标题显示"最近 7 条"，不是 30
+AssertionError: 标题里的上限没跟着 DIAG_LIMIT（7）走: expected '画质净化显示账号‹ 返回诊断⟳规则齐全。自检信息InPrivate 权限已…' to match /最近 7 条/
+
+- Expected: 
+/最近 7 条/
+
++ Received: 
+"画质净化显示账号‹ 返回诊断⟳规则齐全。自检信息InPrivate 权限已允许诊断日志（最近 8 条，已达上限 7 条，更早的被挤掉了）06:13:2006:13:2006:13:2006:13:2006:13:2006:13:2006
+:13:2006:13:20导出诊断 JSON不含任何凭据面板侧取流通道的结局会记在日志里（panel/page-state · kind=…），排查时先看它。"
+
+ ❯ err-whitelist.test.ts:251:46
+    249|     // 实测当前实现写的是「诊断日志（最近 N 条[，已达上限 limit 条]）…
+    250|     // 这里不预设确切措辞：断言"出现 7 且不出现 30"。
+    251|     expect(text, '标题里的上限没跟着 DIAG_LIMIT（7）走').toMatch(/最近…
+       |                                              ^
+    252|     expect(text, '标题写死成了 30 条').not.toMatch(/最近 30 条|上限 30…
+    253|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  render-robust.test.ts > ★ 判据 5：logsMeta 缺字段不许崩渲染 > ★★★ 直接调 diagnosticsPane：data 里没有 logsMeta 时不许抛
+AssertionError: diagnosticsPane 在缺 logsMeta 时抛了：TypeError: Cannot read properties of undefined (reading 'ok'): expected
+ TypeError: Cannot read properties of unde… to be null
+
+- Expected: 
+null
+
++ Received: 
+[TypeError: Cannot read properties of undefined (reading 'ok')]
+
+ ❯ render-robust.test.ts:189:71
+    187|       threw = e;
+    188|     }
+    189|     expect(threw, `diagnosticsPane 在缺 logsMeta 时抛了：${String(thre…
+       |                                                                       ^
+    190|     expect(box, '没画出任何东西').not.toBeNull();
+    191|     expect(box?.textContent ?? '', '缺字段时连自检信息都没画出来').toC…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+ Test Files  2 failed | 1 passed (3)
+      Tests  2 failed | 14 passed (16)
+   Start at  18:06:37
+   Duration  5.97s (transform 263ms, setup 0ms, collect 626ms, tests 332ms, environment 3.92s, prepare 379ms)
+

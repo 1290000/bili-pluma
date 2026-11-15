@@ -1,0 +1,35 @@
+# ⚠️ 本文件结论已作废 —— 见 CORRECTION-2026-11-12.md
+
+> **作废原因**：下面这段分析把「`Win32_Process` 命令行匹配不到 `incognito`」
+> 当成了「无痕窗口不存在」。**该判据在 Edge 下恒为 0**（无痕窗口是同进程内另一个
+> profile/分区，不是独立进程）。真机复验：窗口**正常出现**（`S3-QR-window-exists.png`）。
+>
+> **保留原文不删**，以便下一个人看清这个坑是怎么踩的。
+
+---
+
+## 原文（作废）
+
+S3 · 扩展详情页真机读数（OS 截图 S3-extensions-page-permission.png）
+
+「在 InPrivate 中允许」  = ON（绿色）   <-- 用户已按 Lead 说的打开，确认无误
+「自动允许在此站点上访问」 = ON
+扩展已启用              = ON
+来源                    = D:\Projects\Pluma\.output\chrome-mv3
+ID                      = fgmggjhdbgaclcbeaopajghpnhgkmfnf
+「检查视图 服务工作进程（不活动）」  <-- ★ SW 已休眠
+
+判读：
+1. 权限确实已开 ==> 场景 3 的前置条件成立            [✅ 仍然成立]
+2. 说明页在权限打开后**自己关掉了**（1673239260: need-incognito.html -> edge://newtab/）
+   ==> D-2（自轮询 + 自关）**真机通过**            [✅ 仍然成立]
+3. 但点「扫码登录取流账号」后：
+   - 面板旧红提示**消失了**（说明点按钮时先 clearNotice 生效）   [✅ 仍然成立]
+   - **没有**任何新的失败提示（说明 login/open 回了 ok）        [✅ 仍然成立]
+   - **但也没有任何无痕窗口**：Get-CimInstance 查 msedge 命令行，0 个含 incognito
+     [❌ **作废** —— 判据无效，窗口其实在]
+   ==> 这就是用户原话「点击扫码登录取流账号没有反应」的**原样复现**
+     [❌ **作废** —— 未复现]
+4. 诊断页此时显示「InPrivate 权限：读取失败（background 未返回这一项）」
+   + 「诊断日志（最近 0 条）」 ==> SW 休眠后 diag/facts 未被唤醒
+     [❌ **归因作废** —— 真因是 content script 孤儿化，见 §8.4]

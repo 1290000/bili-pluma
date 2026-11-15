@@ -1,0 +1,12 @@
+﻿M3 变异：tabs.ts 的 checked 从 hasCredential && feedAccountEnabled 改回 eedAccountEnabled
+（= 重新引入 task-5 修掉的那个真机矛盾态 @e267 [disabled][checked]）
+
+结果（verbose，逐条）：
+  x  ★★★ 真机那个矛盾态：feedAccountEnabled:true + hasCredential:false       <-- 红了，正确
+  v  ★★  不再出现「勾着 + 灰」的自相矛盾组合                                  <-- 仍然绿！恒真确认
+  v  ★★  同时仍然禁用（判据不改：无凭据不可点）
+  v  ★★  下方那句提示已删除
+
+=> 结论：eed-account-effective-state.test.ts:96-113 这条用例在**它声称防御的那个 bug
+   被重新引入时仍然通过**，因此它是恒真断言（空测试），不是有效防线。
+   真正守住的是同文件 :59-71 那条（唯一变红的用例）。

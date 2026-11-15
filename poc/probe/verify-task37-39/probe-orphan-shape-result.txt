@@ -1,0 +1,4 @@
+﻿[runtime-gone] 同步调用记录 = ["stopPolling()"] | 同步抛出 = null
+[chrome-gone] 同步调用记录 = ["stopPolling()"] | 同步抛出 = null
+[send-throws] 同步调用记录 = ["stopPolling()"] | 同步抛出 = null
+[send-throws + controller 可用] 记录 = ["stopPolling()","clearNotice"]

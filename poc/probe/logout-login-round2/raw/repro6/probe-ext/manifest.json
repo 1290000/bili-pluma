@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Pluma Q4 Probe",
+  "version": "0.0.1",
+  "incognito": "spanning",
+  "permissions": [
+    "storage"
+  ],
+  "background": {
+    "service_worker": "sw.js"
+  }
+}

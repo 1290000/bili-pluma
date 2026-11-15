@@ -96,6 +96,8 @@
 | `node poc/probe/probe-pgc-path1-strict.mjs <sid> <ep>` | 只构造 `still-truncated` 裁决轮（路径 1 严格版） |
 | `node poc/probe/probe-pgc-layer2-chain.mjs <sid> <tab> <ep>` | 第二层清缓存 → 第三层的完整链路 |
 | `node poc/probe/read-diag.cjs` | 读产品自己写的 `pluma:diag` 日志 |
+| `node poc/probe/tail-diag.cjs [n]` | 同上，但只看**最后 n 条**（扫真机最近的 `probe/` / `login/open` 记录） |
+| `node poc/probe/heartbeat-check/verify-heartbeat-key.cjs` | **某 storage 键到底写没写过**（直接读 LevelDB 原始字节 + 三个对照组，只读） |
 | `node poc/probe/popup-inspect.mjs` | 读 popup 状态 |
 | `node poc/probe/probe-streaming-status.mjs <sid> <tab>` | **测 background SW 的消息通道**（见下） |
 | `node poc/probe/setup-profile.mjs` | 准备测试用 profile |
