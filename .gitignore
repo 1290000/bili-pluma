@@ -58,6 +58,10 @@ desktop.ini
 # ---------- AI 工具本地状态 ----------
 # 记忆文件是开发过程中的工作记录，属于本地产物，不入库
 .workbuddy-ai/
+# 同上：`.workbuddy/memory/` 是工作日志与长期笔记。
+# 若以后出现 `.workbuddy/skills/`（项目级 skill，要跟团队共享），
+# 在下面加 `!.workbuddy/skills/` 单独放行，别整体取消忽略。
+.workbuddy/
 .wbapp_*
 # playwright-cli 的页面快照缓存，属本地排查产物
 .playwright-cli/
