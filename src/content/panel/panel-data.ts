@@ -778,3 +778,12 @@ export async function writeUpdateAuto(enabled: boolean): Promise<UpdateStatusVie
     .catch(() => null)) as { type?: string; status?: UpdateStatusView } | null;
   return reply?.type === 'update/auto:ok' ? (reply.status ?? null) : null;
 }
+
+/** 打开更新窗口（小窗，由 background 创建）。 */
+export async function openUpdateWindow(): Promise<boolean> {
+  const reply = (await chrome.runtime.sendMessage({ type: 'update/open' }).catch(() => null)) as {
+    type?: string;
+    opened?: boolean;
+  } | null;
+  return reply?.type === 'update/open:ok' && reply.opened === true;
+}

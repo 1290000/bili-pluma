@@ -17,7 +17,7 @@ import type { ZipEntry } from '@core/update/zip';
 export interface WriteAction {
   /** 归一化相对路径，正斜杠 */
   path: string;
-  data: Uint8Array;
+  data: Uint8Array<ArrayBuffer>;
 }
 
 export interface RejectedEntry {

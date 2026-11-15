@@ -24,6 +24,7 @@ import { handleDiagFacts } from '@/src/background/handlers/diag.handler';
 import {
   handleUpdateAuto,
   handleUpdateCheck,
+  handleUpdateOpen,
   handleUpdateStatus,
   runStartupUpdateCheck,
 } from '@/src/background/handlers/update.handler';
@@ -600,6 +601,18 @@ export default defineBackground(() => {
         .catch((e: unknown) =>
           sendResponse({
             type: 'update/auto:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
+    if (type === 'update/open') {
+      handleUpdateOpen()
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'update/open:err',
             detail: e instanceof Error ? e.name : 'unknown',
           }),
         );

@@ -10,6 +10,7 @@ function view(over: Partial<UpdateStatusView> = {}): UpdateStatusView {
     currentVersion: '1.1.0',
     latestVersion: null,
     latestSizeBytes: null,
+    latestZipUrl: null,
     phase: 'idle',
     autoCheckEnabled: true,
     intervalDays: 1,
@@ -19,7 +20,13 @@ function view(over: Partial<UpdateStatusView> = {}): UpdateStatusView {
   };
 }
 
-const noop = { check: () => {}, openReleases: () => {}, toggleAuto: () => {}, busy: false };
+const noop = {
+  check: () => {},
+  openUpdate: () => {},
+  openReleases: () => {},
+  toggleAuto: () => {},
+  busy: false,
+};
 
 function text(node: HTMLElement, testid: string): string {
   return node.querySelector(`[data-testid="${testid}"]`)?.textContent ?? '';
@@ -86,6 +93,28 @@ describe('aboutTab：控件', () => {
     const btn = node.querySelector('[data-testid="update-check"]') as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(btn.textContent).toBe('检查中…');
+  });
+
+  it('没有新版时「立即更新」禁用（点了也只会拿到"没有可更新的版本"）', () => {
+    const node = aboutTab(view(), noop);
+    expect((node.querySelector('[data-testid="update-now"]') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it('有新版时「立即更新」可点，且与 Releases 是两个独立回调', () => {
+    const openUpdate = vi.fn();
+    const openReleases = vi.fn();
+    const node = aboutTab(view({ latestVersion: '1.2.0', phase: 'available' }), {
+      ...noop,
+      openUpdate,
+      openReleases,
+    });
+    const btn = node.querySelector('[data-testid="update-now"]') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    btn.click();
+    expect(openUpdate).toHaveBeenCalledTimes(1);
+    expect(openReleases).not.toHaveBeenCalled();
   });
 
   it('点 Releases 走 openReleases（与"检查更新"是两个独立动作）', () => {

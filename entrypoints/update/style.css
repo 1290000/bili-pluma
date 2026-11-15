@@ -1,0 +1,77 @@
+/* 更新窗口样式。窄、单列、只需要能读。 */
+
+body {
+  margin: 0;
+  padding: 16px 18px 20px;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+  font-size: var(--pluma-font-body, 13px);
+  line-height: 1.6;
+  color: var(--pluma-text, #222);
+  background: var(--pluma-surface, #fff);
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: var(--pluma-font-title, 15px);
+  font-weight: 500;
+}
+
+section {
+  margin: 14px 0;
+}
+
+p {
+  margin: 0 0 6px;
+}
+
+.muted {
+  color: var(--pluma-text-muted, #666);
+}
+
+.hint {
+  color: var(--pluma-text-muted, #666);
+  font-size: var(--pluma-font-caption, 12px);
+}
+
+button {
+  font: inherit;
+  padding: 6px 14px;
+  border-radius: var(--pluma-radius-control, 6px);
+  border: 1px solid var(--pluma-border, #d0d0d0);
+  background: var(--pluma-accent-bg, #eef3fb);
+  color: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button.secondary {
+  background: transparent;
+}
+
+progress {
+  width: 100%;
+  height: 6px;
+}
+
+.status {
+  min-height: 1.6em;
+  font-weight: 500;
+}
+
+.log {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  font-size: var(--pluma-font-caption, 12px);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--pluma-text-muted, #666);
+}

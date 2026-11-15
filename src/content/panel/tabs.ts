@@ -1257,6 +1257,7 @@ export function aboutTab(
   view: UpdateStatusView | null,
   actions: {
     check: () => void;
+    openUpdate: () => void;
     openReleases: () => void;
     toggleAuto: (next: boolean) => void;
     /** 正在检查（按钮置灰 + 文案改成"检查中…"） */
@@ -1317,6 +1318,23 @@ export function aboutTab(
       onToggle: actions.toggleAuto,
     }),
   );
+
+  /**
+   * 「立即更新」与「GitHub Releases」并排，但**是两件不同的事**：
+   * 前者下载并覆盖文件，后者只是跳去下载页。合成就等于替用户选了。
+   *
+   * 没有新版时禁用 —— 点了也只会拿到「没有可更新的版本」。
+   */
+  const updateBtn = el('button', 'acct-btn', '立即更新');
+  updateBtn.type = 'button';
+  updateBtn.disabled = view.phase !== 'available';
+  updateBtn.setAttribute('data-testid', 'update-now');
+  updateBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    actions.openUpdate();
+  });
+  box.appendChild(updateBtn);
 
   const releases = el('button', 'acct-btn ghost', 'GitHub Releases');
   releases.type = 'button';

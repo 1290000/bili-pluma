@@ -142,7 +142,14 @@ export type RequestMsg =
    */
   | { type: 'update/check'; manual?: boolean }
   /** 切换「自动检查」开关。关掉只停自动发起，手动检查照常可用 */
-  | { type: 'update/auto'; enabled: boolean };
+  | { type: 'update/auto'; enabled: boolean }
+  /**
+   * 打开更新窗口（独立小窗，不是 popup）。
+   *
+   * 必须是 background 开：content script 里没有 `chrome.windows`，
+   * 而且 `showDirectoryPicker` 只能在**扩展页面**里调（见方案 §1.3）。
+   */
+  | { type: 'update/open' };
 /**
  * `page/activate:ok` 的 `reason` —— **唯一真相源**（2026-11-11 提取）。
  *
@@ -460,7 +467,9 @@ export type ResponseMsg =
   | { type: 'update/auto:ok'; status: UpdateStatusView }
   | { type: 'update/status:err'; detail: string | null }
   | { type: 'update/check:err'; detail: string | null }
-  | { type: 'update/auto:err'; detail: string | null };
+  | { type: 'update/auto:err'; detail: string | null }
+  | { type: 'update/open:ok'; opened: boolean }
+  | { type: 'update/open:err'; detail: string | null };
 
 export type Msg = RequestMsg | ResponseMsg;
 

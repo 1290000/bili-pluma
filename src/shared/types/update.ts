@@ -32,6 +32,8 @@ export interface UpdateStatusView {
   latestVersion: string | null;
   /** 对应 zip 的体积，给"283 KB"这种文案用 */
   latestSizeBytes: number | null;
+  /** 精简包下载地址。更新窗口要用；不含任何凭据，就是 GitHub 的公开链接 */
+  latestZipUrl: string | null;
   /** 三态/四态（见 `UpdatePhase`） */
   phase: UpdatePhase;
   autoCheckEnabled: boolean;

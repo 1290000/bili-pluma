@@ -49,6 +49,7 @@ export const UPDATE_ALLOWED_TOP_LEVEL: readonly string[] = [
   'popup.html',
   'login-window.html',
   'need-incognito.html',
+  'update.html',
   'content-scripts/',
   'chunks/',
   'assets/',

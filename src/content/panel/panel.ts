@@ -51,6 +51,7 @@ import {
   patchCleanOption,
   toggleHideCategory,
   loadPanelModel,
+  openUpdateWindow,
   readUpdateStatus,
   requestUpdateCheck,
   writeUpdateAuto,
@@ -1062,6 +1063,11 @@ export function mountPanelBody(actions: PanelActions): PanelController {
             void writeUpdateAuto(next).then((status) => {
               if (status) updateStatus = status;
               render();
+            });
+          },
+          openUpdate: () => {
+            void openUpdateWindow().then((opened) => {
+              if (!opened) showNotice('更新窗口打不开', false);
             });
           },
           openReleases: () => {

@@ -34,6 +34,7 @@ export function toStatusView(state: UpdateState, version: string): UpdateStatusV
     currentVersion: version,
     latestVersion: state.latest?.version ?? null,
     latestSizeBytes: state.latest?.sizeBytes ?? null,
+    latestZipUrl: state.latest?.zipUrl ?? null,
     phase: resolvePhase(state, version),
     autoCheckEnabled: state.autoCheckEnabled,
     intervalDays: state.intervalDays,
@@ -132,5 +133,25 @@ export async function runStartupUpdateCheck(): Promise<void> {
     await applyUpdateBadge(result.state, version);
   } catch {
     /* 自动检查失败一律静默：它是后台行为，不该产生可见噪音 */
+  }
+}
+
+/**
+ * 打开更新窗口。
+ *
+ * 用 `chrome.windows.create` 而不是 `tabs.create`：这是个有明确终点的任务窗口，
+ * 不是一个要留在标签栏里的页面。尺寸固定，避免它被拉成半个屏幕。
+ */
+export async function handleUpdateOpen(): Promise<{ type: 'update/open:ok'; opened: boolean }> {
+  try {
+    await chrome.windows.create({
+      url: chrome.runtime.getURL('update.html'),
+      type: 'popup',
+      width: 440,
+      height: 600,
+    });
+    return { type: 'update/open:ok', opened: true };
+  } catch {
+    return { type: 'update/open:ok', opened: false };
   }
 }

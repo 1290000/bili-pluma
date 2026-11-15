@@ -28,7 +28,7 @@ const MAX_COMMENT_BYTES = 0xffff;
 export interface ZipEntry {
   /** 归一化后的路径：正斜杠、无前导斜杠 */
   name: string;
-  data: Uint8Array;
+  data: Uint8Array<ArrayBuffer>;
   /** 来自中央目录 external attributes 的 unix 权限位；拿不到就是 `null` */
   unixMode: number | null;
 }
@@ -84,7 +84,7 @@ function decodeName(bytes: Uint8Array): string {
   return new TextDecoder('utf-8').decode(bytes);
 }
 
-async function inflateRaw(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
+async function inflateRaw(bytes: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
   // 用 writer/reader 而不是 `pipeThrough`：lib.dom 里 `DecompressionStream` 的
   // 泛型与 `pipeThrough` 要求的 `ReadableWritablePair` 对不上，写了就得加 cast。
   const ds = new DecompressionStream('deflate-raw');
@@ -169,7 +169,7 @@ export async function readZip(buffer: ArrayBuffer, options: ReadZipOptions): Pro
     }
 
     const raw = bytes.slice(dataStart, dataEnd);
-    let data: Uint8Array;
+    let data: Uint8Array<ArrayBuffer>;
     if (method === 0) {
       data = raw;
     } else if (method === 8) {
