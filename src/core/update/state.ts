@@ -153,6 +153,24 @@ export function withFailedCheck(state: UpdateState, at: number, manual: boolean)
   return manual ? { ...state, lastManualCheckAt: at } : state;
 }
 
+/**
+ * `304 Not Modified`：这是一次**成功**的检查。
+ *
+ * `lastCheckAt` 必须推进 —— 否则下一次加载会立刻再发一次条件请求，
+ * "每天查一次"就退化成"每次打开都查一次"。
+ */
+export function withNoChange(
+  state: UpdateState,
+  result: { at: number; etag: string | null },
+): UpdateState {
+  return { ...state, lastCheckAt: result.at, etag: result.etag ?? state.etag };
+}
+
+/** 只记手动检查时间（用于冷却），不碰其他字段。 */
+export function withManualCheckAt(state: UpdateState, at: number): UpdateState {
+  return { ...state, lastManualCheckAt: at };
+}
+
 export function withDismissed(state: UpdateState, version: string): UpdateState {
   return { ...state, dismissedVersion: version };
 }
