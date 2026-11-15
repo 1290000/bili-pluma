@@ -69,7 +69,12 @@ import {
  * 而旧代码写的是 `if (controller) controller.showNotice(...)`（等于静默）。
  * 详见 `src/content/panel/orphan-hint.ts` 文件头。
  */
-import { isOrphanError, isOrphanHintShown, showOrphanHint } from '@/src/content/panel/orphan-hint';
+import {
+  isOrphanError,
+  isOrphanHintShown,
+  showOrphanHint,
+  startOrphanWatch,
+} from '@/src/content/panel/orphan-hint';
 // tokens.css 的**原始文本**，注入 shadow root 用。
 // ⚠️ 不能用 <link>：CSS 变量不穿透 shadow 边界，必须把规则塞进 shadow 内部
 import tokensCss from '@/src/design/tokens.css?raw';
@@ -1034,16 +1039,31 @@ export default defineContentScript({
      * 假装有回收点比没有更糟。**不要为了"对称"再加一个假的清理块。**
      */
     const probeAlive = (): void => {
-      void chrome.runtime
-        .sendMessage({ type: 'proxy/status' })
-        /**
-         * `Receiver not found` / `undefined` 都**不算孤儿**：前者是老版本
-         * background 没有这个 handler（升级中途的正常态），后者是 handler
-         * 没写 return —— 真孤儿是**抛异常**那一种。
-         */
-        .catch((e: unknown) => {
-          if (isOrphanError(e)) showOrphanHint();
-        });
+      /**
+       * ⚠️ 必须 try/catch 包住**同步**抛。
+       *
+       * 上下文失效时 `chrome.runtime.sendMessage` 是**同步抛**
+       * `Error: Extension context invalidated.` —— 那时 `.catch` 还没挂上，
+       * 异常直接冲出函数，`showOrphanHint()` 一次都不会执行。
+       * 表现就是用户报的"点了没反应、也没有提示"。
+       * （`openLogin()` 里修过同一类问题，这里漏了。）
+       */
+      let sending: Promise<unknown>;
+      try {
+        sending = chrome.runtime.sendMessage({ type: 'proxy/status' });
+      } catch (e: unknown) {
+        if (isOrphanError(e)) showOrphanHint();
+        return;
+      }
+      void sending;
+      /**
+       * `Receiver not found` / `undefined` 都**不算孤儿**：前者是老版本
+       * background 没有这个 handler（升级中途的正常态），后者是 handler
+       * 没写 return —— 真孤儿是**抛异常**那一种。
+       */
+      void sending.catch((e: unknown) => {
+        if (isOrphanError(e)) showOrphanHint();
+      });
     };
 
     /** 启动时先探一次（页面可能是在扩展重载之后才加载完的） */
@@ -1058,6 +1078,16 @@ export default defineContentScript({
      * ⚠️ 必须 capture：shadow DOM 里的 click 在冒泡阶段才到 document，
      * 那时业务 handler 已经跑完并静默失败了。
      */
+    /**
+     * 存活监听：**不等用户动作**。
+     *
+     * 用户停在页面上、扩展在别处被 reload（或 InPrivate 权限被开关）时，
+     * 之前的两条路径（点击 / 切回前台）都不会触发，面板就一直是死壳。
+     * 这里每秒读一次 `chrome.runtime.id`（不发消息、不唤醒 SW），
+     * 一旦失效立刻出提示。
+     */
+    startOrphanWatch({ onOrphan: () => showOrphanHint() });
+
     const onAnyClick = (): void => probeAlive();
     document.addEventListener('click', onAnyClick, true);
 

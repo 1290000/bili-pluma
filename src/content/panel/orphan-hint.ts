@@ -137,3 +137,88 @@ export function isOrphanHintShown(): boolean {
 
 /** 宿主 id 的只读导出（单测按 id 找，避免手抄常量） */
 export const ORPHAN_HINT_HOST_ID = ORPHAN_HOST_ID;
+
+/**
+ * 扩展上下文是否还活着 —— **纯本地判断，不发任何消息**。
+ *
+ * 判据是 `chrome.runtime.id`：扩展被 reload / 更新 / 权限变更后，旧 content script
+ * 身上的 `chrome.runtime.id` 会变成 `undefined`（这就是 "Extension context
+ * invalidated" 的底层状态）。读一个属性，**不唤醒 Service Worker**。
+ *
+ * ⚠️ 这里**不许**改成 `sendMessage` 探活。曾经有过 `setInterval(probeAlive, 20s)`
+ * 的版本，被撤掉的原因就是它每个后台标签页都永久每 20 秒唤醒一次 SW。
+ */
+export function isExtensionContextAlive(): boolean {
+  try {
+    if (typeof chrome === 'undefined') return false;
+    const runtime = chrome.runtime;
+    if (!runtime) return false;
+    return typeof runtime.id === 'string' && runtime.id.length > 0;
+  } catch {
+    // 访问失效上下文的属性本身就可能抛 —— 那也是"已死"
+    return false;
+  }
+}
+
+/** 存活监听的默认间隔。1 秒足够"立刻看到"，而读属性几乎无成本。 */
+export const ORPHAN_POLL_MS = 1000;
+
+export interface OrphanWatchOptions {
+  onOrphan: () => void;
+  intervalMs?: number;
+  isAlive?: () => boolean;
+  isHidden?: () => boolean;
+}
+
+/**
+ * 盯着"扩展还在不在"—— 一旦发现上下文失效，**立刻**出提示，不需要用户点任何东西。
+ *
+ * ## 为什么需要它（用户原话）
+ *
+ * > 「这个提示应该在重新加载了扩展，或者打开/关闭了 InPrivate 时出现，
+ * > 而不是要回去重新点了扫码登录取流账号才出现」
+ *
+ * 之前只有两条触发路径：用户点击（capture 阶段探活）、切回前台（`visibilitychange`）。
+ * 两条都依赖"用户做了某个动作"。而实际场景里用户可能**就停在那个页面**——
+ * 扩展在另一个窗口被 reload，他回来什么都不做，面板就一直是个死壳。
+ *
+ * ## 为什么这个轮询是允许的（与撤掉的那个 20s 心跳的区别）
+ *
+ * | | 旧的 `setInterval(probeAlive, 20s)` | 本函数 |
+ * | --- | --- | --- |
+ * | 动作 | `sendMessage('proxy/status')` | 读 `chrome.runtime.id` |
+ * | 唤醒 SW | **每个后台标签页每 20s 一次** | **从不** |
+ * | 后台开销 | 高 | 一次属性读 |
+ *
+ * ## 回收
+ *
+ * `ctx.onInvalidated` 实测不触发，所以**没有显式回收点**：定时器随页面卸载消失。
+ * 这是可接受的（一次属性读 / 秒），而且**发现孤儿后自己就停**，不会长期空转。
+ *
+ * @returns 停止函数（测试与"面板恢复"时用）
+ */
+export function startOrphanWatch(options: OrphanWatchOptions): () => void {
+  const intervalMs = options.intervalMs ?? ORPHAN_POLL_MS;
+  const isAlive = options.isAlive ?? isExtensionContextAlive;
+  const isHidden = options.isHidden ?? (() => document.visibilityState === 'hidden');
+
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const stop = (): void => {
+    if (timer !== null) {
+      clearInterval(timer);
+      timer = null;
+    }
+  };
+
+  const tick = (): void => {
+    // 后台标签页不判：省电，也避免"刚切走就误报"。切回来那一瞬间由
+    // `visibilitychange` 与下一次 tick 一起兜住。
+    if (isHidden()) return;
+    if (isAlive()) return;
+    stop();
+    options.onOrphan();
+  };
+
+  timer = setInterval(tick, intervalMs);
+  return stop;
+}
