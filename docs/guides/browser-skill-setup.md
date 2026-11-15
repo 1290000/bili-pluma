@@ -18,54 +18,91 @@
 > 且缺了实际必需的 `BSK_HOME`。文档标着"照抄"，**但照抄会失败** ——
 > 下一个人会以为 bsk 环境坏了，而不是文档错了。
 
-### ⚠️ 锁定 bsk 0.3.3，**不要升级到 0.4.x**
+### 版本结论（2026-11-15 复核）
 
-同一台机器、同一个 B站番剧页的实测对比：
-
-| | 0.3.3 | 0.4.0 |
+| 版本 | 结论 | 依据 |
 | --- | --- | --- |
-| B站动态页 `evaluate`（读） | ✅ **通** | ❌ 被挡住 |
-| B站动态页 `click`/`fill`（写） | ✅ **通** | ❌ 被挡住 |
-| 静态页（`example.com`） | ✅ | ✅（要先 `cooperate sync`） |
-| 额外要求 | 无 | 每次操作前必须拿单次 `context_id` |
+| **0.5.0** | **当前使用**（2026-11-15 迁移） | 见下「0.5.0 的实测」与「迁移记录」 |
+| 0.3.3 | 已归档备份 | 升级前的版本，二进制与扩展目录都留了 `.bak` |
+| 0.4.0 / 0.4.1 / 0.4.2 | **不适用** | 脚本必须带整页**严格观测**，页面一变动就 `document_changed` |
 
-**根因**：0.4.0 的协作上下文模型把 `evaluate` 和所有 `browser mutations` 都划进「单次观测上下文」，
-而 B站番剧页持续变化（进度、弹幕、评论），`sync` 与 action 之间必然被判内容已变。
-实测连续 10 轮重试全失败，同法在静态页一次通过 —— 是模型与"持续更新页面"的根本冲突。
+**为什么 0.4.x 全部不行**：`evaluate` 是脚本，不在 target policy 放宽的那一档
+（放宽的是"有 DOM 目标的动作"），所以仍要一次 `sync` 的 `observation_id`，
+而那是**整页一次性严格观测**。0.4.2 的 `observation_required` 报错里只有
+"去 sync 拿 observation_id"这一条出路，`SCRIPT_CHANGE_RECOVERY` 常量在 `ext-v0.4.2`
+里**根本不存在** —— 0.4.2 与 0.4.0 是同一档。
 
-**这对本项目是致命的**：验收第 5 条（关总开关 → 刷新 → 画质回落）需要真的去拨开关，
-0.4.0 下这个操作在 B站页上无法完成。
+**0.5.0 的实测**（隔离 profile，Edge 157，未登录，B站视频页**正在播放**中）：
 
-> 若将来要升级，先验证：B站番剧页播放中能否不带 `--context` 连续 `sync → evaluate → sync → click`。
+```
+① 不带 --expect（走严格观测）→ 立刻失败
+   permission_denied: "A page frame changed; synchronize before choosing this action"
+   reason: document_changed
 
-### 回退到 0.3.3 的步骤
+② evaluate --expect '[{"target":"video","field":"exists","equals":true}]'
+   不带 --observation，同一个 context → 8/8 全过，进度 74→108 秒，零 resync
 
-```powershell
-$base = "https://github.com/Tencent/BrowserSkill/releases/download"
-
-# 1) CLI（先停 daemon，它占着二进制）
-Invoke-WebRequest "$base/cli-v0.3.3/bsk-v0.3.3-x86_64-pc-windows-msvc.zip" -OutFile "$env:TEMP\bsk033.zip"
-Expand-Archive "$env:TEMP\bsk033.zip" -DestinationPath "$env:TEMP\bsk033" -Force
-Copy-Item "$env:USERPROFILE\.local\bin\bsk.exe" "$env:USERPROFILE\.local\bin\bsk.exe.bak" -Force
-Copy-Item "$env:TEMP\bsk033\bsk.exe" "$env:USERPROFILE\.local\bin\bsk.exe" -Force
-bsk --version     # 必须 0.3.3
-
-# 2) 扩展（**在 `ext-v0.3.3` 这个 tag，不在 `cli-v0.3.3`**）
-Invoke-WebRequest "$base/ext-v0.3.3/browser-skill-extension-v0.3.3-chrome.zip" -OutFile "$env:TEMP\ext033.zip"
-Expand-Archive "$env:TEMP\ext033.zip" -DestinationPath "$env:USERPROFILE\.bsk-ext-0.3.3" -Force
-
-# 3) 在 Edge 里手动（bsk 进不去 edge://）
-#    edge://extensions → 删掉商店版 → 开发者模式 → 加载解压缩的扩展 → 选 %USERPROFILE%\.bsk-ext-0.3.3
-
-# 4) 起 daemon 并确认 8/8
-bsk daemon start --foreground     # 必须 run_in_background
-bsk doctor
+③ click --selector ".bpx-player-ctrl-play" → 命中并生效（复核 paused:true）
 ```
 
-**三条必知**：
-1. `cli-v0.3.3` 里**只有 CLI**，扩展在独立的 `ext-v0.3.3` tag。
-2. **扩展 ID 会变**（解压加载按路径算）→ vault 密钥失效，**播放账号要重新扫码**。
-3. **别跑 `bsk update`**，它会升回 0.4.0。`doctor` 的 `auto-update` 行提示可升级，**忽略**。
+⇒ **0.5.0 能在播放中的页面上连续读 JS 状态并写入，前提是每处 `evaluate` 都声明 `--expect` 事实。**
+
+### 升级到 0.5.0 的闸门（2026-11-15 隔离环境已验，真实 profile 未验）
+
+| # | 闸门 | 结果 |
+| --- | --- | --- |
+| 1 | 0.5.0 扩展 + daemon 能连（`doctor` 的 `extension connected`） | ✅ |
+| 2 | 多扩展共存不报 issue #686（`Cannot access a chrome-extension:// URL of different extension`） | ✅ 4 个扩展下 `open` / `sync` / `evaluate` 全正常（bsk + Pluma + 篡改猴 + ChatGPT） |
+| 3 | Pluma 面板（`attachShadow({mode:'closed'})`）能被操作 | ✅ **但只能走 VOM ref** |
+
+**闸门 3 的结论会影响迁脚本的写法**：closed shadow 里的内容
+`--selector` 和 `evaluate`（页面上下文的 `document.querySelector`）**都进不去**，
+只有**无障碍树**能看见并点。实测 `@e221 tab "账号"` 点击成功、`画质`→`账号` 选中态可复核。
+⇒ 面板交互一律用 ref，不要写选择器；面板内的 `checkbox` 状态（如"自动接管取流"的
+`[disabled] [unchecked]`）也能从 VOM 直接读到。
+
+⚠️ 隔离环境**没验到**的两条：6 个扩展全装、真实登录态下的番剧页（大会员、弹幕密度更高）。
+
+⚠️ 搭隔离环境时的一个坑：Edge 的 `--load-extension` 是**逗号分隔**的，路径里带空格
+（`...\Edge\User Data\...`）会让整条列表解析失败 —— 表现是 Edge 起来了、但 bsk 扩展
+不连 daemon（`bsk browsers` 里看不到它）。把扩展先拷到无空格路径再加载即可。
+
+
+### 三条必知
+
+1. **CLI 与扩展必须同时升**。0.3.3 扩展连 0.5.0 daemon 时 `doctor` 会把
+   `--expect` / `read` / `evaluate --unverified` / target control 全标成
+   `unavailable` —— 能力按版本协商，混用等于白升。
+2. **`cli-vX` 里只有 CLI，扩展在独立的 `ext-vX` tag**（回退同理）。
+3. 扩展 ID 会变（解压加载按路径算）⇒ vault 密钥失效，**播放账号要重新扫码**；
+   **别跑 `bsk update`**，`doctor` 的 auto-update 行提示可升级时**忽略**。
+
+### 迁移记录（2026-11-15，0.3.3 → 0.5.0）
+
+| 项 | 做法 |
+| --- | --- |
+| CLI | `~/.local/bin/bsk.exe.0.3.3.bak` 留旧版，`bsk.exe` 换成 0.5.0 |
+| 扩展 | **原地替换** `~/.bsk-ext-0.3.3` 的**内容**（目录名不改） |
+
+**原地替换是关键**：扩展 ID 由**解压路径**决定 ⇒ 路径不变、ID 就不变（`agcheblah…`），
+于是**不用卸载重装、不用重新扫码**，只需在 `edge://extensions` 点一次「重新加载」。
+换到新目录才会变 ID —— 那才需要重装。
+
+⚠️ **更正一条旧说法**：旧版本文档写过"扩展 ID 变 ⇒ vault 失效 ⇒ 播放账号要重新扫码"。
+**这不成立**：vault 密钥在 **Pluma 自己的** `chrome.storage.local` 里（按 Pluma 的扩展 ID 隔离），
+与 bsk 扩展无关。本次迁移 ID 未变，实测登录态完好。
+
+**验证**：`bsk doctor` 从
+`app ext v0.3.3` + 7 项 `unavailable`（`--expect` / `read` / `evaluate --unverified` …）
+变成 `all 1 online browser(s) are compatible` + `feature availability … support the catalogued features`；
+真机（登录态 + 7 个扩展）`evaluate --expect` 连续 3 次成功。
+
+**已跟着改的脚本**：`poc/probe/bsk-eval.mjs`（加 `--context` / `--expect`）、
+`poc/probe/reload-extension.mjs`（先 `sync` 取 `ctx`）。
+
+**回退**：`cp ~/.local/bin/bsk.exe.0.3.3.bak ~/.local/bin/bsk.exe` + 把
+`~/.bsk-ext-0.3.3.bak-20261115` 的内容拷回 `~/.bsk-ext-0.3.3`，再点一次「重新加载」。
+（`edge://` 页面 `bsk` 进不去，这一步只能人点。）
 
 ---
 
@@ -97,14 +134,25 @@ ok  browser protocol compatible
 ## 4. 一次最小任务
 
 ```bash
-bsk session start --no-focus --json          # 记下 session_id
-bsk navigate --session <id> https://example.com   # 输出 tab=<数字>
-bsk evaluate --session <id> --tab-id <数字> "..."
-bsk session stop <id>                        # 完成或失败都必须停
+bsk open --no-focus "https://example.com" --json   # 返回 session_id / ctx / obs
+bsk sync --json                                   # 取一个新的 ctx（上一个被动作消费后要重取）
+bsk evaluate --session <id> --context <ctx> \
+  --expect '[{"target":"body","field":"exists","equals":true}]' "..."
+bsk close                                         # 完成或失败都必须关
 ```
 
 `evaluate` 的表达式是**位置参数**，不是 `--expression`。
-**0.3.3 不需要 `cooperate sync`，也不需要 `--context`**，在持续更新的页面上照样能用。
+**0.5.0 起还必须给 `--context`，并用 `--expect` 声明脚本依赖的事实**（细则见
+`AGENTS-TOOLS.md` §3.1）。
+
+⚠️ **`open` / `sync` 在播放中的视频页上会偶发失败**，报
+`Document changed during observation; observe again` —— 因为它们要返回一个"稳定"的
+VOM 快照，而页面恰好在采样窗口内变了（弹幕、推荐位、广告 iframe）。
+
+- **重试即可**（实测 3 次内必成），不是永久失效；
+- 失败时**会话通常已经建好**（`bsk session list` 看得到），不必重新 `open`；
+- **`bsk read` 不受影响**（它不要求快照稳定），纯只读需求优先用它；
+- `evaluate --expect` 只在**已持有有效 ctx** 时才绕过整页校验 —— 拿不到 ctx 时先 `sync`。
 
 ---
 
@@ -125,7 +173,7 @@ Copy-Item "$wb\SKILL.md" "$dsh\SKILL.md" -Force
 Copy-Item "$wb\references\*" "$dsh\references\" -Force
 ```
 
-**判断副本是否对版**（0.4.0 独有的三个文件，0.3.3 没有）：
+**判断副本是否对版**（0.4.x 及以后独有的三个文件，0.3.3 没有）：
 
 | 文件 | 0.3.3 | 0.4.0 |
 | --- | --- | --- |

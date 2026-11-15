@@ -342,12 +342,26 @@ async function verifyViaBsk() {
   // 等页面把 content script 跑起来再读
   await new Promise((r) => setTimeout(r, 12_000));
 
+  // 0.5.0 起：`evaluate` 必须带 `--context`，且脚本类动作要么给整页严格观测
+  // （`--observation`，页面一变动即失效），要么声明 `--expect` 事实后省略观测。
+  // 这里刚打开页面、可能仍在加载，只能走后者；事实取"body 存在"。
+  const syncOut = run(['sync', '--session', sid, '--json']).stdout ?? '';
+  const ctx = /"ctx":\s*"([^"]+)"/.exec(syncOut)?.[1];
+  if (!ctx) {
+    run(['session', 'stop', sid]);
+    return { state: 'no-ctx', detail: '拿不到 control context：' + syncOut.slice(0, 200) };
+  }
+
   const invoke = run([
     'evaluate',
     '--session',
     sid,
     '--tab-id',
     probeTab,
+    '--context',
+    ctx,
+    '--expect',
+    '[{"target":"body","field":"exists","equals":true}]',
     // ⚠️ **绝不经过 shell 转义**：`!` 在 bash 里是历史展开、`"` 会被吃掉，
     // 表达式必须不带引号字符和感叹号。见 `runBsk` 的 `shell: false`。
     'String(window.__PLUMA_MAIN__ === true)',

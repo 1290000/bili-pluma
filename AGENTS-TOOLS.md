@@ -101,7 +101,7 @@
 | `node poc/probe/popup-inspect.mjs` | 读 popup 状态 |
 | `node poc/probe/probe-streaming-status.mjs <sid> <tab>` | **测 background SW 的消息通道**（见下） |
 | `node poc/probe/setup-profile.mjs` | 准备测试用 profile |
-| **`node poc/probe/bsk-eval.mjs <sid> <tab> <expr-file>`** | **所有 `bsk evaluate` 都必须用它**（见 §3.1） |
+| **`node poc/probe/bsk-eval.mjs <sid> <tab> <expr-file> [context] [expectJson]`** | **所有 `bsk evaluate` 都必须用它**（见 §3.1） |
 
 ### 3.1 ⚠️ 所有 `bsk evaluate` 都该走 `bsk-eval.mjs`（2026-11-11 实测踩坑）
 
@@ -122,16 +122,34 @@ evaluate threw: SyntaxError: Invalid or unexpected token
 evaluate threw: SyntaxError: Unexpected token '<'      ← 相对路径打到页面域名
 ```
 
-**`bsk evaluate` 没有 `--stdin`，也没有 `--file`**（`--help` 确认只有 `--session` / `--tab-id` / `--json` / `--quiet` / `--await-promise`）。
+**`bsk evaluate` 没有 `--stdin`，也没有 `--file`**，表达式只能走位置参数。
+
+**0.5.0 起（2026-11-15 迁移）还有一条硬要求**：`evaluate` 是"任意脚本"，
+不属于 target policy 放宽的那一档，所以**必须**给 `--context`（`open`/`sync` 返回的 `ctx`），
+并且二选一：
+
+| 给什么 | 语义 | B站页可用？ |
+| --- | --- | --- |
+| `--observation <id>` | 整页一次性**严格**观测 | ❌ 页面一变就 `document_changed` |
+| `--expect '<facts>'`（省略 observation） | 只校验声明的几条事实，其余随便变 | ✅ |
+
+本项目所有探针都跑在持续变化的 B站页上 ⇒ **一律用 `--expect`**。
+包装脚本已按此改好（默认事实 `body exists`，第 5 个参数可覆盖）。
 
 **正确形态**：用 `poc/probe/bsk-eval.mjs`，它把表达式作为**单元素 argv** 传给
 `execFileSync('bsk', [..., expr])` —— **不经过任何 shell 解析**。
 
 ```bash
 # 1) 表达式写进文件（文件里可以随意写括号引号，不用转义）
-# 2) 用包装脚本调
-node poc/probe/bsk-eval.mjs <session> <tabId> <expr-file>
+# 2) 用包装脚本调（context 从 `bsk open`/`bsk sync` 的 ctx 取）
+node poc/probe/bsk-eval.mjs <session> <tabId> <expr-file> c1
+# 需要校验业务事实时再给第 5 个参数：
+node poc/probe/bsk-eval.mjs <session> <tabId> <expr-file> c1 \
+  '[{"target":"video","field":"exists","equals":true}]'
 ```
+
+> ⚠️ 漏了 `context` 的报错是 `This action requires a valid control context from cooperate sync`，
+> **看起来像权限问题，其实是参数缺失**。
 
 **为什么放在 `search-identity/` 却要给所有人用**：它本来就是通用的，
 最初为搜索取证写的。**路径不好记的话记住"`bsk-eval.mjs` + 三个参数"即可**。
