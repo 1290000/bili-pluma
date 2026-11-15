@@ -197,9 +197,18 @@ $env:PATH = "C:\Users\i1290\.local\bin;" + $env:PATH
 
 - daemon 用 `run_in_background` 起，**不要起第二个**（会撞 `daemon.lock`；进程名不叫 bsk，`Get-Process *bsk*` 看不到）
 - 活动 home 是 `~/.bsk`，不是 `.bsk-agent`
-- `bsk doctor` / `bsk status` 会一直提示「可升级 0.4.0」—— **忽略它，别跑 `bsk update`**
-- ⚠️ **本机没有 bash / Git Bash**（只有 PowerShell 5.1）。所以一切命令都写成 PowerShell 语法。
-  `export PATH=...`、`/c/Users/...` 这类写法在这台机器上**跑不了** —— 2026-10-30 实测确认。
+- `doctor` 的 `auto-update` 行可能提示可升级 —— **前台启动的 daemon 不会自动装**。
+  别单独跑 `bsk update`：它只升 CLI、扩展不动 ⇒ `doctor` 会把 `--expect` / `read` 标成
+  `unavailable`。**两端必须一起升**（做法见 `docs/guides/browser-skill-setup.md` 的「迁移记录」）。
+- ⚠️ **shell 语法要看是谁在用**（2026-11-15 实测校正，旧版那条已作废）：
+
+  | 谁 | 可用 shell | 写什么语法 |
+  | --- | --- | --- |
+  | **Agent** | WorkBuddy 自带 PortableGit bash（`GNU bash 5.3.15`） | **优先 bash**：`export PATH=…`、`/c/Users/…` 都能跑 |
+  | **人手动开终端** | 只有 Windows PowerShell **5.1**（`5.1.26100.9818`，Desktop） | 别用 7 才有的语法 |
+
+  系统里**没有**独立安装的 Git for Windows，也**没有** `pwsh` 7。PowerShell 5.1 下
+  `??`、三元 `?:`、`&&` / `||` 管道链**会直接解析报错** —— 这不是命令写错，是版本没有。
 
 ---
 
@@ -207,7 +216,7 @@ $env:PATH = "C:\Users\i1290\.local\bin;" + $env:PATH
 
 | 坑 | 正确做法 |
 | --- | --- |
-| **`node` 不在 PATH** | 每条 pwsh 先加 `$env:PATH = "C:\Users\i1290\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin;" + $env:PATH` |
+| **`node` 已在 PATH**（`v22.22.2`，指向 WorkBuddy binaries） | 直接用 `node`。旧文档要求"每条 pwsh 先拼 `$env:PATH`"已过时（2026-11-15 校正），别再加 |
 | **`npx` 不可用** | 用 `node node_modules/vitest/vitest.mjs run` / `node node_modules/typescript/bin/tsc` |
 | **`Get-Content` 数行数少读**（PS 5.1，`main-world.js` 报 2963 / 真值 3804） | 统一用 `node scripts/loc.mjs` |
 | **`Get-Content` 读中文乱码**（`閲嶆柊鍔犺浇`） | 读文件用 read 工具；**绝不用 `Get-Content` + `Set-Content` 回写**（会真写坏中文） |

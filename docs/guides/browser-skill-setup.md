@@ -13,10 +13,11 @@
 > [AGENTS-TOOLS.md](../../AGENTS-TOOLS.md) §4**，本文不再重复 ——
 > 按 `AGENTS.md` §6.1「每件事只有一个权威位置」，两处都写必然漂移。
 >
-> **2026-10-30 修**：本节原先写的是 `export PATH="/c/Users/<你的用户名>/.local/bin:$PATH"`。
-> 那是 **bash 语法**，而本机**没有 bash / Git Bash**（只有 PowerShell 5.1，实测确认），
-> 且缺了实际必需的 `BSK_HOME`。文档标着"照抄"，**但照抄会失败** ——
-> 下一个人会以为 bsk 环境坏了，而不是文档错了。
+> **2026-11-15 校正**：本节原先写的是 `export PATH="/c/Users/<你的用户名>/.local/bin:$PATH"`，
+> 并附了一句"本机没有 bash / Git Bash" —— **那句是错的**：Agent 的默认 shell 就是
+> WorkBuddy 自带的 PortableGit bash，这条写法能跑；**人手动开终端**时才是只有 PowerShell 5.1。
+> 真正容易漏的是 `BSK_HOME`（不设会找不到 daemon 的 home）。三个前置条件一律以
+> AGENTS-TOOLS.md §4 为准，**别照抄半条**。
 
 ### 版本结论（2026-11-15 复核）
 
