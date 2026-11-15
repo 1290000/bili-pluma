@@ -100,7 +100,28 @@ export default defineConfig({
      * `routes.ts` 里两条直播路径**必须保持 `enabled: false`**。
      * 直播间只做样式层清理（隐藏水印 logo），不换 Cookie、不发取流请求。
      */
-    host_permissions: ['*://*.bilibili.com/*', '*://live.bilibili.com/*'],
+    host_permissions: [
+      '*://*.bilibili.com/*',
+      '*://live.bilibili.com/*',
+      /**
+       * ## GitHub（自动更新，ADR 0036）
+       *
+       * 三条缺一不可，**不能靠 CORS**：
+       * - `api.github.com` —— 版本查询（它确实回了 `ACAO: *`，但见下）
+       * - `github.com` —— Release 页面与 302 跳转的起点
+       * - `*.githubusercontent.com` —— **实际下载域**
+       *   （`release-assets.githubusercontent.com`）。2026-11-16 实测：
+       *   它**不回 `Access-Control-Allow-Origin`**，所以没有 host 权限时
+       *   `fetch` 会在下载那一步被 CORS 拦掉 —— 版本能查、更新永远装不上，
+       *   而且失败得很安静。
+       *
+       * 有了 host 权限，扩展的 fetch 走自己的权限模型、不参与页面的 CORS 判定，
+       * 也就不再依赖第三方响应头。
+       */
+      'https://api.github.com/*',
+      'https://github.com/*',
+      'https://*.githubusercontent.com/*',
+    ],
     /**
      * ⚠️ 这里**没有** `web_accessible_resources`。
      *
