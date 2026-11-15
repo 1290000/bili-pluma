@@ -17,6 +17,7 @@ import type { ErrorCode } from './errors';
 import type { QrLoginStatus } from './login';
 import type { PageTracksView } from './playinfo';
 import type { StatBucket } from './stats';
+import type { UpdateCheckOutcome, UpdateStatusView } from './update';
 
 /**
  * UI / content → background
@@ -126,7 +127,22 @@ export type RequestMsg =
    * 诊断用的浏览器环境事实。由 **background** 代查 ——
    * 相关命名空间在 content script 里不存在（见 `diag/facts:ok` 的长注释）。
    */
-  | { type: 'diag/facts' };
+  | { type: 'diag/facts' }
+  // ── 自动更新（2026-11-16）──
+  //
+  // ⚠️ 这三个都必须有 `background.ts` 里的路由分支，否则 `check-messages` 会红：
+  // 定义了类型不路由 = 静默返回 undefined。
+  /** 读更新状态（面板「关于」tab 打开时） */
+  | { type: 'update/status' }
+  /**
+   * 立刻检查一次。
+   *
+   * `manual: true` **无视间隔闸门**（用户点了按钮就是要现在查），但仍受 60s 冷却限制；
+   * `manual: false` 走自动闸门（开关 + 间隔）。
+   */
+  | { type: 'update/check'; manual?: boolean }
+  /** 切换「自动检查」开关。关掉只停自动发起，手动检查照常可用 */
+  | { type: 'update/auto'; enabled: boolean };
 /**
  * `page/activate:ok` 的 `reason` —— **唯一真相源**（2026-11-11 提取）。
  *
@@ -427,7 +443,24 @@ export type ResponseMsg =
        */
       echo?: string;
     }
-  | { type: 'diag/facts:err'; detail: string; echo?: string };
+  | { type: 'diag/facts:err'; detail: string; echo?: string }
+  | { type: 'update/status:ok'; status: UpdateStatusView }
+  /**
+   * 一次检查的结果。
+   *
+   * `outcome` 必须原样透传：`unchanged`（304）与 `rate-limited` 对用户说的话完全不同，
+   * 混成"失败"会让人不知道是该等还是该报 bug。`reason` 只在这两种情况下有值。
+   */
+  | {
+      type: 'update/check:ok';
+      status: UpdateStatusView;
+      outcome: UpdateCheckOutcome;
+      reason: string | null;
+    }
+  | { type: 'update/auto:ok'; status: UpdateStatusView }
+  | { type: 'update/status:err'; detail: string | null }
+  | { type: 'update/check:err'; detail: string | null }
+  | { type: 'update/auto:err'; detail: string | null };
 
 export type Msg = RequestMsg | ResponseMsg;
 

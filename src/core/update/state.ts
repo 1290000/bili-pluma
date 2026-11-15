@@ -7,10 +7,16 @@
  */
 
 import { isNewer } from '@core/update/version';
+import type { UpdatePhase } from '@shared/types/update';
 
-/** 更新流程所处的阶段。`dismissed` 是"有新版本但用户把提示条关了"。 */
-export type UpdatePhase =
-  'idle' | 'available' | 'dismissed' | 'downloading' | 'writing' | 'pending-reload' | 'failed';
+/**
+ * 阶段枚举**定义在 `shared/types/update.ts`**，这里只转出一次。
+ *
+ * 理由：它是发给 UI 的 DTO 字段，而 `shared` 不能 import `core`（方向反了）。
+ * 放在 shared + core 反向引用，比两边各写一份 union 安全 —— 后者加值只改一处时
+ * 不会报错，只会让某处 switch 静默落进 default。
+ */
+export type { UpdatePhase };
 
 export interface LatestRelease {
   /** 已剥掉 `v` 前缀，形如 `1.2.0` */

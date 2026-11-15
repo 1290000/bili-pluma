@@ -25,6 +25,7 @@ import {
 } from '@core/update/state';
 import { canManualCheck, shouldCheck } from '@core/update/gate';
 import { compareVersions } from '@core/update/version';
+import type { UpdateCheckOutcome } from '@shared/types/update';
 
 export type LatestReleaseResult =
   | { kind: 'ok'; release: LatestRelease; etag: string | null }
@@ -49,7 +50,7 @@ export interface RunCheckOptions {
   source: ReleaseSource;
 }
 
-export type CheckOutcome = 'skipped' | 'ok' | 'unchanged' | 'rate-limited' | 'failed';
+export type CheckOutcome = UpdateCheckOutcome;
 
 export interface CheckResult {
   state: UpdateState;

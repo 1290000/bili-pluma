@@ -22,6 +22,12 @@ import { handleAffectedTabs, handleTabsReload } from '@/src/background/handlers/
 import { handleStatsRecent } from '@/src/background/handlers/stats.handler';
 import { handleDiagFacts } from '@/src/background/handlers/diag.handler';
 import {
+  handleUpdateAuto,
+  handleUpdateCheck,
+  handleUpdateStatus,
+  runStartupUpdateCheck,
+} from '@/src/background/handlers/update.handler';
+import {
   applyRulePlan,
   reconcileTabRules,
   rebuildRulesIfEnabled,
@@ -561,6 +567,45 @@ export default defineBackground(() => {
       return true;
     }
 
+    if (type === 'update/status') {
+      handleUpdateStatus()
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'update/status:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
+    if (type === 'update/check') {
+      const { manual } = message as { manual?: boolean };
+      // `manual` 语义见 messages.ts：true = 用户点的按钮，无视间隔闸门
+      handleUpdateCheck(manual === true)
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'update/check:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
+    if (type === 'update/auto') {
+      const { enabled } = message as { enabled: boolean };
+      handleUpdateAuto(enabled === true)
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'update/auto:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
     if (type === 'login/open') {
       handleLoginOpen()
         .then(sendResponse)
@@ -602,4 +647,10 @@ export default defineBackground(() => {
     forgetLoginWindow();
     void clearLoginReady();
   });
+
+  // ── 自动检查更新（2026-11-16）──
+  //
+  // 放在最后、`void` 掉、内部自己 catch：它是后台行为，用户没在等它。
+  // 闸门（开关 + 间隔 + 时钟回拨）在 core 的 `shouldCheck` 里，这里不做判断。
+  void runStartupUpdateCheck();
 });
