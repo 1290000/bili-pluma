@@ -215,6 +215,46 @@ export const PANEL_CSS = `
   display: none;
 }
 
+/* 「关于」Tab 的贡献者清单：两列换行，头像 + login */
+.contributors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.contributor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  border: none;
+  border-radius: var(--pluma-radius-control);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--pluma-font-caption);
+  cursor: pointer;
+}
+
+.contributor:hover {
+  background: var(--pluma-accent-bg);
+}
+
+.contributor-avatar {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.contributor-avatar[hidden] {
+  display: none;
+}
+
+.contributor-name {
+  color: var(--pluma-text-muted);
+}
+
 .tab.active {
   background: var(--pluma-accent-bg);
   color: var(--pluma-text);

@@ -56,6 +56,17 @@
 
 ---
 
+## 1.5 生成类（`scripts/`，构建期跑，结果要入库）
+
+| 命令 | 生成什么 | 何时必须跑 |
+| --- | --- | --- |
+| `node scripts/gen-contributors.mjs` | `src/generated/contributors.ts`（面板「关于」Tab 的贡献者清单） | 发版前。**必须在干净网络下跑**：它调 GitHub `contributors` 接口，失败时不改文件并返回非 0 |
+
+> 为什么不放在运行时拉：GitHub 未认证配额 60 次/小时且**按出口 IP 共享**，而贡献者名单
+> 不是实时数据。名单过期几周不影响任何功能，见 [ADR 0036](./docs/decisions/0036-auto-update.md)。
+
+---
+
 ## 2. 真机验证类（`poc/verify/`，多数不需要登录态）
 
 | 命令 | 查什么 | 何时必须跑 |

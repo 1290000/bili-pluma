@@ -24,6 +24,7 @@ import { describeExpiry, describeHealth } from '@core/ui/popup-state';
 import { describeStreamingIdentity } from '@core/ui/streaming-pill';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
 import type { UpdateStatusView } from '@shared/types/update';
+import { CONTRIBUTORS } from '@/src/generated/contributors';
 import { primaryPlaceholder } from '@shared/utils/primary-card';
 
 /** 会员类型短标签 */
@@ -1345,6 +1346,41 @@ export function aboutTab(
     actions.openReleases();
   });
   box.appendChild(releases);
+
+  /**
+   * 贡献者。
+   *
+   * ⚠️ 头像走 `avatars.githubusercontent.com`。B站页面的 CSP 有可能拦掉第三方图片，
+   * 所以 `img` 出错时**只隐藏图片保留名字** —— 名字才是必须显示的，头像是修饰。
+   */
+  if (CONTRIBUTORS.length > 0) {
+    box.appendChild(el('p', 'diag-section', '贡献者'));
+    const list = el('div', 'contributors');
+    for (const person of CONTRIBUTORS) {
+      const item = el('button', 'contributor');
+      item.type = 'button';
+      item.title = `${person.login} · ${String(person.contributions)} commits`;
+
+      const avatar = document.createElement('img');
+      avatar.className = 'contributor-avatar';
+      avatar.alt = '';
+      avatar.loading = 'lazy';
+      avatar.src = person.avatarUrl;
+      avatar.addEventListener('error', () => {
+        avatar.hidden = true;
+      });
+      item.appendChild(avatar);
+      item.appendChild(el('span', 'contributor-name', person.login));
+
+      item.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        window.open(person.htmlUrl, '_blank', 'noopener,noreferrer');
+      });
+      list.appendChild(item);
+    }
+    box.appendChild(list);
+  }
 
   return box;
 }

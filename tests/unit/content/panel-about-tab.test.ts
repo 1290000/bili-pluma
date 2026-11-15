@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { aboutTab } from '@/src/content/panel/tabs';
 import type { UpdateStatusView } from '@shared/types/update';
+import { CONTRIBUTORS } from '@/src/generated/contributors';
 
 function view(over: Partial<UpdateStatusView> = {}): UpdateStatusView {
   return {
@@ -16,6 +17,7 @@ function view(over: Partial<UpdateStatusView> = {}): UpdateStatusView {
     intervalDays: 1,
     lastCheckAt: Date.now() - 3 * 60_000,
     lastAppliedVersion: null,
+    lastFailedVersion: null,
     ...over,
   };
 }
@@ -128,5 +130,40 @@ describe('aboutTab：控件', () => {
     const node = aboutTab(view({ autoCheckEnabled: false }), noop);
     expect(node.textContent).toContain('自动检查更新');
     expect(node.textContent).toContain('关掉后仍可手动检查');
+  });
+});
+
+describe('贡献者清单（Step 7）', () => {
+  it('生成物里没有 Bot、没有超量', () => {
+    // 这份数据由 scripts/gen-contributors.mjs 生成，这里只核对"生成规则真的生效了"
+    expect(CONTRIBUTORS.length).toBeGreaterThan(0);
+    expect(CONTRIBUTORS.length).toBeLessThanOrEqual(12);
+    for (const person of CONTRIBUTORS) {
+      expect(person.login.toLowerCase()).not.toContain('[bot]');
+      expect(person.avatarUrl.startsWith('https://')).toBe(true);
+      expect(person.htmlUrl.startsWith('https://github.com/')).toBe(true);
+    }
+  });
+
+  it('按 contributions 降序', () => {
+    const counts = CONTRIBUTORS.map((p) => p.contributions);
+    expect([...counts].sort((a, b) => b - a)).toEqual(counts);
+  });
+
+  it('面板里渲染出每一位的 login（头像是修饰，名字是必须的）', () => {
+    const node = aboutTab(view(), noop);
+    for (const person of CONTRIBUTORS) {
+      expect(node.textContent).toContain(person.login);
+    }
+  });
+
+  it('点头像/名字走 open，不触发面板其他动作', () => {
+    const node = aboutTab(view(), noop);
+    const first = node.querySelector('.contributor') as HTMLButtonElement;
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    first.click();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(String(open.mock.calls[0]?.[0])).toContain('github.com/');
+    open.mockRestore();
   });
 });

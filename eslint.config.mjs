@@ -209,6 +209,8 @@ export default tseslint.config(
       globals: {
         console: 'readonly',
         process: 'readonly',
+        // Node 18+ 有全局 fetch；我们的 check/gen 脚本用它（gen-contributors 调 GitHub API）
+        fetch: 'readonly',
         Buffer: 'readonly',
         __dirname: 'readonly',
         URL: 'readonly',

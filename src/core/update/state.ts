@@ -35,6 +35,21 @@ export interface PendingUpdate {
   at: number;
 }
 
+/**
+ * 一次**没生效**的更新。
+ *
+ * 判定方式只有一条：reload 之后 SW 启动时，`getManifest().version` 还是旧值。
+ * 这说明写进去的文件没有被加载 —— 最常见的原因是**用户选错了目录**
+ * （写进了 Downloads 里的旧解压目录，而不是当前加载的那个）。
+ *
+ * 不记这条的话，用户会看到"更新完成"然后发现版本没变，且毫无线索。
+ */
+export interface FailedUpdate {
+  /** 本该变成的版本 */
+  to: string;
+  at: number;
+}
+
 export interface UpdateState {
   /** 面板「自动检查」开关。**只**影响自动发起检查，不影响手动。 */
   autoCheckEnabled: boolean;
@@ -54,6 +69,8 @@ export interface UpdateState {
   pendingUpdate: PendingUpdate | null;
   /** 上一次成功生效的版本，用于开面板时提示"已更新到 vX"。 */
   lastAppliedVersion: string | null;
+  /** 上一次 reload 后没生效的更新（多半是目录选错了） */
+  lastFailedUpdate: FailedUpdate | null;
 }
 
 export const DEFAULT_UPDATE_STATE: UpdateState = {
@@ -66,6 +83,7 @@ export const DEFAULT_UPDATE_STATE: UpdateState = {
   dismissedVersion: null,
   pendingUpdate: null,
   lastAppliedVersion: null,
+  lastFailedUpdate: null,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -105,6 +123,13 @@ function parsePending(value: unknown): PendingUpdate | null {
   return { from, to, at: numOr(value.at, 0, 0) };
 }
 
+function parseFailed(value: unknown): FailedUpdate | null {
+  if (!isRecord(value)) return null;
+  const to = strOrNull(value.to);
+  if (!to) return null;
+  return { to, at: numOr(value.at, 0, 0) };
+}
+
 /**
  * 从 storage 里读出来的东西**一律不可信**（可能是上一个版本写的、可能被手改）。
  * 任何字段不合法就退回默认值，绝不让坏数据把整个更新流程卡死。
@@ -121,6 +146,7 @@ export function normalizeUpdateState(raw: unknown): UpdateState {
     dismissedVersion: strOrNull(raw.dismissedVersion),
     pendingUpdate: parsePending(raw.pendingUpdate),
     lastAppliedVersion: strOrNull(raw.lastAppliedVersion),
+    lastFailedUpdate: parseFailed(raw.lastFailedUpdate),
   };
 }
 
@@ -200,7 +226,17 @@ export function withPendingUpdate(state: UpdateState, pending: PendingUpdate): U
 }
 
 export function withApplied(state: UpdateState, version: string): UpdateState {
-  return { ...state, pendingUpdate: null, lastAppliedVersion: version };
+  return { ...state, pendingUpdate: null, lastAppliedVersion: version, lastFailedUpdate: null };
+}
+
+/**
+ * reload 后版本没变 ⇒ 这次更新**没生效**。
+ *
+ * 清掉 `pendingUpdate`（重试已经结束，答案就是"没成"），留下 `lastFailedUpdate`
+ * 让面板能说人话。不许静默 —— 用户为这件事点过一次目录授权。
+ */
+export function withFailedUpdate(state: UpdateState, failed: FailedUpdate): UpdateState {
+  return { ...state, pendingUpdate: null, lastFailedUpdate: failed };
 }
 
 /** 用于 UI 文案的三态。**不要让调用方自己拼**。 */

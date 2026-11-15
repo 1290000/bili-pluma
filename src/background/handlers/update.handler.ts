@@ -9,7 +9,14 @@
  */
 
 import { runCheck, type ReleaseSource } from '@core/update/check';
-import { resolvePhase, shouldPrompt, withAutoCheck, type UpdateState } from '@core/update/state';
+import {
+  resolvePhase,
+  shouldPrompt,
+  withApplied,
+  withAutoCheck,
+  withFailedUpdate,
+  type UpdateState,
+} from '@core/update/state';
 import { fetchLatestRelease } from '@platform/update/github';
 import { readUpdateState, writeUpdateState } from '@platform/update/state-store';
 import { UPDATE_MANUAL_COOLDOWN_MS } from '@shared/constants/update';
@@ -40,6 +47,7 @@ export function toStatusView(state: UpdateState, version: string): UpdateStatusV
     intervalDays: state.intervalDays,
     lastCheckAt: state.lastCheckAt,
     lastAppliedVersion: state.lastAppliedVersion,
+    lastFailedVersion: state.lastFailedUpdate?.to ?? null,
   };
 }
 
@@ -109,6 +117,32 @@ export async function handleUpdateAuto(enabled: boolean): Promise<{
   await writeUpdateState(state);
   await applyUpdateBadge(state, currentVersion());
   return { type: 'update/auto:ok', status: toStatusView(state, currentVersion()) };
+}
+
+/**
+ * SW 启动时的**更新后自检**。
+ *
+ * ## 这是"目录选错了"的唯一硬判据
+ *
+ * 更新窗口写完文件后记 `pendingUpdate { from, to }` 再 `runtime.reload()`。
+ * SW 重启时如果 `getManifest().version === to` → 真的生效了；
+ * 否则说明**写进去的文件没有被加载** —— 最常见就是用户选了另一个目录
+ * （比如 Downloads 里那个旧解压目录）。本地只能做浅校验（有没有 manifest），
+ * 证明不了"是不是当前加载的那个"，所以必须靠这一次重启来回答。
+ *
+ * ⚠️ 不许静默：用户为这件事点过一次目录授权，没成必须告诉他为什么。
+ */
+export async function checkPendingUpdate(): Promise<void> {
+  const state = await readUpdateState();
+  const pending = state.pendingUpdate;
+  if (!pending) return;
+
+  const version = currentVersion();
+  if (version === pending.to) {
+    await writeUpdateState(withApplied(state, version));
+    return;
+  }
+  await writeUpdateState(withFailedUpdate(state, { to: pending.to, at: pending.at }));
 }
 
 /**

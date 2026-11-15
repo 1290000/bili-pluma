@@ -12,6 +12,7 @@ import {
   withDismissed,
   withFailedCheck,
   withIntervalDays,
+  withFailedUpdate,
   withPendingUpdate,
   type UpdateState,
 } from '@core/update/state';
@@ -176,5 +177,36 @@ describe('resolvePhase', () => {
 
   it('有更新 ⇒ available', () => {
     expect(resolvePhase(stateWith({ latest: NEWER }), CURRENT)).toBe('available');
+  });
+});
+
+describe('更新后自检的两种结局（Step 6）', () => {
+  it('成功：withApplied 同时清掉 pendingUpdate 与失败记录', () => {
+    const before = withPendingUpdate(
+      withFailedUpdate(DEFAULT_UPDATE_STATE, { to: '1.0.0', at: 1 }),
+      { from: '1.1.0', to: '1.2.0', at: 2 },
+    );
+    const after = withApplied(before, '1.2.0');
+    expect(after.pendingUpdate).toBeNull();
+    expect(after.lastFailedUpdate).toBeNull();
+    expect(after.lastAppliedVersion).toBe('1.2.0');
+  });
+
+  it('失败：清掉 pendingUpdate 但**留下**失败记录（不许静默）', () => {
+    const before = withPendingUpdate(DEFAULT_UPDATE_STATE, { from: '1.1.0', to: '1.2.0', at: 2 });
+    const after = withFailedUpdate(before, { to: '1.2.0', at: 2 });
+    expect(after.pendingUpdate).toBeNull();
+    expect(after.lastFailedUpdate).toEqual({ to: '1.2.0', at: 2 });
+  });
+
+  it('坏数据里的 lastFailedUpdate 被归一化掉', () => {
+    expect(normalizeUpdateState({ lastFailedUpdate: { at: 1 } }).lastFailedUpdate).toBeNull();
+    expect(normalizeUpdateState({ lastFailedUpdate: 'x' }).lastFailedUpdate).toBeNull();
+    expect(
+      normalizeUpdateState({ lastFailedUpdate: { to: '1.2.0', at: 5 } }).lastFailedUpdate,
+    ).toEqual({
+      to: '1.2.0',
+      at: 5,
+    });
   });
 });

@@ -4,6 +4,7 @@ import {
   applyUpdateBadge,
   handleUpdateAuto,
   handleUpdateCheck,
+  checkPendingUpdate,
   handleUpdateStatus,
   runStartupUpdateCheck,
   toStatusView,
@@ -190,5 +191,37 @@ describe('runStartupUpdateCheck', () => {
     stubChrome(stateWith({ lastCheckAt: null }));
     vi.stubGlobal('fetch', () => Promise.reject(new TypeError('offline')));
     await expect(runStartupUpdateCheck()).resolves.toBeUndefined();
+  });
+});
+
+describe('checkPendingUpdate：唯一能判定"目录选错了"的地方', () => {
+  it('没有 pending ⇒ 什么都不做（不写状态）', async () => {
+    const h = stubChrome(DEFAULT_UPDATE_STATE);
+    await checkPendingUpdate();
+    expect(h.setCalls).toHaveLength(0);
+  });
+
+  it('reload 后版本等于目标 ⇒ 记为已生效', async () => {
+    const h = stubChrome(stateWith({ pendingUpdate: { from: '1.0.0', to: CURRENT, at: 111 } }));
+    await checkPendingUpdate();
+    const written = h.store.get(UPDATE_STATE_KEY) as UpdateState;
+    expect(written.pendingUpdate).toBeNull();
+    expect(written.lastAppliedVersion).toBe(CURRENT);
+  });
+
+  it('reload 后版本还是旧的 ⇒ 记为失败（多半选错目录）', async () => {
+    const h = stubChrome(stateWith({ pendingUpdate: { from: CURRENT, to: '1.2.0', at: 111 } }));
+    await checkPendingUpdate();
+    const written = h.store.get(UPDATE_STATE_KEY) as UpdateState;
+    expect(written.pendingUpdate).toBeNull();
+    expect(written.lastFailedUpdate?.to).toBe('1.2.0');
+    // 不许记成"已生效"
+    expect(written.lastAppliedVersion).toBeNull();
+  });
+
+  it('失败信息会出现在面板视图里', async () => {
+    stubChrome(stateWith({ lastFailedUpdate: { to: '1.2.0', at: 1 } }));
+    const reply = await handleUpdateStatus();
+    expect(reply.status.lastFailedVersion).toBe('1.2.0');
   });
 });

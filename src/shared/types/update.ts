@@ -41,4 +41,11 @@ export interface UpdateStatusView {
   lastCheckAt: number | null;
   /** 上一次成功生效的版本，用于"已更新到 vX" */
   lastAppliedVersion: string | null;
+  /**
+   * 上一次**没生效**的更新目标版本。
+   *
+   * 非 `null` 时面板必须说清楚："更新没有生效，可能选错目录了，请重新选目录
+   * 或在 edge://extensions 手动重新加载"。这是 Step 0 之后唯一能抓到这类错误的信号。
+   */
+  lastFailedVersion: string | null;
 }

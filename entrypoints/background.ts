@@ -26,6 +26,7 @@ import {
   handleUpdateCheck,
   handleUpdateOpen,
   handleUpdateStatus,
+  checkPendingUpdate,
   runStartupUpdateCheck,
 } from '@/src/background/handlers/update.handler';
 import {
@@ -665,5 +666,9 @@ export default defineBackground(() => {
   //
   // 放在最后、`void` 掉、内部自己 catch：它是后台行为，用户没在等它。
   // 闸门（开关 + 间隔 + 时钟回拨）在 core 的 `shouldCheck` 里，这里不做判断。
-  void runStartupUpdateCheck();
+  // 先核对"上一次更新到底生效没有"，再做自动检查（顺序不能反：
+  // 自检会清掉 pendingUpdate，检查会写 lastCheckAt，两者互不依赖但先答旧问题）
+  void checkPendingUpdate().finally(() => {
+    void runStartupUpdateCheck();
+  });
 });
