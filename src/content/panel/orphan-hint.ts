@@ -153,9 +153,20 @@ export function isExtensionContextAlive(): boolean {
     if (typeof chrome === 'undefined') return false;
     const runtime = chrome.runtime;
     if (!runtime) return false;
-    return typeof runtime.id === 'string' && runtime.id.length > 0;
+    if (typeof runtime.id !== 'string' || runtime.id.length === 0) return false;
+
+    /**
+     * 第二道判据：真的调一次 `getURL()`。
+     *
+     * 为什么不止看 `id`：`id` 是个**属性**，某些版本（或某些失效阶段）它还在，
+     * 而调用会抛。`getURL` 是**纯本地**的字符串拼接，不发消息、不唤醒 SW，
+     * 但失效上下文里任何 `chrome.*` 调用都会抛 `Extension context invalidated`。
+     * 两个判据任一不成立即判死 —— 宁可在极端情况下多提示一次（用户 F5 就恢复），
+     * 也不要漏判后留一个点了没反应的面板。
+     */
+    return typeof runtime.getURL('') === 'string';
   } catch {
-    // 访问失效上下文的属性本身就可能抛 —— 那也是"已死"
+    // 访问/调用失效上下文都会抛 —— 那就是"已死"
     return false;
   }
 }

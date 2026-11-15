@@ -9,7 +9,16 @@ import {
 } from '@/src/content/panel/orphan-hint';
 
 interface ChromeStub {
-  runtime?: { id?: string };
+  runtime?: {
+    id?: string;
+    getURL?: (path: string) => string;
+  };
+}
+
+/** 活着的 chrome：id 在，getURL 也能调。返回非可选类型 —— exactOptionalPropertyTypes 下
+ *  `runtime?:` 不接受显式 `undefined`。 */
+function aliveRuntime(): NonNullable<ChromeStub['runtime']> {
+  return { id: 'abc', getURL: (p) => `chrome-extension://abc/${p}` };
 }
 
 function stubChrome(value: ChromeStub | undefined): void {
@@ -23,17 +32,17 @@ afterEach(() => {
 
 describe('isExtensionContextAlive：纯本地判断', () => {
   it('有 runtime.id ⇒ 活着', () => {
-    stubChrome({ runtime: { id: 'abc' } });
+    stubChrome({ runtime: aliveRuntime() });
     expect(isExtensionContextAlive()).toBe(true);
   });
 
   it('id 变成 undefined（扩展被 reload 之后的状态）⇒ 已死', () => {
-    stubChrome({ runtime: {} });
+    stubChrome({ runtime: { getURL: () => 'x' } });
     expect(isExtensionContextAlive()).toBe(false);
   });
 
   it('id 是空串 ⇒ 已死（宁可多提示，也不留死壳）', () => {
-    stubChrome({ runtime: { id: '' } });
+    stubChrome({ runtime: { id: '', getURL: () => 'x' } });
     expect(isExtensionContextAlive()).toBe(false);
   });
 
@@ -41,6 +50,23 @@ describe('isExtensionContextAlive：纯本地判断', () => {
     stubChrome({});
     expect(isExtensionContextAlive()).toBe(false);
     stubChrome(undefined);
+    expect(isExtensionContextAlive()).toBe(false);
+  });
+
+  it('id 还在、但 getURL 抛 ⇒ 已死（这是"id 残留"那条假设的兜底）', () => {
+    stubChrome({
+      runtime: {
+        id: 'abc',
+        getURL: () => {
+          throw new Error('Extension context invalidated.');
+        },
+      },
+    });
+    expect(isExtensionContextAlive()).toBe(false);
+  });
+
+  it('缺 getURL 也算死（宁可多提示一次，也不要留死壳）', () => {
+    stubChrome({ runtime: { id: 'abc' } });
     expect(isExtensionContextAlive()).toBe(false);
   });
 
