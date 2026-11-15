@@ -643,6 +643,41 @@ function assertTestTotals(out, expected) {
     }
   }
 
+  /**
+   * ## 先剥 ANSI，再匹配（2026-11-15 修）
+   *
+   * ### 这条 bug 长什么样
+   *
+   * vitest 的摘要在**带颜色**的输出里长这样（`cat -v` 实测，2026-11-15）：
+   *
+   * ```
+   * ^[[2m Test Files ^[[22m ^[[1m^[[32m118 passed^[[39m^[[22m^[[90m (118)^[[39m
+   * ```
+   *
+   * 而原正则要求 `Test Files` 后面**紧跟空白 + 数字**，中间却被 `ESC[22m` 挡住
+   * ⇒ 永远匹配不到 ⇒ `test` 项**恒红**，文案是"在 vitest 输出里找不到 Test Files 行"，
+   * 而真实情况是 118 文件 / 1896 用例全过。
+   *
+   * ### 为什么必须修，而不是"知道它是假红灯就行"
+   *
+   * 一个**恒红**的检查项会让所有人开始无视它 —— 而它守的恰恰是
+   * "worker 静默跳过测试文件"这个最危险的失败形态（见 `vitest.config.ts` 里
+   * `fileParallelism` 的注释）。假红灯的真实代价不是"多看一眼"，是**这道闸整体失效**。
+   *
+   * ### 只剥颜色，不放宽任何判据
+   *
+   * `expected !== filesRan` 与 `testsRan === 0` 两道断言原样保留；
+   * 剥 ANSI 只让"读取摘要"这一步恢复工作，不改变任何阈值。
+   *
+   * 反向验证：把这一行换成 `const plain = out`（不剥）⇒ `test` 项立刻变回红
+   * （2026-11-15 实测：exit 1 / "找不到 Test Files 行"）。
+   *
+   * ⚠️ 正则用 `String.fromCharCode(0x1b)` 拼，不写字面量 `\u001b`：
+   * 源码里出现裸控制字符会被 eslint `no-control-regex` 拦下（本项就是 lint 的一环）。
+   */
+  const ansiEscape = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-9;]*m`, 'g');
+  const plain = out.replace(ansiEscape, '');
+
   // ⚠️ 取**最后一个**匹配，不是第一个（2026-11-10 修）。
   //
   // 为什么：vitest 的摘要打在输出**末尾**，而某个测试自己往 stdout 打印一行
@@ -651,9 +686,9 @@ function assertTestTotals(out, expected) {
   //
   // `matchAll` + 取末项：真实摘要永远在最后，所以末项才是真的。
   const filesMatches = [
-    ...out.matchAll(/Test Files\s+(?:(\d+)\s+failed\s*\|\s*)?(\d+)\s+passed(?:\s*\((\d+)\))?/g),
+    ...plain.matchAll(/Test Files\s+(?:(\d+)\s+failed\s*\|\s*)?(\d+)\s+passed(?:\s*\((\d+)\))?/g),
   ];
-  const testsMatches = [...out.matchAll(/Tests\s+(\d+)\s+passed(?:\s*\((\d+)\))?/g)];
+  const testsMatches = [...plain.matchAll(/Tests\s+(\d+)\s+passed(?:\s*\((\d+)\))?/g)];
 
   const filesMatch = filesMatches.at(-1);
   const testsMatch = testsMatches.at(-1);
