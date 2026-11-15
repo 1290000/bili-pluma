@@ -1,0 +1,180 @@
+import { describe, expect, it } from 'vitest';
+
+import {
+  DEFAULT_UPDATE_STATE,
+  isUpdateAvailable,
+  normalizeUpdateState,
+  resolvePhase,
+  shouldPrompt,
+  withApplied,
+  withAutoCheck,
+  withCheckResult,
+  withDismissed,
+  withFailedCheck,
+  withIntervalDays,
+  withPendingUpdate,
+  type UpdateState,
+} from '@core/update/state';
+
+const CURRENT = '1.1.0';
+
+function stateWith(over: Partial<UpdateState>): UpdateState {
+  return { ...DEFAULT_UPDATE_STATE, ...over };
+}
+
+const NEWER = {
+  version: '1.2.0',
+  zipUrl: 'https://example.invalid/pluma-1.2.0.zip',
+  sizeBytes: 289831,
+  publishedAt: '2026-11-16T00:00:00Z',
+};
+
+describe('normalizeUpdateState：坏数据一律退回默认值', () => {
+  it('null / 字符串 / 数字都不炸', () => {
+    for (const raw of [null, undefined, 'x', 42, []]) {
+      expect(normalizeUpdateState(raw)).toEqual(DEFAULT_UPDATE_STATE);
+    }
+  });
+
+  it('字段类型不对时逐个退回，不影响其他字段', () => {
+    const state = normalizeUpdateState({
+      autoCheckEnabled: 'yes',
+      intervalDays: 0,
+      lastCheckAt: 'yesterday',
+      etag: 12,
+      latest: { version: '1.2.0' },
+    });
+    expect(state.autoCheckEnabled).toBe(true);
+    expect(state.intervalDays).toBe(1);
+    expect(state.lastCheckAt).toBeNull();
+    expect(state.etag).toBeNull();
+    expect(state.latest).toBeNull();
+  });
+
+  it('合法的部分原样保留', () => {
+    const state = normalizeUpdateState({
+      autoCheckEnabled: false,
+      intervalDays: 3,
+      lastCheckAt: 1000,
+      latest: NEWER,
+      pendingUpdate: { from: '1.1.0', to: '1.2.0', at: 2000 },
+    });
+    expect(state.autoCheckEnabled).toBe(false);
+    expect(state.intervalDays).toBe(3);
+    expect(state.lastCheckAt).toBe(1000);
+    expect(state.latest?.version).toBe('1.2.0');
+    expect(state.pendingUpdate?.to).toBe('1.2.0');
+  });
+});
+
+describe('isUpdateAvailable', () => {
+  it('没有 latest ⇒ false', () => {
+    expect(isUpdateAvailable(DEFAULT_UPDATE_STATE, CURRENT)).toBe(false);
+  });
+
+  it('latest 更新 ⇒ true', () => {
+    expect(isUpdateAvailable(stateWith({ latest: NEWER }), CURRENT)).toBe(true);
+  });
+
+  it('latest 同版本 ⇒ false', () => {
+    expect(isUpdateAvailable(stateWith({ latest: { ...NEWER, version: CURRENT } }), CURRENT)).toBe(
+      false,
+    );
+  });
+
+  it('latest 版本号是垃圾 ⇒ false，而不是抛错把面板搞崩', () => {
+    expect(
+      isUpdateAvailable(stateWith({ latest: { ...NEWER, version: 'garbage' } }), CURRENT),
+    ).toBe(false);
+  });
+});
+
+describe('shouldPrompt：dismissed 只压提示，不改变"有更新"', () => {
+  it('没关过 ⇒ 提示', () => {
+    expect(shouldPrompt(stateWith({ latest: NEWER }), CURRENT)).toBe(true);
+  });
+
+  it('关掉过这一版 ⇒ 不提示，但仍然"有更新"', () => {
+    const state = stateWith({ latest: NEWER, dismissedVersion: '1.2.0' });
+    expect(shouldPrompt(state, CURRENT)).toBe(false);
+    expect(isUpdateAvailable(state, CURRENT)).toBe(true);
+  });
+
+  it('出了下一版 ⇒ 重新提示', () => {
+    const state = stateWith({ latest: { ...NEWER, version: '1.3.0' }, dismissedVersion: '1.2.0' });
+    expect(shouldPrompt(state, CURRENT)).toBe(true);
+  });
+});
+
+describe('状态转换', () => {
+  it('withAutoCheck 不清 lastCheckAt（重新打开开关后能立刻补查）', () => {
+    const state = withAutoCheck(stateWith({ lastCheckAt: 12345 }), false);
+    expect(state.autoCheckEnabled).toBe(false);
+    expect(state.lastCheckAt).toBe(12345);
+    expect(withAutoCheck(state, true).lastCheckAt).toBe(12345);
+  });
+
+  it('withCheckResult 记下时间、ETag 与最新版', () => {
+    const state = withCheckResult(DEFAULT_UPDATE_STATE, {
+      at: 999,
+      etag: 'W/"abc"',
+      latest: NEWER,
+    });
+    expect(state.lastCheckAt).toBe(999);
+    expect(state.etag).toBe('W/"abc"');
+    expect(state.latest?.version).toBe('1.2.0');
+  });
+
+  it('自动检查失败 ⇒ 状态原封不动（下次加载还得重试）', () => {
+    const before = stateWith({ lastCheckAt: 111 });
+    expect(withFailedCheck(before, 999, false)).toEqual(before);
+  });
+
+  it('手动检查失败 ⇒ 只记手动冷却', () => {
+    const state = withFailedCheck(stateWith({ lastCheckAt: 111 }), 999, true);
+    expect(state.lastManualCheckAt).toBe(999);
+    expect(state.lastCheckAt).toBe(111);
+  });
+
+  it('withDismissed 只动 dismissedVersion', () => {
+    const state = withDismissed(stateWith({ latest: NEWER }), '1.2.0');
+    expect(state.dismissedVersion).toBe('1.2.0');
+    expect(state.latest?.version).toBe('1.2.0');
+  });
+
+  it('withIntervalDays 把非法值夹到 1', () => {
+    expect(withIntervalDays(DEFAULT_UPDATE_STATE, 0).intervalDays).toBe(1);
+    expect(withIntervalDays(DEFAULT_UPDATE_STATE, -5).intervalDays).toBe(1);
+    expect(withIntervalDays(DEFAULT_UPDATE_STATE, 3.7).intervalDays).toBe(3);
+  });
+
+  it('withApplied 清掉 pendingUpdate 并记下版本', () => {
+    const pending = withPendingUpdate(DEFAULT_UPDATE_STATE, { from: '1.1.0', to: '1.2.0', at: 1 });
+    const applied = withApplied(pending, '1.2.0');
+    expect(applied.pendingUpdate).toBeNull();
+    expect(applied.lastAppliedVersion).toBe('1.2.0');
+  });
+});
+
+describe('resolvePhase', () => {
+  it('有 pendingUpdate 优先报 pending-reload', () => {
+    const state = stateWith({
+      latest: NEWER,
+      pendingUpdate: { from: '1.1.0', to: '1.2.0', at: 1 },
+    });
+    expect(resolvePhase(state, CURRENT)).toBe('pending-reload');
+  });
+
+  it('无更新 ⇒ idle', () => {
+    expect(resolvePhase(DEFAULT_UPDATE_STATE, CURRENT)).toBe('idle');
+  });
+
+  it('有更新但关过提示 ⇒ dismissed', () => {
+    const state = stateWith({ latest: NEWER, dismissedVersion: '1.2.0' });
+    expect(resolvePhase(state, CURRENT)).toBe('dismissed');
+  });
+
+  it('有更新 ⇒ available', () => {
+    expect(resolvePhase(stateWith({ latest: NEWER }), CURRENT)).toBe('available');
+  });
+});
