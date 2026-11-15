@@ -201,7 +201,7 @@ Copy-Item "$wb\references\*" "$dsh\references\" -Force
 
 ---
 
-## 7. 三个能力边界（都是实测）
+## 7. 能力边界（都是实测）
 
 ### 7a. `network` / `debug` 抓不到早期请求
 
@@ -277,6 +277,81 @@ node poc/probe/reload-extension.mjs --dry-run    # 只打印判断，不动任�
 > 两条硬规矩（换任何脚本都适用）：
 > 1. **不要打印密钥内容来"确认备份成功"**，连前缀都不要 —— 数文件和字节数就够。
 > 2. 真要做备份，**整目录搬到仓库之外**；`.gitignore` 不能当防线。
+
+---
+
+### 7d. `edge://` 进不去 ⇒ 两个动作只能人点
+
+`bsk open "edge://extensions/"`（0.5.0 实测）：
+
+```json
+{ "code": "cdp_failed", "message": "Detached while handling command.", "exit_code": 3 }
+```
+
+（0.3.3 时代报的是 `permission_denied / restricted_tab_url` —— 措辞变了，结果一样：
+**CDP 接不上，页面里的按钮点不了**。）
+
+| 只能人的动作 | 为什么 | 代价 |
+| --- | --- | --- |
+| 点扩展的「重新加载」 | `edge://` 连不上；`chrome.runtime.reload()` 只能扩展自己调 | 每次换构建都要叫一次人（本轮叫了 2 次） |
+| 拨「在 InPrivate 中允许」 | 同一个页面里的开关 | 环境重建时要再拨一次 |
+
+**另一条候选路径是「电脑操控」**（屏幕截图 + 模拟鼠标键盘）——它走屏幕层面，不受 URL 白名单约束。
+**2026-11-15 实测结论：Windows 桌面端支持，但解决不了这两个动作，仍按"人点"处理。**
+
+#### 它确实能点（这一层别怀疑）
+
+独立桌面（`child_session`）授权后，可以 `open_app` 起 Edge、地址栏敲 `edge://extensions`、
+滚动找到 Pluma 卡片并点击。**点击真的生效**，别信 GUI agent 的自述报告（本轮它的 `reasoning` 全空、
+`status=done`），要看落盘判据：
+
+```bash
+# 把「在 InPrivate 中允许」拨开后，这个字段从"不存在"变成 true
+python -c "
+import json,io
+p=r'C:\Users\i1290\.workbuddy\app\computer-use\profiles\msedge\Default\Secure Preferences'
+s=json.load(io.open(p,encoding='utf-8'))['extensions']['settings']
+print([ (k,v.get('incognito')) for k,v in s.items() if 'Pluma' in str(v.get('path')) ])"
+```
+
+#### 为什么还是不能用
+
+**① 它操作的不是日常那个浏览器。** 进程命令行是决定性的：
+
+| | user-data-dir |
+| --- | --- |
+| 日常 Edge（真机验收用它） | `C:\Users\i1290\AppData\Local\Microsoft\Edge\User Data` |
+| 电脑操控里的 Edge | `C:\Users\i1290\.workbuddy\app\computer-use\profiles\msedge` |
+
+副本 profile 里 Pluma 也是**解压自** `D:\Projects\Pluma\.output\chrome-mv3`（`Secure Preferences`
+里 `location=4`），所以「点重新加载」只重载了**副本实例**里的扩展 ⇒ **日常浏览器仍是旧构建**。
+而真机验收要登录态，副本 profile 拿不到 ⇒ 换完构建还是得叫人点。
+
+**② 它会污染 bsk 的浏览器清单。** 副本 Edge 以**第二个浏览器**身份连上 daemon：
+
+```bash
+bsk browsers     # 用完会看到两条 edge 实例
+bsk doctor       # 2 browser(s) connected —— 后续真机验证可能连到错的那个
+```
+
+用完必须清掉，并确认回落：
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" | Where-Object { $_.SessionId -eq 2 } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+# 然后 bsk doctor 应回到 1 browser(s) connected
+```
+
+**③ 副本 profile 自带一堆孤儿扩展**（篡改猴 / ChatGPT / WebRTC Control / XDown 显示
+「此扩展可能已损坏」、`path` 为空）。是这份克隆 profile 的历史残留，**不是操作点坏的**，别去"修"。
+
+#### 环境事实（下次别再重新发现）
+
+- `WORKBUDDY_COMPUTER_USE_BACKGROUND_DISABLED=1` ⇒ `gui_list_windows` 只返回 `screen`，
+  **拿不到后台 app 窗口**；而且传 `screen` 也会被路由到独立桌面。
+- 首次使用要用户点一次 UAC：`gui_permission_status` → `setup_state: requires_setup` →
+  `gui_setup_permission`（原地轮询，用户点完「去授权」→「是」后返回 `all_granted`）。
+- GUI agent 每轮 10 步、自述报告不可信 ⇒ 判定一律用可落盘的副作用。
 
 ---
 
