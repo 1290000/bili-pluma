@@ -1286,6 +1286,23 @@ export function aboutTab(
   version.setAttribute('data-testid', 'update-version');
   box.appendChild(version);
 
+  /**
+   * 「上次更新没生效」—— 这条不能省。
+   *
+   * 用户为更新点过一次目录授权；如果写进去的文件没被加载（多半选错了目录），
+   * 不说清楚的话他会看到"更新完成"而版本没变，然后完全无从下手。
+   * 类名用 `.pane-note.warn`（琥珀色），不是 `.warning` —— 后者不存在。
+   */
+  if (view.lastFailedVersion) {
+    const failed = el(
+      'p',
+      'pane-note warn',
+      `上次更新到 v${view.lastFailedVersion} 没有生效 —— 可能选错目录了。重新选一次目录，或在扩展详情页点「重新加载」。`,
+    );
+    failed.setAttribute('data-testid', 'update-failed');
+    box.appendChild(failed);
+  }
+
   const checked = el(
     'p',
     'pane-note',

@@ -167,3 +167,11 @@ describe('贡献者清单（Step 7）', () => {
     open.mockRestore();
   });
 });
+
+describe('失败提示的样式类（真机截图暴露过一次）', () => {
+  it('用的是现有的 .warn，不是不存在的 .warning', () => {
+    const node = aboutTab(view({ lastFailedVersion: '1.2.0' }), noop);
+    const el = node.querySelector('[data-testid="update-failed"]');
+    expect(el?.className).toBe('pane-note warn');
+  });
+});
