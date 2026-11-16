@@ -21,7 +21,9 @@ body {
   font-size: var(--pluma-font-body, 13px);
   line-height: 1.6;
   color: var(--pluma-text, #222);
-  background: var(--pluma-surface, #fff);
+  /* 2026-11-16（Stage 4）：窗口底 = canvas 一档灰，步骤卡用 surface 浮起来。
+     独立窗口不套模糊材质（背后是空窗口，没有东西可采样）。 */
+  background: var(--pluma-canvas, #f1f2f1);
 }
 
 h1 {
@@ -50,8 +52,9 @@ p {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border: 0.5px solid var(--pluma-border, #d0d0d0);
+  /* 靠明度差分层，不画描边（与面板里的卡同一个道理） */
   border-radius: var(--pluma-radius-card, 12px);
+  background: var(--pluma-surface, #fff);
   margin-bottom: 14px;
 }
 
@@ -153,11 +156,15 @@ p {
   opacity: 0.5;
 }
 
+/* 4px + 圆头：6px 的方条在这个窗口里像一根硬边 */
 progress {
   display: block;
   width: 100%;
-  height: 6px;
+  height: 4px;
   margin-top: 10px;
+  border-radius: var(--pluma-radius-pill, 999px);
+  accent-color: var(--pluma-accent);
+  overflow: hidden;
 }
 
 /* 状态行：空时由 main.ts 加 hidden，不留空行占位 */
@@ -200,8 +207,12 @@ progress {
 
 .log {
   margin: 8px 0 0;
+  padding: 8px 10px;
   max-height: 180px;
   overflow: auto;
+  /* 凹陷面：日志是"只读、可能很长"的东西，给它一个明确的边界，别和服务文案混在一起 */
+  background: var(--pluma-sunken, #e9eae9);
+  border-radius: var(--pluma-radius-control, 8px);
   font-size: var(--pluma-font-caption, 12px);
   white-space: pre-wrap;
   word-break: break-all;
