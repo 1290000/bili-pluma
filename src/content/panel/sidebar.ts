@@ -346,18 +346,12 @@ export const PANEL_CSS = `
   display: none;
 }
 
-/* ── 「关于」Tab（02-ui-spec §5.3，2026-11-17 排版改造）──
-   关于页"不协调"的根因是**组与组之间和组内元素之间用了同一个间距**（都 6px），
-   不是缺装饰。所以这里只做一件事：组间距 12px，组内 4~6px。
-   ⚠️ **不许改全局 「.tab-pane」 的 6px** —— 另外 4 个 Tab 都吃那条。
-
-   ⚠️ 选择器写的是「.tab-pane.about-pane」（两个类），**不是** 「.about-pane」。
-   原因：这条块排在本文件靠前的位置，而 「.tab-pane」/「.diag-section」 在它之后，
-   同权重下后者会赢 —— 写成「.about-pane」会被静默吃掉（12px 永远是 6px）。
-   用两个类把权重抬到 0,2,0，就与顺序无关。CSS 没有单测兜这条，只能靠这里写清楚。 */
-.tab-pane.about-pane {
-  gap: 12px;
-}
+/* ── 「关于」Tab 的组间距：**已升级为全局规则**（2026-11-16 裁决 E）──
+   原来这里有一条「.tab-pane.about-pane { gap: 12px }」，理由写在它的注释里：
+   "关于页不协调的根因是组间距与组内间距同值"。但那是**所有 Tab 的**问题，
+   只给关于页打补丁意味着每加一个 Tab 都要再打一次。
+   现在 「.tab-pane」 全局 12px，「.about-pane」 这个修饰类已经**没有样式职责**，
+   从 DOM 里删掉了（契约测试同步移除）。 */
 
 /* 元信息卡：与 「.unlock-card」 **同一款**（padding / 边框 / 圆角 / 底色），
    不新造一套卡视觉。卡内 4px 是"行距"，与组间距 12px 是两个量级。
@@ -395,12 +389,6 @@ export const PANEL_CSS = `
 /* 「上次检查」不是主角，值也用 muted —— 否则三个值权重一样，看不清哪个是重点 */
 .about-meta .diag-value.soft {
   color: var(--pluma-text-muted);
-}
-
-/* 并排按钮行在 flex 列里不再叠 margin：组间距已经由 「.about-pane」 的 gap 给出，
-   留着这条 8px 会变成"12 + 8 = 20px"，与其它组不一致 */
-.about-pane .acct-actions {
-  margin-top: 0;
 }
 
 /* 主操作按钮：只换填充，**高度/圆角/字号完全沿用 「.acct-btn」**。
@@ -512,10 +500,14 @@ export const PANEL_CSS = `
   padding-top: 8px;
 }
 
+/* 组间距 **12px，全局唯一值**（2026-11-16 裁决 E）。
+   原来是 6px —— 组与组、组与组内元素同值，读起来是一条没有层级的长列表。
+   组内自己用 4px（卡内行距）与 6px（同组控件）拉开，见各组件。
+   ⚠️ 「.about-pane」那个局部补丁已删：它是同一个问题的第一次发作。 */
 .tab-pane {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 12px;
 }
 
 /* ── 状态胶囊 ──
@@ -885,7 +877,9 @@ export const PANEL_CSS = `
 .acct-actions {
   display: flex;
   gap: 6px;
-  margin-top: 8px;
+  /* 不再自己叠 margin：组间距由 .tab-pane 的 12px 给（2026-11-16 裁决 E）。
+     以前这里是 8px，只有关于页靠一条 .about-pane 覆盖归零，账号页会变成 12+8=20。 */
+  margin-top: 0;
 }
 
 .acct-btn {

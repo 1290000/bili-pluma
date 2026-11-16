@@ -1381,13 +1381,11 @@ export function aboutTab(
   },
 ): HTMLElement {
   /**
-   * `.about-pane` 只做一件事：把组间距从 `.tab-pane` 的 6px 放大到 12px。
-   *
-   * ⚠️ **不许直接改 `.tab-pane`** —— 另外 4 个 Tab 都吃那条全局规则，
-   * 而关于页"不协调"的根因是"组与组之间和组内元素之间用了同一个间距"，
-   * 不是因为它缺装饰。
+   * 组间距由 `.tab-pane` 的 12px 统一给出（2026-11-16 裁决 E）。
+   * 以前这里挂 `.about-pane` 把 6px 局部放大到 12px —— 那个补丁已删：
+   * "组内外同间距"是所有 Tab 的问题，不是关于页独有的。
    */
-  const box = el('div', 'tab-pane about-pane');
+  const box = el('div', 'tab-pane');
 
   if (!view) {
     box.appendChild(el('p', 'diag-section', '更新'));
