@@ -235,7 +235,10 @@ export const PANEL_CSS = `
   display: flex;
   gap: 2px;
   padding-bottom: 6px;
-  border-bottom: 0.5px solid var(--pluma-border);
+  /* 这里**不再画线**（2026-11-16 改版）。原来 `.sheet-head` 一条 + `.tabs` 一条，
+     两条相距 6px，看起来像表格的双层线；而参考图实测只有标题下那一根
+     （截图竖扫 y≈56 有线、Tab 行下方没有）。
+     分隔改由激活 Tab 的 2px 下划线承担 —— 见 `.tab.active`。 */
 }
 
 .tab {
