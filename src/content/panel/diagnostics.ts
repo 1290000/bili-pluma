@@ -250,9 +250,21 @@ export function downloadJson(text: string, fileName: string): void {
   }, 0);
 }
 
-/** 一行自检事实：`ok===true` 绿 / `false` 红 / 省略中性 */
+/**
+ * 一行自检事实：`ok===true` 绿 / `false` 红 / 省略中性。
+ *
+ * ## 2026-11-16：行首加状态点
+ *
+ * 原来只有**数值**变颜色 —— 一屏十几行时，观众要靠读右列的每一个字才能判断
+ * "哪几项不对"。加一个 6px 的点在最左列，这一列就成了纵向扫描轴（方案 §2.1 D3）。
+ *
+ * ⚠️ **`ok === undefined` 也要渲染一个透明点**：不能"没有状态就不占位"，
+ * 否则同一列里有点与没点的行，标签起始位置差 12px，看起来像没对齐。
+ */
 function factRow(r: DiagRow): HTMLElement {
-  const row = el('div', `diag-row${r.ok === true ? ' ok' : r.ok === false ? ' bad' : ''}`);
+  const tone = r.ok === true ? ' ok' : r.ok === false ? ' bad' : '';
+  const row = el('div', `diag-row${tone}`);
+  row.appendChild(el('span', 'diag-dot'));
   row.appendChild(el('span', 'diag-label', r.label));
   row.appendChild(el('span', 'diag-value', r.value));
   return row;
@@ -404,6 +416,8 @@ export function diagnosticsPane(
   if (!meta.ok) {
     box.appendChild(el('p', 'diag-section', '诊断日志'));
     const failed = el('div', 'diag-row bad');
+    // 与 factRow 同样的点占位，保证这一行与上面几行的标签左边缘对齐
+    failed.appendChild(el('span', 'diag-dot'));
     failed.appendChild(el('span', 'diag-label', '诊断日志读取失败'));
     /**
      * 文案只说**用户能做的事**，不解释内部原因（§5.2：不把内部错误原样泼给用户）。

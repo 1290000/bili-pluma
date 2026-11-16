@@ -991,14 +991,34 @@ export const PANEL_CSS = `
   gap: 3px;
 }
 
+/* 诊断事实行（2026-11-16）：行首 6px 状态点 + label + 右对齐 value。
+   原来是 space-between + baseline —— 加点之后 space-between 会把 label 推向中间，
+   所以改成"点 + label（不伸）+ value（伸满并右对齐）"，点这一列自然对齐。 */
 .diag-row {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   padding: 2px 0;
   font-size: var(--pluma-font-caption);
   line-height: 1.4;
+}
+
+/* 状态点：ok 用 --pluma-ok-dot（更鲜的绿，只给圆点）、bad 用危险色、
+   没有状态时透明但仍占 6px（否则整列错位） */
+.diag-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.diag-row.ok .diag-dot {
+  background: var(--pluma-ok-dot);
+}
+
+.diag-row.bad .diag-dot {
+  background: var(--pluma-danger);
 }
 
 .diag-label {
@@ -1016,9 +1036,11 @@ export const PANEL_CSS = `
   word-break: break-all;
 }
 
-/* ok===true 绿 / false 红 / 省略中性 —— 与 02-ui-spec §4.2 的自检行同一语义 */
+/* ok===true 绿 / false 红 / 省略中性 —— 与 02-ui-spec §4.2 的自检行同一语义。
+   2026-11-16：ok 从 accent 蓝改成 --pluma-ok 绿 —— 这是"事实：正常"，
+   与 pill-good 同一个语义（裁决 A）。蓝只留给交互。 */
 .diag-row.ok .diag-value {
-  color: var(--pluma-accent);
+  color: var(--pluma-ok);
 }
 
 .diag-row.bad .diag-value {
