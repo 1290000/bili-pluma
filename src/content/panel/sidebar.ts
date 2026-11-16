@@ -95,15 +95,57 @@ export const PANEL_CSS = `
      上限仍是 02-ui-spec 的口径：不许出现横向滚动。 */
   width: 280px;
   padding: 12px 14px 14px;
-  background: var(--pluma-surface);
-  border: 0.5px solid var(--pluma-border);
-  border-left: none;
+  /* 底板 = **一层材质**，不再是"实色 + 描边 + 投影"三件套（2026-11-16 改版，方案 §2.2）。
+     材质必须铺在 ::before 而不是 .sheet 上：写在容器上会让后代（二级浮层）拿到
+     新的 fixed 包含块，定位整体错位 —— 这是 DSH 「MenuSurface.module.css」 的原话。
+     border 也必须为 0：0.5px 描边是 elevation 的**第一层**，两者并存会画成双线。 */
+  border: 0;
   border-radius: 0 var(--pluma-radius-card) var(--pluma-radius-card) 0;
   color: var(--pluma-text);
   font-size: var(--pluma-font-body);
   line-height: 1.5;
   pointer-events: auto;
-  box-shadow: 0 4px 16px color-mix(in srgb, var(--pluma-text) 12%, transparent);
+  position: relative;
+  isolation: isolate;
+  box-shadow: var(--pluma-elevation-panel);
+}
+
+/* 材质层：70% 近白 + 40px 模糊（照搬 DSH 的值，见 tokens.css）。
+   「inset:0」 + 「z-index:-1」 + 「border-radius:inherit」：只铺在内容下面，且跟着容器圆角走。
+   ⚠️ 容器上不许出现 「opacity」 —— 那会让材质停止采样页面，模糊直接失效。 */
+.sheet::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--pluma-menu-fill);
+  backdrop-filter: var(--pluma-menu-blur);
+  pointer-events: none;
+}
+
+/* 回退：内核不认 backdrop-filter 时，只剩一层 70% 透明 —— 换成实色。
+   v1 只支持 Chrome/Edge（AGENTS §3 第 9 条），但"不认"不等于"不存在"：
+   旧内核、被禁用的 GPU 合成都可能走到这里，那时面板会变成"能看见页面文字"。 */
+@supports not (backdrop-filter: blur(1px)) {
+  .sheet {
+    background: var(--pluma-surface);
+  }
+
+  .sheet::before {
+    display: none;
+  }
+}
+
+/* 系统级"减少透明"偏好：直接给实色，不跟用户对着干 */
+@media (prefers-reduced-transparency: reduce) {
+  .sheet {
+    background: var(--pluma-surface);
+  }
+
+  .sheet::before {
+    display: none;
+  }
 }
 
 /* 展开时隐藏贴边条：两者并排会多出 8px 的空隙，看起来像没对齐 */
