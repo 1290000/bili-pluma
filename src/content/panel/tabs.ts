@@ -19,7 +19,7 @@ import type { CleanOptionKey, CleanPreferences } from '@/src/content/site-clean/
 import { CLEAN_OPTION_META } from '@/src/content/site-clean/clean-options';
 import { OBSERVED_CATEGORIES } from '@/src/content/site-clean/home-selectors';
 import { describeAdDebugCaveat, type AccountView, type QualityView } from './panel-data';
-import { el, iconChevron, pill, switchRow } from './dom';
+import { el, iconChevron, iconSwap, pill, switchRow } from './dom';
 import { describeExpiry, describeHealth } from '@core/ui/popup-state';
 import { describeStreamingIdentity } from '@core/ui/streaming-pill';
 import { isNewerThan } from '@core/update/state';
@@ -927,30 +927,37 @@ export function accountTab(
     {
       const identity = actions.streamingIdentity;
       const known = identity !== null;
-      const pill = known
-        ? describeStreamingIdentity(identity)
-        : {
-            label: '取流身份：未知',
-            accent: false,
-            /**
-             * 未知态**不强调**：`accent` 是"这是当前生效的身份"的视觉信号，
-             * 而未知时我们连它是什么都不知道。
-             */
-            stale: true,
-          };
-      const pillEl = el('span', pill.accent ? 'acct-tag accent' : 'acct-tag', pill.label);
+      const button = el('button', `acct-identity-btn${known ? '' : ' unknown'}`);
+
+      /**
+       * ## 为什么不再显示「取流：扩展账号」这行字（2026-11-16）
+       *
+       * 用户原话：「取流：扩展账号这几个字可以删了」。
+       *
+       * 那行字当时有三个问题，都不是"再多写几个字能解决"的：
+       *   1. 与 B 卡里的「仅取流」重复 —— 同一件事说两遍
+       *   2. 在「已停用」状态下照样显示，读起来自相矛盾：
+       *      面板说停用了，这行却说用扩展账号取流（它显示的是**设置值**，
+       *      不是**当前生效值**）
+       *   3. 它真正承载的信息只有"点我能切"，那是图标该干的活
+       *
+       * 现在只留一个 12px 的双向箭头，命中区 24px（`.acct-identity-btn`）。
+       * 当前用谁取流、点了会变成谁，全放 `title` / `aria-label` 里 ——
+       * 想知道的用户悬停或读屏都能拿到，不想看的用户不必每眼都扫一遍。
+       */
+      button.type = 'button';
+      button.appendChild(iconSwap(12));
 
       if (known) {
         /**
          * 可点：`toggleStreamingIdentity` 现在是**必填**（见 `AccountActions` 的注释），
          * 所以这里不再需要"有没有回调"的分支 —— 那就跳过了一个"渲染了点不动的按钮"的坑。
          */
-        pillEl.setAttribute('role', 'button');
-        pillEl.setAttribute('tabindex', '0');
-        pillEl.style.cursor = 'pointer';
-        pillEl.title = pill.accent
-          ? '点击改为用浏览器当前登录的账号取流'
-          : '点击改为改用扩展账号取流';
+        const current = describeStreamingIdentity(identity).label;
+        const next = identity === 'extension' ? '浏览器账号' : '扩展账号';
+        const label = `${current} · 点击改为${next}取流`;
+        button.title = label;
+        button.setAttribute('aria-label', label);
 
         const toggle = actions.toggleStreamingIdentity;
         const fire = (ev: Event): void => {
@@ -959,17 +966,21 @@ export function accountTab(
           // 传**目标值**而不是"取反"：调用方不需要自己算 next，也就不可能算错
           toggle(identity === 'extension' ? 'page' : 'extension');
         };
-        pillEl.addEventListener('click', fire);
-        pillEl.addEventListener('keydown', (ev) => {
-          if (ev.key === 'Enter' || ev.key === ' ') fire(ev);
-        });
+        /**
+         * ⚠️ 不用再挂 `keydown`：`<button>` 原生把 Enter / Space 转成 click。
+         * 原来那个 span + `role="button"` 才必须手写键盘处理。
+         */
+        button.addEventListener('click', fire);
       } else {
         /**
          * 未知态：**留痕但不给动作**。
          *
          * `title` 说明"为什么不能点"，而不是让用户点一下没反应（那更糟）。
          */
-        pillEl.title = '还没读到取流身份设置。收起重开面板会重新读取。';
+        const note = '还没读到取流身份设置。收起重开面板会重新读取。';
+        button.title = note;
+        button.setAttribute('aria-label', note);
+        button.disabled = true;
       }
 
       /**
@@ -1008,8 +1019,14 @@ export function accountTab(
        *
        * 它**本来就该占剩余空间**。问题在胶囊不收缩（`flex: 0 0 auto`），不在 main。
        * 把 main 改成 `flex: 1 1 0` 之类只会让它更窄。
+       *
+       * ### 2026-11-16：胶囊换成 24px 图标后，这行只剩 24px
+       *
+       * 上面那 67px 是文字胶囊的宽度。换成图标后降到 24，`.acct-main` 的余量
+       * 只会更宽 —— "昵称被挤断"这件事不会再发生。它仍然留在卡片**外面**：
+       * 表达的是设置，不是这个账号的属性。
        */
-      pillRow.appendChild(pillEl);
+      pillRow.appendChild(button);
     }
 
     box.appendChild(playbackRow);

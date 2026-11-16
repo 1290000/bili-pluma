@@ -831,11 +831,13 @@ describe('取流身份胶囊（步骤 4，2026-11-11）', () => {
     });
   }
 
-  it('extension → 胶囊写「取流：扩展账号」', () => {
-    expect(render('extension').textContent).toContain('取流：扩展账号');
+  it('extension → 图标按钮的 aria-label 写明当前用扩展账号取流', () => {
+    const btn = render('extension').querySelector('.acct-identity-btn');
+    expect(btn?.getAttribute('aria-label')).toContain('取流：扩展账号');
   });
-  it('page → 胶囊写「取流：浏览器账号」', () => {
-    expect(render('page').textContent).toContain('取流：浏览器账号');
+  it('page → 图标按钮的 aria-label 写明当前用浏览器账号取流', () => {
+    const btn = render('page').querySelector('.acct-identity-btn');
+    expect(btn?.getAttribute('aria-label')).toContain('取流：浏览器账号');
   });
 
   it('★★ identity 为 null（还没读出来）→ **胶囊仍然渲染**，显示「取流身份：未知」', () => {
@@ -856,10 +858,16 @@ describe('取流身份胶囊（步骤 4，2026-11-11）', () => {
      * 正确做法：**内容仍是"未知"（不编数据），但入口要留着**。
      */
     const box = render(null);
-    expect(box.textContent).toContain('取流身份：未知');
+    const btn = box.querySelector('.acct-identity-btn');
+    /**
+     * 2026-11-16：文字胶囊换成 24px 图标后，"内容"落在 `aria-label` 上
+     * （视觉上没有字了）。判据本身没变：入口要在、且不许冒充真实身份。
+     */
+    expect(btn).not.toBeNull();
+    expect(btn?.getAttribute('aria-label')).toContain('还没读到取流身份设置');
     // 未知态**不许**冒充任何一个真实身份
-    expect(box.textContent).not.toContain('取流：扩展账号');
-    expect(box.textContent).not.toContain('取流：浏览器账号');
+    expect(btn?.getAttribute('aria-label')).not.toContain('扩展账号');
+    expect(btn?.getAttribute('aria-label')).not.toContain('浏览器账号');
   });
 
   it('★ 未知态**不可点**（目标不确定，点了可能违反预期）', () => {
@@ -871,14 +879,14 @@ describe('取流身份胶囊（步骤 4，2026-11-11）', () => {
      *
      * 反向验证：把未知态也设成 `role="button"` → 本用例红。
      */
-    const box = render(null);
-    expect(box.querySelector('[role="button"]')).toBeNull();
+    const btn = render(null).querySelector<HTMLButtonElement>('.acct-identity-btn');
+    expect(btn?.disabled).toBe(true);
   });
 
   it('有回调 → 可点，点击时传「目标值」而不是"取反"', () => {
     const spy = vi.fn();
     const box = render('extension', spy);
-    const pillEl = box.querySelector('[role="button"]');
+    const pillEl = box.querySelector('.acct-identity-btn');
     expect(pillEl).not.toBeNull();
     pillEl?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(spy).toHaveBeenCalledWith('page');
@@ -887,7 +895,9 @@ describe('取流身份胶囊（步骤 4，2026-11-11）', () => {
   it('page 状态下点击 → 目标值是 extension', () => {
     const spy = vi.fn();
     const box = render('page', spy);
-    box.querySelector('[role="button"]')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    box
+      .querySelector('.acct-identity-btn')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     expect(spy).toHaveBeenCalledWith('extension');
   });
 
@@ -901,7 +911,7 @@ describe('取流身份胶囊（步骤 4，2026-11-11）', () => {
      * 防的是"B 卡渲染两次"或"胶囊在 `pb` 有值/无值两个分支各加一次"这类回归。
      */
     const box = render('extension');
-    expect(box.querySelectorAll('[role="button"]').length).toBe(1);
+    expect(box.querySelectorAll('.acct-identity-btn').length).toBe(1);
   });
 
   it('★ 任何状态下都不出现「停用」「关闭」字样', () => {

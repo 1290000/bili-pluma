@@ -876,6 +876,42 @@ export const PANEL_CSS = `
   margin-top: 2px;
 }
 
+/* 取流身份切换：24px 图标按钮（2026-11-16）。
+   原来这里是一行「取流：扩展账号」—— 与 B 卡的「仅取流」重复，
+   而且在「已停用」状态下照样显示（说的是设置值，不是生效值），读起来矛盾。
+   现在只留 ⇄ 图标；"当前用谁、点了变谁"都在 title / aria-label 里。
+   颜色用 accent：这是**可执行的动作**，符合「蓝只给当前/可执行」。 */
+.acct-identity-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: var(--pluma-radius-chip);
+  background: transparent;
+  color: var(--pluma-accent);
+  cursor: pointer;
+  transition: background-color var(--pluma-duration) var(--pluma-ease);
+}
+
+.acct-identity-btn:hover {
+  background: var(--pluma-accent-soft);
+}
+
+/* 未知态 = 读不到设置，**此刻不可操作**。
+   用中性色而不是整块变淡：这与「dim（本质不可用）」是两种灰，
+   混用会让用户以为功能坏了。 */
+.acct-identity-btn.unknown {
+  color: var(--pluma-text-muted);
+  cursor: default;
+}
+
+.acct-identity-btn.unknown:hover {
+  background: transparent;
+}
+
 .acct-name {
   font-size: var(--pluma-font-body);
   overflow: hidden;

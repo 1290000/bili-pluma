@@ -67,6 +67,7 @@ const CONTRACT: Record<string, readonly string[]> = {
     'acct-avatar',
     'acct-main',
     'acct-pill-row',
+    'acct-identity-btn',
     'acct-name',
     'acct-sub',
     'acct-tag',

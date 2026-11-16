@@ -161,6 +161,44 @@ export function replaceChildren(container: HTMLElement, children: readonly Node[
 }
 
 /**
+ * 双向箭头（取流身份切换）。
+ *
+ * ## 为什么是图标而不是一行文字
+ *
+ * 原来这里渲染「取流：扩展账号」—— 与 B 卡里的「仅取流」重复，
+ * 而且它在"已停用"状态下照样显示，读起来自相矛盾（面板说停用了，
+ * 这行却说用扩展账号取流）。它承载的唯一新信息是"点我能切"，
+ * 那用图标表达更省地方，也不跟账号属性抢注意力。
+ *
+ * @param size 图标边长；命中区由 CSS 的 `.acct-identity-btn` 给（24px）
+ */
+export function iconSwap(size = 12): SVGSVGElement {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 12 12');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.style.pointerEvents = 'none';
+  svg.style.flex = '0 0 auto';
+
+  // 上下两条反向箭头：3,4.5 → 9,4.5 与 9,7.5 → 3,7.5
+  const top = document.createElementNS(NS, 'path');
+  top.setAttribute('d', 'M3 4.5h6M7.5 2.5 9.5 4.5 7.5 6.5');
+  const bottom = document.createElementNS(NS, 'path');
+  bottom.setAttribute('d', 'M9 7.5H3M4.5 5.5 2.5 7.5 4.5 9.5');
+  svg.appendChild(top);
+  svg.appendChild(bottom);
+
+  return svg;
+}
+
+/**
  * 方向箭头（二级入口的 `›` / 返回条的 `‹`）。
  *
  * ## 为什么不用 `▸` `‹` 字符
