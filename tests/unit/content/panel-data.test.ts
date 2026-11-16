@@ -114,7 +114,7 @@ describe('buildQualityView：非播放页不许编数据', () => {
     const unlock = {
       title: '已解锁',
       badges: ['4K'],
-      anchor: '主账号仅可用 1080P',
+      anchor: '主账号最高 1080P',
       improved: true,
     };
     const v = buildQualityView({
@@ -205,7 +205,7 @@ describe('★ 播放页：区分"等数据"与"通道断了"（2026-11-10 真机
   });
 
   it('有 unlock 时原样用 unlock，不被占位覆盖', () => {
-    const real = { title: '已解锁', badges: ['4K'], anchor: '主账号仅可用 1080P', improved: true };
+    const real = { title: '已解锁', badges: ['4K'], anchor: '主账号最高 1080P', improved: true };
     const v = buildQualityView({
       view: { pill: '已接管', tone: 'good' },
       unlock: real,

@@ -284,7 +284,20 @@ function anchorText(view: PageTracksView): string {
     const topId = [...cap.topQualityIds].sort((a, b) => b - a)[0];
     const byId = topId === undefined ? undefined : QUALITY_NAMES[topId];
     const label = byId ?? heightLabel(cap.maxHeight);
-    return label ? `主账号仅可用 ${label}` : `主账号仅可用 ${String(cap.maxHeight)}p`;
+    /**
+     * ## 「仅可用」改成「最高」（2026-11-17，用户反馈）
+     *
+     * 用户原话：「当浏览器账号和扩展账号都有大会员时，画质界面显示……
+     * 主账号仅可用杜比视界，这个描述明显是不对的」。
+     *
+     * 「仅可用」在**顶配档位**上读起来像贬低：杜比视界是本片最高档，
+     * 说"仅可用杜比视界"等于说"你只有这个"，而事实是"你已经有最好的了"。
+     *
+     * 「最高」两种情况下都准确：
+     *   - 主账号最高 1080P（本片有 4K）→ 上限是 1080P，该提升
+     *   - 主账号最高 杜比视界（本片顶配）→ 上限就是顶配，无需提升
+     */
+    return label ? `主账号最高 ${label}` : `主账号最高 ${String(cap.maxHeight)}p`;
   }
 
   /**
@@ -488,14 +501,35 @@ export function describeUnlock(
     for (const id of ids) if (id > top) top = id;
     return top;
   };
+  const primaryTop = primaryCap === null ? -1 : topId(primaryCap.topQualityIds);
+  const playbackTop = topId(playback.topQualityIds);
   const same =
     primaryCap !== null &&
     primaryCap.maxHeight === playback.maxHeight &&
     primaryCap.hasHiRes === playback.hasHiRes &&
-    topId(primaryCap.topQualityIds) === topId(playback.topQualityIds);
+    primaryTop === playbackTop;
+
+  /**
+   * ## 「源限制」这个归因只在**低于 4K** 时成立（2026-11-17，用户反馈）
+   *
+   * `same === true` 有两种成因，原代码把它们说成同一句话，第二种是**假归因**：
+   *
+   * | 成因 | 事实 | 说「源限制」对不对 |
+   * | --- | --- | --- |
+   * | 视频最高就 1080P，两侧都到顶 | 确实是源的限制 | ✅ |
+   * | 视频有 4K/杜比，两侧都是大会员，都到顶 | 是**两边权限相同**，不是源不够 | ❌ |
+   *
+   * 用户就撞在第二种上：两个号都是大会员，主账号最高「杜比视界」，
+   * 面板却写「无提升（源限制）」—— 读起来像"这视频只有这么点画质"，
+   * 而真相是"你已经拿到本片最好的了"。
+   *
+   * 判据用最高档 id：`120`（4K）及以上说明已经摸到 B站 的高画质档，
+   * 此时"源限制"是假话。低于 4K 时视频源通常确实没有更高档，保留原措辞。
+   */
+  const atCeiling = Math.max(primaryTop, playbackTop) >= 120;
 
   return {
-    title: same ? '无提升（源限制）' : '没有提升',
+    title: !same ? '没有提升' : atCeiling ? '已是最高画质' : '无提升（源限制）',
     badges,
     anchor,
     improved: false,

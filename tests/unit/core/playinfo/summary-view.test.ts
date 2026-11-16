@@ -89,12 +89,12 @@ describe('describeUnlock：不是视频页 / 还没报到', () => {
 });
 
 describe('describeUnlock：真实提升（真机数据）', () => {
-  it('已解锁 4K / 60fps / Hi-Res，锚点是"主账号仅可用 1080P"', () => {
+  it('已解锁 4K / 60fps / Hi-Res，锚点是"主账号最高 1080P"', () => {
     const s = describeUnlock(view());
     expect(s?.title).toBe('已解锁');
     expect(s?.improved).toBe(true);
     expect(s?.badges).toEqual(['4K', '60fps', 'Hi-Res']);
-    expect(s?.anchor).toBe('主账号仅可用 1080P');
+    expect(s?.anchor).toBe('主账号最高 1080P');
   });
 });
 
@@ -105,7 +105,7 @@ describe('describeUnlock：播放账号侧还没数据', () => {
     expect(s?.badges).toEqual([]);
     expect(s?.improved).toBe(false);
     // 锚点仍然给（主账号基线是独立拿到的）
-    expect(s?.anchor).toBe('主账号仅可用 1080P');
+    expect(s?.anchor).toBe('主账号最高 1080P');
   });
 });
 

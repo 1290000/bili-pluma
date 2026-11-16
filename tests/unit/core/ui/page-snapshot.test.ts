@@ -110,7 +110,7 @@ describe('buildPageSnapshot —— 基本字段', () => {
     });
     expect(s.texts.unlockLine).toBe(`${s.unlock?.title} · ${s.unlock?.anchor}`);
     // 锚点必须带上主账号可用画质，那是 §2.3 的核心
-    expect(s.texts.unlockLine).toContain('主账号仅可用 1080P');
+    expect(s.texts.unlockLine).toContain('主账号最高 1080P');
   });
 
   it('非播放页：page.kind=other，画质区为 null', () => {

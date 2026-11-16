@@ -4,7 +4,7 @@
  * ## 为什么放在 `shared/`
  *
  * 这段逻辑有两个使用者：页内角标（`src/content/isolated/badge-content.ts`）和
- * popup §2.3 的"主账号仅可用 X"（`src/core/playinfo/summary-view.ts`）。
+ * popup §2.3 的"主账号最高 X"（`src/core/playinfo/summary-view.ts`）。
  * 而 `core` **不许依赖** `content`（分层方向是 content → core），所以它只能待在 `shared`。
  *
  * 复制一份是最差的选择：这里的 8K / 4K 顺序曾经写反过（`height >= 2160` 排在

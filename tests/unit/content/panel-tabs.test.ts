@@ -49,7 +49,7 @@ function quality(overrides: Partial<QualityView> = {}): QualityView {
     unlock: {
       title: '已解锁',
       badges: ['4K', '60fps'],
-      anchor: '主账号仅可用 1080P',
+      anchor: '主账号最高 1080P',
       improved: true,
     },
     proxyEnabled: true,
@@ -109,7 +109,7 @@ describe('画质 Tab', () => {
     const box = qualityTab(quality(), { toggleProxy: () => undefined, ...QUALITY_ACTS_EXTRA });
     expect(box.querySelector('.unlock-card')).not.toBeNull();
     expect(box.querySelector('.unlock-title')?.textContent).toBe('已解锁');
-    expect(box.querySelector('.unlock-anchor')?.textContent).toBe('主账号仅可用 1080P');
+    expect(box.querySelector('.unlock-anchor')?.textContent).toBe('主账号最高 1080P');
     const chips = [...box.querySelectorAll('.badge-chip')].map((n) => n.textContent);
     expect(chips).toEqual(['4K', '60fps']);
   });

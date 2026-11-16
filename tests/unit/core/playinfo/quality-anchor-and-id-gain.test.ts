@@ -5,7 +5,7 @@
  *
  * ## 用户报告
  *
- * 画质面板显示 `无提升（源限制）` + `主账号仅可用 720P`，而实际主账号能拿到 1080P、
+ * 画质面板显示 `无提升（源限制）` + `主账号最高 720P`，而实际主账号能拿到 1080P、
  * 播放账号拿到了 1080P 高码率。
  *
  * ## 真机取证（`BV1h14n6jEGf`）
@@ -28,11 +28,11 @@
  *
  * | # | 场景 | 期望 |
  * | --- | --- | --- |
- * | A | 80/900 vs 112/900（用户场景） | 已解锁 · 主账号仅可用 **1080P** |
- * | B | 80/1080 vs 112/1080 | 已解锁 · 主账号仅可用 1080P |
+ * | A | 80/900 vs 112/900（用户场景） | 已解锁 · 主账号最高 **1080P** |
+ * | B | 80/1080 vs 112/1080 | 已解锁 · 主账号最高 1080P |
  * | C | 80 vs 80（真源限制） | 无提升（源限制） |
  * | D | 80 vs 64（播放账号更弱） | **没有提升** |
- * | E | 64/720 → 80/900 | 已解锁 · 主账号仅可用 **720P** |
+ * | E | 64/720 → 80/900 | 已解锁 · 主账号最高 **720P** |
  * | F | 80/30fps vs 116/60fps | 已解锁（1080P60 是真提升） |
  *
  * ⚠️ **场景 D 是我第一版修复引入的回归**：第一版用"播放账号有而主账号没有的 id"
@@ -125,10 +125,10 @@ describe('★★ 场景 A：用户报的场景（height 900，锚点曾错成 72
   it('★★ 锚点用 id 说「1080P」，不再是 heightLabel(900) 的「720P」', () => {
     /**
      * 反例：把 `anchorText` 改回 `heightLabel(cap.maxHeight)` → 本条必红，
-     * 拿到「主账号仅可用 720P」。
+     * 拿到「主账号最高 720P」。
      */
     const r = unlock(v);
-    expect(r.anchor).toBe('主账号仅可用 1080P');
+    expect(r.anchor).toBe('主账号最高 1080P');
   });
 
   it('★★ 标题是「已解锁」（码率档提升被识别）', () => {
@@ -150,7 +150,7 @@ describe('★★ 场景 B：标准 1080p（height 1080）', () => {
   );
 
   it('锚点 1080P', () => {
-    expect(unlock(v).anchor).toBe('主账号仅可用 1080P');
+    expect(unlock(v).anchor).toBe('主账号最高 1080P');
   });
 
   it('标题已解锁', () => {
@@ -170,7 +170,7 @@ describe('★★ 场景 C：两侧完全一样 → 真源限制', () => {
   });
 
   it('锚点仍正确（1080P，不是 720P）', () => {
-    expect(unlock(v).anchor).toBe('主账号仅可用 1080P');
+    expect(unlock(v).anchor).toBe('主账号最高 1080P');
   });
 });
 
@@ -200,7 +200,7 @@ describe('★★ 场景 E：高度真实提升（720 → 1080 档）', () => {
   const v = view([{ id: 64, h: 720, bw: BW_720 }], [{ id: 80, h: 900, bw: BW_1080 }]);
 
   it('锚点 720P（主账号确实只有 720P 档）', () => {
-    expect(unlock(v).anchor).toBe('主账号仅可用 720P');
+    expect(unlock(v).anchor).toBe('主账号最高 720P');
   });
 
   it('标题已解锁（heightGain > 0）', () => {
@@ -260,7 +260,7 @@ describe('★ heightLabel 的已知错位（文档化，不是要修）', () => 
      */
     const v = view([{ id: 80, h: 900, bw: BW_1080 }], [{ id: 80, h: 900, bw: BW_1080 }]);
     expect(heightLabel(900)).toBe('720P');
-    expect(unlock(v).anchor).toBe('主账号仅可用 1080P');
+    expect(unlock(v).anchor).toBe('主账号最高 1080P');
   });
 });
 
@@ -291,5 +291,48 @@ describe('★ diffCapability 的 qualityGained 判据', () => {
       capOf([{ id: 80, h: 900, bw: BW_1080 }]),
     );
     expect(d?.improved).toBe(false);
+  });
+});
+
+describe('★★ 场景 F：两侧都到顶配 → 「已是最高画质」（2026-11-17 用户反馈）', () => {
+  /**
+   * ## 用户报的原话
+   *
+   * 「当浏览器账号和扩展账号都有大会员时，扩展的画质界面却显示无提升源限制
+   * 主账号仅可用杜比视界，这个描述明显是不对的」。
+   *
+   * 两个问题：
+   *  1. 「源限制」是**假归因** —— 真相是"两边权限相同，都到顶了"，
+   *     不是"这视频只有这么多画质"
+   *  2. 「仅可用」在顶配档位上读起来像贬低 —— 杜比视界就是本片最高档
+   */
+  const DOLBY = { id: 126, h: 2160, bw: 20000000 };
+  const UHD = { id: 120, h: 2160, bw: 12000000 };
+
+  it('★★ 126 vs 126（杜比视界）→ 「已是最高画质」，不再说源限制', () => {
+    const v = view([DOLBY, UHD], [DOLBY, UHD]);
+    expect(v.diff?.improved).toBe(false);
+    expect(unlock(v).title).toBe('已是最高画质');
+    expect(unlock(v).title).not.toContain('源限制');
+  });
+
+  it('120 vs 120（4K）→ 同样是「已是最高画质」', () => {
+    const v = view([UHD], [UHD]);
+    expect(unlock(v).title).toBe('已是最高画质');
+  });
+
+  it('★ 80 vs 80（1080P）→ 仍是「无提升（源限制）」（视频源确实没更高档）', () => {
+    /**
+     * 对照组：证明上面两条不是"恒不说源限制"。
+     * 唯一差别是最高档 id —— 低于 4K 时"源限制"这个归因才成立。
+     */
+    const v = view([{ id: 80, h: 1080, bw: BW_1080 }], [{ id: 80, h: 1080, bw: BW_1080 }]);
+    expect(unlock(v).title).toBe('无提升（源限制）');
+  });
+
+  it('★ 锚点写「主账号最高 杜比视界」，不写「仅可用」', () => {
+    const v = view([DOLBY], [DOLBY]);
+    expect(unlock(v).anchor).toBe('主账号最高 杜比视界');
+    expect(unlock(v).anchor).not.toContain('仅可用');
   });
 });
