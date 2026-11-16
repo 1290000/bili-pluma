@@ -79,6 +79,11 @@ import {
 import { restoreResumeTime, saveResumeTime } from '@/src/content/isolated/pgc-resume';
 import { watchPlaybackQuality } from '@/src/content/isolated/quality-watch';
 import {
+  attachLoadingTraceVideo,
+  installLoadingTrace,
+  resetLoadingTrace,
+} from '@/src/content/isolated/loading-trace';
+import {
   createBadgeState,
   paintBadge as paintBadgeFromModule,
 } from '@/src/content/isolated/badge-state';
@@ -960,6 +965,16 @@ function listenMainWorld(): void {
       if (cid && s.result) {
         pageState.setPageKey(pgcPageKeyForCid(cid), 1);
         pageState.applyPlayback({ code: 0, result: s.result });
+        /**
+         * 换集 → **清空加载观测**（T3）。
+         *
+         * PGC 切集是 SPA 内的动作，content script 不会重跑，采集器也不会重装。
+         * 不清的话上一集的 host 统计会留在新一集名下：诊断页会指着一个这一集
+         * 一条分片都没发过的线路说"当前线路"。计数与时间轴一起清，不留一半。
+         */
+        resetLoadingTrace();
+        // 播放器可能把 `<video>` 整个重建了（那时旧元素上的监听器再也不会触发）
+        attachLoadingTraceVideo();
         reportQuality({ height: 0, note: `[PGC] 切集换流已记录 cid=${cid}` });
       }
       return;
@@ -2322,6 +2337,27 @@ export default defineContentScript({
     void ctx;
 
     installSender();
+
+    /**
+     * ## PCDN 诊断：加载观测采集器（T3，2026-11-19）
+     *
+     * 装上 `src/content/isolated/loading-trace.ts`：`PerformanceObserver`（resource,
+     * `buffered: true`）+ `<video>` 事件，产出诊断面板要的时间轴与 host 统计。
+     *
+     * ## 为什么放在 `main()` 里而不是模块顶层
+     *
+     * 它需要一个**明确的卸载点**。`ctx.signal` 在扩展被重载 / 卸载时 abort，
+     * 这是本仓库既有的生命周期出口（见 `main(ctx)` 顶部那段长注释）——
+     * 放在模块顶层就没有 `ctx`，观察器会随着页面一直挂到进程结束。
+     *
+     * ## 它**只读**，不改本文件任何既有行为
+     *
+     * 采集器只写自己的内存状态：不发消息、不写 `chrome.storage`、不打印、
+     * 不碰 DOM。所以装上之后扩展的既有逻辑（取流 / 面板 / 角标）**完全不变**。
+     * 这也是本轮唯一允许的接入方式 —— 编排层的判断与顺序一个字都不能动。
+     */
+    const disposeLoadingTrace = installLoadingTrace();
+    ctx.signal.addEventListener('abort', disposeLoadingTrace, { once: true });
 
     /**
      * popup / 诊断页**直连**查询当前页数据（不经 SW）。

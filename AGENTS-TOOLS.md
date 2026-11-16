@@ -77,6 +77,7 @@
 | `node poc/verify/dnr-atomicity-sampler-selftest.cjs` | 上一项的采样器可信性自检 | 同上 |
 | `node poc/verify/run-p0.cjs` | P0 阶段基线 | 追溯历史用 |
 | `node poc/verify/check-urlfilter.cjs` | `urlFilter` 写法 | 改规则条件 |
+| `node poc/verify/t3-loading-trace-console.cjs` | **真实 content script 的隔离世界能不能读到页面媒体请求**（PCDN 诊断的地基，约 40 秒） | 改 `src/content/isolated/loading-trace.ts` 或换 WXT/浏览器版本后。⚠️ 需要临时把 `[pluma-t3]` 探针加回采集器（脚本头有说明） |
 
 > **两个 DNR 脚本必须一起跑**（`AGENTS.md` §4.3）——它们测的是不同东西，缺一不可。
 >

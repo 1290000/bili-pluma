@@ -1,0 +1,512 @@
+/**
+ * `src/content/isolated/loading-trace.ts` 的可测部分（T3）
+ *
+ * ## 只测"纯"的那半边
+ *
+ * 采集器分两半：
+ *   - **纯函数**：URL → host、resource 条目 → 事件、计数累加、环形截断、快照
+ *   - **浏览器壳**：`PerformanceObserver` / `MutationObserver` / `<video>` 监听
+ *
+ * 壳不在这里测（它要真扩展才有意义 —— 那正是 T3 真机验证要证明的东西）。
+ * 这里守的是**一旦壳把数据交进来，处理逻辑不会把凭据带出去、也不会把计数算丢**。
+ *
+ * ## 最要紧的四条
+ *
+ * 1. **query 不许出现在任何输出里**：`upsig` / `uparams` 是取流凭据，
+ *    进内存结构就等于埋了一颗泄漏的地雷。所以用例直接用带凭据的真实 URL
+ *    形状去断言输出里**连 `?` 都没有**。
+ *    （query 可以被 `classifyCdn` **判读一次**——`os=mcdn` 那条判据要靠它——
+ *    但判读不等于留存，用例同时钉住"判读生效"与"没被留下"两件事。）
+ * 2. **计数不能靠事件算**：事件会被环形截断，闸门又会压掉同类别的事件，
+ *    `hosts[].count` 必须独立累加、一条不少。
+ * 3. **线路判据只有一份**：这里不复制域名表，全部走 `classifyCdn()` 的结果。
+ * 4. **换线闸门按线路类别（`cls`），不按 host**：B站 会在同一条官方 CDN 的
+ *    两个边缘之间逐片轮转，按 host 计会把"轮转"报成"换线"（2026-11-19 真机：
+ *    12 秒 23 次假换线）。用例里有专门一条守这个。
+ */
+import { describe, expect, it } from 'vitest';
+
+import { buildTimeline, detectSwitches } from '@core/loading/timeline';
+import {
+  createTraceState,
+  getLoadingSnapshot,
+  hostFromUrl,
+  pushEvent,
+  recordResource,
+  recordVideoStage,
+  resetLoadingTrace,
+  resolveMediaHost,
+  snapshotOf,
+  type LoadingTraceState,
+} from '@/src/content/isolated/loading-trace';
+
+/** 一条真实形状的媒体分片 URL：**带取流凭据**（query 里有 upsig / uparams） */
+const SEGMENT_URL =
+  'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/video.m4s?upsig=9f2c1e0b7a&uparams=0a1b,2c3d&deadline=20390101';
+
+/** 万一 query 漏出来，这些片段会出现在输出里 */
+const CREDENTIAL_MARKERS = ['?', 'upsig', 'uparams', 'deadline', 'm4s', '8082'];
+
+describe('hostFromUrl —— 边界处只留纯 hostname', () => {
+  it('带端口与取流凭据的 URL 只留下 hostname', () => {
+    expect(hostFromUrl(SEGMENT_URL)).toBe('xy116x196x140x25xy.mcdn.bilivideo.cn');
+  });
+
+  it('输出里不含 `?`，也不含 query 的任何片段', () => {
+    const serialized = JSON.stringify(hostFromUrl(SEGMENT_URL));
+    for (const marker of CREDENTIAL_MARKERS) {
+      expect(serialized).not.toContain(marker);
+    }
+  });
+
+  it('大小写归一成小写', () => {
+    expect(hostFromUrl('https://UPOS-SZ-MIRRORCOS.BiliVideo.COM/x?y=1')).toBe(
+      'upos-sz-mirrorcos.bilivideo.com',
+    );
+  });
+
+  it('没有主机名的 URL 返回 null（不编一个出来）', () => {
+    // blob: / data: 在 <video src> 与资源条目里都实测出现过
+    expect(hostFromUrl('blob:https://www.bilibili.com/9f2c1e0b-1234')).toBeNull();
+    expect(hostFromUrl('data:application/octet-stream;base64,AAAA')).toBeNull();
+    expect(hostFromUrl('')).toBeNull();
+    expect(hostFromUrl('   ')).toBeNull();
+    expect(hostFromUrl('/video.m4s?upsig=1')).toBeNull();
+  });
+});
+
+describe('resolveMediaHost —— 媒体域判据只有 classifyCdn 一份', () => {
+  it('官方自建边缘 → official', () => {
+    expect(resolveMediaHost('https://cn-cq-gd-bcache-19.bilivideo.com/x.m4s?upsig=1')).toEqual({
+      host: 'cn-cq-gd-bcache-19.bilivideo.com',
+      cls: 'official',
+      flavor: 'self-built',
+    });
+  });
+
+  it('`mcdn` 子域即使挂在官方域下也判 pcdn（顺序即语义）', () => {
+    expect(resolveMediaHost(SEGMENT_URL)).toEqual({
+      host: 'xy116x196x140x25xy.mcdn.bilivideo.cn',
+      cls: 'pcdn',
+      flavor: null,
+    });
+  });
+
+  it('PCDN 供应商自有域 → pcdn', () => {
+    expect(resolveMediaHost('https://a1.szbdyd.com/x.m4s')?.cls).toBe('pcdn');
+  });
+
+  it('Akamai → third-party', () => {
+    expect(resolveMediaHost('https://e1.akamaized.net/x.m4s')?.cls).toBe('third-party');
+  });
+
+  it('没实测过的域 → null（不擅自当成媒体域）', () => {
+    expect(resolveMediaHost('https://api.bilibili.com/x/player/playurl')).toBeNull();
+    expect(resolveMediaHost('https://evil-mcdn.attacker.test/x.m4s')).toBeNull();
+  });
+
+  it('官方域 + query 里的 `os=mcdn` → pcdn（官方镜像代理 mcdn 资源）', () => {
+    // 只看域名会把这条判成 official，等于对用户陈述错误事实
+    expect(
+      resolveMediaHost('https://cn-bj-ct-01-01.bilivideo.com/v.m4s?upsig=AA&uparams=BB&os=mcdn'),
+    ).toEqual({ host: 'cn-bj-ct-01-01.bilivideo.com', cls: 'pcdn', flavor: null });
+  });
+
+  it('`os=mcdn` 必须整段相等，`os=mcdnx` / `xos=mcdn` 不算', () => {
+    const official = 'official';
+    expect(resolveMediaHost('https://cn-bj-ct-01-01.bilivideo.com/v.m4s?os=mcdnx')?.cls).toBe(
+      official,
+    );
+    expect(resolveMediaHost('https://cn-bj-ct-01-01.bilivideo.com/v.m4s?xos=mcdn')?.cls).toBe(
+      official,
+    );
+  });
+});
+
+describe('resolveMediaHost —— 路径判据：只认媒体分片（2026-11-19 真机假阳性）', () => {
+  it('`.m4s` + `/upgcxcode/` → 计入', () => {
+    // `cn-x-1.…` 命中自建边缘正则，所以 flavor 是 `self-built`（不是 null）
+    expect(resolveMediaHost('https://cn-x-1.bilivideo.com/upgcxcode/99/91/x.m4s?upsig=A')).toEqual({
+      host: 'cn-x-1.bilivideo.com',
+      cls: 'official',
+      flavor: 'self-built',
+    });
+  });
+
+  it('无扩展名但落在 `/upgcxcode/` 下 → 计入（兜住"将来没有扩展名的分片"）', () => {
+    expect(resolveMediaHost('https://cn-x-1.bilivideo.com/upgcxcode/99/91/noext')).toEqual({
+      host: 'cn-x-1.bilivideo.com',
+      cls: 'official',
+      flavor: 'self-built',
+    });
+  });
+
+  it('水印遮罩 `/cmaskboss/*.webmask` → 不计入（本次实测的直接回归守卫）', () => {
+    // 实测：同域静态资源会被判成"官方线路"混进线路表；一旦它落在 pcdn 域上
+    // 就是假警报 —— 而假警报正是这个功能唯一要避免的东西
+    expect(
+      resolveMediaHost('https://upos-sz-staticcos-cmask.bilivideo.com/cmaskboss/1_25_2.webmask'),
+    ).toBeNull();
+    // 换成 pcdn 域也一样不计入：路径判据先于线路判据
+    expect(resolveMediaHost('https://n1.szbdyd.com/cmaskboss/1_25_2.webmask')).toBeNull();
+  });
+
+  it('播放器数据接口 `/pbp/data` → 不计入', () => {
+    expect(resolveMediaHost('https://bvc.bilivideo.com/pbp/data')).toBeNull();
+  });
+
+  it('`.mp4` / `.flv` 也算媒体（非 DASH 场景兜底），且大小写不敏感', () => {
+    expect(resolveMediaHost('https://cn-x-1.bilivideo.com/v/1.MP4')?.cls).toBe('official');
+    expect(resolveMediaHost('https://cn-x-1.bilivideo.com/v/1.flv')?.cls).toBe('official');
+  });
+
+  it('pathname 只用来算布尔：快照序列化不含 path 的任何痕迹', () => {
+    const state = createTraceState();
+    recordResource(state, {
+      name: 'https://cn-x-1.bilivideo.com/upgcxcode/99/91/x.m4s?upsig=A',
+      startTime: 1,
+      responseEnd: 2,
+    });
+
+    const serialized = JSON.stringify(snapshotOf(state, null));
+    expect(serialized).not.toContain('pathname');
+    expect(serialized).not.toContain('.m4s');
+    expect(serialized).not.toContain('upgcxcode');
+    expect(serialized).not.toContain('webmask');
+    expect(serialized).not.toContain('?');
+  });
+});
+
+describe('recordResource —— 首次产事件，之后只累加计数', () => {
+  it('首条：一对 seg-req / seg-res，时间戳原样保留', () => {
+    const state = createTraceState();
+    const isNew = recordResource(state, {
+      name: SEGMENT_URL,
+      startTime: 1234.5,
+      responseEnd: 1300.25,
+    });
+
+    expect(isNew).toBe(true);
+    expect(state.events.map((e) => [e.stage, e.t])).toEqual([
+      ['seg-req', 1234.5],
+      ['seg-res', 1300.25],
+    ]);
+    expect(state.events[0]?.host).toBe('xy116x196x140x25xy.mcdn.bilivideo.cn');
+    expect(state.events[0]?.kind).toBe('pcdn');
+    expect(state.hosts.get('xy116x196x140x25xy.mcdn.bilivideo.cn')?.count).toBe(1);
+  });
+
+  it('同一 host 的后续分片只加计数，不再进时间轴', () => {
+    const state = createTraceState();
+    recordResource(state, { name: SEGMENT_URL, startTime: 10, responseEnd: 20 });
+    const isNew = recordResource(state, { name: SEGMENT_URL, startTime: 30, responseEnd: 40 });
+
+    expect(isNew).toBe(false);
+    expect(state.events).toHaveLength(2);
+    expect(state.hosts.get('xy116x196x140x25xy.mcdn.bilivideo.cn')?.count).toBe(2);
+  });
+
+  it('同一 host 连发 5 条 → 只有 1 个 seg-req（抗淹没），count=5', () => {
+    const state = createTraceState();
+    for (let i = 0; i < 5; i += 1) {
+      recordResource(state, { name: SEGMENT_URL, startTime: 10 + i, responseEnd: 11 + i });
+    }
+
+    expect(state.events.filter((e) => e.stage === 'seg-req')).toHaveLength(1);
+    expect(state.events).toHaveLength(2);
+    expect(state.hosts.get('xy116x196x140x25xy.mcdn.bilivideo.cn')?.count).toBe(5);
+  });
+
+  it('A,A,B(同类别),B,C(pcdn),C,A(official) → 3 条 seg-req，类别变化才记', () => {
+    const A = 'https://cn-bj-ct-01-01.bilivideo.com/v.m4s?upsig=a'; // official
+    const B = 'https://cn-bj-ct-01-02.bilivideo.com/v.m4s?upsig=b'; // official（另一台机器）
+    const C = 'https://n1.szbdyd.com/v.m4s?upsig=c'; // pcdn
+    const state = createTraceState();
+
+    // A A B B C C A，每条间隔 1ms，便于断言 t
+    const sequence: Array<[string, number]> = [
+      [A, 1],
+      [A, 2],
+      [B, 3],
+      [B, 4],
+      [C, 5],
+      [C, 6],
+      [A, 7],
+    ];
+    for (const [name, t] of sequence) {
+      recordResource(state, { name, startTime: t, responseEnd: t + 0.5 });
+    }
+
+    const segReqs = state.events.filter((e) => e.stage === 'seg-req');
+    // B 与 A 同属 official：不发事件；C 换了类别：发；回到 A 又换回来：再发
+    expect(segReqs.map((e) => [e.host, e.kind, e.t])).toEqual([
+      ['cn-bj-ct-01-01.bilivideo.com', 'official', 1],
+      ['n1.szbdyd.com', 'pcdn', 5],
+      ['cn-bj-ct-01-01.bilivideo.com', 'official', 7],
+    ]);
+    // seg-res 只配首条（不发就不发），别为了对称让它变多
+    expect(state.events.filter((e) => e.stage === 'seg-res')).toHaveLength(3);
+
+    // 关键的跨模块性质：core 的换线判据得出"2 次"，且两次都跨类别
+    const switches = detectSwitches(buildTimeline(state.events).events);
+    expect(switches).toEqual([
+      { t: 5, from: 'cn-bj-ct-01-01.bilivideo.com', to: 'n1.szbdyd.com' },
+      { t: 7, from: 'n1.szbdyd.com', to: 'cn-bj-ct-01-01.bilivideo.com' },
+    ]);
+
+    // 计数一条不少：A 真实出现 3 次，B 2 次，C 2 次（即使 B 一次事件都没发）
+    expect(state.hosts.get('cn-bj-ct-01-01.bilivideo.com')?.count).toBe(3);
+    expect(state.hosts.get('cn-bj-ct-01-02.bilivideo.com')?.count).toBe(2);
+    expect(state.hosts.get('n1.szbdyd.com')?.count).toBe(2);
+  });
+
+  it('纯同类别轮转（真机现场 23 次"换线"的回归守卫）：3 个 official 轮转 → 1 条 seg-req / 0 次切换', () => {
+    // 2026-11-19 真机实测：B站 播放器在同一条官方 CDN 的两个边缘之间逐片轮转。
+    // 按 host 变化计数会在这里产出 3 条 seg-req 与 2 次"换线" —— 那正是要防的假信号。
+    const A = 'https://cn-jsnt-ct-01-06.bilivideo.com/v.m4s?upsig=a';
+    const B = 'https://cn-jsnt-ct-01-01.bilivideo.com/v.m4s?upsig=b';
+    const C = 'https://cn-jsnt-ct-01-02.bilivideo.com/v.m4s?upsig=c';
+    const state = createTraceState();
+
+    for (const [i, name] of [A, B, C].entries()) {
+      recordResource(state, { name, startTime: i + 1, responseEnd: i + 1.5 });
+    }
+
+    expect(state.events.filter((e) => e.stage === 'seg-req')).toHaveLength(1);
+    expect(detectSwitches(buildTimeline(state.events).events)).toEqual([]);
+    // 三个 host 都在，计数各 1 —— "用过哪些机器"仍然查得到
+    expect(state.hosts.size).toBe(3);
+    expect(state.hosts.get('cn-jsnt-ct-01-06.bilivideo.com')?.count).toBe(1);
+    expect(state.hosts.get('cn-jsnt-ct-01-01.bilivideo.com')?.count).toBe(1);
+    expect(state.hosts.get('cn-jsnt-ct-01-02.bilivideo.com')?.count).toBe(1);
+  });
+
+  it('非媒体域的条目整条丢掉（没有 host 就没有"线路"可说）', () => {
+    const state = createTraceState();
+    recordResource(state, {
+      name: 'https://api.bilibili.com/x/web-interface/nav',
+      startTime: 1,
+      responseEnd: 2,
+    });
+    // 同域静态资源也不许混进线路表（实测假阳性）
+    recordResource(state, {
+      name: 'https://upos-sz-staticcos-cmask.bilivideo.com/cmaskboss/137649199_25_2.webmask',
+      startTime: 3,
+      responseEnd: 4,
+    });
+    recordResource(state, {
+      name: 'https://bvc.bilivideo.com/pbp/data',
+      startTime: 5,
+      responseEnd: 6,
+    });
+
+    expect(state.events).toHaveLength(0);
+    expect(state.hosts.size).toBe(0);
+  });
+
+  it('非法时间戳不进环形缓冲，但计数照加', () => {
+    const state = createTraceState();
+    recordResource(state, { name: SEGMENT_URL, startTime: Number.NaN, responseEnd: -1 });
+
+    expect(state.events).toHaveLength(0);
+    expect(state.hosts.get('xy116x196x140x25xy.mcdn.bilivideo.cn')?.count).toBe(1);
+  });
+});
+
+describe('环形缓冲 —— 上限 200，丢的是最早的', () => {
+  /** 造一个 PCDN 供应商域下的第 i 个 host */
+  const hostUrl = (i: number): string =>
+    `https://n${String(i)}.szbdyd.com/v.m4s?upsig=s${String(i)}`;
+
+  it('缓冲满后再来一条 resource 事件 → 保留最新 200 条并置 truncated', () => {
+    const state = createTraceState();
+    // 先灌满 200 条（`nav` 只是占位阶段，与 resource 无关）
+    for (let i = 1; i <= 200; i += 1) {
+      pushEvent(state, { t: i, stage: 'nav' });
+    }
+    recordResource(state, { name: hostUrl(1), startTime: 201, responseEnd: 202 });
+
+    expect(state.events).toHaveLength(200);
+    expect(state.truncated).toBe(true);
+    // 丢的是最早那两条（t=1、t=2 的 nav），最后一条是本条 resource 的 seg-res
+    expect(state.events[0]?.t).toBe(3);
+    expect(state.events[199]?.stage).toBe('seg-res');
+    expect(state.events[199]?.t).toBe(202);
+  });
+
+  it('截断与闸门都不影响计数：150 个同类 host 各 2 条 → 只有 1 对事件，计数一条不少', () => {
+    const state = createTraceState();
+    for (let i = 1; i <= 150; i += 1) {
+      recordResource(state, { name: hostUrl(i), startTime: i, responseEnd: i + 0.5 });
+      // 每个 host 再来一条：只加计数
+      recordResource(state, { name: hostUrl(i), startTime: i + 2, responseEnd: i + 3 });
+    }
+
+    // 150 个 host 全是 pcdn（同类别轮转）：按 cls 闸门只应产出第一对事件
+    expect(state.events).toHaveLength(2);
+    expect(state.truncated).toBe(false);
+    // 但"用过哪些机器、各发了多少请求"必须完整可查
+    expect(state.hosts.size).toBe(150);
+    expect(state.hosts.get('n1.szbdyd.com')?.count).toBe(2);
+    expect(state.hosts.get('n150.szbdyd.com')?.count).toBe(2);
+  });
+
+  it('恰好 200 条时不置 truncated（边界不要提前报丢）', () => {
+    const state = createTraceState();
+    for (let i = 1; i <= 200; i += 1) {
+      pushEvent(state, { t: i, stage: 'nav' });
+    }
+
+    expect(state.events).toHaveLength(200);
+    expect(state.truncated).toBe(false);
+  });
+});
+
+describe('snapshotOf —— actual 取 count 最大的真实线路', () => {
+  it('空状态：present=false / confidence=none / actual=null', () => {
+    const snapshot = snapshotOf(createTraceState(), null);
+
+    expect(snapshot).toEqual({
+      present: false,
+      confidence: 'none',
+      actual: null,
+      hosts: [],
+      events: [],
+      truncated: false,
+      video: null,
+    });
+  });
+
+  it('有 resource 条目即 confidence=measured', () => {
+    const state = createTraceState();
+    recordResource(state, { name: SEGMENT_URL, startTime: 1, responseEnd: 2 });
+
+    expect(snapshotOf(state, null).confidence).toBe('measured');
+  });
+
+  it('actual 是 count 最大的那条，而不是最先出现的那条', () => {
+    const state = createTraceState();
+    // 官方先出现 1 次，PCDN 后出现 3 次
+    recordResource(state, {
+      name: 'https://cn-bj-ct-01-01.bilivideo.com/v.m4s',
+      startTime: 1,
+      responseEnd: 2,
+    });
+    for (let i = 0; i < 3; i += 1) {
+      recordResource(state, { name: SEGMENT_URL, startTime: 10 + i, responseEnd: 11 + i });
+    }
+
+    const snapshot = snapshotOf(state, null);
+    expect(snapshot.actual).toEqual({
+      host: 'xy116x196x140x25xy.mcdn.bilivideo.cn',
+      cls: 'pcdn',
+      flavor: null,
+    });
+    // hosts 按 count 降序
+    expect(snapshot.hosts.map((h) => [h.host, h.count])).toEqual([
+      ['xy116x196x140x25xy.mcdn.bilivideo.cn', 3],
+      ['cn-bj-ct-01-01.bilivideo.com', 1],
+    ]);
+  });
+
+  it('快照序列化后不含 query / 凭据的任何片段', () => {
+    const state = createTraceState();
+    recordResource(state, { name: SEGMENT_URL, startTime: 1, responseEnd: 2 });
+    recordResource(state, {
+      name: 'https://e1.akamaized.net/v.m4s?upsig=SECRETSIG&uparams=a,b',
+      startTime: 3,
+      responseEnd: 4,
+    });
+
+    const serialized = JSON.stringify(snapshotOf(state, null));
+    for (const marker of CREDENTIAL_MARKERS) {
+      expect(serialized).not.toContain(marker);
+    }
+    expect(serialized).not.toContain('SECRETSIG');
+  });
+
+  it('`os=mcdn` 只影响分类，不进快照：序列化后既没有凭据也没有 query', () => {
+    const state = createTraceState();
+    recordResource(state, {
+      name: 'https://cn-bj-ct-01-01.bilivideo.com/v.m4s?upsig=SECRETUPSIG&uparams=SECRETPARAMS&os=mcdn',
+      startTime: 1,
+      responseEnd: 2,
+    });
+
+    const snapshot = snapshotOf(state, null);
+    // 分类用到了 query（因此是 pcdn），但 query 本身没被留下
+    expect(snapshot.hosts).toEqual([
+      { host: 'cn-bj-ct-01-01.bilivideo.com', cls: 'pcdn', flavor: null, count: 1 },
+    ]);
+
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain('?');
+    expect(serialized).not.toContain('SECRETUPSIG');
+    expect(serialized).not.toContain('SECRETPARAMS');
+    expect(serialized).not.toContain('os=mcdn');
+    expect(serialized).not.toContain('upsig');
+    expect(serialized).not.toContain('uparams');
+  });
+
+  it('video 原样透传（页面上没有 video 时是 null）', () => {
+    const state = createTraceState();
+    const video = { readyState: 4, durationSec: 180, height: 1080, errorCode: 0 };
+
+    expect(snapshotOf(state, video).video).toEqual(video);
+  });
+});
+
+describe('recordVideoStage —— waiting 归一成 stall', () => {
+  it('只写阶段与时间，不带 host', () => {
+    const state: LoadingTraceState = createTraceState();
+    recordVideoStage(state, 'playing', 1000);
+    recordVideoStage(state, 'stall', 2000);
+    recordVideoStage(state, 'error', 3000, 'code=2');
+
+    expect(state.events.map((e) => [e.stage, e.t])).toEqual([
+      ['playing', 1000],
+      ['stall', 2000],
+      ['error', 3000],
+    ]);
+    expect(state.events[2]?.note).toBe('code=2');
+    // 视频事件没有 host：线路只能由 resource 条目给出，不猜
+    expect(state.events.every((e) => e.host === undefined)).toBe(true);
+  });
+
+  it('非法时间戳整条丢掉', () => {
+    const state = createTraceState();
+    recordVideoStage(state, 'canplay', Number.POSITIVE_INFINITY);
+    recordVideoStage(state, 'canplay', -5);
+
+    expect(state.events).toHaveLength(0);
+  });
+});
+
+describe('pushEvent —— 环形上限', () => {
+  it('超过 200 条时丢最早的一条并置 truncated', () => {
+    const state = createTraceState();
+    for (let i = 0; i <= 200; i += 1) {
+      pushEvent(state, { t: i, stage: 'nav' });
+    }
+
+    expect(state.events).toHaveLength(200);
+    expect(state.truncated).toBe(true);
+    expect(state.events[0]?.t).toBe(1);
+    expect(state.events[199]?.t).toBe(200);
+  });
+});
+
+describe('单例：reset 清空、快照不抛', () => {
+  it('resetLoadingTrace 清掉计数与时间轴', () => {
+    // jsdom 不是本文件的运行环境（environment: node），所以这里只验
+    // "没有 <video> 时 getLoadingSnapshot 仍然可用" —— DOM 壳由真机验证覆盖。
+    resetLoadingTrace();
+    const snapshot = getLoadingSnapshot();
+
+    expect(snapshot.hosts).toEqual([]);
+    expect(snapshot.events).toEqual([]);
+    expect(snapshot.present).toBe(false);
+    expect(snapshot.confidence).toBe('none');
+    expect(snapshot.video).toBeNull();
+  });
+});
