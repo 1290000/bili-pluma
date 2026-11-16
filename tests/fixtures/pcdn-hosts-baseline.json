@@ -1,0 +1,422 @@
+[
+  {
+    "host": "upos-sz-mirrorcoso1.bilivideo.com",
+    "cls": "official",
+    "flavor": "partner"
+  },
+  {
+    "host": "upos-sz-mirrorhwo1.bilivideo.com",
+    "cls": "official",
+    "flavor": "partner"
+  },
+  {
+    "host": "xy39x129x121x166xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "upos-sz-estgoss.bilivideo.com",
+    "cls": "official",
+    "flavor": "partner"
+  },
+  {
+    "host": "upos-sz-mirrorbd.bilivideo.com",
+    "cls": "official",
+    "flavor": "partner"
+  },
+  {
+    "host": "b-baaac591actrtu6cut7jmqpbv3zc.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x112xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaac5u490d9pqc11bnwzce1yw.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaa9hoa0255d3c4bi3ygwqsbqj4b.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x205xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x127xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "pv5br67a.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaa43bl16bhperp2d2wwvu3vnn8a.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaaw54ucu1hly3c6spt73k9fsi.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaa9fsb4660c3c4bi3ygwqsbhi4b.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaca0d9742atlnff6n6w6af6zf.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "mv0bs83m.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x3xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x232xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x130x190x199xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x252xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x36xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "mv0b973m.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x89xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x181xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xu5bp87a.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x156xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaac34qq3xtu6cut7jmqpb0kzc.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaa1frq032t3c4bkrnes3j7sxb.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaac7sz23d9pqc11bnwzc8xyw.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "upos-sz-mirrorhw.bilivideo.com",
+    "cls": "official",
+    "flavor": "partner"
+  },
+  {
+    "host": "b-baaa1jd6155d3c4bi3ygwqsbok4b.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x218xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x41xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "upos-sz-mirrorcos.bilivideo.com",
+    "cls": "official",
+    "flavor": "partner"
+  },
+  {
+    "host": "xy116x196x140x43xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaaw79txv1hrw3c8upt73k9fsi.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x226xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "mv0bm24m.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "rq3a904j.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "upos-sz-mirrorzos.bilivideo.com",
+    "cls": "official",
+    "flavor": "partner"
+  },
+  {
+    "host": "b-baaa1fw9am30r3c4bcjnj13j7sxb.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy144x123x31x41xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaaw30uqv1hzw3czupt73k9fsi.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaaw33uqu1h4x3cptpt73k9fsi.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-iba9z996j4h3alp2d9cro8fe7rc48za.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy58x144x144x10xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "mv0bw83m.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "cn-sccd-ct-02-06.bilivideo.com",
+    "cls": "official",
+    "flavor": "self-built"
+  },
+  {
+    "host": "b-baaa9ic0255d3c4bi3ygwqsbdk4b.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "svx61w.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-iba80a272j4h3alp2dvdrz7fe7rc48za.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaa1fr4e420l3c4b5lney3j7sxb.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaad67mq03az5cwy5fxglsy0c.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy144x123x97x238xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy58x144x144x30xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy116x196x140x22xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy124x225x92x85xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy180x129x222x238xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy111x31x56x250xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy223x242x43x224xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy116x196x140x46xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy58x144x144x27xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy116x196x140x59xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy116x196x140x58xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "cn-sccd-ct-02-13.bilivideo.com",
+    "cls": "official",
+    "flavor": "self-built"
+  },
+  {
+    "host": "cn-sccd-ct-02-08.bilivideo.com",
+    "cls": "official",
+    "flavor": "self-built"
+  },
+  {
+    "host": "cn-sccd-ct-02-07.bilivideo.com",
+    "cls": "official",
+    "flavor": "self-built"
+  },
+  {
+    "host": "xy58x144x144x31xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy116x196x140x54xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy116x196x140x37xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "cn-sccd-ct-02-22.bilivideo.com",
+    "cls": "official",
+    "flavor": "self-built"
+  },
+  {
+    "host": "cn-sccd-ct-02-18.bilivideo.com",
+    "cls": "official",
+    "flavor": "self-built"
+  },
+  {
+    "host": "cn-sccd-ct-02-24.bilivideo.com",
+    "cls": "official",
+    "flavor": "self-built"
+  },
+  {
+    "host": "cn-sccd-ct-02-09.bilivideo.com",
+    "cls": "official",
+    "flavor": "self-built"
+  },
+  {
+    "host": "xy115x56x95x31xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "upos-sz-mirror14b.bilivideo.com",
+    "cls": "official",
+    "flavor": "partner"
+  },
+  {
+    "host": "xy116x196x157x78xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy116x196x140x19xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy124x225x92x81xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-baaaw90ujv1h7w3cqupt73k9fsi.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy116x196x140x55xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "b-iba7yw07j4h3alp2dhcrl9fe7rc48za.edge.mountaintoys.cn:4483",
+    "cls": "pcdn",
+    "flavor": null
+  },
+  {
+    "host": "xy140x249x234x129xy.mcdn.bilivideo.cn:8082",
+    "cls": "pcdn",
+    "flavor": null
+  }
+]

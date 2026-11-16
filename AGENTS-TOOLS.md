@@ -113,6 +113,7 @@
 | `node poc/probe/popup-inspect.mjs` | 读 popup 状态 |
 | `node poc/probe/probe-streaming-status.mjs <sid> <tab>` | **测 background SW 的消息通道**（见下） |
 | `node poc/probe/setup-profile.mjs` | 准备测试用 profile |
+| **`node poc/probe/pcdn-diag/probe.mjs`** | **PCDN 诊断的前置探针**（约 2 分钟）：抓 20 个热门视频的**候选 host 全集**（落 `poc/probe/result-pcdn-diag.json`）+ 验 isolated world 能不能看见页面媒体请求。改 `classify.ts` 的域名判据或 `loading-trace.ts` 的采集判据后重跑；结论见 `poc/probe/pcdn-diag/REPORT.md` |
 | **`node poc/probe/bsk-eval.mjs <sid> <tab> <expr-file> [context] [expectJson]`** | **所有 `bsk evaluate` 都必须用它**（见 §3.1） |
 
 ### 3.1 ⚠️ 所有 `bsk evaluate` 都该走 `bsk-eval.mjs`（2026-11-11 实测踩坑）
@@ -190,6 +191,43 @@ node poc/probe/bsk-eval.mjs <session> <tabId> <expr-file> c1 \
 > ⚠️ **读页面状态必须用 `async IIFE` + 内部 `await` 再 stringify**。
 > 直接 stringify 一个 Promise 会得到 `{}`，而 `bsk evaluate` **exit 0** ——看起来完全"成功"。
 > 踩过的坑：[bsk-page-bridges.md](./docs/guides/bsk-page-bridges.md)。
+
+---
+
+### 3.2 归档探针批次（`poc/probe/<批次>/`，**不日常跑**）
+
+一次取证会留下几十个一次性探针（`feed-cover/` 一个就 72 个），逐个登记会把本文件
+写成文件清单 —— 而它存在的意义是「我要做 X → 命令」。所以 `check-tools` 允许
+**按目录登记**：下表每个目录一行，覆盖该目录下所有脚本（判据见
+`scripts/check-tools.mjs` 的 `registrationOf()`）。
+
+| 批次目录 | 用途 | 日期 |
+| --- | --- | --- |
+| `poc/probe/api-inventory/` | 真实接口盘点：账号职责可配置化的可行性取证 | 2026-11-11 |
+| `poc/probe/blocked-by-client/` | 扫码窗「已阻止 / `ERR_BLOCKED_BY_CLIENT`」取证 | 2026-11-15 |
+| `poc/probe/dnr-initiator/` | DNR 能力边界实测（initiator 判定 / 规则行为） | 2026-11-11 |
+| `poc/probe/feed-boundary/` | 推荐流分界线：首屏 SSR 批大小是否稳定为 10 | 2026-11-11 |
+| `poc/probe/feed-cover/` | 首页封面隐藏取证（含取流身份胶囊不渲染的配对取证） | 2026-11-11 |
+| `poc/probe/heartbeat-check/` | 跨分区心跳到底写没写过（读 LevelDB 原始字节 + 对照组） | 2026-11-12 |
+| `poc/probe/history-entry/` | 首页「历史」入口结构探测（H4 生死线，全程只读） | 2026-11-11 |
+| `poc/probe/incognito-api-probe/` | 无痕分区 API 读翻转探测 | 2026-11-12 |
+| `poc/probe/logout-login-round2/` | 孤儿态根因调查（退出登录 → 重登后的残留状态） | 2026-11-12 |
+| `poc/probe/s3/` | S3 面板几何实测（尺寸 / 边距 / 层级） | 2026-11-11 |
+| `poc/probe/verify-report-2026-11-12/` | 那一轮验收的**工具与原始证据**（`tools/` 下含变异与计数脚本） | 2026-11-12 |
+| `poc/probe/verify-task22/` | verifier 独立验收 task-22（三处静默失败）的探针与报告 | 2026-11-12 |
+| `poc/probe/verify-task24/` | 独立复核 task-24（心跳探测已开着的 InPrivate 扫码窗口） | 2026-11-12 |
+| `poc/probe/verify-task25/` | 独立验收 task-25（`already-open` 走危险色 / 强杀窗口后误判） | 2026-11-12 |
+| `poc/probe/verify-task26/` | 独立复核 task-26（`logsMeta` 可信度声明 + 孤儿态自证失效） | 2026-11-12 |
+| `poc/probe/verify-task28/` | 独立验收 task-28（`logsMeta` 缺失时诊断页崩渲染） | 2026-11-12 |
+| `poc/probe/verify-task30/` | 复核 task-30（守卫补位 + 注释口径 + 源码级断言） | 2026-11-12 |
+| `poc/probe/verify-task33/` | 独立复核 task-33（孤儿态主动探测 + 永不静默） | 2026-11-12 |
+| `poc/probe/verify-task37-39/` | 验收 task-37 / task-39（文案反转 + 同步孤儿守卫）的变异探针 | 2026-11-12 |
+| `poc/probe/verify-task46/` | 验收 task-46（权限 `false` 不建窗 + `assumed` 不冒充成功） | 2026-11-12 |
+
+> ⚠️ **往上面这些目录里加新脚本不必改本文件**（整批已登记）；
+> **新建一个批次目录则必须在这里加一行**，否则 `check-tools` 变红 ——
+> 这正是 2026-11-20 修掉的那个盲区（旧实现只扫一层，`pcdn-diag/probe.mjs`
+> 之类的子目录脚本会**绕过闸门**，而检查仍打印"全部有归属"）。
 
 ---
 
