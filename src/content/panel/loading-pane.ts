@@ -295,9 +295,10 @@ export function describePcdnCaveat(snapshot: LoadingSnapshotLite): string | null
 
 /** 一条时间轴行（纯数据，DOM 由 `loadingDetailPane` 装配） */
 export interface TimelineRow {
-  /** `segment` = 配对好的「请求→返回」；`event` = 里程碑等单点事件 */
-  kind: 'segment' | 'event';
-  stage: LoadStage;
+  /** `segment` = 配对好的「请求→返回」；`event` = 里程碑等单点事件；`gap` = 空档 */
+  kind: 'segment' | 'event' | 'gap';
+  /** 空档行没有阶段（它不是事件），所以是 `null` */
+  stage: LoadStage | null;
   /** 左侧标题 */
   label: string;
   /**
@@ -305,6 +306,8 @@ export interface TimelineRow {
    * - 配对成功：`4.22s → 4.39s · 0.17s`
    * - 只有请求：`4.22s · 未完成`
    * - 里程碑：`3.18s +0.40s`（后半个是距上一条的增量）
+   *
+   * 空档行是 `''`（它的说明写在 `label` 里，独占一行）。
    */
   meta: string;
   /** 明细（有 host 才有一行）；`null` = 不渲染，不留占位符 */
@@ -312,18 +315,80 @@ export interface TimelineRow {
   /**
    * 线路形状。`null` = **里程碑**，左侧画一根短竖线而不是圆点
    * （2026-11-20 Lead 裁决 ④：里程碑不是线路，不该共用形状）。
+   *
+   * 空档行也是 `null`，但它连短竖线都不画 —— `timelineRow()` 对
+   * `kind === 'gap'` 走另一套骨架（一条细横线 + 一句话）。
    */
   marker: MarkerShape | null;
   /** 圆点色调（只在 `marker !== null` 时起作用） */
   tone: LoadingTone;
-  /** 标题用次要文字色（只有"未完成"的请求会用它，**不是危险色**） */
+  /** 标题用次要文字色（"未完成"的请求、空档行） */
   dimTitle: boolean;
   /** 标题用危险色（`error` / `blocked`） */
   dangerTitle: boolean;
 }
 
-/** 配对行里的线段文案。比 `stageLabel('seg-req')` 短：它代表一整段，不是那一刻 */
-const SEGMENT_LABEL = '下载分片';
+/**
+ * 配对行里的线段文案。
+ *
+ * ## 为什么是「下载视频片段」而不是「开始下载分片」
+ *
+ * 用户原话：「下载分片是下载视频的意思吗」—— 「分片」是这行的**实现词**，
+ * 非技术用户读不出它指什么。这一行代表"从某条线路取一段视频数据"，
+ * 所以用「下载视频片段」：既说清了对象（视频片段），也保留了"一段一段"的语义。
+ *
+ * 它也**不再是** `stageLabel('seg-req')`（那是「开始下载分片」，指"那一刻"）——
+ * 这一行代表的是一整段（请求→返回），所以文案与诊断页的技术名分开。
+ */
+const SEGMENT_LABEL = '下载视频片段';
+
+/**
+ * 相邻两个节点间隔多大就插一条空档分隔行（毫秒）。
+ *
+ * ## 为什么需要它（2026-11-20 真机截图）
+ *
+ * 用户看到 `2.07s` 与 `8.28s` 之间一片空白，第一反应是"这 6 秒卡住了"。
+ * 我们**能证实的只有一件事**：这段时间里没有可显示的事件（采集闸门按 `cls`
+ * 压事件，同一类别下的连续分片不逐段列，见 `loading-trace.ts:recordVideoStage`）。
+ *
+ * ## ⚠️ 文案**绝不**写"同一线路继续下载"
+ *
+ * 闸门是按 `cls`（类别）压的，**同一类别下 host 可能已经换了**。用户真机截图里
+ * 副行写「4 条线路」而时间轴只有 3 个 host —— 第 4 个正是在空档期间出现的。
+ * 写"同一线路"就是在陈述一件我们没有观测到的事。所以两条文案都只说
+ * "这段时间的片段未逐段列出"（分隔行见 `gapText()`，尾注见 `TIMELINE_FOOTNOTE`）。
+ *
+ * 2 秒是"肉眼已经开始怀疑"的阈值：1.x 秒的间隔在正常播放里到处都是，
+ * 每条都插一行会把时间轴撑长，反而看不清真正的节点。
+ */
+const GAP_THRESHOLD_MS = 2000;
+
+/**
+ * 空档分隔行的文案。
+ *
+ * 只陈述可证实的事实：**有这么长一段时间，我们没有逐段列出其中的片段**。
+ * 不解释原因、不点名线路（原因见 `GAP_THRESHOLD_MS` 的第 2 段）。
+ *
+ * @param ms 相邻两个节点之间没被列出的那段时长（毫秒，由两个节点的时刻相减得到）
+ */
+export function gapText(ms: number): string {
+  return `⋯ ${seconds(ms)}s（这段时间的片段未逐段列出）`;
+}
+
+/**
+ * 时间轴尾注。
+ *
+ * ## 第 3 句为什么不写"同一条线路"
+ *
+ * 旧文案写的是"同一条线路连续下载的片段只列第一段"——**不准**：闸门按 `cls`
+ * 压事件，同类别下 host 可能已经换了（真机截图里「4 条线路」但时间轴只有
+ * 3 个 host）。所以只说"每次线路类别变化后的第一段"，其余一律"未逐段列出"。
+ *
+ * 导出是为了让 `tests/unit/content/panel-loading.test.ts` 能用一条**文案守卫**
+ * 钉住"不许写回去"，而不是断言整段长文本。
+ */
+export const TIMELINE_FOOTNOTE =
+  '时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，下载视频片段那几行给的是请求到返回的耗时。只列出每次线路类别变化后的第一段，其余片段未逐段列出。';
 
 /**
  * 阶段 → 颜色 + 形状（只对**线路行**有意义）。
@@ -335,6 +400,9 @@ const SEGMENT_LABEL = '下载分片';
  * 它们在 `buildTimelineRows` 里走 `marker: null`（短竖线），
  * 因为空心圆与图例里的线路形状撞形（2026-11-20 Lead 裁决 ④）。
  * 本函数对它们仍返回一个值，但调用方不会拿它画圆点。
+ *
+ * `ext-patch` 是例外：它**保留**空心圆 + `accent` —— 它不是里程碑，是"扩展真的
+ * 改写了取流响应"这一刻，而且图例里已经有一条「○ 扩展介入」与它对应。
  */
 export function describeEventMarker(event: LoadEvent): { tone: LoadingTone; marker: MarkerShape } {
   if (event.stage === 'ext-patch') return { tone: 'accent', marker: 'ring' };
@@ -385,7 +453,7 @@ function isLineRow(event: LoadEvent): boolean {
  * 的 `pairSegments()` 头上，这里只负责**渲染成一行**：
  *
  * ```text
- * ◇ 下载分片              4.22s → 4.39s · 0.17s
+ * ◇ 下载视频片段          4.22s → 4.39s · 0.17s
  *   xy116x196x140x34xy.mcdn.bilivideo.cn
  * ```
  *
@@ -399,6 +467,13 @@ function isLineRow(event: LoadEvent): boolean {
  * 真机那份 9 条事件因此变成 **6 行**（3 段配对 + stall / canplay / playing）。
  *
  * 竖向位置 = 传入顺序（`buildTimeline()` 已排好），这里**不再排序**。
+ *
+ * ## 空档分隔行（`kind: 'gap'`）是**派生**出来的，不来自任何事件
+ *
+ * 相邻两个节点之间隔了 ≥ `GAP_THRESHOLD_MS` 就插一行。它不是事件：
+ * `stage` 为 `null`、`marker` 为 `null`、`meta` 为空，文案见 `gapText()`。
+ * 参数用**上一条行覆盖到的结束时刻**（配对行是返回时刻），所以只会把间隔算小、
+ * 不会把一段正在下载的时间说成"没有事件"。
  */
 export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
   const pairByKey = new Map<string, SegmentPair>();
@@ -410,9 +485,34 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
    *
    * 配对行用 `doneAt`（不是请求时刻）：里程碑的"+x.xxs"要回答的是
    * "上一个动作**做完**之后隔了多久"，用请求时刻会把这段下载耗时算进间隔里。
-   * 被吃掉的 `seg-res` 不更新它（它们不是行）。
+   * 被吃掉的 `seg-res` 不更新它（它们不是行）。空档行同样不更新它。
    */
   let previous: number | null = null;
+
+  /**
+   * 在时刻 `t` 那一行之前按需插一条空档分隔行。
+   *
+   * `previous` 是"上一行**覆盖到的**结束时刻"：`t - previous` 因此只会等于或
+   * **小于**两个节点名义时刻之差 —— 差值可能为负（两条分片请求在时间上重叠），
+   * 那种情况自然落在阈值以下，不会插行，也不需要额外判断。
+   */
+  const pushGapBefore = (t: number): void => {
+    if (previous === null) return;
+    const ms = t - previous;
+    if (ms < GAP_THRESHOLD_MS) return;
+
+    rows.push({
+      kind: 'gap',
+      stage: null,
+      label: gapText(ms),
+      meta: '',
+      detail: null,
+      marker: null,
+      tone: 'muted',
+      dimTitle: true,
+      dangerTitle: false,
+    });
+  };
 
   for (const event of events) {
     // 返回不单独成行，见函数头
@@ -424,6 +524,8 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
         : undefined;
 
     if (pair !== undefined) {
+      pushGapBefore(pair.t);
+
       const unmatched = pair.doneAt === null || pair.ms === null;
       const look = describeEventMarker(event);
       rows.push({
@@ -445,8 +547,21 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
       });
       previous = pair.doneAt ?? pair.t;
     } else {
+      pushGapBefore(event.t);
+
       const line = isLineRow(event);
       const look = describeEventMarker(event);
+      /**
+       * 要不要画圆点。
+       *
+       * - 线路行（`seg-req` / 带 `kind` 的 `switch`）用线路形状；
+       * - `ext-patch`（扩展介入）**也画**：它是空心圆 + `--pluma-accent`，
+       *   而且图例里有一条「○ 扩展介入」与它对应（`legendEntries()`）。
+       *   裁决 ④ 让里程碑改用短竖线，理由是"空心圆与图例里的线路撞形"——
+       *   有了图例条目，这个理由不再成立，而颜色/形状正是这一行最该被看见的东西；
+       * - 其余里程碑用短竖线（`marker: null`）。
+       */
+      const usesMarker = line || event.stage === 'ext-patch';
       rows.push({
         kind: 'event',
         stage: event.stage,
@@ -457,7 +572,7 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
             : `${seconds(event.t)}s +${seconds(event.t - previous)}s`,
         detail: event.host === undefined || event.host.length === 0 ? null : event.host,
         // 里程碑没有线路形状：左侧画短竖线（见 TimelineRow.marker 的注释）
-        marker: line ? look.marker : null,
+        marker: usesMarker ? look.marker : null,
         tone: look.tone,
         dimTitle: false,
         dangerTitle: event.stage === 'error' || event.stage === 'blocked',
@@ -639,8 +754,9 @@ export function loadingQuickRow(view: LoadingQuickView, onOpen?: () => void): HT
  * 我们所有打点都在 isolated 侧，没有任何事件能产出 `ext-patch`。
  * 图例承诺了不存在的类别 —— 那是在解释一个不会出现的形状。
  *
- * 现在只列**本次真的出现过**的线路类别（`legendKinds()`），一项都没有就整块不画。
- * `扩展介入` 已从图例删掉：等真有 `ext-patch` 数据源那天再加回来。
+ * 现在只列**本次真的出现过**的东西（`legendEntries()`），一项都没有就整块不画。
+ * `2026-11-20 T11` 起 `ext-patch` 有了数据源（主世界 `reportExtPatch()`），
+ * 所以「扩展介入」按需回到图例里 —— 仍然只在**本次真的出现过**时出现。
  */
 const LEGEND_LOOK: Record<
   'official' | 'pcdn' | 'third-party',
@@ -649,6 +765,18 @@ const LEGEND_LOOK: Record<
   official: { text: '官方', shape: 'disc', tone: 'ok' },
   pcdn: { text: 'P2P', shape: 'diamond', tone: 'warn' },
   'third-party': { text: '第三方', shape: 'triangle', tone: 'muted' },
+};
+
+/**
+ * 「扩展介入」的图例外观。
+ *
+ * 空心圆 + `--pluma-accent`，与时间轴里那一行（`describeEventMarker()` 的
+ * `accent` / `ring` 档）**同一个造型**：图例说的和行里画的不许分家。
+ */
+const LEGEND_EXT_PATCH: { text: string; shape: MarkerShape; tone: LoadingTone } = {
+  text: '扩展介入',
+  shape: 'ring',
+  tone: 'accent',
 };
 
 /** 图例的固定顺序：官方 → P2P → 第三方（不按出现顺序，免得每次截图都不一样） */
@@ -675,6 +803,31 @@ export function legendKinds(
     if (e.kind !== undefined) seen.add(e.kind);
   }
   return LEGEND_ORDER.filter((k) => seen.has(k));
+}
+
+/**
+ * 本次事件序列里有没有「扩展介入」。
+ *
+ * 判据只看**事件**（不看 hosts —— 那里面没有这个阶段）：
+ * `ext-patch` 是主世界真的改写了取流响应之后发来的那一条。
+ */
+export function legendHasExtPatch(snapshot: LoadingSnapshotLite): boolean {
+  return snapshot.events.some((e) => e.stage === 'ext-patch');
+}
+
+/**
+ * 图例条目（按绘制顺序）。
+ *
+ * 线路类别在前、「扩展介入」在后 —— 前三个回答"这几条线是什么"，
+ * 后面那个回答"扩展在这一刻动过手"，是两件事，不该交错。
+ * 一项都没有就返回空数组，调用方据此**整块不画**。
+ */
+export function legendEntries(
+  snapshot: LoadingSnapshotLite,
+): Array<{ text: string; shape: MarkerShape; tone: LoadingTone }> {
+  const entries = legendKinds(snapshot).map((kind) => LEGEND_LOOK[kind]);
+  if (legendHasExtPatch(snapshot)) entries.push(LEGEND_EXT_PATCH);
+  return entries;
 }
 
 /** 二级浮层「本次加载」要调出去的三件事 */
@@ -766,8 +919,21 @@ function conclusionCard(snapshot: LoadingSnapshotLite): HTMLElement {
   return card;
 }
 
-/** 时间轴一行 */
+/**
+ * 时间轴一行。
+ *
+ * ## 空档行（`kind === 'gap'`）走另一套骨架
+ *
+ * 它**不是事件**：不画圆点、不画短竖线、也不参与"圆点列 + 竖线连接"那套布局。
+ * 只有一条细横线（CSS 的 `.ld-gap::before`）加一句说明，文字本身已经在
+ * `row.label` 里（`gapText()`）。上一行的 `.ld-conn` 到这里断开 ——
+ * 这正是想让人看到的"中间有一段没有列出来的时间"。
+ */
 function timelineRow(row: TimelineRow, isLast: boolean): HTMLElement {
+  if (row.kind === 'gap') {
+    return el('div', 'ld-row ld-gap', row.label);
+  }
+
   const line = el('div', 'ld-row');
 
   const wrap = el('div', 'ld-node-wrap');
@@ -825,14 +991,16 @@ function timelineRow(row: TimelineRow, isLast: boolean): HTMLElement {
  * └──────────────────────────────┘
  * 时间轴
  * ▏卡了一下              1.77s
- * ● 下载分片             2.53s → 2.82s · 0.29s
+ * ● 下载视频片段         2.53s → 2.82s · 0.29s
  * │ cn-jsnt-ct-01-07.bilivideo.com
  * ▏可以播放              3.27s +0.45s
- * ◆ 下载分片             3.74s → 3.89s · 0.15s
- * │ xy220x180x77x45xy.mcdn.bilivideo.cn
- * 图例  ● 官方  ◆ P2P
+ * ⋯ 5.01s（这段时间的片段未逐段列出）      ← 空档分隔行，不是事件
+ * ○ 扩展介入             8.28s +5.01s
+ * ◆ 下载视频片段         8.40s → 8.55s · 0.15s
+ *   xy220x180x77x45xy.mcdn.bilivideo.cn
+ * 图例  ● 官方  ◆ P2P  ○ 扩展介入
  * 查看完整诊断 ›
- * 时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，…
+ * 时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，…（见 TIMELINE_FOOTNOTE）
  * ```
  *
  * ## 拿不到数据时**不画空壳**
@@ -892,17 +1060,17 @@ export function loadingDetailPane(
   }
 
   /**
-   * 图例：**按本次出现的类别动态生成**（裁决 ③）。
+   * 图例：**按本次出现的东西动态生成**（裁决 ③）。
    *
    * 一项都没有时整块不渲染 —— 包括那个「图例」小标题。画一个空图例等于说
    * "这里有形状要解释"，而实际一个形状都没有。
+   * 「扩展介入」排在线路类别之后，且同样只在本次真的出现过 `ext-patch` 时才画。
    */
-  const kinds = legendKinds(snapshot);
-  if (kinds.length > 0) {
+  const legendItems = legendEntries(snapshot);
+  if (legendItems.length > 0) {
     box.appendChild(el('p', 'diag-section', '图例'));
     const legend = el('div', 'ld-legend');
-    for (const kind of kinds) {
-      const look = LEGEND_LOOK[kind];
+    for (const look of legendItems) {
       const cell = el('div', `ld-legend-item ld-tone-${look.tone}`);
       cell.appendChild(markerSvg(look.shape));
       cell.appendChild(el('span', 'ld-legend-text', look.text));
@@ -913,13 +1081,7 @@ export function loadingDetailPane(
 
   box.appendChild(diagnosticsEntry(actions));
 
-  box.appendChild(
-    el(
-      'p',
-      'pane-note',
-      '时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，下载分片那几行给的是请求到返回的耗时。',
-    ),
-  );
+  box.appendChild(el('p', 'pane-note', TIMELINE_FOOTNOTE));
 
   return box;
 }

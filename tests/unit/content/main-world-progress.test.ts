@@ -51,6 +51,12 @@ interface Options {
   enable?: boolean;
   /** responseType，默认 ''（文本路径） */
   responseType?: string;
+  /**
+   * `responseType === 'json'` 时页面读到的那个**对象**（脚本会就地改它）。
+   * 传了它才会装 `response` 访问器 —— 否则 jsdom 的 `response` 是 `null`，
+   * 脚本的 json 分支会走 `!live` 早退，测不到。
+   */
+  jsonBody?: Record<string, unknown>;
   /** playurl 地址，默认 PLAYURL_URL */
   url?: string;
 }
@@ -60,6 +66,15 @@ interface Result {
   text: string;
   /** 解析后的 data 段；解析失败为 null */
   data: Record<string, unknown> | null;
+  /**
+   * 主世界发出的「扩展介入」上报（`{ __ns, __PLUMA_EXT_PATCH__, at }`）。
+   *
+   * **只数这一种**：同一个通道上还有 `cfg` 回执、`page/*` 诊断上报等，
+   * 本文件只关心"扩展到底有没有动手"。
+   */
+  patches: Record<string, unknown>[];
+  /** `jsonBody` 被就地改写后的样子（文本路径下等于传入的那个对象） */
+  jsonBody: Record<string, unknown> | undefined;
 }
 
 /** 建一个干净页面、执行真源码、跑一次 playurl XHR，返回页面最终读到的响应 */
@@ -97,6 +112,23 @@ async function runPlayurl(opts: Options = {}): Promise<Result> {
 
   win.eval(SOURCE);
 
+  /**
+   * 捕获**主世界发出的**消息。
+   *
+   * 必须装在 `eval` 之后、发 cfg 之前：脚本里的 `safePost()` 每次调用都重新取
+   * `window.postMessage`（不在启动时缓存），所以这里换掉的包装器能被它用上；
+   * 而 cfg 是**我们**发给脚本的，同样会被记进来 —— 靠 `__PLUMA_EXT_PATCH__` 过滤。
+   */
+  const patches: Record<string, unknown>[] = [];
+  const postToWindow = win.postMessage.bind(win);
+  win.postMessage = (message: unknown, targetOrigin: string): void => {
+    if (message !== null && typeof message === 'object') {
+      const payload = message as Record<string, unknown>;
+      if (payload.__PLUMA_EXT_PATCH__ === true) patches.push(payload);
+    }
+    postToWindow(message, targetOrigin);
+  };
+
   // 机制 1：token 必须是非空字符串，否则 tokenLocked 不锁、行为类开关被忽略
   if (opts.enable !== false) {
     // ⚠️ `rewriteGate` 必带：进度还原是**改写响应**，初值 false（fail-closed）会拦住它
@@ -131,6 +163,10 @@ async function runPlayurl(opts: Options = {}): Promise<Result> {
     configurable: true,
     get: () => opts.responseType ?? '',
   });
+  if (opts.jsonBody !== undefined) {
+    // json 分支读的是 `xhr.response`（对象）—— 脚本会就地改它，所以这里交出引用
+    Object.defineProperty(xhr, 'response', { configurable: true, get: () => opts.jsonBody });
+  }
 
   (xhr as unknown as { open: (m: string, u: string) => void }).open('GET', opts.url ?? PLAYURL_URL);
 
@@ -147,7 +183,7 @@ async function runPlayurl(opts: Options = {}): Promise<Result> {
   } catch {
     data = null;
   }
-  return { text, data };
+  return { text, data, patches, jsonBody: opts.jsonBody };
 }
 
 describe('ADR 0017 观看进度还原', () => {
@@ -258,6 +294,107 @@ describe('ADR 0017 观看进度还原', () => {
         served: { data: { last_play_time: 0, last_play_cid: 0 } },
       });
       expect(text).toContain('"last_play_time":0');
+    });
+  });
+
+  /**
+   * ## T11：「扩展介入」上报的唯一数据源
+   *
+   * 时间轴上那个节点（`ext-patch`）没有别的来源 —— 采集器在 isolated 侧读
+   * resource 条目，**看不到**主世界什么时候改写了 playurl。
+   *
+   * 这一组的判据只有一条：**只有真的改了字段才发**。
+   * 发多一条的后果不是"多显示一行"，而是时间轴上出现
+   * "扩展介入了却什么都没改"的假节点 —— 排查时会被当成线索。
+   */
+  describe('T11 · 扩展介入上报（只有真改过才发）', () => {
+    const isPatch = (r: { patches: Record<string, unknown>[] }): boolean => r.patches.length > 0;
+
+    it('★ 真的改写了字段 → 恰好 1 条，且 at 是有限数', async () => {
+      const { patches } = await runPlayurl();
+      expect(patches).toHaveLength(1);
+      // 时间戳必须能用：采集侧拿它当事件时间（`Number.isFinite` 才收）
+      expect(typeof patches[0]?.at).toBe('number');
+      expect(Number.isFinite(patches[0]?.at as number)).toBe(true);
+      // 与采集侧约定的字段名，少一个就收不到
+      expect(patches[0]?.__ns).toBe('__PLUMA__');
+      expect(patches[0]?.__PLUMA_EXT_PATCH__).toBe(true);
+    });
+
+    it('⛔ 值本来就对（命中但无需改）→ 一条都不发', async () => {
+      /**
+       * 文本路径：`applyProgressToJson()` 值相等时返回 null，根本走不到 `return true`。
+       * 反例：把那条相等判断删掉 → 这条会红（多出一条"什么也没改"的介入）。
+       */
+      const res = await runPlayurl({
+        served: { data: { last_play_time: PRIMARY_TIME, last_play_cid: PRIMARY_CID } },
+      });
+      expect(isPatch(res)).toBe(false);
+    });
+
+    it('⛔ 闸门拦下（currentTime > 3）→ 不发', async () => {
+      const res = await runPlayurl({
+        currentTime: 4,
+        served: { data: { last_play_time: 0, last_play_cid: 0 } },
+      });
+      expect(isPatch(res)).toBe(false);
+      expect(res.data!.last_play_time).toBe(0);
+    });
+
+    it('⛔ 总开关关闭（没有 rewriteGate）→ 不发', async () => {
+      const res = await runPlayurl({
+        enable: false,
+        served: { data: { last_play_time: 0, last_play_cid: 0 } },
+      });
+      expect(isPatch(res)).toBe(false);
+    });
+
+    it('⛔ 取不到主账号进度 → 不发', async () => {
+      const res = await runPlayurl({
+        primary: null,
+        served: { data: { last_play_time: 7, last_play_cid: 7 } },
+      });
+      expect(isPatch(res)).toBe(false);
+    });
+
+    it('⛔ 不是 playurl 请求 → 不发', async () => {
+      const res = await runPlayurl({
+        url: 'https://api.bilibili.com/x/web-interface/nav',
+        served: { data: { last_play_time: 0, last_play_cid: 0 } },
+      });
+      expect(isPatch(res)).toBe(false);
+    });
+
+    it('★ json 分支：真的改了 → 1 条；值本来就对 → 0 条', async () => {
+      /**
+       * json 分支是**无条件赋值**（不像文本路径有"值相等就返回 null"）。
+       * 所以"要不要报"必须看字段值是否真的变了 —— 判据写错成
+       * "走到这里就报"的话，下面第二个断言会红。
+       */
+      const changed = await runPlayurl({
+        responseType: 'json',
+        served: { data: { last_play_time: 0, last_play_cid: 0 } },
+        jsonBody: { data: { last_play_time: 0, last_play_cid: 0 } },
+      });
+      expect(changed.jsonBody).toEqual({
+        data: { last_play_time: PRIMARY_TIME, last_play_cid: PRIMARY_CID },
+      });
+      expect(changed.patches).toHaveLength(1);
+
+      const same = await runPlayurl({
+        responseType: 'json',
+        served: { data: { last_play_time: PRIMARY_TIME, last_play_cid: PRIMARY_CID } },
+        jsonBody: { data: { last_play_time: PRIMARY_TIME, last_play_cid: PRIMARY_CID } },
+      });
+      expect(same.patches).toHaveLength(0);
+    });
+
+    it('⛔ arraybuffer / blob 响应不碰也不发', async () => {
+      const res = await runPlayurl({
+        responseType: 'arraybuffer',
+        served: { data: { last_play_time: 0, last_play_cid: 0 } },
+      });
+      expect(isPatch(res)).toBe(false);
     });
   });
 });

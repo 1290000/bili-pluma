@@ -82,6 +82,7 @@ import {
   attachLoadingTraceVideo,
   getLoadingSnapshot,
   installLoadingTrace,
+  noteExtPatch,
   resetLoadingTrace,
 } from '@/src/content/isolated/loading-trace';
 import {
@@ -2825,6 +2826,36 @@ export default defineContentScript({
         { __ns: NS, type: 'loading-snapshot-reply', snapshot: getLoadingSnapshot() },
         '*',
       );
+    });
+
+    /**
+     * **主世界报告"我改了取流响应"**（2026-11-20，T11）。
+     *
+     * 这条不是诊断上报，是**时间轴上「扩展介入」节点的唯一数据源**：
+     * 采集器读的是 ISOLATED 侧的 resource 条目，看不到主世界什么时候改写了
+     * playurl —— 所以这个阶段一直在，却从来没有事件。
+     *
+     * ## 判据只有一条：`__PLUMA_EXT_PATCH__ === true`
+     *
+     * 主世界**只在真改过字段之后**发（`reportExtPatch()` 的两个调用点都在
+     * `patchPlayurlXhrProgress()` 确认成功的那一行）。所以这里不做任何二次判断，
+     * 只把时间戳交给采集器 —— 它负责"一次页面只记第一条"。
+     *
+     * ## 时间戳
+     *
+     * `at` 是主世界的 `performance.now()`，与采集侧同一时基（都以页面导航为原点）。
+     * **必须是有限数**：我们两边都是自己写的，缺 `at` 说明有一侧改坏了，
+     * 补一个 `performance.now()` 会把一个 bug 掩盖成"看起来正常的一毫秒"。
+     *
+     * 页面脚本伪造这条消息的最坏效果是让时间轴多一个「扩展介入」节点
+     * （它会出现在诊断导出里）—— 不扩大任何权限、不触发任何写操作。
+     */
+    window.addEventListener('message', (ev) => {
+      const d = ev.data as { __ns?: string; __PLUMA_EXT_PATCH__?: unknown; at?: unknown } | null;
+      if (!d || d.__ns !== NS || d.__PLUMA_EXT_PATCH__ !== true) return;
+      if (typeof d.at !== 'number' || !Number.isFinite(d.at)) return;
+
+      noteExtPatch(d.at);
     });
 
     /**

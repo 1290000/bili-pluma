@@ -37,10 +37,14 @@ import {
   describeLine,
   describeKindPill,
   describePcdnCaveat,
+  gapText,
+  legendEntries,
+  legendHasExtPatch,
   legendKinds,
   loadingDetailPane,
   loadingQuickRow,
   stageLabel,
+  TIMELINE_FOOTNOTE,
 } from '../../../src/content/panel/loading-pane';
 import type { LoadingOutcome } from '../../../src/content/panel/loading-pane';
 import {
@@ -302,13 +306,19 @@ describe('时间轴：请求与返回配对成一行', () => {
   });
 
   it('★ 每行的标题与右列元信息（配对区间带耗时）', () => {
+    /**
+     * 标题是「下载视频片段」而不是「开始下载分片」：配对行代表**一整段**
+     * （请求→返回），不是"那一刻"；而「分片」是内部实现词，用户读不出它指视频。
+     * 反例：把 `SEGMENT_LABEL` 改回 `stageLabel('seg-req')` → 这条必红。
+     * 技术名映射本身不变（诊断页还在用「开始下载分片」，见下一个用例）。
+     */
     expect(rows.map((r) => r.label)).toEqual([
       '卡了一下',
-      '下载分片',
+      '下载视频片段',
       '可以播放',
       '开始播放',
-      '下载分片',
-      '下载分片',
+      '下载视频片段',
+      '下载视频片段',
     ]);
     expect(rows.map((r) => r.meta)).toEqual([
       '1.77s',
@@ -399,8 +409,147 @@ describe('时间轴：请求与返回配对成一行', () => {
     for (const s of stages) expect(stageLabel(s)).not.toBe(s);
     expect(stageLabel('switch')).toBe('换了一条线路');
     expect(stageLabel('playurl-res')).toBe('B站 返回线路清单');
-    // 配对行用更短的「下载分片」，但技术名映射本身不变（诊断页还在用）
+    // 配对行用更短的「下载视频片段」，但技术名映射本身不变（诊断页还在用）
     expect(stageLabel('seg-req')).toBe('开始下载分片');
+    expect(stageLabel('ext-patch')).toBe('扩展介入');
+  });
+});
+
+// ─────────────────────────── 空档分隔行 ───────────────────────────
+
+describe('空档分隔行：间隔 ≥ 2 秒才插一条', () => {
+  /** 两个里程碑、间隔可控 —— 最少的事件数才能把"阈值"单独钉住 */
+  const between = (a: number, b: number): ReturnType<typeof buildTimelineRows> =>
+    buildTimelineRows([
+      { t: a, stage: 'canplay' },
+      { t: b, stage: 'playing' },
+    ]);
+
+  it('1.9 秒不插；2.0 秒插（阈值就在 2 秒，边界不含糊）', () => {
+    expect(between(1000, 2900).map((r) => r.kind)).toEqual(['event', 'event']);
+    expect(between(1000, 3000).map((r) => r.kind)).toEqual(['event', 'gap', 'event']);
+  });
+
+  it('★ 真机那份 2.07s → 8.28s：文案写 6.21s（秒数就是两个节点相减）', () => {
+    const rows = between(2070, 8280);
+    const gap = rows.find((r) => r.kind === 'gap');
+    expect(gap?.label).toBe('⋯ 6.21s（这段时间的片段未逐段列出）');
+    // 与"用两个 t 相减"的结果逐字一致 —— 不是估计出来的
+    expect(gap?.label).toBe(gapText(8280 - 2070));
+  });
+
+  it('⛔ 分隔行不是事件：没有阶段、没有形状、没有右列元信息与明细', () => {
+    const gap = between(1000, 5000).find((r) => r.kind === 'gap');
+    expect(gap).toMatchObject({
+      kind: 'gap',
+      stage: null,
+      marker: null,
+      meta: '',
+      detail: null,
+      dimTitle: true,
+      dangerTitle: false,
+    });
+  });
+
+  it('上一条是配对行时，间隔从**返回时刻**算起（不把正在下载的时间说成空档）', () => {
+    /**
+     * 请求 1.00s → 返回 4.00s，下一条在 4.50s：真实空档只有 0.5s。
+     * 反例：改用请求时刻（1.00s）当前一条的结束 → 会插一条「3.50s 未逐段列出」，
+     * 而上面那一行明明写着这 3 秒在下载。那是在陈述没观测到的事。
+     */
+    const rows = buildTimelineRows([
+      { t: 1000, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' },
+      { t: 4000, stage: 'seg-res', host: 'a.bilivideo.com', kind: 'official' },
+      { t: 4500, stage: 'canplay' },
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual(['segment', 'event']);
+  });
+
+  it('时间上重叠的两条请求不产生负间隔行', () => {
+    // A 先返回、B 后发但更早结束：previous 在两者之间来回，差值可能为负
+    const rows = buildTimelineRows([
+      { t: 1000, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' },
+      { t: 9000, stage: 'seg-res', host: 'a.bilivideo.com', kind: 'official' },
+      { t: 2000, stage: 'seg-req', host: 'b.mcdn.bilivideo.cn', kind: 'pcdn' },
+      { t: 2100, stage: 'seg-res', host: 'b.mcdn.bilivideo.cn', kind: 'pcdn' },
+    ]);
+    expect(rows.some((r) => r.kind === 'gap')).toBe(false);
+  });
+
+  it('只有一条事件时没有"上一行"，不插行', () => {
+    expect(buildTimelineRows([{ t: 1000, stage: 'canplay' }]).map((r) => r.kind)).toEqual([
+      'event',
+    ]);
+  });
+});
+
+// ─────────────────────────── 「扩展介入」 ───────────────────────────
+
+describe('「扩展介入」事件（ext-patch）', () => {
+  it('★ 画空心圆 + accent 色，而不是里程碑的短竖线', () => {
+    const rows = buildTimelineRows([
+      { t: 1000, stage: 'ext-patch' },
+      { t: 1500, stage: 'canplay' },
+    ]);
+
+    expect(rows[0]).toMatchObject({
+      kind: 'event',
+      stage: 'ext-patch',
+      label: '扩展介入',
+      marker: 'ring',
+      tone: 'accent',
+      dangerTitle: false,
+    });
+    // 同一次序列里的里程碑仍然走短竖线（marker: null）—— 两者没混
+    expect(rows[1]?.marker).toBeNull();
+  });
+
+  it('它不归属任何线路：没有 host 就没有明细行', () => {
+    const rows = buildTimelineRows([{ t: 1000, stage: 'ext-patch' }]);
+    expect(rows[0]?.detail).toBeNull();
+  });
+
+  it('⛔ 没有 ext-patch 事件时，时间轴上不出现「扩展介入」', () => {
+    const rows = buildTimelineRows(snapshot().events);
+    expect(rows.map((r) => r.label)).not.toContain('扩展介入');
+  });
+});
+
+// ─────────────────────────── 文案守卫 ───────────────────────────
+
+describe('文案守卫：只说可证实的事', () => {
+  /**
+   * ## 为什么这两条要单独守
+   *
+   * 闸门按**线路类别**（`cls`）压事件 —— **同一类别下 host 可能已经换了**。
+   * 用户真机截图里副行写「4 条线路」，时间轴却只有 3 个 host，第 4 个正是在
+   * 空档期间出现的。所以"同一条线路继续下载"是一句我们**没有观测到**的话，
+   * 而这正是最容易为了"解释得通顺"被写回去的一句。
+   */
+  it('★ 尾注与分隔行都不许出现「同一线路」', () => {
+    expect(TIMELINE_FOOTNOTE).not.toContain('同一线路');
+    expect(gapText(6210)).not.toContain('同一线路');
+
+    const box = loadingDetailPane(
+      ok({
+        events: [
+          { t: 1000, stage: 'playing' },
+          { t: 7210, stage: 'stall' },
+        ],
+      }),
+      { back: () => undefined, refresh: () => undefined, openDiagnostics: () => undefined },
+    );
+    expect(box.textContent).not.toContain('同一线路');
+  });
+
+  it('尾注同时说清四件事：时间基准 / 增量 / 配对行耗时 / 其余未逐段列出', () => {
+    expect(TIMELINE_FOOTNOTE).toContain('时间从页面开始加载算起');
+    expect(TIMELINE_FOOTNOTE).toContain('比上一条多花的时间');
+    expect(TIMELINE_FOOTNOTE).toContain('下载视频片段');
+    expect(TIMELINE_FOOTNOTE).toContain('未逐段列出');
+    // 也不能写成"同一条线路"的等价说法
+    expect(TIMELINE_FOOTNOTE).not.toContain('同一条线');
+    expect(gapText(6210)).not.toContain('同一条线');
   });
 });
 
@@ -614,7 +763,7 @@ describe('「本次加载」浮层', () => {
     const rows = [...box.querySelectorAll('.ld-row')];
     expect(rows).toHaveLength(6);
     expect(rows[0]?.querySelector('.ld-title')?.textContent).toBe('卡了一下');
-    expect(rows[1]?.querySelector('.ld-title')?.textContent).toBe('下载分片');
+    expect(rows[1]?.querySelector('.ld-title')?.textContent).toBe('下载视频片段');
     expect(rows[1]?.querySelector('.ld-delta')?.textContent).toBe('2.53s → 2.82s · 0.29s');
     // 里程碑只有时刻（首条没有上一条）
     expect(rows[0]?.querySelector('.ld-delta')?.textContent).toBe('1.77s');
@@ -651,6 +800,89 @@ describe('「本次加载」浮层', () => {
     // 每一项都画了形状，不是只有一个色块
     for (const i of items) expect(i.querySelector('svg')).not.toBeNull();
     expect(box.textContent).not.toContain('扩展介入');
+  });
+
+  it('★ 本次出现 ext-patch → 图例追加「○ 扩展介入」，排在线路类别之后', () => {
+    const withPatch = ok({
+      events: [{ t: 900, stage: 'ext-patch' }, ...snapshot().events],
+    });
+    expect(legendHasExtPatch(withPatch.kind === 'ok' ? withPatch.snapshot : snapshot())).toBe(true);
+
+    const box = loadingDetailPane(withPatch, spyActions());
+    const items = [...box.querySelectorAll('.ld-legend-item')];
+    expect(items.map((i) => i.querySelector('.ld-legend-text')?.textContent)).toEqual([
+      '官方',
+      'P2P',
+      '扩展介入',
+    ]);
+
+    const cell = items[2];
+    // 色调是 accent（蓝 = 我方动作），与时间轴那一行同一个造型
+    expect(cell?.className).toContain('ld-tone-accent');
+    /**
+     * 形状必须是**空心圆**：`markerSvg('ring')` 只给 svg 挂 stroke，
+     * 内部 circle 不带 fill；`disc`（官方）的内部 circle 是 `fill="currentColor"`。
+     * 断言 fill 属性就能分辨"实心圆"与"空心圆"，不需要真的渲染。
+     */
+    const circle = cell?.querySelector('svg circle');
+    expect(circle).not.toBeNull();
+    expect(circle?.getAttribute('fill')).toBeNull();
+  });
+
+  it('⛔ 没有 ext-patch 时，图例里连「扩展介入」这四个字都没有', () => {
+    const box = loadingDetailPane(ok(), spyActions());
+    const texts = [...box.querySelectorAll('.ld-legend-text')].map((n) => n.textContent);
+    expect(texts).not.toContain('扩展介入');
+    expect(box.textContent).not.toContain('扩展介入');
+  });
+
+  it('只有「扩展介入」、一条线路类别都没有时，图例仍然画（那个形状真的出现了）', () => {
+    const onlyPatch = ok({
+      confidence: 'none',
+      actual: null,
+      hosts: [],
+      events: [{ t: 500, stage: 'ext-patch' }],
+    });
+    const box = loadingDetailPane(onlyPatch, spyActions());
+    expect([...box.querySelectorAll('.ld-legend-text')].map((n) => n.textContent)).toEqual([
+      '扩展介入',
+    ]);
+  });
+
+  /**
+   * 图例条目的纯函数出口（DOM 之外也能被别的视图复用）。
+   *
+   * 反例：`legendEntries()` 忘了 push `LEGEND_EXT_PATCH` → 图例少一项，
+   * 而时间轴上那一行照样画圆点，于是"有个形状没人解释"。
+   */
+  it('legendEntries：线路类别在前、扩展介入在后', () => {
+    const snap = snapshot({ events: [{ t: 100, stage: 'ext-patch' }, ...snapshot().events] });
+    expect(legendEntries(snap).map((e) => e.text)).toEqual(['官方', 'P2P', '扩展介入']);
+    expect(legendEntries(snapshot()).map((e) => e.text)).toEqual(['官方', 'P2P']);
+  });
+
+  it('★ 空档在 DOM 里是 `.ld-gap`：只有一条细横线，没有圆点 / 短竖线 / 竖线', () => {
+    const gapped = ok({
+      events: [
+        { t: 1000, stage: 'playing' },
+        { t: 7210, stage: 'stall' },
+      ],
+    });
+    const box = loadingDetailPane(gapped, spyActions());
+    const gaps = [...box.querySelectorAll('.ld-gap')];
+    expect(gaps).toHaveLength(1);
+    expect(gaps[0]?.textContent).toBe('⋯ 6.21s（这段时间的片段未逐段列出）');
+
+    // 它不是事件：三种"节点"标记一个都不许有
+    expect(gaps[0]?.querySelector('.ld-node')).toBeNull();
+    expect(gaps[0]?.querySelector('.ld-tick')).toBeNull();
+    expect(gaps[0]?.querySelector('.ld-conn')).toBeNull();
+    // 时间轴本身仍然按顺序排：里程碑 → 空档 → 里程碑
+    expect(
+      [...box.querySelectorAll('.ld-row')].map((r) =>
+        r.classList.contains('ld-gap') ? 'gap' : 'row',
+      ),
+    ).toEqual(['row', 'gap', 'row']);
   });
 
   it('★ 一个线路类别都没有时，图例整块不渲染（不画空图例）', () => {

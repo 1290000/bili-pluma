@@ -189,4 +189,30 @@ describe('content.ts 特征测试（拆分安全网）', () => {
       expect(CONTENT).toContain("if (d.type === 'hdr')");
     });
   });
+
+  /**
+   * ## T11：「扩展介入」的上报入口
+   *
+   * 主世界（`main-world.js` 的 `reportExtPatch()`）发 `__PLUMA_EXT_PATCH__`，
+   * **这条监听器是它唯一的接收方**。少一个 `noteExtPatch()` 调用，
+   * 时间轴上那个节点就永远是空的 —— 而这**不会让任何别的测试变红**：
+   * `loading-trace.test.ts` 直接调 `recordExtPatch()`，面板测试直接构造事件，
+   * 唯独"两界之间这根线"没有行为测试覆盖（它要一个真的 content script 实例）。
+   *
+   * 所以这里按本文件既有的手法做**源码级**断言：钉住"判据"与"落点"两件事。
+   */
+  describe('T11 · 扩展介入上报的接收端', () => {
+    it('判据只有 __PLUMA_EXT_PATCH__ === true，且要求 at 是有限数', () => {
+      expect(CONTENT).toContain('__PLUMA_EXT_PATCH__ === true');
+      expect(CONTENT).toContain('Number.isFinite(d.at)');
+      // 缺 at 时**不补一个** performance.now()（那会把一处 bug 掩盖成正常值）
+      expect(/noteExtPatch\(performance\.now\(\)\)/.test(CONTENT)).toBe(false);
+    });
+
+    it('收到的 at 原样交给采集器（不换算、不加偏移）', () => {
+      expect(CONTENT).toContain('noteExtPatch(d.at)');
+      // 报了名却没接上：导入与调用必须同时在
+      expect(CONTENT).toContain('noteExtPatch,');
+    });
+  });
 });

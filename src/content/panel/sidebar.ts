@@ -1373,6 +1373,29 @@ export const PANEL_CSS = `
   display: none;
 }
 
+/* ── 空档分隔行（2026-11-20，T11）──
+   相邻两个节点隔了 2 秒以上时插一行，说明那段时间的片段没有逐段列出。
+   ⚠️ 它**不是事件**：不画圆点、不画短竖线，只有一条细横线加一句话，
+   所以它既没有 ld-node-wrap 也没有 ld-conn（上一行的竖线到此断开，
+   这个断口正是"中间有一段没列出来的时间"该有的样子）。
+   ::before 那条线固定 30px，与圆点列同宽，文字的左边就落在标题行左边缘上。
+   颜色用次要文字色 —— 它陈述的是一件次要的事，不该抢走圆点的注意力。 */
+.ld-row.ld-gap {
+  align-items: center;
+  gap: 6px;
+  margin: 1px 0;
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+  line-height: var(--pluma-line-height-meta);
+}
+
+.ld-row.ld-gap::before {
+  content: '';
+  flex: 0 0 30px;
+  height: 1px;
+  background: var(--pluma-line);
+}
+
 .ld-body {
   display: flex;
   flex: 1 1 auto;

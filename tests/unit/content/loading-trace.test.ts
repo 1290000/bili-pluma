@@ -31,7 +31,9 @@ import {
   createTraceState,
   getLoadingSnapshot,
   hostFromUrl,
+  noteExtPatch,
   pushEvent,
+  recordExtPatch,
   recordResource,
   recordVideoStage,
   resetLoadingTrace,
@@ -496,6 +498,66 @@ describe('pushEvent —— 环形上限', () => {
   });
 });
 
+describe('recordExtPatch —— 「扩展介入」一次页面只记一条', () => {
+  /**
+   * ## 这条打点的数据来源
+   *
+   * 主世界（`src/content/main-world.js` 的 `reportExtPatch()`）**只在真的改写了
+   * playurl 响应**之后发一条 `{ __PLUMA_EXT_PATCH__, at }`；`content.ts` 校验后
+   * 调 `noteExtPatch(at)`。切清晰度 / 换轨会重新拉 playurl，于是**可能连发好几条**，
+   * 而"扩展介入了"在一次页面里只发生一次 —— 去重在这里做。
+   */
+  it('★ 上报一次 → 时间轴上多一条 ext-patch（t 就是主世界给的 at）', () => {
+    const state = createTraceState();
+    expect(recordExtPatch(state, 1234.5)).toBe(true);
+
+    expect(state.events).toHaveLength(1);
+    expect(state.events[0]).toMatchObject({ t: 1234.5, stage: 'ext-patch' });
+    // 它是"扩展动手"这一刻，不归属任何线路 —— 不许带上 host / kind
+    expect(state.events[0]?.host).toBeUndefined();
+    expect(state.events[0]?.kind).toBeUndefined();
+  });
+
+  it('★ 连发 3 次仍然只有 1 条（重复改写不刷屏）', () => {
+    const state = createTraceState();
+    expect([
+      recordExtPatch(state, 100),
+      recordExtPatch(state, 200),
+      recordExtPatch(state, 300),
+    ]).toEqual([true, false, false]);
+
+    expect(state.events).toHaveLength(1);
+    // 保留的是**第一条**：那才是"扩展第一次介入"的时刻
+    expect(state.events[0]?.t).toBe(100);
+  });
+
+  it('⛔ 一次都没上报 → 一条都没有（不补一个"看起来正常"的节点）', () => {
+    const state = createTraceState();
+    recordVideoStage(state, 'playing', 1000);
+
+    expect(state.events.map((e) => e.stage)).toEqual(['playing']);
+  });
+
+  it('非法时间戳丢弃，且**不占用**那唯一的一次机会', () => {
+    const state = createTraceState();
+    expect(recordExtPatch(state, Number.NaN)).toBe(false);
+    expect(recordExtPatch(state, Number.POSITIVE_INFINITY)).toBe(false);
+    expect(recordExtPatch(state, -1)).toBe(false);
+    expect(state.events).toHaveLength(0);
+    // 抛掉三条非法上报之后，合法的那条仍然记得下来
+    expect(recordExtPatch(state, 50)).toBe(true);
+    expect(state.events.map((e) => e.t)).toEqual([50]);
+  });
+
+  it('createTraceState 的新页面是干净的（重置之后可以再记一条）', () => {
+    const first = createTraceState();
+    recordExtPatch(first, 10);
+    const second = createTraceState();
+    expect(second.extPatchRecorded).toBe(false);
+    expect(recordExtPatch(second, 20)).toBe(true);
+  });
+});
+
 describe('单例：reset 清空、快照不抛', () => {
   it('resetLoadingTrace 清掉计数与时间轴', () => {
     // jsdom 不是本文件的运行环境（environment: node），所以这里只验
@@ -508,5 +570,22 @@ describe('单例：reset 清空、快照不抛', () => {
     expect(snapshot.present).toBe(false);
     expect(snapshot.confidence).toBe('none');
     expect(snapshot.video).toBeNull();
+  });
+
+  /**
+   * `noteExtPatch()` 是 `content.ts` 唯一的入口（它拿不到模块单例）。
+   *
+   * 这条同时钉住"重置会清掉 `extPatchRecorded`"：漏掉的话，换集 / 重载之后
+   * 时间轴上**永远**不会再出现「扩展介入」—— 而且不报任何错。
+   */
+  it('noteExtPatch 走模块单例；resetLoadingTrace 之后能再记一条', () => {
+    resetLoadingTrace();
+    expect(noteExtPatch(10)).toBe(true);
+    expect(noteExtPatch(20)).toBe(false);
+    expect(getLoadingSnapshot().events.map((e) => e.stage)).toEqual(['ext-patch']);
+
+    resetLoadingTrace();
+    expect(noteExtPatch(30)).toBe(true);
+    expect(getLoadingSnapshot().events.map((e) => e.t)).toEqual([30]);
   });
 });

@@ -130,6 +130,43 @@
   }
 
   /**
+   * 上报一条「扩展真的改写了取流响应」（2026-11-20，T11）。
+   *
+   * ## 为什么需要这条上报
+   *
+   * 用户在时间轴上**看不到「扩展介入」**，直接问"扩展不是要接管取流吗，
+   * 为什么没显示"。真相是：采集器（`loading-trace.ts`）只在 ISOLATED 侧读
+   * resource 条目，**没有任何东西记录主世界什么时候改了 playurl 响应** ——
+   * 这个阶段从一开始就没有数据源。
+   *
+   * ## 只在**真的改了字段**时调用
+   *
+   * 调用点只有两处，都在 `patchPlayurlXhrProgress()` 里，而且都在
+   * **确认改写成功**（`return true`）之前的那一行：
+   *
+   * | 分支 | 判据 | 为什么这样判 |
+   * | --- | --- | --- |
+   * | `responseType === 'json'` | `wrote`（两个字段**确实变了**） | 这一段是无条件赋值，值本来就相等时赋值什么也没改 |
+   * | 文本 / 访问器 | `patched !== null` 且两个 `defineProperty` 都装上 | 值相等时 `applyProgressToJson` 已经返回 null，根本走不到这里 |
+   *
+   * 跳过（`rewriteGate` 关 / `currentTime > 3` / 不是 playurl / 没有可还原进度）/
+   * 失败 / `last_play_time` 本来就对 —— 那些分支一律不发：
+   * 发出去就会出现"扩展介入了却什么都没改"的假事件。
+   *
+   * ## 时序口径
+   *
+   * `at` 用 `performance.now()`：与采集器的 `PerformanceResourceTiming.startTime`
+   * 和 `<video>` 事件的 `performance.now()` **同一个时基**（都以页面导航为原点），
+   * 所以 ISOLATED 侧可以直接拿它当事件时间戳，不需要换算。
+   *
+   * ISOLATED 侧对同一次页面生命周期只记第一条（见 `loading-trace.ts` 的
+   * `noteExtPatch`），所以这里重复发是安全的。
+   */
+  function reportExtPatch() {
+    safePost({ __ns: NS, __PLUMA_EXT_PATCH__: true, at: performance.now() });
+  }
+
+  /**
    * **原生 fetch 的备份，必须在任何 hook 之前取**。
    *
    * XHR 的「接管式改写」要用它重发请求。如果等到 fetch hook 那一段再取，
@@ -3475,8 +3512,18 @@
         var live = xhr.response;
         var ld = live && live.data;
         if (ld && typeof ld.last_play_time === 'number') {
+          /**
+           * ⚠️ 这一段是**无条件赋值**（与下面文本路径的 `applyProgressToJson` 不同：
+           * 那边"值本来就相等"会返回 null，走不到改写）。所以"要不要报「扩展介入」"
+           * 不能只看"走到了这里"，必须看**字段值是不是真的变了** ——
+           * 值本来就对的时候这两行赋值什么都没改，报出去就是一条
+           * "扩展介入了却什么都没改"的假事件（时间轴上会多一个没有依据的节点）。
+           */
+          var wrote = ld.last_play_time !== prog.time || ld.last_play_cid !== prog.cid;
           ld.last_play_time = prog.time;
           ld.last_play_cid = prog.cid;
+          // 真改了 → 报一条「扩展介入」（见 reportExtPatch 的函数头）
+          if (wrote) reportExtPatch();
           return true;
         }
       } catch (e) {}
@@ -3502,6 +3549,8 @@
           return patched;
         },
       });
+      // 两个访问器都装上了才算改成功 → 报一条「扩展介入」
+      reportExtPatch();
       return true;
     } catch (e) {
       return false;

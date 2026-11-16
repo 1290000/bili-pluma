@@ -136,11 +136,31 @@ export interface LoadingTraceState {
    * 于是真实发生的**两次**切换会被显示成一次。
    */
   lastSegReqCls: CdnKind | null;
+  /**
+   * 这一次页面生命周期里**是否已经记过一条 `ext-patch`**（2026-11-20，T11）。
+   *
+   * ## 为什么要记这个
+   *
+   * 主世界每次真改写 playurl 响应都会上报一条（`reportExtPatch()`）。
+   * 切清晰度 / 换轨会重新拉一次 playurl，于是**可能连着报好几条** ——
+   * 而"扩展介入了"这件事在一次页面里只发生一次，重复打点会让时间轴出现
+   * 一长串同名节点，把真正有用的分片事件挤下去。
+   *
+   * 所以采集侧只收第一条，后面的直接丢弃（主世界那边不做判断：
+   * 它的职责是"我改了就说"，"只显示一次"是显示层的事）。
+   */
+  extPatchRecorded: boolean;
 }
 
 /** 造一份空状态 */
 export function createTraceState(): LoadingTraceState {
-  return { events: [], hosts: new Map<string, HostStat>(), truncated: false, lastSegReqCls: null };
+  return {
+    events: [],
+    hosts: new Map<string, HostStat>(),
+    truncated: false,
+    lastSegReqCls: null,
+    extPatchRecorded: false,
+  };
 }
 
 /**
@@ -358,6 +378,47 @@ export function recordVideoStage(
 ): void {
   const event: LoadEvent = note === undefined ? { t, stage } : { t, stage, note };
   pushEvent(state, event);
+}
+
+/**
+ * 记录一条「扩展介入」（主世界真的改写了取流响应）。
+ *
+ * ## 数据从哪来
+ *
+ * `src/content/main-world.js` 的 `reportExtPatch()`：它在
+ * `patchPlayurlXhrProgress()` **确认改写成功**之后发一条
+ * `{ __ns, __PLUMA_EXT_PATCH__, at }`。跳过 / 失败 / 没改动 的分支不发 ——
+ * 否则会出现"扩展介入了却什么都没改"的假事件。
+ *
+ * ## 为什么在这里收口"只记第一条"
+ *
+ * 主世界每次真改写都会上报（切清晰度会重新拉 playurl），而"扩展介入了"
+ * 在一次页面里只发生一次。去重放在**采集侧**：主世界的职责是"我改了就说"，
+ * "只显示一次"是显示层的事 —— 反过来做（让主世界自己判断"是不是第一次"）
+ * 就等于在两个世界各维护一份"已经报过"的状态，迟早不一致。
+ *
+ * @param state 采集器状态（就地修改）
+ * @param t 毫秒（主世界的 `performance.now()`，与采集侧同一时基）
+ * @returns 本次是否真的记下了（`false` = 重复 / 时间戳非法 / 已经记过）
+ */
+export function recordExtPatch(state: LoadingTraceState, t: number): boolean {
+  if (state.extPatchRecorded) return false;
+  // 与 `pushEvent()` 同一条纪律：非法时间戳直接丢，不修正成 0
+  if (!Number.isFinite(t) || t < 0) return false;
+
+  state.extPatchRecorded = true;
+  pushEvent(state, { t, stage: 'ext-patch' });
+  return true;
+}
+
+/**
+ * 模块级入口：`content.ts` 收到主世界上报时调用。
+ *
+ * 与 `recordExtPatch(state, t)` 的分工和 `resetLoadingTrace()` 一样 ——
+ * 单例的读写都在本模块里，外面不需要拿到 `state`。
+ */
+export function noteExtPatch(t: number): boolean {
+  return recordExtPatch(state, t);
 }
 
 /**
