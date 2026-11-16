@@ -34,7 +34,7 @@ import {
 } from '../../../src/content/panel/host';
 import { PANEL_CSS, mountSidebar } from '../../../src/content/panel/sidebar';
 
-const TOKENS = ':host, :root { --pluma-accent: #378add; }';
+const TOKENS = ':host, :root { --pluma-accent: #206ebb; }';
 
 /** 建宿主 + 侧栏，返回 shadow root（host.ts 不导出 shadow，测试自己留引用） */
 function mount(): ShadowRoot | null {

@@ -51,7 +51,11 @@
 :root {
   color-scheme: light dark;
 
-  --pluma-accent: #378add;
+  /* 强调色：同时承担「当文字」与「当填充」两个角色，两个都得过 4.5:1。
+     改版前的值在这两组里分别只有 3.55 与 3.59 —— 链接与 Tab 文字一直低于 AA。
+     这是全表唯一一个「压深到 43% 明度」才够的值：徽章（11px 蓝字压浅蓝底）
+     那一组卡在 4.57，再亮一点都不行。 */
+  --pluma-accent: #206ebb;
   --pluma-accent-bg: #e6f1fb;
   --pluma-danger: #c24140;
   --pluma-warning: #976419;
@@ -186,7 +190,7 @@
  * | Stage 1 | `.sheet` 套材质（新增 `::before`，用 `--pluma-menu-fill/blur`） | 面板底板 |
  * | Stage 1 | `--pluma-border` 的在面板壳里的引用换成 `--pluma-line`（先换名） | 头部那条线 |
  * | Stage 2 | `--pluma-radius-card` 12 → 10 | 所有卡片 |
- * | Stage 2 | `--pluma-accent` #378add → #3E77F0 | Tab / 主按钮 / 链接 |
+ * | Stage 5 | `--pluma-accent` 压深到 AA 达标值（原计划的 #3E77F0 实测仍差 0.4~0.9） | Tab / 主按钮 / 链接 / 徽章 |
  * | Stage 2 | `--pluma-accent-bg` → `--pluma-accent-soft`（换名 + 微调值） | 选中底、hover 底 |
  * | Stage 2 | `--pluma-text` #1a1a1a → #1F2226、`--pluma-text-muted` #6b7280 → #6E747D | 全部文字 |
  * | Stage 5 | 删掉本清单与所有 v1 遗留名（那时全仓已无引用） | —— |
