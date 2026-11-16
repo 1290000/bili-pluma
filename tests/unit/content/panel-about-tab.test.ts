@@ -85,8 +85,9 @@ describe('aboutTab：元信息卡（三行 label/value）', () => {
     ]);
   });
 
-  it('无新版 ⇒ 当前 v1.1.0 / 最新「已是最新」，不写"最新 v1.1.0"这种重复信息', () => {
-    const node = aboutTab(view(), noop);
+  it('无新版（比过了、不新）⇒ 当前 v1.1.0 / 最新「已是最新」，不写"最新 v1.1.0"这种重复信息', () => {
+    // ⚠️ 必须显式给 latestVersion：`view()` 的默认值是 null，那是"从没查过"（第四态）
+    const node = aboutTab(view({ latestVersion: '1.1.0' }), noop);
     expect(text(node, 'update-current')).toBe('v1.1.0');
     expect(text(node, 'update-latest')).toBe('已是最新');
   });
@@ -139,7 +140,7 @@ describe('aboutTab：状态徽标（仅「有新版本」时出现）', () => {
   });
 
   it('无新版 ⇒ 不渲染徽标（版本行已写「已是最新」，再挂一个是重复）', () => {
-    const node = aboutTab(view(), noop);
+    const node = aboutTab(view({ latestVersion: '1.1.0' }), noop);
     expect(testid(node, 'update-badge')).toBeNull();
   });
 
@@ -168,16 +169,22 @@ describe('aboutTab：状态徽标（仅「有新版本」时出现）', () => {
   });
 
   /**
-   * `latestVersion === null`（从没检查过）也**不能**报新版。
+   * ## 第四态：`latestVersion === null`（后台应答了，但从没查过 GitHub）
    *
-   * 它和"比过了发现不新"不是一回事，但两者都**不该**出现「有新版本」徽标。
-   * （这一行文案是既有行为：`已是最新`。是否要改成"还没查过"是另一个产品决定，
-   * 见回报里的说明 —— 本轮不动，只钉住"不报新版"。）
+   * 它掉进"无新版"分支就会显示「已是最新」—— 而同一张卡下面的「上次检查」
+   * 正写着「从未检查」，两行互相打脸。**没比过 ≠ 比过了不新。**
+   *
+   * 这是 §0 铁律（"读不到时绝不显示已是最新"）的第四态，规格见
+   * `docs/02-ui-spec.md` §5.3 的四态表。
+   *
+   * 变异验证：删掉 `latest === null` 那条分支（退回两分支）→ 本条必红。
    */
-  it('latest=null（从没查过）⇒ 无徽标，也不出现任何版本号', () => {
-    const node = aboutTab(view({ latestVersion: null }), noop);
-    expect(testid(node, 'update-badge')).toBeNull();
-    expect(text(node, 'update-latest')).toBe('已是最新');
+  it('★★ latest=null（从没查过）⇒ 说「还没检查过」，既不放徽标也不许说「已是最新」', () => {
+    const node = aboutTab(view({ latestVersion: null, lastCheckAt: null }), noop);
+    expect(testid(node, 'update-badge'), '没比过，不能标"有新版本"').toBeNull();
+    expect(text(node, 'update-latest'), '没比过就说"已是最新"是谎报').toBe('还没检查过');
+    // 与下面那行自洽：卡里不能一边说"已是最新"一边说"从未检查"
+    expect(text(node, 'update-last-check')).toBe('从未检查');
   });
 
   /**

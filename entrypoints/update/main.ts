@@ -118,11 +118,20 @@ async function readStatus(): Promise<void> {
     // 与 `syncButtons()` 同一判据（`isNewerThan`）：两处若各写一份，
     // 就会出现"行里说有新版、按钮却是灰的"这种自相矛盾
     const hasNewer = status !== null && isNewerThan(status.latestVersion, status.currentVersion);
-    versionLine.textContent = status
-      ? hasNewer
-        ? `当前 v${status.currentVersion} → v${status.latestVersion}`
-        : `当前 v${status.currentVersion} · 已是最新`
-      : '读不到版本信息';
+    /**
+     * 四态，别合并（2026-11-17 第三轮）：`status` 非空但 `latestVersion` 为 `null`
+     * 意味着**后台应答了、但从没查过 GitHub**。这时候写「已是最新」是谎报 ——
+     * 根本没比过。它与"读不到版本信息"（`status === null`）也不是一回事，
+     * 所以两者各占一格。规格见 `docs/02-ui-spec.md` §5.3 的四态表。
+     */
+    versionLine.textContent =
+      status === null
+        ? '读不到版本信息'
+        : status.latestVersion === null
+          ? `当前 v${status.currentVersion} · 还没检查过`
+          : hasNewer
+            ? `当前 v${status.currentVersion} → v${status.latestVersion}`
+            : `当前 v${status.currentVersion} · 已是最新`;
   }
 
   if (estimateEl) {
@@ -208,6 +217,15 @@ async function onStart(): Promise<void> {
 
   try {
     if (!status?.latestVersion) throw new Error('没有可更新的版本');
+    /**
+     * **纵深防御**（2026-11-17）。当前 UI 路径不可达：`syncButtons()` 已经用同一个
+     * `isNewerThan` 把按钮禁掉了（本地比线上新时点不动）。但它是"如果哪天别处
+     * 调用 `onStart()`"的唯一防线 —— 而写错这一处的代价是**降级安装**：
+     * 用户本地装着 1.2.0，被退回线上的 1.1.0，且没有任何提示说这是降级。
+     */
+    if (!isNewerThan(status.latestVersion, status.currentVersion)) {
+      throw new Error('没有可安装的新版本');
+    }
 
     // 1) 句柄
     dir ??= await readStoredDir();

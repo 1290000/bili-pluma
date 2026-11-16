@@ -1407,10 +1407,27 @@ export function aboutTab(
   card.appendChild(head);
 
   card.appendChild(metaRow('当前', `v${view.currentVersion}`, 'update-current'));
+  /**
+   * 「最新」那一行的值 —— **三分支，不是两分支**（2026-11-17 第三轮）。
+   *
+   * | 情形 | 显示 | 为什么 |
+   * | --- | --- | --- |
+   * | `latest === null`（从没查过） | `还没检查过` | 说「已是最新」是**谎报**：根本没比过 |
+   * | 线上确实更新 | `v1.2.0 · 283 KB` | 正常 |
+   * | 比过了、不新 | `已是最新` | 正常 |
+   *
+   * 漏掉第一列就是这一轮修的 bug：它掉进"无新版"分支，而下面「上次检查」那行
+   * 明明写着「从未检查」—— 同一张卡里两行自相矛盾。
+   * 规格见 `docs/02-ui-spec.md` §5.3 的四态表。
+   */
   card.appendChild(
     metaRow(
       '最新',
-      hasNewer ? `v${latest}${size ? ` · ${size}` : ''}` : '已是最新',
+      latest === null
+        ? '还没检查过'
+        : hasNewer
+          ? `v${latest}${size ? ` · ${size}` : ''}`
+          : '已是最新',
       'update-latest',
     ),
   );

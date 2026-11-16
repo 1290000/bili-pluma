@@ -155,6 +155,30 @@ describe('更新窗口：只有真的"更新"才允许装', () => {
     expect(startBtn().disabled).toBe(true);
     expect(versionLine()).toBe('读不到版本信息');
   });
+
+  /**
+   * ## 第四态：后台**应答了**，但 `latestVersion` 是 `null`（从没查过）
+   *
+   * 它跟"读不到版本信息"（`status === null`）不是一回事：前者有状态、只是没比过；
+   * 后者连状态都没拿到。两者都**不许**说「已是最新」—— 那会让用户以为
+   * 自己是最新版，于是不再去点「检查更新」。
+   *
+   * 变异验证：把 `status.latestVersion === null` 那条分支删掉（退回三歧义）→ 本条必红。
+   */
+  it('★★ 有状态但 latestVersion=null（从没查过）⇒ 说「还没检查过」，按钮 disabled', async () => {
+    await bootWith(
+      statusWith({
+        currentVersion: '1.1.0',
+        latestVersion: null,
+        phase: 'idle',
+        lastCheckAt: null,
+      }),
+    );
+
+    expect(versionLine()).toBe('当前 v1.1.0 · 还没检查过');
+    expect(versionLine(), '没比过就说"已是最新"是谎报').not.toContain('已是最新');
+    expect(startBtn().disabled).toBe(true);
+  });
 });
 
 /**
