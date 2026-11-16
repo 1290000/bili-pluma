@@ -174,7 +174,10 @@ export const PANEL_CSS = `
   justify-content: space-between;
   gap: 8px;
   padding-bottom: 8px;
-  border-bottom: 0.5px solid var(--pluma-border);
+  /* 面板里**唯一**一条横贯线（2026-11-16 改版：Tab 行那条已删）。
+     走 --pluma-line（10%）而不是 --pluma-border（15%）：
+     15% 在半透明白底上会显成一道灰杠，10% 才是"发丝"。 */
+  border-bottom: 0.5px solid var(--pluma-line);
 }
 
 .sheet-title {
