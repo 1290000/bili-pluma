@@ -540,9 +540,11 @@ export const PANEL_CSS = `
   color: var(--pluma-text);
 }
 
+/* 「事实：正常」用绿，不用蓝（2026-11-16 裁决 A）。
+   蓝从此只表示「交互：当前/去做」—— 两者之前撞在一起，扫一眼分不出哪条是状态。 */
 .pill-good {
-  background: var(--pluma-accent-bg);
-  color: var(--pluma-accent);
+  background: color-mix(in srgb, var(--pluma-ok) 16%, transparent);
+  color: var(--pluma-ok);
 }
 
 .pill-warn {
@@ -597,7 +599,8 @@ export const PANEL_CSS = `
 }
 
 .unlock-title.good {
-  color: var(--pluma-accent);
+  /* 与 pill-good 同一个语义：这是事实（已解锁），不是交互 —— 所以是绿不是蓝 */
+  color: var(--pluma-ok);
 }
 
 .unlock-title.muted {
