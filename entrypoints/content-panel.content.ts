@@ -58,19 +58,18 @@ import type { StreamingIdentity } from '@shared/constants/streaming-identity';
 import { parsePlayPage } from '@shared/utils/video-page';
 import { readPrimaryProfile } from '@platform/storage/primary-profile-store';
 import { UPDATE_STATE_KEY } from '@platform/update/state-store';
-import { normalizeUpdateState } from '@core/update/state';
+import { currentVersion } from '@platform/update/version';
 /**
- * `toStatusView` 与 `currentVersion()` 都来自 background 的更新 handler ——
- * **本入口是 content script，正常情况下不该依赖 background 的代码**
- * （AGENTS.md §5.1 允许 `entrypoints → background`，但这是全仓唯一一处这么用的）。
+ * `storage.onChanged` 拿到的是**归一化之前**的原始值，要变成面板认识的
+ * `UpdateStatusView` 必须走 `toStatusView` —— 那是唯一实现（`phase` 判据在
+ * `resolvePhase` 里，重写一份必然漂移）。
  *
- * 为什么仍然这样：`storage.onChanged` 拿到的是**归一化之前**的原始值，
- * 要变成面板认识的 `UpdateStatusView` 必须走 `toStatusView` —— 那是唯一实现，
- * 在这里重写一份 phase 判据就会和 `resolvePhase` 漂移。
- * 换一条路（改发一次 `update/status` 消息）能免掉这个 import，代价是每次
- * 状态变化多一次消息往返，且要处理"读失败"这条新分支。
+ * ⚠️ 这两个都在 **core**（`@core/update/state`），不在 background 的 handler 里：
+ * 本文件是 **content script**，不许依赖 background 的代码（AGENTS.md §5.1 的
+ * `entrypoints → background` 是给 SW 入口用的）。2026-11-17 之前这里 import 过
+ * `@/src/background/handlers/update.handler`，属于那笔债，已清。
  */
-import { toStatusView } from '@/src/background/handlers/update.handler';
+import { normalizeUpdateState, toStatusView } from '@core/update/state';
 import {
   PANEL_ENTRY_ENABLED_KEY,
   readFeedAccountEnabled,
@@ -92,23 +91,6 @@ import {
 // tokens.css 的**原始文本**，注入 shadow root 用。
 // ⚠️ 不能用 <link>：CSS 变量不穿透 shadow 边界，必须把规则塞进 shadow 内部
 import tokensCss from '@/src/design/tokens.css?raw';
-
-/**
- * 当前安装的扩展版本。
- *
- * ⚠️ 与 `src/background/handlers/update.handler.ts` 的 `currentVersion()` **同一取法**
- * （`getManifest().version`，拿不到就 `0.0.0`，绝不因为一个附属信息把面板搞崩）。
- * 现在有两处实现 —— 因为一处是 SW、一处是 content script，中间没有共享模块。
- * 若哪天要收敛，正确做法是把 `toStatusView` + 它一起挪进 `core`，
- * 而不是在两边各改一遍。
- */
-function currentVersion(): string {
-  try {
-    return chrome.runtime.getManifest().version;
-  } catch {
-    return '0.0.0';
-  }
-}
 
 /**
  * 当前页是不是受支持的播放页。

@@ -7,7 +7,7 @@
  */
 
 import { isNewer } from '@core/update/version';
-import type { UpdatePhase } from '@shared/types/update';
+import type { UpdatePhase, UpdateStatusView } from '@shared/types/update';
 
 /**
  * 阶段枚举**定义在 `shared/types/update.ts`**，这里只转出一次。
@@ -244,4 +244,45 @@ export function resolvePhase(state: UpdateState, currentVersion: string): Update
   if (state.pendingUpdate) return 'pending-reload';
   if (!isUpdateAvailable(state, currentVersion)) return 'idle';
   return state.dismissedVersion === state.latest?.version ? 'dismissed' : 'available';
+}
+
+/**
+ * `UpdateState` → 面板/更新窗口认识的 DTO。
+ *
+ * ## 为什么放在 `resolvePhase` 紧后面
+ *
+ * 这两件事本来就是同一件：`phase` 的判据**只能有一处**（`resolvePhase`），
+ * 而 `toStatusView` 是它唯一的对外出口。放一起，改动时想漏掉另一半都难。
+ *
+ * ## 为什么它在 `core` 而不是 background 的 handler 里
+ *
+ * 它是**纯函数**：只读 `state` 字段 + 调 `resolvePhase`，不碰 `chrome`。
+ * 而它有两个消费者，分居两个上下文：
+ *
+ * | 消费者 | 上下文 |
+ * | --- | --- |
+ * | `background/handlers/update.handler.ts` | SW |
+ * | `entrypoints/content-panel.content.ts` | content script（`storage.onChanged` 同步） |
+ *
+ * 留在 handler 里会让 content script 去 import background 的代码 ——
+ * 方向反了（AGENTS.md §5.1 只允许 `entrypoints → background`，那是给 SW 入口用的，
+ * 不是给 content 用的）。搬进 core 之后两边都从同一个地方取。
+ *
+ * @param state 归一化后的更新状态
+ * @param version 当前安装的版本（`getManifest().version`，由调用方用
+ *   `platform/update/version.ts` 的 `currentVersion()` 取 —— core 不碰 chrome）
+ */
+export function toStatusView(state: UpdateState, version: string): UpdateStatusView {
+  return {
+    currentVersion: version,
+    latestVersion: state.latest?.version ?? null,
+    latestSizeBytes: state.latest?.sizeBytes ?? null,
+    latestZipUrl: state.latest?.zipUrl ?? null,
+    phase: resolvePhase(state, version),
+    autoCheckEnabled: state.autoCheckEnabled,
+    intervalDays: state.intervalDays,
+    lastCheckAt: state.lastCheckAt,
+    lastAppliedVersion: state.lastAppliedVersion,
+    lastFailedVersion: state.lastFailedUpdate?.to ?? null,
+  };
 }

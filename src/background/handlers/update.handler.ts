@@ -10,8 +10,8 @@
 
 import { runCheck, type ReleaseSource } from '@core/update/check';
 import {
-  resolvePhase,
   shouldPrompt,
+  toStatusView,
   withApplied,
   withAutoCheck,
   withDismissed,
@@ -20,6 +20,7 @@ import {
 } from '@core/update/state';
 import { fetchLatestRelease } from '@platform/update/github';
 import { readUpdateState, writeUpdateState } from '@platform/update/state-store';
+import { currentVersion } from '@platform/update/version';
 import { UPDATE_MANUAL_COOLDOWN_MS } from '@shared/constants/update';
 import type { UpdateCheckOutcome, UpdateStatusView } from '@shared/types/update';
 
@@ -27,30 +28,6 @@ import type { UpdateCheckOutcome, UpdateStatusView } from '@shared/types/update'
 const defaultSource: ReleaseSource = {
   latest: (etag) => fetchLatestRelease({ etag }),
 };
-
-function currentVersion(): string {
-  // `getManifest()` 在扩展任何上下文里都有；万一拿不到也不该把更新功能弄崩
-  try {
-    return chrome.runtime.getManifest().version;
-  } catch {
-    return '0.0.0';
-  }
-}
-
-export function toStatusView(state: UpdateState, version: string): UpdateStatusView {
-  return {
-    currentVersion: version,
-    latestVersion: state.latest?.version ?? null,
-    latestSizeBytes: state.latest?.sizeBytes ?? null,
-    latestZipUrl: state.latest?.zipUrl ?? null,
-    phase: resolvePhase(state, version),
-    autoCheckEnabled: state.autoCheckEnabled,
-    intervalDays: state.intervalDays,
-    lastCheckAt: state.lastCheckAt,
-    lastAppliedVersion: state.lastAppliedVersion,
-    lastFailedVersion: state.lastFailedUpdate?.to ?? null,
-  };
-}
 
 /**
  * 工具栏角标：**只在"有新版本且用户没关过这一版"时亮**。

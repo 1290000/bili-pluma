@@ -88,6 +88,34 @@ describe('★★ 更新状态跨 Tab 同步', () => {
     );
   });
 
+  /**
+   * ## 层间债的护栏：content script **不许** import background
+   *
+   * 2026-11-17 之前这里为了拿 `toStatusView`，import 过
+   * `@/src/background/handlers/update.handler` —— 方向反了。
+   * 那次清理把 `toStatusView` 搬进了 `core`（见 `src/core/update/state.ts`），
+   * 这个入口才回到 `entry → core / platform` 的合法路径上。
+   *
+   * ⚠️ 这条断言存在的唯一目的就是**别让它长回来**：
+   * `check-boundaries.ts` 只扫 `src/core` + `src/shared` 的禁用全局，**不看 import 方向**；
+   * ESLint 的 `no-restricted-imports` 也没有 `entrypoints/**` 段。
+   * 也就是说这条债今天唯一的闸就是这一行断言。
+   *
+   * 注释里提到这个路径是允许的（说明历史），所以断言打在**字面量视图**上，
+   * 而注释视图里它已经被抹白了。
+   */
+  it('★★★ content script 不许 import background（2026-11-17 清掉的债，不许长回来）', () => {
+    expect(
+      ENTRY_LITERALS,
+      '入口又开始依赖 background 了 —— content script 不许这么干',
+    ).not.toContain("from '@/src/background");
+    // 正面要求：两个工具函数都来自 core / platform 的合法位置
+    expect(ENTRY_LITERALS).toContain(
+      "import { normalizeUpdateState, toStatusView } from '@core/update/state'",
+    );
+    expect(ENTRY_LITERALS).toContain("import { currentVersion } from '@platform/update/version'");
+  });
+
   it('★ 面板销毁时同一个 listener 要被解绑（不许新增一个没解绑的）', () => {
     expect(ENTRY_CODE).toContain('chrome.storage.onChanged.removeListener(onChanged)');
     // 只允许一个 onChanged 注册：多注册一个就有解绑漏一个的风险

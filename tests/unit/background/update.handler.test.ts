@@ -8,9 +8,9 @@ import {
   handleUpdateDismiss,
   handleUpdateStatus,
   runStartupUpdateCheck,
-  toStatusView,
 } from '@/src/background/handlers/update.handler';
-import { DEFAULT_UPDATE_STATE, type UpdateState } from '@core/update/state';
+// 2026-11-17 起 `toStatusView` 在 core（与 `resolvePhase` 相邻），不在 handler 里
+import { DEFAULT_UPDATE_STATE, toStatusView, type UpdateState } from '@core/update/state';
 import { UPDATE_STATE_KEY } from '@platform/update/state-store';
 import type { ReleaseSource } from '@core/update/check';
 
