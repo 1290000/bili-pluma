@@ -56,9 +56,11 @@ import {
   requestUpdateCheck,
   requestUpdateDismiss,
   writeUpdateAuto,
+  fetchLoadingSnapshot,
   type PanelModel,
 } from './panel-data';
 import { aboutTab, accountTab, cleanTab, displayTab, homeCleanPane, qualityTab } from './tabs';
+import { loadingDetailPane } from './loading-pane';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
 import { isNewerThan } from '@core/update/state';
 import { UPDATE_RELEASES_PAGE } from '@shared/constants/update';
@@ -118,7 +120,7 @@ const TAB_LABEL: Record<PanelTab, string> = {
 type PanelLevel = readonly { kind: SubKind }[];
 
 /** 二级浮层的种类 */
-type SubKind = 'homeClean' | 'diagnostics';
+type SubKind = 'homeClean' | 'diagnostics' | 'loadingDetail';
 
 /** 编排层对外暴露的句柄 */
 export interface PanelController {
@@ -415,6 +417,15 @@ export function mountPanelBody(actions: PanelActions): PanelController {
    */
   let diagEcho: string | null = null;
   let diagLoading = false;
+
+  /**
+   * 加载快照是否**有一次读取在飞**（T5）。
+   *
+   * 与 `diagLoading` 同一个用途：⟳ 可以被连点，重复发没有收益。
+   * 区别是它不驱动"正在采集…"那种整屏状态 ——
+   * 浮层里保留上一次的数据比换成一句"正在读取…"更有用（用户正在对照那一屏）。
+   */
+  let loadingRefreshing = false;
 
   /**
    * 探一次"存储还能不能碰"，产出 `logsMeta` 里除 `count` 之外的字段。
@@ -1159,6 +1170,44 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     }
   }
 
+  /**
+   * ── 加载快照的 ⟳（T5）──
+   *
+   * ## 为什么由编排层做，而不是让浮层自己取
+   *
+   * 取数只有 `panel-data.ts` 一条路（`fetchLoadingSnapshot`），
+   * 浮层是纯 DOM 层（与 `diagnosticsPane` 同一条纪律：它不认识 chrome / postMessage）。
+   *
+   * ## 为什么刷完要 `render()`，并写回模型
+   *
+   * 写回 `model.loading` 而不是另存一份局部状态：速览行读的是
+   * `model.quality.loading`，两处各存一份就会出现"浮层刷新了、速览行还是旧值"。
+   * 与 `pageView` 留在模型里同一个理由。
+   *
+   * ⚠️ `in-flight` 去重（`loadingRefreshing`）：⟳ 是用户可以连点的按钮，
+   * 每点一次都发一条 postMessage 没有任何收益，只会让应答互相超车。
+   */
+  const refreshLoading = (): void => {
+    if (loadingRefreshing) return;
+    loadingRefreshing = true;
+    void fetchLoadingSnapshot({ pageKind: model?.pageKind ?? 'other' })
+      .then((next) => {
+        if (model !== null) model = { ...model, loading: next };
+      })
+      .catch(() => {
+        /**
+         * `fetchLoadingSnapshot` 自己不会抛（超时与形状不对都归到 `unanswered`），
+         * 真抛了（`Extension context invalidated` 这类同步抛）说明通道已经废了 ——
+         * 如实标成"没人应答"，而不是把面板卡在 ⟳ 上转圈。
+         */
+        if (model !== null) model = { ...model, loading: { kind: 'unanswered' } };
+      })
+      .finally(() => {
+        loadingRefreshing = false;
+        render();
+      });
+  };
+
   const render = (): void => {
     /**
      * 一次性压制：上一次 `applyUpdateStatus()` 推来的状态不算"用户看过"。
@@ -1394,6 +1443,44 @@ export function mountPanelBody(actions: PanelActions): PanelController {
       return;
     }
 
+    if (top?.kind === 'loadingDetail') {
+      /**
+       * 加载详情浮层（T5）。
+       *
+       * ## 数据来自模型，**不在这里取数**
+       *
+       * `model.loading` 是首屏（或上一次 ⟳ / 写操作后的重取）已拿到的那一份。
+       * 进入浮层时**不重新采集**：用户点进来就是为了看"刚才那一次加载"，
+       * 而重新采集会把这个页面此刻的环形缓冲再读一遍 —— 结果通常一样，
+       * 却多一次 2 秒的空窗（超时的那 2 秒里界面会闪一下"读取失败"）。
+       * 想看最新的点 ⟳，那条路才重取。
+       *
+       * `undefined` 与 `{kind:'absent'}` 同义，交给浮层去画那句实话。
+       */
+      replaceChildren(content, [
+        loadingDetailPane(model.loading, {
+          back: () => {
+            stack = stack.slice(0, -1);
+            render();
+          },
+          refresh: () => {
+            refreshLoading();
+          },
+          /**
+           * 「查看完整诊断 ›」= **压栈**，不是跳转：用户按返回要回到这里，
+           * 而不是回到一级 Tab。与 `openDiag` 同一手法，且进入即重取诊断数据。
+           */
+          openDiagnostics: () => {
+            diagData = null;
+            loadDiag();
+            stack = [...stack, { kind: 'diagnostics' }];
+            render();
+          },
+        }),
+      ]);
+      return;
+    }
+
     switch (tab) {
       case 'quality': {
         /**
@@ -1434,6 +1521,16 @@ export function mountPanelBody(actions: PanelActions): PanelController {
             proxyDisabledReason: proxyUsable
               ? null
               : '还没有可用的取流账号 —— 到「账号」Tab 扫码登录取流账号后就能打开',
+            /**
+             * 加载时间轴速览的「详情 ›」。
+             *
+             * 不在这里重新取数：浮层读 `model.loading`（首屏已拿到的同一份），
+             * 见 `loadingDetail` 分支的注释。压栈而不是切 Tab，返回时回到画质 Tab。
+             */
+            openLoading: () => {
+              stack = [...stack, { kind: 'loadingDetail' }];
+              render();
+            },
           }),
         ]);
         break;

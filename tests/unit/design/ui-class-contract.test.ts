@@ -99,6 +99,53 @@ const CONTRACT: Record<string, readonly string[]> = {
     'diag-detail',
   ],
   提示: ['pane-note', 'panel-notice'],
+  /**
+   * 加载时间轴（T5，2026-11-20）。速览行 + 二级浮层「本次加载」。
+   *
+   * 这一组的类名**全是新增**，没有一个是给旧组件改名的结果 ——
+   * 所以旧那九组一个字都没动。`ld-` 前缀是为了在 DevTools 里能一眼认出
+   * "这是加载详情那块"（`.diag-*` 已经是诊断浮层的，两者会同时出现在 DOM 里）。
+   *
+   * ⚠️ `ld-tone-*` 五个也要登记：它们是**语义色唯一的入口**，
+   * 改名的后果不是变丑，是所有圆点与结论大字一起掉回继承色（看起来"没有颜色"），
+   * 而那五个名字正是 `sidebar.ts` 末尾那一段的全部消费者。
+   */
+  加载详情: [
+    'ld-quick',
+    'ld-quick-head',
+    'ld-quick-label',
+    'ld-quick-more',
+    'ld-quick-main',
+    'ld-quick-dot',
+    'ld-quick-title',
+    'ld-quick-sub',
+    'ld-conclusion',
+    'ld-conclusion-icon',
+    'ld-conclusion-body',
+    'ld-conclusion-kicker',
+    'ld-conclusion-title',
+    'ld-conclusion-tag',
+    'ld-conclusion-counts',
+    'ld-count',
+    'ld-timeline',
+    'ld-row',
+    'ld-node-wrap',
+    'ld-node',
+    'ld-conn',
+    'ld-body',
+    'ld-title-row',
+    'ld-title',
+    'ld-delta',
+    'ld-detail',
+    'ld-legend',
+    'ld-legend-item',
+    'ld-legend-text',
+    'ld-tone-ok',
+    'ld-tone-warn',
+    'ld-tone-bad',
+    'ld-tone-muted',
+    'ld-tone-accent',
+  ],
 };
 
 /**

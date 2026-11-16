@@ -80,6 +80,7 @@ import { restoreResumeTime, saveResumeTime } from '@/src/content/isolated/pgc-re
 import { watchPlaybackQuality } from '@/src/content/isolated/quality-watch';
 import {
   attachLoadingTraceVideo,
+  getLoadingSnapshot,
   installLoadingTrace,
   resetLoadingTrace,
 } from '@/src/content/isolated/loading-trace';
@@ -2788,6 +2789,40 @@ export default defineContentScript({
 
       window.postMessage(
         { __ns: NS, type: 'page-summary-reply', view: pageState.view() ?? null },
+        '*',
+      );
+    });
+
+    /**
+     * **同页面板问加载快照**（T5）。
+     *
+     * ## 为什么另开一条，而不是塞进上面那条应答
+     *
+     * 两条数据来自不同的采集器（`page-state` 与 `loading-trace`），
+     * 而且**失败语义不同**：取流数据拿不到 = 解锁卡不渲染（用户看不出差别）；
+     * 加载快照拿不到 = 面板必须说「读取失败」。
+     *
+     * 合成一条的话，就得让"哪个字段缺了算哪一半没成"变成一个需要解释的判据 ——
+     * `diagnostics.ts` 的 `logsMeta` 那件事已经证明这种合并最后一定被读错。
+     *
+     * ## 安全边界（与 `page-summary` 那条同一条）
+     *
+     * - **只读**：`getLoadingSnapshot()` 只读内存状态，不安装观察器、不清空、
+     *   不写 `chrome.storage`、不发消息、不打印（`loading-trace.ts` 的三条硬约束）。
+     * - **不含凭据**：快照里只有 hostname（`upsig` / `uparams` 那类 query 在采集侧
+     *   就被丢掉了，见 `loading-trace.ts` 文件头第 1 条）。
+     * - **不回环**：`loading-snapshot-reply` 与 `loading-snapshot` 不同名。
+     * - 页面脚本伪造 `loading-snapshot` 的最坏效果是让扩展多做一次只读的内存拷贝。
+     *
+     * ⚠️ 面板侧对应的是 `panel-data.ts` 的 `fetchLoadingSnapshotViaPage()`，
+     * 两边的 `type` 与 `NS` 必须一致，改一处必须改另一处。
+     */
+    window.addEventListener('message', (ev) => {
+      const d = ev.data as { __ns?: string; type?: string } | null;
+      if (!d || d.__ns !== NS || d.type !== 'loading-snapshot') return;
+
+      window.postMessage(
+        { __ns: NS, type: 'loading-snapshot-reply', snapshot: getLoadingSnapshot() },
         '*',
       );
     });

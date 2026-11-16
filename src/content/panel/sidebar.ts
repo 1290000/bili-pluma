@@ -1104,6 +1104,303 @@ export const PANEL_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ── 加载时间轴：速览行 + 「本次加载」浮层（T5，2026-11-20）──
+
+   ## 为什么这一节必须留在 PANEL_CSS 的**最末尾**
+
+   .ld-tone-* 与 .pane-note / .diag-section 都是**一个类选择器**（特异性 0,1,0），
+   靠**顺序**覆盖文字颜色。往前挪，危险色/警告色的说明文字会变回 muted 灰 ——
+   而那正是"读取失败"和"丢了更早的事件"两句，最不该变灰的两句。
+
+   ## 颜色怎么来的
+
+   全部走 tokens.css 的 --pluma-*。两处"淡底"用 color-mix 把 currentColor
+   混进 14% 透明底（圆点、结论卡的 44px 圆底），所以**换色调只改一个类名**，
+   不需要为每种色调各写一条底色，也不需要新增令牌。
+   color-mix 在本文件里已有先例（.pill-neutral / .pill-good / .strip 的兜底）。 */
+
+/* 速览行：与 .unlock-card 同一档（--pluma-card 底 + 发丝描边），
+   它在画质 Tab 里紧挨着解锁卡，两块的层次必须一致。 */
+.ld-quick {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  /* ⚠️ 必须显式写：窗体的 UA 样式给 button 设了 border-box，但 div 没有。
+     速览行两种元素都用（可点 = button，不可点 = div），不写这一行时
+     不可点的那种会比面板宽 21px（100% + 左右 padding + 描边）—— 
+     实测 294 vs 272，横向溢出。 */
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 0.5px solid var(--pluma-line);
+  border-radius: var(--pluma-radius-card);
+  background: var(--pluma-card);
+  color: var(--pluma-text);
+  font-family: inherit;
+  font-size: var(--pluma-font-body);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--pluma-duration) var(--pluma-ease);
+}
+
+/* 不可点的那一种（没人应答 / 调用方没给入口）：不显示手型，
+   也不响应 hover —— 看起来能点却点不动，比不显示更糟。 */
+.ld-quick.flat {
+  cursor: default;
+}
+
+.ld-quick:not(.flat):hover {
+  background: var(--pluma-accent-soft);
+}
+
+.ld-quick-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.ld-quick-label {
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+}
+
+.ld-quick-more {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+}
+
+/* 主行：圆点 + 文案。色调挂在这一层（.ld-tone-*），
+   圆点的 currentColor 与标题的文字色因此只有一个来源。 */
+.ld-quick-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ld-quick-dot {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.ld-quick-title {
+  font-size: var(--pluma-font-body);
+  font-weight: var(--pluma-font-weight-strong);
+}
+
+/* 副行缩进 18px = 圆点 12 + 间距 6：与上一行的标题左边缘对齐，
+   读起来是"主行的补充"，而不是另起一行。 */
+.ld-quick-sub {
+  padding-left: 18px;
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+  line-height: 1.35;
+}
+
+/* ── 结论卡 ── */
+.ld-conclusion {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 0.5px solid var(--pluma-line);
+  border-radius: var(--pluma-radius-card);
+  background: var(--pluma-card);
+}
+
+/* 44px 圆底：底色是 currentColor 的 14%（半透明），语义色由 .ld-tone-* 给。
+   不新增令牌：--pluma-ok / --pluma-warning / --pluma-danger / --pluma-text-muted
+   四个都已在 tokens.css 里，深浅两套色值都齐。 */
+.ld-conclusion-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.ld-conclusion-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ld-conclusion-kicker {
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+}
+
+.ld-conclusion-title {
+  font-size: var(--pluma-font-title);
+  font-weight: var(--pluma-font-weight-strong);
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.ld-conclusion-tag {
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+}
+
+/* 计数排：整张卡一行（width:100% 让它换到自己那一行去）。
+   flex-wrap 是必需的 —— 三个计数最多 3 项，但 272px 宽放不下时不许溢出。 */
+.ld-conclusion-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  width: 100%;
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+  line-height: 1.35;
+}
+
+.ld-count {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 时间轴 ──
+   左列 30px（28px 圆点 + 下方 2px 竖线），右列自适应。
+   行高 = 圆点 28 + 上下留白，明细行只在有 host 时出现。 */
+.ld-timeline {
+  display: flex;
+  flex-direction: column;
+}
+
+.ld-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+/* 圆点列：28px 的圆 + 一条落到下一行的 2px 竖线。
+   position:relative 是给竖线做定位基准（竖线绝对定位，不参与 flex 布局）。 */
+.ld-node-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  padding-bottom: 4px;
+}
+
+.ld-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* 竖线从圆点下沿接到下一行的圆点上沿。用 --pluma-line-strong（16%）而不是
+   状态色：它只表示"这两步是连续发生的"，不表示任何状态。 */
+.ld-conn {
+  position: absolute;
+  top: 30px;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--pluma-line-strong);
+}
+
+/* 最后一行的竖线没有下一个点可接，隐藏 —— 留一条悬空的线会被读成"还有下文" */
+.ld-row:last-child .ld-conn {
+  display: none;
+}
+
+.ld-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  padding: 4px 0 6px;
+}
+
+.ld-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ld-title {
+  font-size: var(--pluma-font-body);
+  line-height: var(--pluma-line-height-body);
+}
+
+/* 时刻与增量：tabular-nums 让 9 行右边缘对齐（否则 1.77s 与 10.20s 差半个字宽） */
+.ld-delta {
+  flex: 0 0 auto;
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+/* host 明细：单行省略。host 最长可到 40+ 字符（cn-jsnt-ct-01-07.bilivideo.com），
+   272px 放不下，换行会把每一行撑成两行、9 行串成 18 行。 */
+.ld-detail {
+  overflow: hidden;
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+  line-height: var(--pluma-line-height-meta);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 图例 ── */
+.ld-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ld-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ld-legend-text {
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+}
+
+/* ── 语义色（本节的最后一块，理由见本节开头）──
+   currentColor 是这一组唯一的入口：圆底、SVG 描边/填充、大字号结论全都跟着它走。 */
+.ld-tone-ok {
+  color: var(--pluma-ok);
+}
+
+.ld-tone-warn {
+  color: var(--pluma-warning);
+}
+
+.ld-tone-bad {
+  color: var(--pluma-danger);
+}
+
+.ld-tone-muted {
+  color: var(--pluma-text-muted);
+}
+
+.ld-tone-accent {
+  color: var(--pluma-accent);
+}
 `;
 
 /** 面板从静息切到展开 / 收回时要做的动作，由 `mountSidebar` 返回 */

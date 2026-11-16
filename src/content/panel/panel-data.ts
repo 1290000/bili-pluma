@@ -39,6 +39,8 @@
  * 也就是说现在**分开发**：
  *   - 三条 background 消息 → `runtime.sendMessage`
  *   - 当前页取流数据 → **`window.postMessage`**（见 `fetchPageStateViaPage`）
+ *   - 当前页加载快照 → **`window.postMessage`**（见 `fetchLoadingSnapshotViaPage`，
+ *     T5 加的**第二条**同页桥，为什么另开一条写在那个函数头上）
  *
  * ## 文件分成两半，边界是"有没有副作用"
  *
@@ -72,6 +74,7 @@ import type { UpdateCheckOutcome, UpdateStatusView } from '@shared/types/update'
 import type { PageTracksView } from '@shared/types/playinfo';
 import { withLivePrimaryUser, type PrimaryCard } from '@shared/utils/primary-card';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
+import type { LoadingOutcome } from './loading-pane';
 
 // ─────────────────────────── 渲染模型 ───────────────────────────
 
@@ -102,6 +105,22 @@ export interface QualityView {
   proxyEnabled: boolean | null;
   /** 当前页是不是播放页 —— 决定画质区显不显示 */
   pageKind: PanelPageKind;
+  /**
+   * 加载时间轴速览（T5）。
+   *
+   * ## 三态，且**不许**把第三态画成第二态
+   *
+   * | 值 | 含义 | 速览行 |
+   * | --- | --- | --- |
+   * | `{kind:'ok'}` | 拿到了快照 | 正常渲染（可能说"还不知道走哪条线路"） |
+   * | `{kind:'absent'}` / `undefined` | 本页没有这条通道（非播放页） | **整卡不渲染** |
+   * | `{kind:'unanswered'}` | 播放页但没人应答 | 危险色「读取失败 · 刷新页面后重试」 |
+   *
+   * `undefined` 与 `absent` 同义，只是为了让既有调用点（大量测试直接构造
+   * `QualityView`）不必补字段；生产路径由 `buildQualityView` **总是**写上一个
+   * 明确值。
+   */
+  loading?: LoadingOutcome | undefined;
 }
 
 /** 账号 Tab 的双卡 */
@@ -178,6 +197,20 @@ export interface PanelModel {
    * 所以模型必须保留原始 view，不能只留 `describeUnlock()` 的产出。
    */
   pageView: PageTracksView | null;
+  /**
+   * 加载时间轴通道的**原始结局**（不只是速览行要的那几个字段）。
+   *
+   * ## 为什么模型留原始结局，而不是留 `QualityView.loading` 的产物
+   *
+   * 二级浮层「本次加载」要画时间轴、图例、切换次数 —— 那些速览行不用，
+   * 但浮层要用。若模型里只存一句文案，浮层就得**再取一次数**，
+   * 于是"速览行说的"和"浮层说的"来自两次采集（它们会不一致）。
+   *
+   * 与 `pageView` 留在模型里同一个理由：**同一份数据只取一次**。
+   *
+   * `undefined` 与 `{kind:'absent'}` 同义（见 `QualityView.loading`）。
+   */
+  loading?: LoadingOutcome | undefined;
 }
 
 // ─────────────────────────── 纯函数 ───────────────────────────
@@ -192,8 +225,19 @@ export function buildQualityView(input: {
   pageKind: PanelPageKind;
   /** 取流通道的结局，见 `PanelModel.pageStateKind` */
   pageStateKind: PageStateOutcome['kind'];
+  /** 加载时间轴通道的结局，见 `QualityView.loading`。缺省 = `absent` */
+  loading?: LoadingOutcome | undefined;
 }): QualityView {
   const { view, unlock, proxyEnabled, pageKind, pageStateKind } = input;
+
+  /**
+   * ⚠️ 缺省补成**明确值**，不留 `undefined`。
+   *
+   * 生产路径（`loadPanelModel`）总会给真值；补这一句是为了让
+   * "调用方没给"与"本页没有"落到同一个语义上，而不是让下游各自 `?? null`
+   * 猜一遍（那种分散的兜底正是 `logsMeta` 崩溃那件事的形状）。
+   */
+  const loading: LoadingOutcome = input.loading ?? { kind: 'absent' };
 
   /**
    * ## 非播放页：连解锁卡都不给
@@ -209,6 +253,14 @@ export function buildQualityView(input: {
       unlock: null,
       proxyEnabled,
       pageKind,
+      /**
+       * 非播放页**一刀切成 `absent`**，即使调用方传了别的值。
+       *
+       * 与上面 `unlock: null` 同一条纪律：这一页没有"加载"这回事，
+       * 画一行"线路"只会让用户去猜它是从哪来的。判据收在这里，
+       * 渲染层就不用再判一次页面类型（两处判据必然漂移）。
+       */
+      loading: { kind: 'absent' },
     };
   }
 
@@ -244,6 +296,7 @@ export function buildQualityView(input: {
     unlock: unlockForPage,
     proxyEnabled,
     pageKind,
+    loading,
   };
 }
 
@@ -368,8 +421,12 @@ export function buildPanelModel(input: {
   accountKnown: boolean;
   /** 取流通道的结局（区分"等数据"与"通道断了"） */
   pageStateKind: PageStateOutcome['kind'];
+  /** 加载时间轴通道的结局，见 `PanelModel.loading`。缺省 = `absent` */
+  loading?: LoadingOutcome | undefined;
 }): PanelModel {
   const { snapshot, pageView, primary, clean, pageKind, accountKnown, pageStateKind } = input;
+
+  const loading: LoadingOutcome = input.loading ?? { kind: 'absent' };
 
   const view = snapshot ? describePopup(snapshot) : null;
 
@@ -389,6 +446,7 @@ export function buildPanelModel(input: {
     proxyEnabled: snapshot ? snapshot.proxy.enabled : null,
     pageKind,
     pageStateKind,
+    loading,
   });
 
   return {
@@ -421,6 +479,7 @@ export function buildPanelModel(input: {
     pageKind,
     pageStateKind,
     pageView,
+    loading,
   };
 }
 
@@ -599,6 +658,103 @@ export function fetchPageStateViaPage(timeoutMs = 2000): Promise<PageStateOutcom
 const PAGE_NS = '__PLUMA__';
 
 /**
+ * 加载快照桥：问同页的 `content.ts` 要 `LoadingSnapshotLite`（T5）。
+ *
+ * ## 为什么这是**第二条**桥，而不是给 `page-summary` 加个字段
+ *
+ * 两条数据来自不同的采集器、回答不同的问题，而且**失败方式不同**：
+ * 取流数据失败 → 解锁卡不渲染（用户看不出差别）；加载快照失败 →
+ * 必须显示「读取失败」（那是本轮唯一要暴露的信号）。
+ *
+ * 混进同一条应答里，就得让"哪个字段缺了算哪一半失败"变成一个需要解释的判据 ——
+ * 而 `diagnosticsPane` 的 `logsMeta` 那件事已经证明：**两件事共用一个 is-ok 字段，
+ * 最后一定有人读错**。分开发，各自有各自的结局。
+ *
+ * ## 三种结局（见 `LoadingOutcome`），且**必须能辨**
+ *
+ * - `ok`：应答形状正确
+ * - `unanswered`：等到超时，或者应答形状不对（老版本 content script）
+ *
+ * `absent` **不在这里产生** —— 那是"本页没有这条通道"，由 `fetchLoadingSnapshot()`
+ * 先按 `pageKind` 判掉。非播放页上 `content.ts` 根本没注入（它的 `matches` 只有
+ * 视频页与番剧页），硬问一次等于白等 2 秒再把"本页没有"谎报成"读取失败"。
+ *
+ * ## 为什么形状不对算 `unanswered` 而不是第三种结局
+ *
+ * 对用户是**同一件事**：面板拿不到数据，处置都是"刷新页面后重试"（扩展刚更新过时，
+ * 页面里跑的还是旧版 content script）。多一个结局只会让 UI 多一条说不出区别的分支。
+ *
+ * ## 安全边界
+ *
+ * 与 `page-summary` 那条相同：**只读**、不含任何 URL / query / 凭据
+ * （快照里只有 hostname，见 `loading-trace.ts` 文件头第 1 条）。
+ * 页面脚本伪造 `loading-snapshot` 的最坏效果是让扩展多做一次只读的内存拷贝。
+ *
+ * @param timeoutMs 等待上限，默认 2000ms（与 `fetchPageStateViaPage` 同口径：
+ *   面板是交互界面，超过 2 秒用户已经在怀疑"没反应"了）
+ */
+export function fetchLoadingSnapshotViaPage(timeoutMs = 2000): Promise<LoadingOutcome> {
+  /** 快照的形状从 `LoadingOutcome` 自己推导 —— 不必再 import 采集器的类型 */
+  type SnapshotOf = Extract<LoadingOutcome, { kind: 'ok' }>['snapshot'];
+
+  return new Promise<LoadingOutcome>((resolve) => {
+    let settled = false;
+
+    const finish = (out: LoadingOutcome): void => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', onMessage);
+      window.clearTimeout(timer);
+      void diag('panel/loading-snapshot', `kind=${out.kind}`).catch(() => {});
+      resolve(out);
+    };
+
+    const onMessage = (ev: MessageEvent): void => {
+      const d = ev.data as { __ns?: string; type?: string; snapshot?: unknown } | null;
+      if (!d || d.__ns !== PAGE_NS || d.type !== 'loading-snapshot-reply') return;
+
+      const s = d.snapshot as SnapshotOf | null | undefined;
+      /**
+       * ⚠️ 认 `present` 与 `events` 两个字段就够判"形状对不对"：
+       * 前者是布尔（区分空快照与垃圾对象），后者必须是数组
+       * （时间轴是这条桥的主体，缺了就没法画）。
+       */
+      if (s && typeof s === 'object' && typeof s.present === 'boolean' && Array.isArray(s.events)) {
+        finish({ kind: 'ok', snapshot: s });
+        return;
+      }
+      finish({ kind: 'unanswered' });
+    };
+
+    const timer = window.setTimeout(() => {
+      finish({ kind: 'unanswered' });
+    }, timeoutMs);
+
+    window.addEventListener('message', onMessage);
+    window.postMessage({ __ns: PAGE_NS, type: 'loading-snapshot' }, '*');
+  });
+}
+
+/**
+ * 取当前页的加载快照，**先判页面类型**。
+ *
+ * 非播放页直接 `absent`：那里没有 `content.ts`，问也问不到（见
+ * `fetchLoadingSnapshotViaPage` 的注释）。这一句就是"没有数据"与"没人应答"
+ * 的分界线 —— 前者是事实，后者是故障。
+ *
+ * @param input.pageKind 入口用 `parsePlayPage()` 算好的页面类型
+ * @param input.timeoutMs 透传给桥，默认 2000ms
+ */
+export function fetchLoadingSnapshot(input: {
+  pageKind: PanelPageKind;
+  /** ⚠️ `exactOptionalPropertyTypes`：不许显式传 `undefined` */
+  timeoutMs?: number;
+}): Promise<LoadingOutcome> {
+  if (input.pageKind !== 'play') return Promise.resolve({ kind: 'absent' });
+  return fetchLoadingSnapshotViaPage(input.timeoutMs ?? 2000);
+}
+
+/**
  * 从 background 与同页 content script 取数。
  *
  * ## 四条消息，**全部复用现有类型**（没有新增）
@@ -731,7 +887,21 @@ export async function loadPanelModel(input: {
 }): Promise<PanelModel> {
   const { pageKind, primary, streamingIdentity } = input;
 
-  const [replies, rawClean] = await Promise.all([fetchPanelReplies(), readRawCleanOptions()]);
+  const [replies, rawClean, loading] = await Promise.all([
+    fetchPanelReplies(),
+    readRawCleanOptions(),
+    /**
+     * ## 加载快照**并行**取，且不塞进 `fetchPanelReplies()`
+     *
+     * 并行：两条 postMessage 各等各的，串行会把播放页的首屏拖到 4 秒。
+     *
+     * 不塞进 `fetchPanelReplies()`：那条函数的契约是"三条 background 消息 +
+     * 一条取流通道"，`panel-page-channel.test.ts` 直接断言它的运行时消息集合。
+     * 加载快照是**另一条桥**（另一份数据、另一个失败语义），
+     * 混进去等于让一个返回值同时承担两种结局。
+     */
+    fetchLoadingSnapshot({ pageKind }),
+  ]);
 
   const clean = normalizeCleanPreferences(rawClean);
   const snapshot = buildPopupSnapshot({
@@ -756,6 +926,8 @@ export async function loadPanelModel(input: {
     clean,
     pageKind,
     accountKnown: replies.account !== null,
+    /** ⚠️ 结局**原样**传下去（`unanswered` 与 `absent` 表现必须不同） */
+    loading,
   });
 }
 

@@ -20,6 +20,7 @@ import { CLEAN_OPTION_META } from '@/src/content/site-clean/clean-options';
 import { OBSERVED_CATEGORIES } from '@/src/content/site-clean/home-selectors';
 import { describeAdDebugCaveat, type AccountView, type QualityView } from './panel-data';
 import { el, iconChevron, iconSwap, pill, switchRow } from './dom';
+import { buildLoadingQuick, loadingQuickRow } from './loading-pane';
 import { describeExpiry, describeHealth } from '@core/ui/popup-state';
 import { describeStreamingIdentity } from '@core/ui/streaming-pill';
 import { isNewerThan } from '@core/update/state';
@@ -44,6 +45,9 @@ const VIP_TAG: Record<'none' | 'monthly' | 'annual', string> = {
  *
  * ```text
  * [已接管]                          ← 胶囊
+ * 线路                      详情 ›   ← 加载速览（非播放页不渲染，T5）
+ * ● B站官方线路（自建 CDN）
+ *   开局 3.3s · 3 条线路
  * ┌─────────────────────────────┐
  * │ 已解锁        主账号最高 1080P │  ← 解锁卡（非播放页/开关关着时不渲染）
  * │ [4K] [60fps] [Hi-Res]        │
@@ -90,6 +94,16 @@ export function qualityTab(
      * 且不说明原因"这一类，用户会以为控件坏了。
      */
     proxyDisabledReason: string | null;
+    /**
+     * ── 加载时间轴速览的「详情 ›」入口（T5）──
+     *
+     * 打开二级浮层「本次加载」。由编排层压栈（与「诊断 ▸」同一手法）。
+     *
+     * ⚠️ **可以不给**：既有调用点（单测直接构造 `QualityView`）没有这一层，
+     * 那时速览行渲染成**静态行**、不出现「详情 ›」—— 而不是渲染一个点了没反应的箭头
+     * （handoff §2.3 第 9 条：死控件比没有控件更糟）。
+     */
+    openLoading?: (() => void) | undefined;
   },
 ): HTMLElement {
   const box = el('div', 'tab-pane');
@@ -99,6 +113,24 @@ export function qualityTab(
   box.appendChild(head);
 
   if (q.line) box.appendChild(el('p', 'pane-line', q.line));
+
+  /**
+   * ── 加载时间轴速览（T5，2026-11-20）──
+   *
+   * ## 位置：胶囊与解锁卡**之间**
+   *
+   * 放这里而不是塞进 `pane-head` 那颗胶囊里：那颗胶囊是 `describePopup()`
+   * 的 8 状态判据（已接管 / 已停用 / 未生效 …），往里加 CDN 维度会把它污染成
+   * 一个既说取流状态又说线路状态的复合体 —— 而那两个问题毫无关系
+   * （线路是**页面自己**在用哪条 CDN，取流状态是**扩展**有没有接管）。
+   *
+   * ## 非播放页**整块不渲染**
+   *
+   * `buildLoadingQuick()` 对 `absent`（含 `undefined`）返回 `null`。
+   * 判据在 `buildQualityView()` 里已按页面类型收口，这里只负责如实不画。
+   */
+  const quick = buildLoadingQuick(q.loading);
+  if (quick !== null) box.appendChild(loadingQuickRow(quick, actions.openLoading));
 
   /**
    * 解锁卡。`null` 时**整块不渲染** —— 包括"等待取流"这类占位也不行：
