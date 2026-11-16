@@ -321,10 +321,35 @@ describe('★★ 场景 F：两侧都到顶配 → 「已是最高画质」（20
     expect(unlock(v).title).toBe('已是最高画质');
   });
 
+  /**
+   * ## 2026-11-17 第二轮：`>= 120` 的阈值当天被打脸
+   *
+   * 用户拿两张新截图来测：「1080P 高码率」（112）与「1080P 60帧」（116）
+   * 依旧显示「无提升（源限制）」。这两档同样是大会员专属 ——
+   * 阈值应该是 `> 80`（免费档上限），不是 `>= 120`。
+   */
+  it('★★ 112 vs 112（1080P 高码率）→ 不再说源限制（第一轮阈值漏了它）', () => {
+    const v = view(
+      [{ id: 112, h: 1080, bw: BW_1080P_PLUS }],
+      [{ id: 112, h: 1080, bw: BW_1080P_PLUS }],
+    );
+    expect(unlock(v).title).toBe('已是最高画质');
+    expect(unlock(v).title).not.toContain('源限制');
+  });
+
+  it('★★ 116 vs 116（1080P 60帧）→ 同上', () => {
+    const v = view(
+      [{ id: 116, h: 1080, bw: BW_1080P_PLUS }],
+      [{ id: 116, h: 1080, bw: BW_1080P_PLUS }],
+    );
+    expect(unlock(v).title).toBe('已是最高画质');
+  });
+
   it('★ 80 vs 80（1080P）→ 仍是「无提升（源限制）」（视频源确实没更高档）', () => {
     /**
-     * 对照组：证明上面两条不是"恒不说源限制"。
-     * 唯一差别是最高档 id —— 低于 4K 时"源限制"这个归因才成立。
+     * 对照组：证明上面几条不是"恒不说源限制"。
+     * 唯一差别是最高档 id —— 80 是免费档上限，两侧都停在它说明
+     * 视频源本来就没有更高档，"源限制"这个归因才成立。
      */
     const v = view([{ id: 80, h: 1080, bw: BW_1080 }], [{ id: 80, h: 1080, bw: BW_1080 }]);
     expect(unlock(v).title).toBe('无提升（源限制）');
@@ -334,5 +359,13 @@ describe('★★ 场景 F：两侧都到顶配 → 「已是最高画质」（20
     const v = view([DOLBY], [DOLBY]);
     expect(unlock(v).anchor).toBe('主账号最高 杜比视界');
     expect(unlock(v).anchor).not.toContain('仅可用');
+  });
+
+  it('★ 锚点写「主账号最高 1080P+」', () => {
+    const v = view(
+      [{ id: 112, h: 1080, bw: BW_1080P_PLUS }],
+      [{ id: 112, h: 1080, bw: BW_1080P_PLUS }],
+    );
+    expect(unlock(v).anchor).toBe('主账号最高 1080P+');
   });
 });
