@@ -215,6 +215,114 @@ export const PANEL_CSS = `
   display: none;
 }
 
+/* ── 「关于」Tab（02-ui-spec §5.3，2026-11-17 排版改造）──
+   关于页"不协调"的根因是**组与组之间和组内元素之间用了同一个间距**（都 6px），
+   不是缺装饰。所以这里只做一件事：组间距 12px，组内 4~6px。
+   ⚠️ **不许改全局 「.tab-pane」 的 6px** —— 另外 4 个 Tab 都吃那条。
+
+   ⚠️ 选择器写的是「.tab-pane.about-pane」（两个类），**不是** 「.about-pane」。
+   原因：这条块排在本文件靠前的位置，而 「.tab-pane」/「.diag-section」 在它之后，
+   同权重下后者会赢 —— 写成「.about-pane」会被静默吃掉（12px 永远是 6px）。
+   用两个类把权重抬到 0,2,0，就与顺序无关。CSS 没有单测兜这条，只能靠这里写清楚。 */
+.tab-pane.about-pane {
+  gap: 12px;
+}
+
+/* 元信息卡：与 「.unlock-card」 **同一款**（padding / 边框 / 圆角 / 底色），
+   不新造一套卡视觉。卡内 4px 是"行距"，与组间距 12px 是两个量级。 */
+.about-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--pluma-border);
+  border-radius: var(--pluma-radius-card);
+  background: var(--pluma-surface);
+}
+
+/* 卡头：标题左、状态徽标右 —— 与 「.unlock-head」 同一模式 */
+.about-meta-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* 卡内的节标题沿用 「.diag-section」 的排版，只把它自带的外边距归零。
+   同样用两个类提权重（理由同上：这条块在 「.diag-section」 之前） */
+.diag-section.about-meta-title {
+  margin: 0;
+}
+
+/* 数值等宽：三行的 「v1.x.y」 才能上下对齐，否则每次版本变化数字都左右跳 */
+.about-meta .diag-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 「上次检查」不是主角，值也用 muted —— 否则三个值权重一样，看不清哪个是重点 */
+.about-meta .diag-value.soft {
+  color: var(--pluma-text-muted);
+}
+
+/* 并排按钮行在 flex 列里不再叠 margin：组间距已经由 「.about-pane」 的 gap 给出，
+   留着这条 8px 会变成"12 + 8 = 20px"，与其它组不一致 */
+.about-pane .acct-actions {
+  margin-top: 0;
+}
+
+/* 主操作按钮：只换填充，**高度/圆角/字号完全沿用 「.acct-btn」**。
+   不复用 「.primary-btn」 —— 它字号是 body、还带 「margin-top:2px」，
+   与 「.acct-btn」 并排会不等高、基线错开。 */
+.acct-btn.accent {
+  border-color: var(--pluma-accent);
+  background: var(--pluma-accent);
+  color: var(--pluma-surface);
+}
+
+/* 实心按钮的 hover 不能再叠 「.acct-btn:hover」 那层浅底（会出现"半蓝半灰"），
+   改用轻微提亮 */
+.acct-btn.accent:hover:not(:disabled) {
+  background: var(--pluma-accent);
+  filter: brightness(1.06);
+}
+
+/* 英文外链降级为**文字链接**：仍然可聚焦、可键盘触发（它还是个 <button>），
+   只是不再和主操作抢同样的视觉重量 —— 三个等大按钮看不出主次。 */
+.btn-link {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--pluma-text-muted);
+  font-family: inherit;
+  font-size: var(--pluma-font-caption);
+  cursor: pointer;
+}
+
+.btn-link:hover {
+  color: var(--pluma-text);
+  text-decoration: underline;
+}
+
+/* 功能与署名之间**唯一**一条分隔线。
+   ⚠️ 用 「height:0」 + border，不用 「height:1px」 + background —— 后者在 1.5x/2x
+   屏上会被拉成 2px 灰条，看起来发毛；0.5px 的 border 会按 DPI 正确取整。 */
+.about-divider {
+  height: 0;
+  border-top: 0.5px solid var(--pluma-border);
+}
+
+/* 署名区：一块，内部 6px */
+.about-credit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.about-credit .diag-section {
+  margin: 0;
+}
+
 /* 「关于」Tab 的贡献者清单：两列换行，头像 + login */
 .contributors {
   display: flex;
@@ -241,8 +349,8 @@ export const PANEL_CSS = `
 }
 
 .contributor-avatar {
-  width: 16px;
-  height: 16px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   flex: 0 0 auto;
 }
@@ -251,8 +359,9 @@ export const PANEL_CSS = `
   display: none;
 }
 
+/* 名字用正文色（不是 muted）：这一排要读起来像**署名**，不是一排待点按钮 */
 .contributor-name {
-  color: var(--pluma-text-muted);
+  color: var(--pluma-text);
 }
 
 .tab.active {
@@ -625,8 +734,11 @@ export const PANEL_CSS = `
   cursor: pointer;
 }
 
-/* ── 账号 Tab 的操作区（2026-11-10 加：重新登录 / 退出播放账号）──
-   两个按钮并排，各占一半。面板只有 280px，竖排会把账号卡挤下去。 */
+/* ── 面板内**并排按钮行**（2026-11-10 加，2026-11-17 起两个 Tab 共用）──
+   账号 Tab：重新登录 / 退出播放账号；关于 Tab：立即更新 / 检查更新。
+   两处都是"两个短中文按钮并排、各占一半"。面板内容区只有 252px
+   （「.sheet」是 280px，减去左右各 14px padding），两格各约 123px，
+   11px 字号下四字按钮约 44px —— 余量充足，竖排反而把下面的内容挤下去。 */
 .acct-actions {
   display: flex;
   gap: 6px;

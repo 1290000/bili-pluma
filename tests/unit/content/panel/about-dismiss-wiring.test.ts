@@ -186,8 +186,14 @@ function mount(): PanelController {
   return controller;
 }
 
-function versionLine(c: PanelController): string {
-  return c.root.querySelector('[data-testid="update-version"]')?.textContent ?? '';
+/**
+ * 元信息卡里「最新」那一行的值。
+ *
+ * 2026-11-17 排版改造后，"版本行"拆成了「当前 / 最新 / 上次检查」三行
+ * （252px 里那一行长文案必然折行）。要判断"有没有显示最新版"就看这一行。
+ */
+function latestLine(c: PanelController): string {
+  return c.root.querySelector('[data-testid="update-latest"]')?.textContent ?? '';
 }
 
 function updateBtn(c: PanelController): HTMLButtonElement | null {
@@ -371,7 +377,7 @@ describe('进入「关于」Tab 即视为已读', () => {
       expect(aboutDot(c)?.hidden).toBe(true);
     });
     // dismiss 只压提示：版本行与「立即更新」都必须保留
-    expect(versionLine(c)).toContain('最新 v1.3.0');
+    expect(latestLine(c)).toContain('v1.3.0');
     expect(updateBtn(c)?.disabled).toBe(false);
   });
 
@@ -388,7 +394,7 @@ describe('进入「关于」Tab 即视为已读', () => {
     // 红点仍在（这一版确实还没被记成已读）
     expect(aboutDot(c)?.hidden).toBe(false);
     // Tab 里其他内容完全没受影响：版本行还在，按钮还能点
-    expect(versionLine(c)).toContain('最新 v1.2.0');
+    expect(latestLine(c)).toContain('v1.2.0');
     expect(updateBtn(c)?.disabled).toBe(false);
   });
 
@@ -464,7 +470,7 @@ describe('进入「关于」Tab 即视为已读', () => {
       expect(unhandled, '未处理的 promise rejection —— 真机控制台会一片红').toHaveLength(0);
       // 面板照常可用
       await vi.waitFor(() => {
-        expect(versionLine(c)).toContain('最新 v1.2.0');
+        expect(latestLine(c)).toContain('v1.2.0');
       });
     } finally {
       process.off('unhandledRejection', onRejection);
@@ -477,7 +483,7 @@ describe('进入「关于」Tab 即视为已读', () => {
     c.showTab('about');
 
     await vi.waitFor(() => {
-      expect(versionLine(c)).toBe('当前 v1.1.0 · 已是最新');
+      expect(latestLine(c)).toBe('已是最新');
     });
     expect(h.dismissCalls(), '没有新版还去 dismiss，等于凭空写一个 dismissedVersion').toBe(0);
   });
@@ -563,7 +569,7 @@ describe('跨 Tab 同步（storage.onChanged → applyUpdateStatus）', () => {
     c.showTab('about');
 
     await vi.waitFor(() => {
-      expect(versionLine(c)).toBe('当前 v1.1.0 · 已是最新');
+      expect(latestLine(c)).toBe('已是最新');
     });
 
     // 后台自动检查（或另一个 Tab 手点）发现了 1.2.0
@@ -575,7 +581,7 @@ describe('跨 Tab 同步（storage.onChanged → applyUpdateStatus）', () => {
       '存储推来的状态被当成"用户看过"了 —— 另一个 Tab 的红点会凭空消失',
     ).toBe(0);
     // 版本行同步更新了
-    expect(versionLine(c)).toContain('最新 v1.2.0');
+    expect(latestLine(c)).toContain('v1.2.0');
   });
 
   /**

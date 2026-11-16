@@ -1241,6 +1241,73 @@ function describeSize(bytes: number | null): string {
 }
 
 /**
+ * 自动检查的节奏文案。
+ *
+ * ## 为什么是"最多查一次"，不是"每 N 天查一次"
+ *
+ * 触发点不是定时器，而是 **SW 每次启动**（`entrypoints/background.ts` 顶层跑
+ * `runStartupUpdateCheck()`），真正发不发由 `core/update/gate.ts` 的 `shouldCheck`
+ * 闸门决定（开关 / 从没查过 / 时钟回拨 / 间隔是否已过）。
+ *
+ * 也就是说一天里 SW 可能启动几十次（装完、重载、空闲被回收后再唤醒……），
+ * 但**真正发出请求最多一次**。说"每 N 天查一次"会让人以为后台挂了个定时任务 ——
+ * 那正是本项目**没有**做的事（理由见 docs/decisions/0015-lazy-health-check-no-alarms.md：
+ * 不申请 `alarms` 权限、不加任何定时任务）。
+ *
+ * ## 为什么删掉"首次打开时"
+ *
+ * 那不是"用户首次打开浏览器"。SW 的启动时机由浏览器决定，用户感知不到 ——
+ * 写在开关下面只会让人以为"我今天没开过浏览器所以没查"，而实际可能刚查过。
+ *
+ * ## 为什么 1 天要单独成句
+ *
+ * 默认值是 1（`DEFAULT_UPDATE_STATE.intervalDays`），
+ * 「每 1 天最多查一次」中文不通顺，应读作「每天最多查一次」。
+ *
+ * ## 为什么**不再**写「关掉后仍可手动检查」
+ *
+ * 2026-11-17 用户决定删掉这句。两个理由：
+ *
+ * 1. **标签已经说了**。开关叫「**自动**检查更新」，"自动"两个字本身就是
+ *    "关掉只停自动、手动仍在"的载体 —— 在 hint 里再解释一遍是同一件事说两次。
+ * 2. **hint 会折行**。面板内容区只有 252px，加上这半句就变成两行，
+ *    把一个设置项的说明撑成一个段落，是净增噪音。
+ *
+ * ⚠️ 因此**「自动」两字不许从标签里删**：它现在独自承担这条区分，
+ * 删了它 = 用户再次以为关掉后手动也失效。这条约束写在
+ * `docs/02-ui-spec.md` §5.3 的反模式表里，改标签前先看那里。
+ */
+function autoCheckHint(intervalDays: number): string {
+  return intervalDays === 1 ? '每天最多查一次' : `每 ${String(intervalDays)} 天最多查一次`;
+}
+
+/**
+ * 元信息卡里的一行：label 左（muted）/ value 右（正文色）。
+ *
+ * 复用 `.diag-row` 的既有对齐模式（`justify-content: space-between` +
+ * `align-items: baseline`），**不新造一套 label/value 排版** ——
+ * 诊断浮层里那十几行就是这么写的，视觉上必须一致。
+ *
+ * 为什么必须这么排：原来是一整行
+ * `当前 v1.1.0 · 最新 v1.2.0（283 KB）`，在 252px 的内容区里**必然折行**，
+ * 折出来的第二行还以「最新」开头，看起来像一个独立的段。拆成两行对齐后，
+ * 版本号又短又靠右，永远不会折。
+ *
+ * @param label 左侧标签（muted）
+ * @param value 右侧数值
+ * @param testid 给测试定位用（`update-current` / `update-latest` / `update-last-check`）
+ * @param soft `true` = value 也用 muted。只给"上次检查"这种非主角的行用
+ */
+function metaRow(label: string, value: string, testid: string, soft = false): HTMLElement {
+  const row = el('div', 'diag-row');
+  row.appendChild(el('span', 'diag-label', label));
+  const v = el('span', soft ? 'diag-value soft' : 'diag-value', value);
+  v.setAttribute('data-testid', testid);
+  row.appendChild(v);
+  return row;
+}
+
+/**
  * 关于 Tab：版本 / 更新 / 仓库入口。
  *
  * ## 为什么「检查更新」与「立即更新」是两个东西
@@ -1249,10 +1316,26 @@ function describeSize(bytes: number | null): string {
  * 也可能只想点「去 Releases 自己下」——三条路径**互不替代**。
  * 所以这里不给"去更新"这种含糊按钮。
  *
+ * ## 版式（2026-11-17 排版改造，见 `docs/02-ui-spec.md` §5.3）
+ *
+ * ```text
+ * [元信息卡]  更新 ─────────── [有新版本]
+ *             当前        v1.1.0
+ *             最新        v1.2.0 · 283 KB
+ *             上次检查    3 分钟前
+ * [失败提示]（若有，在卡外 —— 它是一段长句，塞进卡里会把卡撑变形）
+ * [立即更新] [检查更新]        ← 并排，主左次右
+ * 自动检查更新        [开关]
+ * GitHub Releases ↗           ← 文字链接，不是按钮
+ * ────────────                ← 唯一一条分隔线
+ * 贡献者
+ * ```
+ *
  * ## 读不到状态时不落默认值
  *
  * `view === null` 表示面板与后台没对上（SW 未醒 / 消息失败）。
  * 此时**不显示"已是最新"**——那是谎报。只说明读不到，并让用户重开面板。
+ * 同理**不放状态徽标**：既不能说"已是最新"，也不能瞎标"有新版本"。
  *
  * ## `phase` 只决定"提不提示"，不决定"有没有更新"
  *
@@ -1271,10 +1354,17 @@ export function aboutTab(
     busy: boolean;
   },
 ): HTMLElement {
-  const box = el('div', 'tab-pane');
-  box.appendChild(el('p', 'diag-section', '更新'));
+  /**
+   * `.about-pane` 只做一件事：把组间距从 `.tab-pane` 的 6px 放大到 12px。
+   *
+   * ⚠️ **不许直接改 `.tab-pane`** —— 另外 4 个 Tab 都吃那条全局规则，
+   * 而关于页"不协调"的根因是"组与组之间和组内元素之间用了同一个间距"，
+   * 不是因为它缺装饰。
+   */
+  const box = el('div', 'tab-pane about-pane');
 
   if (!view) {
+    box.appendChild(el('p', 'diag-section', '更新'));
     box.appendChild(
       el('p', 'pane-note', '读不到更新状态 —— 关掉面板再打开试试（后台可能还没醒来）'),
     );
@@ -1283,20 +1373,52 @@ export function aboutTab(
 
   const latest = view.latestVersion;
   const size = describeSize(view.latestSizeBytes);
-  const versionLine =
-    latest && latest !== view.currentVersion
-      ? `当前 v${view.currentVersion} · 最新 v${latest}${size ? `（${size}）` : ''}`
-      : `当前 v${view.currentVersion} · 已是最新`;
+  /** 有没有"比当前新"的正式版。**与提示是否显示无关**（dismiss 后它仍然为 true） */
+  const hasNewer = latest !== null && latest !== view.currentVersion;
 
-  const version = el('p', 'pane-note', versionLine);
-  version.setAttribute('data-testid', 'update-version');
-  box.appendChild(version);
+  // ── ① 元信息卡 ──────────────────────────────────────────────
+  const card = el('div', 'about-meta');
+
+  const head = el('div', 'about-meta-head');
+  // 复用 `.diag-section` 的排版（muted / caption / 600），只把多余的外边距归零
+  head.appendChild(el('span', 'diag-section about-meta-title', '更新'));
+  /**
+   * 状态徽标：**只在有新版本时**出现。
+   *
+   * - 无新版时不放 —— 版本行已经写着「已是最新」，再挂个徽标是重复；
+   * - 读不到状态时不放 —— 看不见的东西不许下结论（见上面文件注释）。
+   *
+   * 它是**信息**，不是提示：dismiss 过之后红点会消失，但"有新版"这个事实不变，
+   * 卡里照常标出来（用户已经在这一页上了，不存在"打扰"）。
+   */
+  if (hasNewer) {
+    const badge = pill('有新版本', 'good');
+    badge.setAttribute('data-testid', 'update-badge');
+    head.appendChild(badge);
+  }
+  card.appendChild(head);
+
+  card.appendChild(metaRow('当前', `v${view.currentVersion}`, 'update-current'));
+  card.appendChild(
+    metaRow(
+      '最新',
+      hasNewer ? `v${latest}${size ? ` · ${size}` : ''}` : '已是最新',
+      'update-latest',
+    ),
+  );
+  // 这一行的数值也用 muted：它是个附属信息，不该和版本号抢注意力
+  card.appendChild(
+    metaRow('上次检查', describeLastCheck(view.lastCheckAt, Date.now()), 'update-last-check', true),
+  );
+  box.appendChild(card);
 
   /**
-   * 「上次更新没生效」—— 这条不能省。
+   * ── ② 「上次更新没生效」────────────────────────────────────
    *
-   * 用户为更新点过一次目录授权；如果写进去的文件没被加载（多半选错了目录），
-   * 不说清楚的话他会看到"更新完成"而版本没变，然后完全无从下手。
+   * 这条不能省。用户为更新点过一次目录授权；如果写进去的文件没被加载
+   * （多半选错了目录），不说清楚的话他会看到"更新完成"而版本没变，然后完全无从下手。
+   *
+   * ⚠️ 放在**卡外**：它是一整句长文案，塞进 label/value 卡里会把卡撑变形。
    * 类名用 `.pane-note.warn`（琥珀色），不是 `.warning` —— 后者不存在。
    */
   if (view.lastFailedVersion) {
@@ -1309,13 +1431,27 @@ export function aboutTab(
     box.appendChild(failed);
   }
 
-  const checked = el(
-    'p',
-    'pane-note',
-    `上次检查 ${describeLastCheck(view.lastCheckAt, Date.now())}`,
-  );
-  checked.setAttribute('data-testid', 'update-last-check');
-  box.appendChild(checked);
+  // ── ③ 主次两个按钮并排（主左次右）──────────────────────────
+  const actionRow = el('div', 'acct-actions');
+
+  /**
+   * 「立即更新」= 主操作（实心 accent）。
+   *
+   * ⚠️ **`dismissed` 必须也视为可执行**（2026-11-17）。
+   * 它只表示"这一版不再提示"，**不代表没有更新** —— `latestVersion` 仍然比当前新。
+   * 只认 `'available'` 的话，用户点进「关于」Tab（自动 dismiss）之后
+   * 按钮会被永久禁用，**从此无法更新** —— 比"红点消不掉"严重得多的功能倒退。
+   */
+  const updateBtn = el('button', 'acct-btn accent', '立即更新');
+  updateBtn.type = 'button';
+  updateBtn.disabled = view.phase !== 'available' && view.phase !== 'dismissed';
+  updateBtn.setAttribute('data-testid', 'update-now');
+  updateBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    actions.openUpdate();
+  });
+  actionRow.appendChild(updateBtn);
 
   const checkBtn = el('button', 'acct-btn ghost', actions.busy ? '检查中…' : '检查更新');
   checkBtn.type = 'button';
@@ -1326,10 +1462,15 @@ export function aboutTab(
     ev.preventDefault();
     actions.check();
   });
-  box.appendChild(checkBtn);
+  actionRow.appendChild(checkBtn);
+
+  box.appendChild(actionRow);
 
   /**
-   * 自动检查开关。
+   * ── ④ 自动检查开关 ────────────────────────────────────────
+   *
+   * 放在按钮组**之后**：原来是"检查更新 → 开关 → 立即更新"的三明治，
+   * 主操作被一个设置项夹在中间，视线要跨过它才能找到「立即更新」。
    *
    * ⚠️ 文案**不能**写成"启用更新检查"——那会让用户以为关掉后手动也失效。
    * 它只停"自动发起"，见方案 §6.3。
@@ -1337,35 +1478,23 @@ export function aboutTab(
   box.appendChild(
     switchRow({
       label: '自动检查更新',
-      hint: `每 ${String(view.intervalDays)} 天首次打开时查一次（关掉后仍可手动检查）`,
+      hint: autoCheckHint(view.intervalDays),
       checked: view.autoCheckEnabled,
       onToggle: actions.toggleAuto,
     }),
   );
 
   /**
-   * 「立即更新」与「GitHub Releases」并排，但**是两件不同的事**：
-   * 前者下载并覆盖文件，后者只是跳去下载页。合成就等于替用户选了。
+   * ── ⑤ GitHub Releases 降级为文字链接 ──────────────────────
    *
-   * 没有新版时禁用 —— 点了也只会拿到「没有可更新的版本」。
+   * 它跳去下载页，**不动文件**，与「立即更新」是两件不同的事（不许合并），
+   * 但它不该和主操作抢同样的视觉重量 —— 以前三个按钮一样大，看不出主次。
    *
-   * ⚠️ **`dismissed` 必须也视为可执行**（2026-11-17）。
-   * 它只表示"这一版不再提示"，**不代表没有更新** —— `latestVersion` 仍然比当前新。
-   * 只认 `'available'` 的话，用户点进「关于」Tab（自动 dismiss）之后
-   * 按钮会被永久禁用，**从此无法更新** —— 比"红点消不掉"严重得多的功能倒退。
+   * 仍然用 `<button>` 而不是 `<a>`：面板在 shadow root 里，`<a target=_blank>`
+   * 会在页面上留下一个可被 B站 样式污染的链接元素；button 能聚焦、能键盘触发，
+   * 点击后走 `window.open`（与「贡献者」同一做法）。
    */
-  const updateBtn = el('button', 'acct-btn', '立即更新');
-  updateBtn.type = 'button';
-  updateBtn.disabled = view.phase !== 'available' && view.phase !== 'dismissed';
-  updateBtn.setAttribute('data-testid', 'update-now');
-  updateBtn.addEventListener('click', (ev) => {
-    ev.stopPropagation();
-    ev.preventDefault();
-    actions.openUpdate();
-  });
-  box.appendChild(updateBtn);
-
-  const releases = el('button', 'acct-btn ghost', 'GitHub Releases');
+  const releases = el('button', 'btn-link', 'GitHub Releases ↗');
   releases.type = 'button';
   releases.setAttribute('data-testid', 'update-releases');
   releases.addEventListener('click', (ev) => {
@@ -1375,14 +1504,18 @@ export function aboutTab(
   });
   box.appendChild(releases);
 
+  // ── ⑥ 分隔线（唯一一条，功能与署名之间）───────────────────
+  box.appendChild(el('div', 'about-divider'));
+
   /**
-   * 贡献者。
+   * ── ⑦ 贡献者（署名区）─────────────────────────────────────
    *
    * ⚠️ 头像走 `avatars.githubusercontent.com`。B站页面的 CSP 有可能拦掉第三方图片，
    * 所以 `img` 出错时**只隐藏图片保留名字** —— 名字才是必须显示的，头像是修饰。
    */
   if (CONTRIBUTORS.length > 0) {
-    box.appendChild(el('p', 'diag-section', '贡献者'));
+    const credit = el('div', 'about-credit');
+    credit.appendChild(el('p', 'diag-section', '贡献者'));
     const list = el('div', 'contributors');
     for (const person of CONTRIBUTORS) {
       const item = el('button', 'contributor');
@@ -1407,7 +1540,8 @@ export function aboutTab(
       });
       list.appendChild(item);
     }
-    box.appendChild(list);
+    credit.appendChild(list);
+    box.appendChild(credit);
   }
 
   return box;
