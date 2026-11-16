@@ -47,12 +47,35 @@ const HTML = `
   <pre id="log"></pre>
 `;
 
-/** 目录句柄那一侧全走 IndexedDB，jsdom 没有 —— 整块替换成"没选过目录" */
+/**
+ * `fs-access` 那一侧全走 IndexedDB / File System Access，jsdom 都没有 —— 整块替换。
+ *
+ * ⚠️ 用 `vi.hoisted` 是因为 `vi.mock` 的工厂会被提到文件顶部，
+ * 拿不到普通的模块级变量；而下面的用例要能改"这个目录里到底是什么"。
+ */
+const fsMock = vi.hoisted(() => ({
+  /** `readDirManifest` 的返回值（用例里改） */
+  manifest: { name: 'Pluma', version: '1.1.0' } as { name: string | null; version: string },
+  /** 非 null ⇒ `readDirManifest` 抛这个错（模拟"选到别的地方了"） */
+  manifestError: null as Error | null,
+  /** `ensureWritable` 的返回值 */
+  permission: 'granted' as PermissionState,
+  /** 非 null ⇒ `readStoredDir` 返回它（模拟"上次已经选过目录"） */
+  storedDir: null as { name: string } | null,
+  /** `readDirManifest` 被调了几次 */
+  manifestReads: 0,
+}));
+
 vi.mock('@platform/update/fs-access', () => ({
-  readStoredDir: async () => null,
-  ensureWritable: async () => 'granted',
-  pickInstallDir: async () => null,
-  readDirManifestVersion: async () => '0.0.0',
+  readStoredDir: async () => fsMock.storedDir,
+  ensureWritable: async () => fsMock.permission,
+  pickInstallDir: async () => ({ name: 'pluma-1.1.0' }),
+  readDirManifest: async () => {
+    fsMock.manifestReads += 1;
+    if (fsMock.manifestError) throw fsMock.manifestError;
+    return fsMock.manifest;
+  },
+  readDirManifestVersion: async () => fsMock.manifest.version,
   storeDir: async () => undefined,
   writeFiles: async () => ({ files: 0, bytes: 0 }),
 }));
@@ -73,8 +96,16 @@ function statusWith(over: Partial<UpdateStatusView> = {}): UpdateStatusView {
   };
 }
 
-/** 摆好 DOM + 桩后台，然后把入口整个跑一遍 */
-async function bootWith(status: UpdateStatusView | null): Promise<void> {
+/**
+ * 摆好 DOM + 桩后台，然后把入口整个跑一遍。
+ *
+ * @param options.manifestName 运行时 `getManifest().name` —— 目录校验的判据就是它，
+ *   所以这里必须可改：用它和"目录里的 name"对比，才能证明判据是**动态**的。
+ */
+async function bootWith(
+  status: UpdateStatusView | null,
+  options: { manifestName?: string } = {},
+): Promise<void> {
   document.body.innerHTML = HTML;
 
   vi.stubGlobal('chrome', {
@@ -86,7 +117,12 @@ async function bootWith(status: UpdateStatusView | null): Promise<void> {
             : { type: 'update/status:ok', status }
           : { type: 'proxy/status:ok' },
       ),
-      getManifest: () => ({ version: status?.currentVersion ?? '0.0.0' }),
+      // ⚠️ `name` 必须有：目录校验的判据是"目录里的 name === 运行时的 name"，
+      // 少了它所有目录都会被判成"不是 Pluma"
+      getManifest: () => ({
+        name: options.manifestName ?? 'Pluma',
+        version: status?.currentVersion ?? '0.0.0',
+      }),
       reload: vi.fn(),
     },
     storage: {
@@ -115,6 +151,11 @@ function versionLine(): string {
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  fsMock.manifest = { name: 'Pluma', version: '1.1.0' };
+  fsMock.manifestError = null;
+  fsMock.permission = 'granted';
+  fsMock.storedDir = null;
+  fsMock.manifestReads = 0;
 });
 
 describe('更新窗口：只有真的"更新"才允许装', () => {
@@ -193,6 +234,124 @@ describe('更新窗口：只有真的"更新"才允许装', () => {
  * `handleUpdateReload` 一组覆盖；这里要防的是**入口里又出现一句 `runtime.reload()`**
  * —— 那种回退不会让任何行为测试变红（页面照样"更新成功"），只会让用户再次看到空白页。
  */
+/**
+ * 选目录**当场**校验（2026-11-17）。
+ *
+ * ## 改之前是什么样
+ *
+ * 选完目录后其实已经读了 `manifest.json`，但只 `appendLog()` 写进日志，
+ * `#dir-line` 仍显示「目录：xxx（可写）」—— **"可写"不等于"选对了"**。
+ * 用户要等到"下载完 + 写入"才发现选错，而那时候的报错完全看不出是目录的问题。
+ *
+ * 现在把结论写在用户正在看的那一行上，并区分三种情形：
+ * 读不到 manifest / 名字不是 Pluma / 正常（可能还附"已经是目标版本"）。
+ */
+describe('选目录当场校验：选错了不许等到下载完', () => {
+  function dirLine(): HTMLElement {
+    return document.getElementById('dir-line') as HTMLElement;
+  }
+
+  /** 点「选择扩展目录」并等目录行写出结论 */
+  async function pickAndWaitFor(expected: RegExp): Promise<void> {
+    (document.getElementById('pick-dir') as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(dirLine().textContent ?? '').toMatch(expected);
+    });
+  }
+
+  it('★ 选到正确的目录 ⇒ 说出该目录当前版本，且不是警告态', async () => {
+    fsMock.manifest = { name: 'Pluma', version: '1.0.0' };
+    await bootWith(statusWith({ currentVersion: '1.0.0', latestVersion: '1.1.0' }));
+
+    await pickAndWaitFor(/该目录当前是 v1\.0\.0/);
+    expect(dirLine().textContent).toContain('（可写）');
+    expect(dirLine().textContent, '正确目录却报了错').not.toContain('⚠️');
+    expect(dirLine().classList.contains('warn')).toBe(false);
+  });
+
+  /**
+   * ## 「不是 Pluma」这一支
+   *
+   * 判据是 `chrome.runtime.getManifest().name`，**不是硬编码的 'Pluma'**。
+   * 这条用例把运行时的 name 改成别的值来证明判据是动态的 ——
+   * 见下面那条"判据来自运行时"的用例。
+   *
+   * 变异验证：删掉 `info.name !== expectedName` 那一支 → 本条必红。
+   */
+  it('★★ 选到别的扩展的目录（name 对不上）⇒ 明确说"不是 Pluma"', async () => {
+    fsMock.manifest = { name: 'Other Extension', version: '9.9.9' };
+    await bootWith(statusWith());
+
+    await pickAndWaitFor(/不是 Pluma/);
+    // 把它读到的名字摆出来，用户能自己对照
+    expect(dirLine().textContent).toContain('Other Extension');
+    expect(dirLine().classList.contains('warn')).toBe(true);
+  });
+
+  /**
+   * 判据来自**运行时**的 manifest 名字。
+   *
+   * 若有人把 `chrome.runtime.getManifest().name` 写成硬编码 `'Pluma'`，
+   * 那么"把运行时名字改成别的值"之后，一个**名字正确**的目录会被误判成"不是 Pluma"。
+   * 这条用例用"运行时叫 PlumaX、目录里叫 PlumaX"来证明它跟着运行时走，
+   * 而不是跟着字面量走。
+   */
+  it('★★ 判据来自运行时：运行时改名叫 PlumaX，同名目录必须判为正确', async () => {
+    fsMock.manifest = { name: 'PlumaX', version: '1.1.0' };
+    await bootWith(statusWith(), { manifestName: 'PlumaX' });
+
+    await pickAndWaitFor(/该目录当前是 v1\.1\.0/);
+    expect(
+      dirLine().textContent,
+      '把判据写成硬编码的「Pluma」时，这条会误判成"不是 Pluma"',
+    ).not.toContain('不是 Pluma');
+  });
+
+  it('★★ 目录里没有 manifest.json ⇒ 说清原因，且不许说"可写"', async () => {
+    fsMock.manifestError = new Error('所选目录里没有 manifest.json —— 选到别的地方了');
+    await bootWith(statusWith());
+
+    await pickAndWaitFor(/没有 manifest\.json/);
+    expect(dirLine().textContent, '选错目录却还说可写，等于让人放心地错下去').not.toContain('可写');
+    expect(dirLine().classList.contains('warn')).toBe(true);
+  });
+
+  it('★ 目录版本已经是目标版本 ⇒ 追一句"已经是目标版本"', async () => {
+    fsMock.manifest = { name: 'Pluma', version: '1.2.0' };
+    await bootWith(statusWith({ currentVersion: '1.2.0', latestVersion: '1.2.0' }));
+
+    await pickAndWaitFor(/已经是目标版本/);
+  });
+
+  /**
+   * 重开窗口时**不重新读盘**：只在"已经读过"时才渲染版本号。
+   *
+   * 为什么这条重要：`refreshDirLine()` 在窗口打开时会跑一次。若它也去读 manifest，
+   * 那么"上次选好的目录这次读失败"（比如用户把目录挪走了）就会把目录行染红 ——
+   * 而用户什么都没做错，也没打算现在更新。校验只发生在"选目录"那个动作里。
+   */
+  it('★ 重开窗口：不重读 manifest（目录行只说目录与权限，不带版本）', async () => {
+    fsMock.storedDir = { name: 'pluma-1.1.0' };
+    await bootWith(statusWith());
+
+    await vi.waitFor(() => {
+      expect(dirLine().textContent).toContain('pluma-1.1.0');
+    });
+    expect(dirLine().textContent).toContain('（可写）');
+    expect(dirLine().textContent, '没读过就不该编一个版本号出来').not.toMatch(/v\d+\.\d+\.\d+/);
+    expect(fsMock.manifestReads, '重开窗口不该去读盘').toBe(0);
+  });
+
+  it('★ 目录版本不是目标版本 ⇒ 不许提前许诺"将升级到"（用户还没点更新）', async () => {
+    fsMock.manifest = { name: 'Pluma', version: '1.0.0' };
+    await bootWith(statusWith({ currentVersion: '1.0.0', latestVersion: '1.2.0' }));
+
+    await pickAndWaitFor(/该目录当前是 v1\.0\.0/);
+    expect(dirLine().textContent).not.toContain('已经是目标版本');
+    expect(dirLine().textContent).not.toContain('将升级');
+  });
+});
+
 describe('更新窗口：收尾交给 SW（不许自己 reload）', () => {
   it('★★★ 入口里不许直接调 runtime.reload()', () => {
     expect(ENTRY_CODE, '页面自己 reload ⇒ 没人关窗 ⇒ 空白新标签页').not.toContain(

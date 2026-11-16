@@ -56,6 +56,19 @@ button.secondary {
   background: transparent;
 }
 
+/**
+ * 目录行的"出问题了"态（2026-11-17）：选错目录 / 读不到 manifest。
+ *
+ * 这个窗口没有自己的配色 —— 复用 `tokens.css` 的 `--pluma-warning`，
+ * 与面板里 `.pane-note.warn` 是同一个琥珀色（同一个项目里"警告"只该有一种颜色）。
+ * 带 fallback 是因为该变量来自 main.ts 引入的 tokens.css，万一它没加载上，
+ * 这一行也得看得见。
+ */
+#dir-line.warn {
+  color: var(--pluma-warning, #b26a00);
+  font-weight: 500;
+}
+
 progress {
   width: 100%;
   height: 6px;

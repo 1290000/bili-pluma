@@ -24,7 +24,9 @@ import { readZip } from '@core/update/zip';
 import {
   ensureWritable,
   pickInstallDir,
+  readDirManifest,
   readDirManifestVersion,
+  type DirManifestInfo,
   readStoredDir,
   storeDir,
   writeFiles,
@@ -147,15 +149,63 @@ async function readStatus(): Promise<void> {
     say('没有可更新的版本 —— 关掉这个窗口，回到面板点「检查更新」再试。');
 }
 
-async function refreshDirLine(): Promise<void> {
+/**
+ * 上一次**成功**读到的目录 manifest。
+ *
+ * 两个用途：①`refreshDirLine()` 用它渲染版本号，不必每次重开窗口都去读盘；
+ * ②"已经是目标版本"那句要跟 `status.latestVersion` 比，也得有它。
+ * 选目录时填入；选失败时不动（保留上一次的结论，不许把好的信息覆盖成红的）。
+ */
+let dirInfo: DirManifestInfo | null = null;
+
+/** 目录状态行：正常一色、出问题换 `.warn`（同一行，不新增元素） */
+function renderDirLine(text: string, warn = false): void {
   if (!dirLine) return;
+  dirLine.textContent = text;
+  dirLine.classList.toggle('warn', warn);
+}
+
+/**
+ * 正常态那一句：`目录：xxx · 该目录当前是 v1.1.0（可写），已经是目标版本`。
+ *
+ * 判据说明：
+ * - 「可写 / 未授予写入权限」来自 `ensureWritable()`（可能弹一次确认框）
+ * - 「已经是目标版本」只在**目标版本已知且相等**时追加 —— 不相等就什么都不说，
+ *   不要写"将升级到 vX"（用户还没点「立即更新」，那是承诺不是事实）
+ *
+ * @param info `readDirManifest()` 读到的结果
+ * @param writable `ensureWritable()` 是否 granted
+ */
+function describeDirOk(info: DirManifestInfo, writable: boolean): string {
+  const head = `目录：${dir?.name ?? '（未知）'} · 该目录当前是 v${info.version}`;
+  const perm = writable ? '（可写）' : '（未授予写入权限）';
+  const target = status?.latestVersion === info.version ? '，已经是目标版本' : '';
+  return `${head}${perm}${target}`;
+}
+
+/**
+ * 刷新目录行。
+ *
+ * ⚠️ 这里**不重新读 manifest**（只在 `dirInfo` 已知时才渲染版本）：
+ * 重开窗口时读盘失败会把上一次的成功信息覆盖成红的，而用户什么都没做错。
+ * 校验发生在"选目录"那个动作里（`onPickDir`），那里失败才是真失败。
+ *
+ * @returns 是否可写（`onPickDir` 要拿它拼同一句话，避免两处各判一次）
+ */
+async function refreshDirLine(): Promise<boolean> {
+  if (!dirLine) return false;
   if (!dir) {
-    dirLine.textContent = '还没有指定扩展目录';
-    return;
+    renderDirLine('还没有指定扩展目录');
+    return false;
   }
   const permission = await ensureWritable(dir).catch(() => 'denied' as PermissionState);
-  dirLine.textContent =
-    permission === 'granted' ? `目录：${dir.name}（可写）` : `目录：${dir.name}（未授予写入权限）`;
+  const writable = permission === 'granted';
+  renderDirLine(
+    dirInfo
+      ? describeDirOk(dirInfo, writable)
+      : `目录：${dir.name}${writable ? '（可写）' : '（未授予写入权限）'}`,
+  );
+  return writable;
 }
 
 /** 「选择扩展目录」—— 只需要做一次。 */
@@ -164,16 +214,46 @@ async function onPickDir(): Promise<void> {
     dir = await pickInstallDir();
     await storeDir(dir);
     appendLog(`已选择目录：${dir.name}`);
-    // 选完立刻读出它的 manifest 版本，让用户能对上"这是不是当前那个目录"
-    try {
-      const version = await readDirManifestVersion(dir);
-      appendLog(`该目录的 manifest 版本：${version}`);
-    } catch (error) {
-      appendLog(`⚠️ 读 manifest 失败：${errorText(error)}`);
-    }
-    await refreshDirLine();
   } catch (error) {
     appendLog(`选择目录失败：${errorText(error)}`);
+    return;
+  }
+
+  /**
+   * 刚选的目录还**没校验过** ⇒ 先把上一次的结论清掉。
+   * 否则 `refreshDirLine()` 会拿旧版本的号去描述新目录（错一帧也是错的）。
+   */
+  dirInfo = null;
+  const writable = await refreshDirLine();
+
+  /**
+   * ## 选完**立刻**校验，别等下载完才发现选错（2026-11-17）
+   *
+   * 以前这里只把版本号写进日志：用户选错目录时，要等到"下载完 + 写入"才失败，
+   * 而那一步的报错完全看不出是"目录选错了"。现在把校验提到这一步，
+   * 并且把结论写在**用户正在看的那一行**（`#dir-line`）上。
+   *
+   * 判据用 `chrome.runtime.getManifest().name`（**运行时**的名字），不硬编码
+   * `'Pluma'` —— 硬编码的话改一次 manifest 名字就永久失效，而且不会有人发现。
+   */
+  try {
+    const info = await readDirManifest(dir);
+    appendLog(`该目录的 manifest：${info.name ?? '（无 name）'} v${info.version}`);
+
+    const expectedName = chrome.runtime.getManifest().name;
+    if (info.name !== expectedName) {
+      // 名字对不上 ⇒ 明确说"不是 Pluma"，并把它读到的名字摆出来（用户能自己对照）
+      // `dirInfo` 保持 null：这个目录的版本号不该被后续的 `refreshDirLine()` 拿去用
+      renderDirLine(`⚠️ 这个目录不是 Pluma（里面的名字是「${info.name ?? '空'}」）`, true);
+      return;
+    }
+    dirInfo = info;
+    renderDirLine(describeDirOk(info, writable));
+  } catch (error) {
+    // 这些 message 都是写给人看的一句话（见 `readDirManifest` 的注释）
+    const message = error instanceof Error ? error.message : String(error);
+    appendLog(`⚠️ 读 manifest 失败：${message}`);
+    renderDirLine(`⚠️ ${message}`, true);
   }
 }
 

@@ -182,19 +182,69 @@ export async function writeFiles(
   return { files: writes.length, bytes };
 }
 
-/** 读所选目录里的 `manifest.json` 版本号（浅校验"这是不是扩展目录"）。 */
-export async function readDirManifestVersion(dir: PermDirHandle): Promise<string> {
+/** 所选目录里 `manifest.json` 的两项关键信息 */
+export interface DirManifestInfo {
+  /**
+   * manifest 里的 `name`；缺失 / 不是非空字符串时为 `null`。
+   *
+   * ⚠️ **缺失不算错**：能不能更新只看 `version`，名字只用来回答"这是不是 Pluma"。
+   */
+  name: string | null;
+  version: string;
+}
+
+/**
+ * 读所选目录里 `manifest.json` 的 `name` / `version` —— **浅校验"这是不是 Pluma 的目录"**。
+ *
+ * ## 为什么把 name 一起读出来（2026-11-17）
+ *
+ * 更新窗口里用户在选目录这一步最容易选错，而以前选完只在日志里写一句版本号，
+ * **真正发现选错要等到"下载完 + 写入"**。要把校验提前到选完那一刻，就得知道
+ * 目录里的 `name` 跟运行时是不是同一个（判据见 `update/main.ts` 的 `onPickDir`）。
+ *
+ * ## 错误一律是**给人看的话**
+ *
+ * 这些 `message` 会被直接渲染到界面上（`⚠️ {message}`），所以不许出现
+ * `Unexpected token } in JSON` 这种引擎原话 —— 对用户来说那等于没说。
+ *
+ * @throws 目录里没有 manifest.json / 不是合法 JSON / 没有 version
+ */
+export async function readDirManifest(dir: PermDirHandle): Promise<DirManifestInfo> {
   let fileHandle: FileSystemFileHandle;
   try {
     fileHandle = await dir.getFileHandle('manifest.json');
   } catch {
     throw new Error('所选目录里没有 manifest.json —— 选到别的地方了');
   }
+
   const file = await fileHandle.getFile();
-  const parsed: unknown = JSON.parse(await file.text());
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    // 引擎原话（"Unexpected token …"）没法给人看，换成能指导下一步的一句
+    throw new Error('manifest.json 不是合法 JSON —— 可能选到别的地方了');
+  }
+
   if (typeof parsed !== 'object' || parsed === null) throw new Error('manifest.json 结构异常');
+
   const version = (parsed as { version?: unknown }).version;
   if (typeof version !== 'string' || version.length === 0)
     throw new Error('manifest.json 没有 version');
-  return version;
+
+  const name = (parsed as { name?: unknown }).name;
+  return {
+    name: typeof name === 'string' && name.length > 0 ? name : null,
+    version,
+  };
+}
+
+/**
+ * 读所选目录里的 `manifest.json` 版本号。
+ *
+ * 只是 `readDirManifest()` 的薄包装 —— **判据与兜错只有那一份实现**，
+ * 调用方要"是不是 Pluma"时才用 `readDirManifest()` 拿 `name`。
+ */
+export async function readDirManifestVersion(dir: PermDirHandle): Promise<string> {
+  return (await readDirManifest(dir)).version;
 }

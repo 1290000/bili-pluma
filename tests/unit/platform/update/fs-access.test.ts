@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { readDirManifestVersion, writeFiles, type PermDirHandle } from '@platform/update/fs-access';
+import {
+  readDirManifest,
+  readDirManifestVersion,
+  writeFiles,
+  type PermDirHandle,
+} from '@platform/update/fs-access';
 
 interface FakeFile {
   bytes: Uint8Array;
@@ -133,6 +138,59 @@ describe('readDirManifestVersion', () => {
     const { handle, files } = fakeDir();
     files.set('/manifest.json', { bytes: bytes('{"name":"x"}') });
     await expect(readDirManifestVersion(handle)).rejects.toThrow(/没有 version/);
+  });
+});
+
+describe('readDirManifest：把"这是不是 Pluma 的目录"读出来', () => {
+  it('正常：name 与 version 都拿到', async () => {
+    const { handle, files } = fakeDir();
+    files.set('/manifest.json', {
+      bytes: bytes('{"name":"Pluma","version":"1.1.0"}'),
+    });
+    await expect(readDirManifest(handle)).resolves.toEqual({ name: 'Pluma', version: '1.1.0' });
+  });
+
+  it('★ name 缺失不算错 ⇒ 返回 null（能不能更新只看 version）', async () => {
+    const { handle, files } = fakeDir();
+    files.set('/manifest.json', { bytes: bytes('{"version":"1.1.0"}') });
+    await expect(readDirManifest(handle)).resolves.toEqual({ name: null, version: '1.1.0' });
+  });
+
+  it('name 不是字符串 ⇒ 也返回 null，不抛', async () => {
+    const { handle, files } = fakeDir();
+    files.set('/manifest.json', { bytes: bytes('{"name":42,"version":"1.1.0"}') });
+    await expect(readDirManifest(handle)).resolves.toEqual({ name: null, version: '1.1.0' });
+  });
+
+  it('★★ 没有 manifest.json ⇒ 抛"选到别的地方了"（这句会直接显示给用户）', async () => {
+    const { handle } = fakeDir();
+    await expect(readDirManifest(handle)).rejects.toThrow(/没有 manifest\.json —— 选到别的地方了/);
+  });
+
+  it('★ manifest 不是合法 JSON ⇒ 抛人话，不是引擎原话', async () => {
+    const { handle, files } = fakeDir();
+    files.set('/manifest.json', { bytes: bytes('{ 这不是 json') });
+    let message = '';
+    try {
+      await readDirManifest(handle);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toMatch(/不是合法 JSON/);
+    // 这条 message 会被渲染到界面上（`⚠️ {message}`），所以不许出现 "Unexpected token"
+    expect(message).not.toMatch(/Unexpected token/i);
+  });
+
+  it('没有 version ⇒ 抛错（这才是"不是扩展目录"的硬判据）', async () => {
+    const { handle, files } = fakeDir();
+    files.set('/manifest.json', { bytes: bytes('{"name":"Pluma"}') });
+    await expect(readDirManifest(handle)).rejects.toThrow(/没有 version/);
+  });
+
+  it('readDirManifestVersion 是它的薄包装（同一份判据）', async () => {
+    const { handle, files } = fakeDir();
+    files.set('/manifest.json', { bytes: bytes('{"name":"Pluma","version":"2.0.0"}') });
+    await expect(readDirManifestVersion(handle)).resolves.toBe('2.0.0');
   });
 });
 
