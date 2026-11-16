@@ -322,30 +322,26 @@ ancestor backdrop root or a new fixed-position containing block."
 🔒 类名：`.diag-section` 保留（诊断/关于都在用），新增 `.section-head` 承担新语义；
 **两者不许同时用于同一个元素**（现在 `about-meta-title` 就是 `.diag-section` 加两个类在改权重，属于同一问题的补丁）。
 
-### 4.4 状态点行（`StatusRow`）—— **本次新增的主力组件**
+### 4.4 状态行 —— **撤回 `StatusRow`，改为升级 `.diag-row`（2026-11-16 修正）**
 
-参考图的核心视觉单元，用来承载"一组同类事实/条目"：
+原计划新增一个 `StatusRow` 组件、先在「关于」试点。**开工时发现两件事，所以撤回：**
 
-```text
-●  一级标题（13/600，单行省略）
-   二级说明（11/400 muted，可省略）
-                              94.8k tok
-                              3 小时 05 分 16 秒
-```
+1. 「关于」那三行是 **label/value 键值对**（当前 / 最新 / 上次检查），不是"一组带状态的点"——
+   套圆点纯属装饰，违反 D3。
+2. 真正需要"状态点"的只有**诊断的事实行**，而那里已经有 `.diag-row` + `.diag-row.ok/.bad`。
+   再造一个 `StatusRow` 就是同一个东西的第二份实现（违反 §9 R2 与 02 §5.3
+   "不许两份相同规则"）。
 
-| 项 | 值 |
-| --- | --- |
-| 左列 | 6px 圆点，`margin-top:6px` 与首行基线对齐；颜色 = ok / warn / bad / muted（muted = 无点，留 6px 空位） |
-| 中列 | `flex:1 1 auto; min-width:0`（必须 `min-width:0`，否则省略号不生效） |
-| 右列 | `flex:0 0 auto`，右对齐，`tabular-nums`，最多两行 |
-| 行高 | min 40px，行间 0（靠 padding 8/0 撑开），**不加分隔线**（D1） |
-| 点不可点 | 它是状态，不是按钮。要可点就整行 `role="button"` + hover 底色 |
+**所以改成升级现有组件**（Stage 3 与诊断一起做）：
 
-**首批落点**（不改判据、只改呈现）：诊断的「事实」行、关于的「更新」三行元信息、
-贡献者清单、净化子项的状态。
+| 要改的 | 从 | 到 |
+| --- | --- | --- |
+| 状态色 | `.diag-row.ok` 用 **accent 蓝** | `--pluma-ok` 绿（蓝只留给交互，裁决 A） |
+| 状态载体 | 只有数值变色 | 行首加 6px 点（ok / warn / bad），与数值同色 |
+| 对齐 | `align-items: baseline` | **保持** —— 诊断是 label/value，不是"标题 + 副标题" |
 
-> ⚠️ **不许把它用成"装饰性列表"**：没有状态含义的条目（如 9 个分类开关）继续用
-> `SwitchRow`，不套圆点 —— 圆点一旦泛滥就失去"状态"语义（D3）。
+> 参考图那套"点 + 两行 + 右侧 meta"的骨架，在 Pluma 里**没有第二处落点**（只有诊断一处），
+> 所以不抽象成组件。它作为视觉语言留在 §2.1 的 D3 里就够了。
 
 ### 4.5 信息卡（`InfoCard`）
 
@@ -355,7 +351,7 @@ ancestor backdrop root or a new fixed-position containing block."
 | --- | --- |
 | 何时用 | 内容需要与上下文**强隔离**：解锁画质卡（价值锚点）、二维码卡、更新版本卡 |
 | 何时不用 | 一组开关、一组元信息、一组列表 → 用 `SectionHeader` + 留白 |
-| 底 | `--pluma-card`（半透明，让材质透出来），**无描边**，圆角 10，内边距 10/12 |
+| 底 | `--pluma-card`（半透明，让材质透出来）+ **0.5px 发丝描边（10%）**，圆角 10，内边距 10/12 |
 | 卡头 | 左 13/600，右 11 muted 或胶囊，基线对齐 |
 
 🔒 类名：`.unlock-card` `.unlock-head` `.unlock-title` `.unlock-anchor` `.about-meta` `.about-meta-head`
@@ -364,7 +360,7 @@ ancestor backdrop root or a new fixed-position containing block."
 
 | 项 | 现状 | 改为 |
 | --- | --- | --- |
-| 高 | padding 6/8 → 约 44px（两行） | min 36px，padding 8/8 |
+| 高 | padding 6/8 → 单行 31px / 两行 47px | **min-height 36px，padding 仍 6/8** —— 加到 8/8 会把两行项顶到 51px，净化页拉长一大截 |
 | 底 | 透明 + hover 8% 灰 | hover `--pluma-accent-soft`（与可点区域统一） |
 | 开关 | 34×18，圆点 14 | 36×20，圆点 16（与 popup 统一，现在两处尺寸不同） |
 | 触控区 | 整行 = label | 保持 |
@@ -520,14 +516,32 @@ Markdown 反引号（`` ` ``）会把字符串提前截断 —— 当天踩了�
 | 贴边条 / 关于页白卡的突兀 | ✅ 两处已修（`e9d4777`） |
 | **播放页 / 直播页帧率** | ⬜ **未测 —— Stage 1 唯一没闭环的事** |
 
-### Stage 2 · 内容组件
+### Stage 2 · 内容组件 —— **已完成 2026-11-16**
 
 | 项 | 内容 |
 | --- | --- |
-| 改动文件 | `dom.ts`（`switchRow` / `pill` 度量）+ `tabs.ts` 里逐 Tab 的类名与结构 |
-| 关键顺序 | 先 `switchRow`（5 个 Tab 都用）→ 再 `pill` → 再 `StatusRow`（新组件，先在「关于」试点） |
+| 改动文件 | `tokens.css`（圆角 / 文字色）+ `sidebar.ts`（`.tab-pane` / `.row` / `.switch` / `.pill` / `.badge-chip` / 两张卡） |
+| 关键顺序 | 先 `switchRow`（5 个 Tab 都用）→ 再 `pill` → ~~再 `StatusRow`~~（**已撤回**，见 §4.4） |
 | 退出条件 | 每个 Tab 在**未知态 / 无数据态 / 正常态**三种模型下都不破版（喂 `null` 看空态） |
 | 回滚 | 按组件 revert |
+
+**实际交付（6 个 commit）：**
+
+| commit | 内容 |
+| --- | --- |
+| `06be6b7` | 卡片圆角 12 → 10px |
+| `6cfeed8` | 正文 / 次要文字色校准 |
+| `f4e764d` | 「事实：正常」改绿（裁决 A）：`pill-good` + `unlock-title.good` |
+| `79142bd` | 组间距全局 12px，删 `.about-pane` 补丁（裁决 E） |
+| `578e6df` | 开关行 min-height 36 / 开关 36×20 / hover 统一 accent-soft |
+| `cff4b6a` | 胶囊定高 18px / 徽章圆角 6px / 卡描边 15% → 10% |
+| `05184f2` | 顺手：`PANEL_CSS` 源码卫生守卫拆成独立文件（第三次踩反引号后才想明白） |
+
+**未做、且是有意的：**
+
+- `StatusRow` 撤回（§4.4）。
+- `.diag-row.ok` 还是蓝的 —— 它要连状态点一起改，属于 Stage 3 的诊断块。
+- 净化子项的 `dim` 视觉未动（那是"两种灰"的硬约定，只换了 hover 与行高）。
 
 ### Stage 3 · 5 个 Tab
 
