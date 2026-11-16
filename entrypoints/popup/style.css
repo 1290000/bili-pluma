@@ -10,6 +10,12 @@
  * 下一个人会照着它去找已经不存在的 DOM。
  *
  * 尺寸依据 docs/02-ui-spec.md §1：宽 360–400px，绝不出现滚动条。
+ *
+ * ## 2026-11-16 与面板统一"档位"（UI 改版 Stage 4）
+ *
+ * popup 是**独立文档**（背后是空窗口），所以**不套模糊材质** ——
+ * 没有东西可采样，只会白付合成成本。借的只是它的**明度档位**：
+ * 底 = canvas 一档灰，开关行 = surface 一层白，靠明度差分，不再画描边。
  */
 
 * {
@@ -20,7 +26,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--pluma-surface);
+  background: var(--pluma-canvas);
   color: var(--pluma-text);
   font-family: var(--pluma-font-sans);
   font-size: var(--pluma-font-body);
@@ -48,7 +54,7 @@ body {
   justify-content: space-between;
   gap: 8px;
   padding-bottom: 10px;
-  border-bottom: 0.5px solid var(--pluma-border);
+  border-bottom: 0.5px solid var(--pluma-line);
 }
 
 .brand {
@@ -71,10 +77,11 @@ body {
 .pill {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: var(--pluma-radius-pill);
   font-size: var(--pluma-font-caption);
-  line-height: 1.4;
+  line-height: 1;
 }
 
 .pill-neutral {
@@ -91,16 +98,18 @@ body {
   padding-top: 10px;
 }
 
-/* ── 开关行（全项目同一形态：面板里也是这套） ── */
+/* ── 开关行（与面板同一形态：canvas 上的一层 surface）── */
 
 .row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  min-height: var(--pluma-h-row);
   padding: 8px 10px;
-  border: 0.5px solid var(--pluma-border);
+  /* **没有描边**：明度差已经够分，描边会让 360px 的小窗口看起来像一堆输入框 */
   border-radius: var(--pluma-radius-card);
+  background: var(--pluma-surface);
   cursor: pointer;
 }
 
@@ -126,7 +135,7 @@ body {
   height: 20px;
   border-radius: 10px;
   background: var(--pluma-border);
-  transition: background-color 0.15s;
+  transition: background-color var(--pluma-duration) var(--pluma-ease);
 }
 
 .switch.on {
@@ -153,7 +162,7 @@ body {
   height: 16px;
   border-radius: 50%;
   background: var(--pluma-surface);
-  transition: transform 0.15s;
+  transition: transform var(--pluma-duration) var(--pluma-ease);
   pointer-events: none;
 }
 
