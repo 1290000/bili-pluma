@@ -17,8 +17,6 @@
   <a href="https://t.me/Pluma129">Telegram 频道</a>　·　<a href="https://t.me/pluma666">Telegram 交流群</a>
 </p>
 
-> ⚠️ 与哔哩哔哩官方无关联，未获授权或认可。使用可能违反 B站用户协议，风险自负；请勿用于账号共享或售卖。可能随时停止维护。
-
 ## 功能
 
 | | |
@@ -53,7 +51,7 @@
 
 ## 凭据
 
-AES-GCM 加密存在本地，密钥也在本地，不上传服务器。能防其他网页与扩展读明文，**防不住本机程序**。
+AES-GCM 加密存在本地，密钥也在本地，不上传服务器。
 
 `cookies` 权限只在扫码那一刻用一次，不读主账号。会记住主账号昵称（不含 mid 与凭据，7 天过期，退出即清）。
 
@@ -65,8 +63,12 @@ AES-GCM 加密存在本地，密钥也在本地，不上传服务器。能防其
 - 改完跑 `node scripts/verify.mjs`
 - 自己构建：Node 20+ / pnpm，`pnpm install && pnpm build`，加载 `.output/chrome-mv3`
 
-## 致谢与许可
+## 致谢
 
 思路受益于 **Bili Dual Account Helper**、**BiliPai**、**Ghost-Downloader-3**（界面形态），均未使用其代码；页内清理的选择器来自 **Bilibili-Evolved**（MIT），见 [NOTICE.md](./NOTICE.md)。
 
-[GPL-3.0-only](./LICENSE) + [附加条款](./ADDITIONAL-TERMS.md)。
+## 许可证与声明
+
+[GPL-3.0-only](./LICENSE) + [附加条款](./ADDITIONAL-TERMS.md)。可自由使用、修改、分发，衍生作品须同样开源。
+
+本项目为非官方扩展，与哔哩哔哩（bilibili.com）无隶属关系，未获授权或认可。**不破解任何加密，不绕过付费墙** —— 只在你自己账号已有的权益范围内改写播放器读到的判断。B站用户协议通常禁止通过非官方工具访问服务，本扩展的行为可能被视为违反该协议；请自行判断并承担账号风险，且勿用于账号共享、出租或售卖。凭据只加密保存在本地。项目可能随时停止维护。
