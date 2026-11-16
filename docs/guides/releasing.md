@@ -1,7 +1,8 @@
 # 发布流程
 
-> 分发方式见 [ADR 0018](../decisions/0018-ship-built-artifacts.md)：**不上架商店、不发 crx、可以发 zip
-> 但必须同时提供带源码的版本**。本文负责**怎么发**（命名、结构、步骤、文案），
+> 分发方式见 [ADR 0018](../decisions/0018-ship-built-artifacts.md)：**不上架商店、不发 crx、
+> 只发一个 zip 附件 `pluma-<版本>.zip`**（源码由 Release 页自带的 `Source code` 归档提供）。
+> 本文负责**怎么发**（命名、结构、步骤、文案），
 > 为什么这么发归 ADR 0018，不在这里复述。
 
 ---
@@ -12,7 +13,7 @@
 | --- | --- |
 | **不上架 Chrome / Edge 商店** | B站投诉后必下架；且"修改请求头"类扩展审核本就严格。详见 Q16 |
 | **不发 crx** | 商店签名的 crx 才是可安装的；自己签的浏览器直接拒绝，发了只会制造"下载了装不上"。见 [ADR 0018](../decisions/0018-ship-built-artifacts.md) |
-| **发 zip 必须同时发 `-with-source` 版** | 让产物可被独立重建比对。**这是唯一能区分"构建产物"与"黑盒分发"的凭证** |
+| **只发一个附件 `pluma-<版本>.zip`** | 源码由 Release 页自带的 `Source code` 归档提供（ADR 0018 2026-11-17 修订） |
 | **不提供跳过付费墙的能力** | 这是能否站住的分界线，也是免责声明里"不绕过付费墙"这句话的前提（见 Q4） |
 | **不做任何形式商业化** | 收钱会把性质从"个人工具"变成"商业服务"（见 Q10） |
 | **不主动做 SEO / 推广** | 降低被发现概率（但别指望有效） |
@@ -24,10 +25,12 @@
 
 ```
 pluma-<版本>.zip              构建产物，解压后可在开发者模式加载
-pluma-<版本>-with-source.zip  同上 + 完整源码
 ```
 
-例：`pluma-0.9.0.zip`、`pluma-0.9.0-with-source.zip`
+例：`pluma-0.9.0.zip`
+
+> 只有这一个产物。源码不单独打包 —— Release 页的 `Source code (zip / tar.gz)`
+> 归档就是该 tag 的完整快照，见 [ADR 0018](../decisions/0018-ship-built-artifacts.md) 文末修订。
 
 | 规则 | 理由 |
 | --- | --- |
@@ -35,7 +38,7 @@ pluma-<版本>-with-source.zip  同上 + 完整源码
 | **不带浏览器名**（不写 `-edge` / `-chrome`） | 写了会让用户以为要区分下载。本项目只支持 Chrome+Edge，产物**同一份** |
 | **不带日期** | 同版本重打包必须覆盖，不允许两个文件并存（否则用户会问"哪个新"） |
 | **不带 `v` 前缀** | `v0.9.0` 是 git tag 的写法，文件名不用，避免两种写法混用 |
-| GitHub 自动生成的 `Source code (zip)` **不要重命名** | 名字固定，不会与上面两个冲突 |
+| GitHub 自动生成的 `Source code (zip)` **不要重命名** | 名字固定；它是**源码的唯一分发渠道**，改名会让人以为是我们另外打的包 |
 
 ---
 
@@ -80,36 +83,7 @@ Windows 资源管理器「全部解压」时**总是先用 zip 文件名建一�
 
 ⚠️ **不要试图用 zip 内目录名去控制解压后的层级。**
 
-### `pluma-<版本>-with-source.zip` — 产物在子目录
-
-同样**平铺在 zip 根**（规则与上面一致）：
-
-```
-BUILD.md               ← 构建凭证（package.mjs 生成：commit / Node / wxt / 逐文件 sha256）
-extension/             ← 构建产物放这里（manifest.json 在这层）
-src/
-entrypoints/
-public/
-scripts/
-docs/
-tests/
-package.json
-pnpm-lock.yaml
-wxt.config.ts
-tsconfig.json
-README.md
-LICENSE
-ADDITIONAL-TERMS.md
-```
-
-Windows 解压后得到 `pluma-0.9.0/extension/manifest.json`，
-用户加载 `pluma-0.9.0/extension`。—— 这个 zip 本来就需要多一层
-`extension/`，因为源码要和产物分开摆。
-
-⚠️ **这个 zip 里不放 `安装说明.txt`**：它里面有源码，放进说明会诱导用户
-去加载整个目录（会失败）。安装说明只属于能直接加载的那一份。
-
-### 两个 zip 都不含
+### zip 不含
 
 `.git/` · `node_modules/` · `.output/chrome-mv3-dev/`（HMR 产物） · `.workbuddy-ai/` ·
 `coverage/` · `dist/` · `*.log`
@@ -126,7 +100,7 @@ Windows 解压后得到 `pluma-0.9.0/extension/manifest.json`，
 | --- | --- |
 | 改文案 | **只改 `assets/install-readme.txt`**，本文不复制内容 |
 | 版本号 | 用 `{{VERSION}}` 占位符，别写死（写死了必然过期） |
-| 只放轻量版 | `-with-source` 版**不放**它 —— 那个包里含源码，放说明会诱导用户去加载整个目录 |
+| 只放轻量版 | 只有 `pluma-<版本>.zip` 里有它 —— 它是「解压后怎么加载」的说明，不属于别的任何地方 |
 | 编码 | UTF-8 无 BOM，换行 LF（`check-docs` 会拦） |
 
 > ⚠️ 这条规则曾是「把全文写在本文里，脚本去抄」。**已废弃** ——
@@ -191,20 +165,20 @@ mid 不是密钥，可它能直接打开一个人的 B 站主页。
 
 > ⚠️ **打包前必须先完成 §5（更新 CHANGELOG）并提交。**
 > `package.mjs` 有 clean-tree 门：工作区不干净（含未跟踪的新文件）会直接拒绝打包 ——
-> 因为 `BUILD.md` 要记录 commit，脏工作区意味着 zip 里的源码不等于任何 commit。
+> 因为 `BUILD.md` 要记录 commit，脏工作区意味着**这份产物不对应任何提交**（用户装的版本无从追溯）。
 > 同时 `.output` 必须比源码新，否则拒绝（先 build 再打包）。
 
 ```bash
 node scripts/package.mjs
 ```
 
-产出 `dist/pluma-<版本>.zip` 与 `dist/pluma-<版本>-with-source.zip`。
+产出 `dist/pluma-<版本>.zip`。
 脚本会自检：`manifest.json` 在根、版本号一致、不含被排除的目录、工作区干净、
 `.output` 不比源码旧。任一不符直接报错退出。
 
-源码版根目录会多一个 **`BUILD.md`**：记录版本、commit、构建命令、Node/wxt/lockfile、
-以及 `extension/**` 逐文件 sha256。`verify` 的 `artifact` 项会逐条核对它与 zip 内实际字节；
-凭证对不上时 `verify` 会红。
+同时会写一个 **`dist/BUILD.md`**：记录版本、commit、构建命令、Node/wxt/lockfile、
+以及产物逐文件 sha256。它**不进 zip、不上传**，只留给维护者核对「用户装的到底是哪一版」。
+（以前它是 `-with-source.zip` 里的构建凭证，那个产物已于 2026-11-17 取消。）
 
 ### 4. 人工冒烟测试（**硬性，不可省**）
 
@@ -336,7 +310,6 @@ git push origin "v$V"          # 只推这个 tag，不要 --tags（会连历史
 
 gh release create "v$V" \
   "dist/pluma-$V.zip" \
-  "dist/pluma-$V-with-source.zip" \
   --title "Pluma $V" \
   --notes-file dist/release-notes.md
 ```
@@ -346,7 +319,7 @@ gh release create "v$V" \
 
 **Release 说明由 `package.mjs` 生成**（CHANGELOG 的「本版内容」+ 固定的下载/用法/边界）。
 
-⚠️ 只上传这两个 zip。GitHub 自动生成的 `Source code (zip)` 保留，不要删也不要改名。
+⚠️ 只上传这一个 zip。GitHub 自动生成的 `Source code (zip)` 保留，不要删也不要改名。
 
 ### 7. 发布后核对（**新增，2026-10-27**）
 
@@ -365,7 +338,7 @@ git ls-remote --tags origin | grep v1.0.1
 
 > ⚠️ **2026-10-30 删掉了原来的第 4 项**（「附件 sha256 与 release notes 的校验和一致」）——
 > Release 正文已不再有「校验和」一节（见 `release-notes-template.md`）。
-> 产物一致性由 `BUILD.md` + `verify` 的 `artifact` 项保证，发布后无需再手工比对。
+> 产物一致性由 `dist/BUILD.md`（维护者本地）+ `verify` 的 `artifact` 项保证，发布后无需再手工比对。
 > 若确实想核验下载到的文件，用 `Get-FileHash -Algorithm SHA256` 与**本地 `dist/` 里的同名文件**比对即可。
 
 ### 8. 自动转发到 Telegram 群
@@ -373,7 +346,7 @@ git ls-remote --tags origin | grep v1.0.1
 Release 发布后自动把**精简版** zip 发到指定群组。实现、一次性配置步骤与失败排查都在
 [`.github/workflows/release-telegram.yml`](../../.github/workflows/release-telegram.yml) 的文件头注释里，本文不复述。
 
-只发 `pluma-<版本>.zip`，不发 `-with-source` 版 —— 想拿源码的人点 Release 链接即可。
+Release 只带一个 zip；想拿源码的走 Release 页的 `Source code` 归档。
 
 **当前形态：公开频道 + 关联讨论群。** bot 作为频道管理员发布，频道自动同步到关联群，
 群里署名是频道而不是 bot。`TELEGRAM_CHAT_ID` 填**频道自己的** `@用户名`，不是 bot 的。
@@ -385,7 +358,7 @@ Release 发布后自动把**精简版** zip 发到指定群组。实现、一次
 
 ## 如果将来要改分发方式
 
-> 现状：**发 zip（含源码版）已由 [ADR 0018](../decisions/0018-ship-built-artifacts.md) 授权**。
+> 现状：**发 zip（单个附件）已由 [ADR 0018](../decisions/0018-ship-built-artifacts.md) 授权**。
 > 本节是「再往下放宽」（比如上架商店）时要过的关。
 
 **先问自己三个问题**：

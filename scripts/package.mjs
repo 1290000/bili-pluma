@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * 打包发布产物 —— 产出两个 zip。
+ * 打包发布产物 —— 产出**一个** zip（+ `BUILD.md` 构建凭证）。
  *
  * ## 规范来源（不要在脚本里另立一套）
  *
@@ -9,12 +9,22 @@
  *
  * 本脚本只负责**执行**那些规范，并把该报的错报出来。
  *
- * ## 两个产物
+ * ## 产物
  *
  * ```
- * dist/pluma-<ver>.zip              构建产物，manifest.json 在根，可直接加载
- * dist/pluma-<ver>-with-source.zip  同上（放 extension/）+ 完整源码
+ * dist/pluma-<ver>.zip   构建产物，manifest.json 在根，可直接加载
+ * dist/BUILD.md          构建凭证（commit / wxt 版本 / 产物逐文件 sha256）
+ * dist/release-notes.md  Release 正文
  * ```
+ *
+ * ## 为什么不再打 `-with-source.zip`（2026-11-17）
+ *
+ * Release 页**自带 `Source code` 归档**（tag 的完整快照），可验证性没丢；
+ * 而带源码包的体积是轻量版的 7 倍，多出来的只有"两份东西在一个包里"这点便利。
+ * 决策记录见 `docs/decisions/0018-ship-built-artifacts.md` 文末的修订。
+ *
+ * `BUILD.md` **仍然生成**，但只留在 `dist/`（不进 zip、不上传）：clean-tree 门与
+ * 新鲜度门的意义就是"这份产物对应哪个 commit"，那份记录对维护者仍然有用。
  *
  * ## 为什么脚本要做这么多自检
  *
@@ -46,74 +56,15 @@ const DIST_DIR = join(ROOT, 'dist');
 const MANIFEST = join(BUILD_DIR, 'manifest.json');
 const PKG = join(ROOT, 'package.json');
 
-/**
- * 源码版要带的顶层条目。
- *
- * 用**白名单**而不是黑名单：新增目录时默认不打包，人得主动加进来。
- * 反过来（黑名单）会让 `.workbuddy-ai`、日志、临时文件这类东西默默漏进 release。
- */
-const SOURCE_ENTRIES = [
-  'src',
-  'entrypoints',
-  'public',
-  'scripts',
-  'docs',
-  'tests',
-  'package.json',
-  'pnpm-lock.yaml',
-  'wxt.config.ts',
-  'tsconfig.json',
-  'README.md',
-  'AGENTS.md',
-  'CHANGELOG.md',
-  'LICENSE',
-  'ADDITIONAL-TERMS.md',
-  'eslint.config.mjs',
-  '.prettierrc',
-  '.prettierignore',
-];
-
-/**
- * 白名单里**必须存在**的条目 —— 缺任何一个就判失败。
- *
- * ## 为什么需要这个（2026-10-27）
- *
- * `SOURCE_ENTRIES` 的遍历逻辑是 `if (!existsSync(...)) continue`，
- * 也就是**不存在就静默跳过**。这对可选文件是合理的（不同机器可能没有 `.prettierrc`），
- * 但对必需文件是危险的：
- *
- * > 白名单里写了 `CHANGELOG.md`，文件名却打错了 → 脚本照样"自检通过"，
- * > 源码包里没有 CHANGELOG，而**没人会发现**。
- *
- * 判据是**缺了它源码包就不完整**：少了 README 无法了解项目，
- * 少了 LICENSE 无法合规分发，少了 lockfile 无法重建依赖。
- *
- * ⚠️ 往这里加条目时问一句：**它缺失时，源码包还能独立使用吗？** 能，就只放白名单。
- */
-const REQUIRED_SOURCE_ENTRIES = [
-  'src',
-  'entrypoints',
-  'package.json',
-  'pnpm-lock.yaml',
-  'wxt.config.ts',
-  'tsconfig.json',
-  'README.md',
-  'CHANGELOG.md',
-  'LICENSE',
-];
-
-/** 无论在哪一层，出现这些目录名就直接判失败（不该被白名单带进来，但再防一道） */
+/** 无论在哪一层，出现这些目录名就直接判失败（构建产物里绝不该有它们） */
 const FORBIDDEN_DIRS = ['node_modules', '.git', '.workbuddy-ai', 'coverage', '.output'];
 
 const problems = [];
-const notes = [];
+// 唯一的告警通道是 `fail()`（problems）—— 没有「记一条 note 继续」这条路了：
+// 源码版取消后，白名单缺失那类「可选条目不存在」的场景一并消失。
 
 function fail(what, why) {
   problems.push({ what, why });
-}
-
-function note(msg) {
-  notes.push(msg);
 }
 
 /** 读版本号，并核对两处一致 —— 这是最容易漂移的地方 */
@@ -240,9 +191,10 @@ function extractChangelogSection(changelog, version) {
  * 规范说明见 `docs/guides/release-notes-template.md`。
  *
  * ⚠️ **也不要有「校验和」一节**（2026-10-30 删掉的）。sha256 每次重打包都会变
- * （`BUILD.md` 记录 commit → `-with-source.zip` 必变），写进 Release 正文只会
- * 让"发了又改"变得尴尬。校验和的价值在**可独立核对**，而那件事由
- * `BUILD.md` 与 `check-artifact` 保证，不需要在 Release 页展示。
+ * （zip 容器的时间戳不进哈希表，但产物字节会随 commit 变），写进 Release 正文
+ * 只会让"发了又改"变得尴尬。校验和的价值在**可独立核对**，而那件事由
+ * `dist/BUILD.md`（维护者手里的凭证）与 `scripts/check-artifact.mjs`（产物结构）
+ * 分别保证，不需要在 Release 页展示。
  */
 async function releaseNotes(version) {
   const changelog = await readFile(join(ROOT, 'CHANGELOG.md'), 'utf8');
@@ -532,7 +484,7 @@ async function checkProvenanceInputs() {
 
   let status;
   try {
-    // --untracked-files=all：未跟踪但会进源码包的新文件也算脏
+    // --untracked-files=all：未跟踪的新文件也算脏（它们可能正是产物缺的那部分）
     status = gitOutput(['status', '--porcelain', '--untracked-files=all']);
   } catch {
     fail('无法读取 git status', '工作区状态未知，不能证明产物 = 源码。');
@@ -583,9 +535,16 @@ async function checkProvenanceInputs() {
 }
 
 /**
- * 生成 `BUILD.md` —— 源码版 zip 的构建凭证（ADR 0018 的「可独立重建并比对」）。
+ * 生成 `BUILD.md` —— 构建凭证（这份 zip 由哪个 commit、哪些字节构成）。
  *
- * @param opts.extDir 真正要进 zip 的 `extension/` 目录（从 staging 读，不读 `.output`）
+ * ## 它现在去哪（2026-11-17）
+ *
+ * 只写到 `dist/BUILD.md`，**不进 zip、不上传**（`-with-source.zip` 已取消）。
+ * 留着它的理由：clean-tree 门与新鲜度门的意义就是"产物对应哪个 commit"，
+ * 这份记录对维护者排查"用户装的到底是哪一版"仍然有用。
+ * 代价（第三方失去"一眼看到 commit"的入口）写在 ADR 0018 的 2026-11-17 修订里。
+ *
+ * @param opts.extDir 要计算哈希的产物目录（就是 `.output/chrome-mv3`，即 zip 的内容）
  * @returns {Promise<string>} Markdown 文本
  */
 async function buildProvenance({ version, commit, extDir }) {
@@ -593,7 +552,7 @@ async function buildProvenance({ version, commit, extDir }) {
   const rows = [];
   for (const rel of files) {
     const buf = await readFile(join(extDir, rel));
-    rows.push(`| ${createHash('sha256').update(buf).digest('hex')} | extension/${rel} |`);
+    rows.push(`| ${createHash('sha256').update(buf).digest('hex')} | ${rel} |`);
   }
 
   const lockHash = createHash('sha256')
@@ -606,7 +565,7 @@ async function buildProvenance({ version, commit, extDir }) {
   return [
     '# BUILD PROVENANCE',
     '',
-    '> 由 `scripts/package.mjs` 生成。逐文件哈希针对 `extension/**`（真正进 zip 的字节）；',
+    '> 由 `scripts/package.mjs` 生成。逐文件哈希针对 **zip 内相对路径**（真正进包的字节）；',
     '> `BUILD.md` 自身与 zip 容器的时间戳不在表内。',
     '',
     `- 版本：${version}`,
@@ -616,9 +575,9 @@ async function buildProvenance({ version, commit, extDir }) {
     `- Node：${process.version}`,
     `- wxt：${wxtVersion}`,
     `- pnpm-lock.yaml sha256：${lockHash}`,
-    `- extension/** 文件数：${String(files.length)}`,
+    `- 产物文件数：${String(files.length)}`,
     '',
-    '## extension/** sha256',
+    '## 产物逐文件 sha256',
     '',
     '| sha256 | 相对路径 |',
     '| --- | --- |',
@@ -662,23 +621,8 @@ async function main() {
   // ── 3b. G6 provenance 前置：git 可用 + 工作区干净 + .output 不比源码旧 ──
   const commit = await checkProvenanceInputs();
 
-  // ── 4. 自检：源码版需要的顶层条目都在 ──
-  // REQUIRED 缺失直接判失败；其余缺失只记一条 note（允许可选文件不存在）
-  const requiredSet = new Set(REQUIRED_SOURCE_ENTRIES);
-  for (const entry of SOURCE_ENTRIES) {
-    if (existsSync(join(ROOT, entry))) continue;
-    if (requiredSet.has(entry)) {
-      fail(
-        `源码版必需条目缺失：${entry}`,
-        '它在 REQUIRED_SOURCE_ENTRIES 里，缺了源码包不完整。若确实该去掉，先改那个数组。',
-      );
-    } else {
-      note(`源码版跳过不存在的条目：${entry}`);
-    }
-  }
-
+  // ── 4. 产物命名 ──
   const lightName = `pluma-${version}.zip`;
-  const srcName = `pluma-${version}-with-source.zip`;
 
   /**
    * zip 内**不包顶层目录**，`manifest.json` 直接放在 zip 根。
@@ -712,7 +656,6 @@ async function main() {
   }
 
   console.log(`[package] 版本 ${version} · ${String(files.length)} 个文件 · 自检通过`);
-  for (const n of notes) console.log(`  · ${n}`);
 
   if (dryRun) {
     console.log('[package] --dry-run：不写文件');
@@ -739,42 +682,23 @@ async function main() {
   await zipDir(staging, join(DIST_DIR, lightName), TOP_DIR);
   await rm(staging, { recursive: true, force: true });
 
-  // ── 6. 打源码版：产物放 extension/，源码在旁边 ──
-  const stagingSrc = join(DIST_DIR, '.staging-src');
-  await mkdir(stagingSrc, { recursive: true });
-  await cp(BUILD_DIR, join(stagingSrc, 'extension'), { recursive: true });
-
-  const present = [];
-  for (const entry of SOURCE_ENTRIES) {
-    if (!existsSync(join(ROOT, entry))) continue;
-    await cp(join(ROOT, entry), join(stagingSrc, entry), { recursive: true });
-    present.push(entry);
-  }
-
-  // 构建凭证要写进源码版根目录（与 extension/ 平级），哈希从 staging 里算
-  const provenance = await buildProvenance({
-    version,
-    commit,
-    extDir: join(stagingSrc, 'extension'),
-  });
-  await writeFile(join(stagingSrc, 'BUILD.md'), provenance, 'utf8');
-
-  await zipDir(stagingSrc, join(DIST_DIR, srcName), TOP_DIR);
-  await rm(stagingSrc, { recursive: true, force: true });
+  // ── 6. 构建凭证：只写 dist/，不进 zip、不上传（见文件头） ──
+  await writeFile(
+    join(DIST_DIR, 'BUILD.md'),
+    await buildProvenance({ version, commit, extDir: BUILD_DIR }),
+    'utf8',
+  );
 
   // ── 7. Release 说明 ──
   await writeFile(join(DIST_DIR, 'release-notes.md'), await releaseNotes(version), 'utf8');
 
   // ── 8. 报告 ──
   const light = join(DIST_DIR, lightName);
-  const src = join(DIST_DIR, srcName);
   console.log('');
   console.log(
     `  ${lightName.padEnd(36)} ${(await sizeOf(light)).padStart(9)}  sha256:${await sha256(light)}`,
   );
-  console.log(
-    `  ${srcName.padEnd(36)} ${(await sizeOf(src)).padStart(9)}  sha256:${await sha256(src)}`,
-  );
+  console.log(`  ${'BUILD.md'.padEnd(36)} （构建凭证，不进 zip、不上传）`);
   console.log(`  ${'release-notes.md'.padEnd(36)}`);
   console.log('');
   console.log('[package] ✅ 打包完成 → dist/');

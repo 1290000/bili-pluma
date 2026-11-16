@@ -37,6 +37,7 @@
 ### 移除
 
 - 移除首页「分界线」标记
+- 不再单独提供 `-with-source.zip`（源码仍可在 Release 页的「Source code」归档下载）
 
 ### 修复
 

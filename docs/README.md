@@ -81,7 +81,7 @@
 | [0015](./decisions/0015-lazy-health-check-no-alarms.md) | **凭据健康只做惰性检查**：不用 alarms，不做 cookie 刷新 |
 | [0016](./decisions/0016-drop-quality-report-page.md) | **砍掉画质体检表与音质自检独立页**：options 五分区降为三 |
 | [0017](./decisions/0017-restore-primary-progress-in-playurl.md) | **把主账号观看进度写回 playurl 响应**：修"看到一半重新打开从 0 开始" |
-| [0018](./decisions/0018-ship-built-artifacts.md) | **放宽「只发源码」**：可发 zip，但必须同时提供带源码版本 |
+| [0018](./decisions/0018-ship-built-artifacts.md) | **放宽「只发源码」**：可发 zip（单个附件），源码走 Release 页自带的归档（2026-11-17 修订） |
 | [0019](./decisions/0019-pgc-async-playurl-injection.md) | **支持番剧 / 国创 / 电影**：hook 播放器异步回调（**主路线已被实测推翻**，仅 R1/R2 等前提仍有效） |
 | [0020](./decisions/0020-pgc-sync-injection-and-reload.md) | **PGC 完整流：`sessionStorage` 同步注入 + 二次加载**（整页加载路径，现行实现） |
 | [0021](./decisions/0021-patch-pgc-preview-flags.md) | **改写 PGC 试看标记**：只换流不够，播放器会在 361 秒处主动停 |

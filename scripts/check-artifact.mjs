@@ -26,6 +26,18 @@
  *    `world === 'MAIN'` 那条声明的 JS 文件，断言它含四段特征串（见 `MAIN_WORLD_SIGNATURES`）。
  *    构建产物 `.output/` 存在时，zip 那份还必须与构建产物那份**同样含这四段**。
  *
+ * ## ⚠️ 为什么不再检查 `-with-source.zip` 的 `BUILD.md`（2026-11-17 删除）
+ *
+ * 那个产物已取消（ADR 0018 文末修订），Release 只带一个 `pluma-<版本>.zip`，
+ * 源码由 Release 页自带的 `Source code` 归档提供。
+ *
+ * `BUILD.md` 仍由 `package.mjs` 生成在 `dist/BUILD.md`，但**不进 zip、不上传**，
+ * 所以本脚本**没有**可核对的包内副本 —— 原来那套 `checkSourceZip()`
+ * （BUILD.md 存在 / 版本一致 / 40 位 commit / 逐文件哈希 / 禁 `安装说明.txt`）
+ * 随之整体删除。**别再照着 git 历史把它加回来**：没有源码包，它没有检查对象。
+ *
+ * 本脚本剩下的四项断言都只针对轻量版，那才是用户真正加载的东西。
+ *
  * ## ⚠️ 为什么不再检查「有没有一个叫 main-world.js 的文件」
  *
  * 2026-10-28 起，主世界脚本**不是独立产物文件**了。架构变成
@@ -63,8 +75,6 @@
  * 退出码：0 通过或跳过｜1 有产物不合格｜2 脚本自身出错
  */
 
-import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { readFile, readdir } from 'node:fs/promises';
 import { join, relative } from 'node:path';
@@ -74,9 +84,14 @@ const ROOT = process.cwd();
 const DIST_DIR = join(ROOT, 'dist');
 const BUILD_DIR = join(ROOT, '.output', 'chrome-mv3');
 
-/** 轻量版与源码版都要查 */
-const ARTIFACT_RE = /^pluma-[\d.]+(-with-source)?\.zip$/;
-const SOURCE_ARTIFACT_RE = /^pluma-[\d.]+-with-source\.zip$/;
+/**
+ * 只认一个产物名。
+ *
+ * ⚠️ **不要再把 `(-with-source)?` 加回来**：`-with-source.zip` 已于 2026-11-17 取消
+ * （ADR 0018 文末修订）。放宽容忍度只会让「dist/ 里躺着一个不该发的包」这件事
+ * 悄无声息地通过 —— 而它恰好是最该被拦下的东西。
+ */
+const ARTIFACT_RE = /^pluma-[\d.]+\.zip$/;
 
 /**
  * 「主世界代码已进产物」的特征串 —— 四段，覆盖四类响应体改写能力。
@@ -163,6 +178,26 @@ async function findArtifacts() {
   const entries = await readdir(DIST_DIR, { withFileTypes: true });
   return entries
     .filter((e) => e.isFile() && ARTIFACT_RE.test(e.name))
+    .map((e) => e.name)
+    .sort();
+}
+
+/**
+ * `dist/` 里所有 zip 的文件名（不管合不合规范）。
+ *
+ * ## 为什么需要它（2026-11-17）
+ *
+ * `findArtifacts()` 用正则**过滤**，一个不合规范的名字会被静默忽略 ——
+ * 于是"改名/改名规则漂移"表现为**这道门无声跳过**，比报错危险得多。
+ * 所以下面 `main()` 会拿这两个列表对比：有 zip 但一个都没匹配上 ⇒ 硬错误。
+ *
+ * @returns {Promise<string[]>} 文件名（不含目录）
+ */
+async function listAllZips() {
+  if (!existsSync(DIST_DIR)) return [];
+  const entries = await readdir(DIST_DIR, { withFileTypes: true });
+  return entries
+    .filter((e) => e.isFile() && e.name.toLowerCase().endsWith('.zip'))
     .map((e) => e.name)
     .sort();
 }
@@ -344,177 +379,6 @@ function checkZip(buf) {
 }
 
 /**
- * 检查 `-with-source.zip` 的构建凭证（G6，ADR 0018 的「可独立重建并比对」）。
- *
- * ## 断言
- *
- * 1. 根目录有 `BUILD.md`
- * 2. `BUILD.md` 有「版本」与 40 位「提交」
- * 3. `BUILD.md` 的版本 == `extension/manifest.json` 的 version
- * 4. `BUILD.md` 的 sha256 表逐条与 `extension/**` 实际字节一致，且行数相等
- * 5. 源码版里**不许**有 `安装说明.txt`（那是轻量版的；混进来会让人以为源码版可直接加载）
- *
- * ## 为什么逐条比对而不是只看表存在
- *
- * 凭证的价值在于「可独立验证」。如果只断言 BUILD.md 存在，那么改坏一个哈希、
- * 或者产物被替换而凭证没更新，都发现不了 —— 那和没有凭证一样。
- *
- * @param {Buffer} buf
- * @returns {{ problems: string[], notes: string[] }}
- */
-function checkSourceZip(buf) {
-  /** @type {string[]} */
-  const problems = [];
-  /** @type {string[]} */
-  const notes = [];
-
-  const entries = readCentralDirectory(buf);
-  const byName = new Map(entries.map((e) => [e.name, e]));
-
-  const buildEntry = byName.get('BUILD.md');
-  if (!buildEntry) {
-    problems.push(
-      'with-source.zip 根目录没有 BUILD.md —— 源码版缺少构建凭证（G6）。' +
-        '重新用 `node scripts/package.mjs` 打包',
-    );
-    return { problems, notes };
-  }
-
-  const text = readEntry(buf, buildEntry).toString('utf8');
-  const version = /^- 版本：(.+)$/m.exec(text)?.[1]?.trim();
-  const commit = /^- 提交：([0-9a-f]{40})$/m.exec(text)?.[1];
-
-  if (!version) problems.push('BUILD.md 缺少「- 版本：…」行');
-  if (!commit) problems.push('BUILD.md 缺少 40 位「- 提交：…」行');
-
-  const rows = [...text.matchAll(/^\| ([0-9a-f]{64}) \| (.+) \|$/gm)].map((m) => ({
-    hash: m[1],
-    path: m[2].trim(),
-  }));
-  if (rows.length === 0) problems.push('BUILD.md 没有 sha256 表（或格式不对）');
-
-  const manifestEntry = byName.get('extension/manifest.json');
-  if (!manifestEntry) {
-    problems.push('with-source.zip 里没有 extension/manifest.json');
-  } else {
-    try {
-      const manifestVersion = JSON.parse(readEntry(buf, manifestEntry).toString('utf8')).version;
-      if (version && manifestVersion !== version) {
-        problems.push(
-          `BUILD.md 版本 ${version} ≠ extension/manifest.json ${String(manifestVersion)}`,
-        );
-      }
-    } catch (err) {
-      problems.push(
-        `extension/manifest.json 不是合法 JSON：${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  }
-
-  /**
-   * BUILD.md 记录的 commit 必须是**可解释的提交**（2026-10-30 加，2026-10-31 修正）
-   *
-   * ## 为什么必须查
-   *
-   * 实测踩到：打完包后又提交了一次，直接把 `git tag` 打在新 commit 上 ——
-   * 于是 `-with-source.zip` 里的 BUILD.md 写着旧 commit，而 tag 指向新 commit。
-   * **源码版无法对应当前 tag 重建**，而这正是 G6「构建凭证」的全部价值。
-   *
-   * 原来的本文件只断言「有 40 位 commit 行」，不检查它指向哪 —— 等于只验格式，不验内容。
-   *
-   * ## ⚠️ 判据不是「等于 HEAD」（2026-10-31 修正）
-   *
-   * 第一版写成 `commit === HEAD`，发布当天就误报了：
-   * 1.0.1 发布后 `dist/` 里的产物**理应**停在 tag `v1.0.1`（`d31f2ed`），
-   * 而 `main` 又往前走了一个提交（`8935ffd`）—— 两者不等是**正确状态**，
-   * 却把 `verify` 判红，导致后续所有检查被跳过。
-   *
-   * 正确的判据是：**这个 commit 必须真实存在于仓库**（`git cat-file -e`），
-   * 且是当前分支祖先之一（`git merge-base --is-ancestor`）——
-   * 也就是"这次的产物是在某个真实提交上打的"。
-   *
-   * 而「产物是否对应当前 tag」这件事，**不该由本检查负责**：
-   * 它是发版流程的一步（`releasing.md` §6 要求先打包再打 tag），
-   * 由人在发布时保证；发布后 `dist/` 停在 tag 上是设计如此。
-   */
-  if (commit) {
-    /**
-     * ⚠️ 这里踩过两个坑（2026-10-31）：
-     *
-     * 1. `git cat-file -e` **成功时 stdout 为空** —— 不能用"有没有输出"判存在，要看退出码
-     * 2. **不能写成 `execSync('git cat-file -e <sha>^{commit}')`** —— 字符串形式会经过 shell，
-     *    `^` 在 Windows cmd 里是转义符，被吞掉后参数变成非法 revision → 退出码非 0 →
-     *    误判成"提交不存在"（实测：命令行手动跑退出码 0，脚本里却判失败）
-     *
-     * 所以用 `spawnSync` + **参数数组**，完全绕开 shell。
-     */
-    const runGit = (args) => spawnSync('git', args, { cwd: ROOT, stdio: 'pipe' });
-
-    const hasGit = runGit(['rev-parse', '--git-dir']).status === 0;
-    if (!hasGit) {
-      notes.push('非 git 环境，跳过 BUILD.md 提交来源检查');
-    } else {
-      const exists = runGit(['cat-file', '-e', `${commit}^{commit}`]).status === 0;
-      if (!exists) {
-        problems.push(
-          `BUILD.md 记录的提交 ${commit.slice(0, 7)} 在本仓库里不存在` +
-            ' —— 产物不是从本仓库打出来的，或提交被改写了',
-        );
-      }
-    }
-  }
-
-  if ([...byName.keys()].some((n) => n === '安装说明.txt' || n.endsWith('/安装说明.txt'))) {
-    problems.push(
-      'with-source.zip 里不应有 安装说明.txt（它是轻量版的；源码版会让人误以为可直接加载）',
-    );
-  }
-
-  const rowMap = new Map(rows.map((r) => [r.path, r.hash]));
-  const extEntries = entries.filter(
-    (e) => e.name.startsWith('extension/') && !e.name.endsWith('/'),
-  );
-
-  if (rows.length > 0 && extEntries.length !== rows.length) {
-    problems.push(
-      `BUILD.md 表 ${String(rows.length)} 行，extension/ 实际 ${String(extEntries.length)} 个文件 —— 不符`,
-    );
-  }
-
-  let mismatched = 0;
-  for (const e of extEntries) {
-    const expected = rowMap.get(e.name);
-    if (!expected) {
-      problems.push(`BUILD.md 缺少 ${e.name} 的哈希`);
-      continue;
-    }
-    let actual;
-    try {
-      actual = createHash('sha256').update(readEntry(buf, e)).digest('hex');
-    } catch (err) {
-      problems.push(`${e.name} 读不出来：${err instanceof Error ? err.message : String(err)}`);
-      continue;
-    }
-    if (actual !== expected) {
-      mismatched += 1;
-      problems.push(
-        `${e.name} 哈希不符（BUILD.md ${expected.slice(0, 8)}… / 实际 ${actual.slice(0, 8)}…）`,
-      );
-    }
-  }
-
-  if (problems.length === 0) {
-    notes.push(
-      `BUILD.md 校验通过（版本 ${String(version)} · commit ${String(commit).slice(0, 8)}… · ${String(rows.length)} 条哈希）`,
-    );
-  } else if (mismatched > 0) {
-    notes.push(`有 ${String(mismatched)} 个文件哈希不符`);
-  }
-
-  return { problems, notes };
-}
-
-/**
  * 断言 4：主世界代码在 zip 里、且四类改写能力的特征串都在。
  *
  * ## 为什么不比对「zip 里有没有 main-world.js」
@@ -633,6 +497,24 @@ async function main() {
 
   const names = await findArtifacts();
   if (names.length === 0) {
+    const zips = await listAllZips();
+    if (zips.length > 0) {
+      /**
+       * `dist/` 里**有** zip，却一个都不符合 `pluma-<版本>.zip`。
+       *
+       * ⚠️ 这是硬错误，不是"跳过"：跳过意味着这道门在**名字变了之后依然全绿**，
+       * 而名字是唯一的发现入口 —— 改名（或历史上遗留的 `-with-source.zip`）
+       * 会让所有检查一起消失，且没有任何信号。
+       */
+      console.error(
+        `\n[artifact] ❌ dist/ 里有 ${String(zips.length)} 个 zip，但都不符合 pluma-<版本>.zip：\n` +
+          zips.map((z) => `  - ${z}`).join('\n') +
+          '\n  只有 pluma-<版本>.zip 是发行产物（-with-source.zip 已于 2026-11-17 取消）。' +
+          '\n  删掉这些文件，或重新 `node scripts/package.mjs`。',
+      );
+      process.exitCode = 1;
+      return;
+    }
     // ⚠️ 跳过不是失败：`dist/` 是本地目录，干净 clone 里没有 zip。
     // 让这里失败等于让整条 verify 链永远红 —— 那样后续所有改动都没法验证。
     console.log('[artifact] ⏭  跳过：dist/ 里没有 pluma-<版本>.zip（未打包，或已归档）');
@@ -656,7 +538,7 @@ async function main() {
 
     let result;
     try {
-      result = SOURCE_ARTIFACT_RE.test(name) ? checkSourceZip(buf) : checkZip(buf);
+      result = checkZip(buf);
     } catch (err) {
       console.error(
         `\n[artifact] ❌ ${name} 解析失败：${err instanceof Error ? err.message : String(err)}`,
