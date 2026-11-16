@@ -622,18 +622,25 @@ export const PANEL_CSS = `
 }
 
 /* ── 开关行（与 popup / 设置页同一形态）── */
+/* 开关行（2026-11-16 度量）：
+   - min-height 36px：单行项原来只有 31px，手指落点偏小；两行项本来就 47px，
+     **所以 padding 不加到 8px** —— 那会把两行项顶到 51px，把净化页拉长一大截。
+   - hover 从"8% 灰"换成 accent-soft：可点区域全项目同一个反馈色，
+     灰 hover 在半透明底上看起来像"这一行脏了"。 */
 .row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-height: var(--pluma-h-row);
   padding: 6px 8px;
   border-radius: var(--pluma-radius-control);
   cursor: pointer;
+  transition: background-color var(--pluma-duration) var(--pluma-ease);
 }
 
 .row:hover {
-  background: color-mix(in srgb, var(--pluma-text-muted) 8%, transparent);
+  background: var(--pluma-accent-soft);
 }
 
 .row.dim {
@@ -653,14 +660,15 @@ export const PANEL_CSS = `
   line-height: 1.35;
 }
 
+/* 开关本体 36×20（panel 与 popup 原来一个 34×18、一个 36×20，同一天统一） */
 .switch {
   position: relative;
   flex: 0 0 auto;
-  width: 34px;
-  height: 18px;
-  border-radius: 9px;
+  width: 36px;
+  height: 20px;
+  border-radius: 10px;
   background: var(--pluma-border);
-  transition: background-color 0.15s;
+  transition: background-color var(--pluma-duration) var(--pluma-ease);
 }
 
 .switch.on {
@@ -683,11 +691,11 @@ export const PANEL_CSS = `
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: var(--pluma-surface);
-  transition: transform 0.15s;
+  transition: transform var(--pluma-duration) var(--pluma-ease);
   pointer-events: none;
 }
 
