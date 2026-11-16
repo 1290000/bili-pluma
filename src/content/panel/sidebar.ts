@@ -65,6 +65,19 @@ export const PANEL_CSS = `
 }
 
 /* 贴边条上的三个点：纯视觉暗示"这里能点"，不是图标字库 */
+/* 有新版本：贴边条与它那三个点改用强调色（2026-11-17）。
+   这是"用户没打开面板时唯一能看见的提示" —— 角标靠图标是否固定到工具栏，
+   红点在面板内部，两者都要求用户先做点什么。
+   ⚠️ 不改尺寸、不加新元素：那三个 2px 点本来就是用 box-shadow 画的。 */
+.strip.has-update {
+  border-color: var(--pluma-accent);
+}
+
+.strip.has-update .strip-dot {
+  background: var(--pluma-accent);
+  box-shadow: 0 4px 0 var(--pluma-accent), 0 -4px 0 var(--pluma-accent);
+}
+
 .strip-dot {
   width: 2px;
   height: 2px;
@@ -891,6 +904,25 @@ export interface SidebarHandle {
   close(): void;
   /** 摘掉 `document` 级监听器。面板销毁时必须调 */
   dispose(): void;
+  /**
+   * 有新版本、且用户还没看过这一版时，让**贴边条**显眼一点（2026-11-17）。
+   *
+   * ## 为什么这条通道必须存在
+   *
+   * 另外两条通知通道都要求用户先做点什么才看得见：
+   *
+   * | 通道 | 前提 |
+   * | --- | --- |
+   * | 工具栏角标 | 图标得**固定在工具栏**（Edge 默认把新装的扩展收进「扩展」菜单） |
+   * | 「关于」Tab 红点 | 面板得先被**展开** |
+   *
+   * 贴边条是唯一"打开 B站 页面就在那儿"的载体。真机反馈"检测到新版本后
+   * 不打开面板完全不知道"说的就是这件事。
+   *
+   * 面板展开时贴边条本来就隐藏（`.panel.open .strip{display:none}`），所以这里
+   * 不用管展开态 —— 展开后由「关于」Tab 的红点与卡里的徽标接管。
+   */
+  setUpdateDot(active: boolean): void;
 }
 
 /** `mountSidebar` 的选项 */
@@ -1226,6 +1258,17 @@ export function mountSidebar(shadow: ShadowRoot, opts: SidebarOptions = {}): Sid
     setOpen(false);
   });
 
+  /**
+   * 贴边条上的"有新版本"标记。
+   *
+   * ⚠️ `aria-label` 必须跟着切：那个 2px 的小点对**读屏用户没有任何信息量**，
+   * 只改颜色等于对他们什么都没发生。
+   */
+  const setUpdateDot = (active: boolean): void => {
+    strip.classList.toggle('has-update', active);
+    strip.setAttribute('aria-label', active ? '打开 Pluma 面板（有新版本）' : '打开 Pluma 面板');
+  };
+
   return {
     isOpen: () => panel.classList.contains('open'),
     /** 是否处于钉住态（诊断/单测用） */
@@ -1247,5 +1290,6 @@ export function mountSidebar(shadow: ShadowRoot, opts: SidebarOptions = {}): Sid
     dispose: () => {
       document.removeEventListener('click', onDocumentClick, false);
     },
+    setUpdateDot,
   };
 }

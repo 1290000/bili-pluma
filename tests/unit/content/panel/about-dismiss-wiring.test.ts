@@ -38,7 +38,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { mountPanelBody } from '@/src/content/panel/panel';
 import type { PanelController } from '@/src/content/panel/panel';
-import type { UpdateStatusView } from '@shared/types/update';
+import { mountSidebar, type SidebarHandle } from '@/src/content/panel/sidebar';
+import type { UpdateCheckOutcome, UpdateStatusView } from '@shared/types/update';
 
 function view(over: Partial<UpdateStatusView> = {}): UpdateStatusView {
   return {
@@ -77,6 +78,16 @@ interface Backend {
   };
   /** `update/check` 的应答状态。缺省 = 不处理（回 err） */
   check?: UpdateStatusView;
+  /**
+   * `update/check` 的 `outcome`。缺省 `'ok'`。
+   *
+   * ⚠️ 这个字段是 2026-11-17 加的：`outcome` 是 **HTTP 层**的说法
+   * （`ok` / `unchanged`(304) / `rate-limited` / `failed`），
+   * 而"有没有新版"要看 `status`。两者混为一谈正是那一轮修掉的 bug。
+   */
+  checkOutcome?: UpdateCheckOutcome;
+  /** `update/check` 的 `reason`（限流 / 失败的说明） */
+  checkReason?: string | null;
   /**
    * `update/dismiss` **同步抛**（扩展被重载后的 `Extension context invalidated`）。
    *
@@ -125,8 +136,8 @@ function stubBackend(backend: Backend = {}): Harness {
       return Promise.resolve({
         type: 'update/check:ok',
         status: backend.check,
-        outcome: 'ok',
-        reason: null,
+        outcome: backend.checkOutcome ?? 'ok',
+        reason: backend.checkReason ?? null,
       });
     }
     return Promise.resolve({
@@ -528,6 +539,234 @@ describe('读失败后的自救路径', () => {
     await vi.waitFor(() => {
       expect(h.statusCalls()).toBe(3);
     });
+  });
+});
+
+/**
+ * 手动检查后**底部提示**说什么（2026-11-17 真机 bug #4）。
+ *
+ * ## 当时的现象
+ *
+ * 卡片写着「有新版本 / 当前 v1.0.0 / 最新 v1.1.0」，底部却弹**「已是最新版本」**。
+ *
+ * ## 根因不是文案，是判据错位
+ *
+ * `outcome === 'unchanged'` 来自 HTTP **304**，它的语义是「**远端**自上次检查以来
+ * 没变化」—— 和"本地是不是落后"毫无关系。本地 1.0.0、远端 1.1.0、上次已经取到过
+ * 1.1.0 的元数据 ⇒ 条件请求 304 ⇒ 旧代码说"已是最新版本"。
+ *
+ * 所以这里的核心断言是：**`ok` 与 `unchanged` 的提示必须一模一样**，
+ * 且两者都由 `isNewerThan` 决定，不由 `outcome` 决定。
+ */
+describe('手动检查后的提示：只看有没有新版，不看 outcome', () => {
+  function notice(c: PanelController): string {
+    return c.root.querySelector('.panel-notice')?.textContent ?? '';
+  }
+
+  /** 点「检查更新」并等到底部提示出现 */
+  async function checkAndRead(c: PanelController): Promise<string> {
+    c.showTab('about');
+    await vi.waitFor(() => {
+      expect(c.root.querySelector('[data-testid="update-check"]')).not.toBeNull();
+    });
+    (c.root.querySelector('[data-testid="update-check"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(notice(c)).not.toBe('');
+    });
+    return notice(c);
+  }
+
+  it('★★★ outcome=unchanged(304) 但本地落后 ⇒ 说「发现新版本」，绝不说「已是最新」', async () => {
+    stubBackend({
+      status: view({ currentVersion: '1.0.0', latestVersion: '1.1.0', phase: 'available' }),
+      check: view({ currentVersion: '1.0.0', latestVersion: '1.1.0', phase: 'available' }),
+      checkOutcome: 'unchanged',
+    });
+    const c = mount();
+
+    const text = await checkAndRead(c);
+    expect(text, '304 是"远端没变"，不是"你没有新版"').toContain('发现新版本');
+    expect(text).toContain('v1.1.0');
+    expect(text).not.toContain('已是最新');
+  });
+
+  it('★★ outcome=ok 且本地落后 ⇒ 同一种提示（用户分不出 ok 与 304，也不该分）', async () => {
+    stubBackend({
+      status: view({ currentVersion: '1.0.0', latestVersion: '1.1.0', phase: 'available' }),
+      check: view({ currentVersion: '1.0.0', latestVersion: '1.1.0', phase: 'available' }),
+      checkOutcome: 'ok',
+    });
+    const c = mount();
+
+    expect(await checkAndRead(c)).toContain('发现新版本');
+  });
+
+  it('outcome=unchanged 且真的已是最新 ⇒ 才说「已是最新版本」', async () => {
+    stubBackend({
+      status: view({ currentVersion: '1.0.0', latestVersion: '1.0.0', phase: 'idle' }),
+      check: view({ currentVersion: '1.0.0', latestVersion: '1.0.0', phase: 'idle' }),
+      checkOutcome: 'unchanged',
+    });
+    const c = mount();
+
+    expect(await checkAndRead(c)).toBe('已是最新版本');
+  });
+
+  it('★ 限流 ⇒ 说限流原因，且不许出现"已是最新"（否则用户不知道是"别等了"还是"没事"）', async () => {
+    stubBackend({
+      status: view({ currentVersion: '1.0.0', latestVersion: '1.1.0', phase: 'available' }),
+      check: view({ currentVersion: '1.0.0', latestVersion: '1.1.0', phase: 'available' }),
+      checkOutcome: 'rate-limited',
+      checkReason: 'GitHub 限流，12 分钟后再试',
+    });
+    const c = mount();
+
+    const text = await checkAndRead(c);
+    expect(text).toContain('限流');
+    expect(text).not.toContain('已是最新');
+  });
+
+  it('★ 失败 ⇒ 说失败原因', async () => {
+    stubBackend({
+      status: view({ currentVersion: '1.0.0', latestVersion: null, phase: 'idle' }),
+      check: view({ currentVersion: '1.0.0', latestVersion: null, phase: 'idle' }),
+      checkOutcome: 'failed',
+      checkReason: '检查失败：断网',
+    });
+    const c = mount();
+
+    expect(await checkAndRead(c)).toContain('断网');
+  });
+
+  /**
+   * 停在「关于」Tab 时 `ensureUpdateDismissed()` 已经把 phase 改成 `dismissed`。
+   * 若有人用 `phase === 'available'` 判"有没有新版"，就会在这个节骨眼上
+   * 对着一个真有新版的界面说"已是最新" —— 这条钉住"必须用 isNewerThan"。
+   */
+  it('★★ 即使 phase 是 dismissed（进过关于页），有新版也要说「发现新版本」', async () => {
+    stubBackend({
+      status: view({ currentVersion: '1.0.0', latestVersion: '1.1.0', phase: 'available' }),
+      check: view({ currentVersion: '1.0.0', latestVersion: '1.1.0', phase: 'dismissed' }),
+      checkOutcome: 'unchanged',
+    });
+    const c = mount();
+
+    expect(await checkAndRead(c)).toContain('发现新版本');
+  });
+});
+
+/**
+ * 贴边条上的「有新版本」提示（2026-11-17，方案 A）。
+ *
+ * ## 为什么需要第三条通道
+ *
+ * | 通道 | 前提 |
+ * | --- | --- |
+ * | 工具栏角标 | 图标得**固定在工具栏**（Edge 默认把新装的扩展收进「扩展」菜单） |
+ * | 「关于」Tab 红点 | 面板得先被**展开**，而且一进去 `ensureUpdateDismissed()` 就把角标灭了 |
+ * | **贴边条** | 打开 B站 页面就在那儿 —— 不需要用户先做任何事 |
+ *
+ * 真机反馈"检测到新版本后不打开面板完全不知道"，说的就是前两条同时失效。
+ *
+ * ## 这里测的是**真实的接线**
+ *
+ * 挂载顺序与 `content-panel.content.ts` 一致：先 `mountPanelBody()`（它的回调里
+ * 引用还没赋值的 `handle`），再 `mountSidebar()`。这样连"挂载时那次同步 render
+ * 发生在 handle 之前"这个边界也一并覆盖了。
+ */
+describe('贴边条提示点：不打开面板也能知道有新版本', () => {
+  let handle: SidebarHandle | null = null;
+
+  beforeEach(() => {
+    handle = null;
+  });
+
+  /** 按生产的顺序挂：body 先建（回调闭包引用 handle），sidebar 后建 */
+  function mountWithStrip(): { body: PanelController; strip: HTMLElement } {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const shadow = host.attachShadow({ mode: 'open' });
+
+    const body = mountPanelBody(noopActions as never);
+    handle = mountSidebar(shadow, { body: body.root });
+    // 与生产同序：body 先建、sidebar 后建，再把信号接上（接上即回放当前状态）
+    body.setUpdateSink((available) => handle?.setUpdateDot(available));
+
+    const strip = shadow.querySelector('.strip') as HTMLElement;
+    expect(strip, '找不到贴边条 —— 挂载结构变了').not.toBeNull();
+    return { body, strip };
+  }
+
+  function hasUpdate(strip: HTMLElement): boolean {
+    return strip.classList.contains('has-update');
+  }
+
+  it('★★★ 后台报 available ⇒ 贴边条亮起，且 aria-label 也说了「有新版本」', async () => {
+    stubBackend({ status: view({ phase: 'available', latestVersion: '1.2.0' }) });
+    const { strip } = mountWithStrip();
+
+    await vi.waitFor(() => {
+      expect(hasUpdate(strip), '不打开面板就完全看不到提示 —— 这正是要修的').toBe(true);
+    });
+    // 那个 2px 的点对读屏用户零信息量，标签必须跟着变
+    expect(strip.getAttribute('aria-label')).toContain('有新版本');
+  });
+
+  it('★★ idle / dismissed ⇒ 贴边条不许亮（判据与红点完全一致）', async () => {
+    stubBackend({ status: view({ phase: 'idle', latestVersion: '1.1.0' }) });
+    const first = mountWithStrip();
+    await vi.waitFor(() => {
+      expect(first.strip.getAttribute('aria-label')).toBe('打开 Pluma 面板');
+    });
+    expect(hasUpdate(first.strip)).toBe(false);
+    handle?.dispose();
+
+    // dismissed：用户已经看过这一版，不该再打扰
+    stubBackend({ status: view({ phase: 'dismissed', latestVersion: '1.2.0' }) });
+    const second = mountWithStrip();
+    await vi.waitFor(() => {
+      expect(hasUpdate(second.strip)).toBe(false);
+    });
+    expect(second.strip.getAttribute('aria-label')).not.toContain('有新版本');
+  });
+
+  /**
+   * 读不到状态 ⇒ 不许亮。
+   *
+   * 与「关于」Tab 红点同一条纪律：**看不见的东西不许下结论**。
+   *
+   * 变异验证：把判据从 `phase === 'available'` 改成 `updateStatus !== null`
+   * （或干脆无脑 `true`）→ 本条必红。
+   */
+  it('★★ 读不到状态（update/status 返错）⇒ 贴边条不许亮', async () => {
+    const h = stubBackend({ status: null });
+    const { strip } = mountWithStrip();
+
+    await vi.waitFor(() => {
+      expect(h.statusCalls()).toBe(1);
+    });
+    await flush();
+    expect(hasUpdate(strip), '读不到状态却亮了 —— 等于编一个"有新版本"').toBe(false);
+  });
+
+  /**
+   * 跨 Tab：另一个标签页里看过这一版 ⇒ 后台落盘 dismissed ⇒ `storage.onChanged`
+   * 推给本 Tab ⇒ `applyUpdateStatus()` 换缓存重画 ⇒ 贴边条也要跟着灭。
+   *
+   * 这条把 `applyUpdateStatus` 与"贴边条"两条路径接在一起验一遍。
+   */
+  it('★★ 别的 Tab 写了「已读」⇒ 本 Tab 的贴边条也要灭', async () => {
+    stubBackend({ status: view({ phase: 'available', latestVersion: '1.2.0' }) });
+    const { body, strip } = mountWithStrip();
+
+    await vi.waitFor(() => {
+      expect(hasUpdate(strip)).toBe(true);
+    });
+
+    body.applyUpdateStatus(view({ phase: 'dismissed', latestVersion: '1.2.0' }));
+
+    expect(hasUpdate(strip), '别的 Tab 已经读过，这里的贴边条还亮着').toBe(false);
+    expect(strip.getAttribute('aria-label')).toBe('打开 Pluma 面板');
   });
 });
 

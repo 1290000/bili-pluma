@@ -958,6 +958,19 @@ export default defineContentScript({
            */
           onClose: () => stopPolling(),
         });
+        /**
+         * 「有新版本」→ 贴边条变强调色（2026-11-17，用户选方案 A）。
+         *
+         * 为什么必须补这条通道：工具栏角标要求图标**固定在工具栏**（Edge 默认把
+         * 新装的扩展收进「扩展」菜单，等于没有载体），「关于」Tab 的红点在面板内部
+         * 且一进去就判已读 —— 两条都要求用户先做点什么。贴边条是唯一
+         * "打开 B站 页面就在那儿"的载体。
+         *
+         * ⚠️ 必须在 `mountSidebar()` **之后**接：`mountPanelBody()` 先构造，
+         * 那时还没有 sidebar 可接；`setUpdateSink()` 内部会回放当前状态，
+         * 所以不存在"接晚了丢掉一次信号"的问题。
+         */
+        body.setUpdateSink((available) => sidebar?.setUpdateDot(available));
       });
       if (shadow === null) {
         sidebar = null;

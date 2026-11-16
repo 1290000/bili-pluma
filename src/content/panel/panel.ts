@@ -60,6 +60,7 @@ import {
 } from './panel-data';
 import { aboutTab, accountTab, cleanTab, displayTab, homeCleanPane, qualityTab } from './tabs';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
+import { isNewerThan } from '@core/update/state';
 import { UPDATE_RELEASES_PAGE } from '@shared/constants/update';
 import type { UpdateStatusView } from '@shared/types/update';
 import {
@@ -125,6 +126,13 @@ export interface PanelController {
   showTab(tab: PanelTab): void;
   /** 重画（模型变了） */
   setModel(model: PanelModel): void;
+  /**
+   * 接上「有新版本」信号的接收方（贴边条）。
+   *
+   * 接上时**立刻用当前状态调一次** —— 否则"先建 body、后建 sidebar"的顺序
+   * 会丢掉挂载那一刻已读到的状态，用户要等下一次重画才看得到提示。
+   */
+  setUpdateSink(sink: (available: boolean) => void): void;
   /**
    * 外部推来一份新的更新状态（来自 `storage.onChanged` 的 `pluma:update-state`）。
    *
@@ -1112,6 +1120,17 @@ export function mountPanelBody(actions: PanelActions): PanelController {
    * 不代表"用户看过这一版"。见该方法的注释。
    */
   let suppressDismissOnce = false;
+  /**
+   * 「有新版本」这个信号的**外部接收方**（贴边条）。
+   *
+   * 为什么不直接调 `sidebar.setUpdateDot()`：本文件**拿不到** `SidebarHandle` ——
+   * `mountPanelBody()` 先于 `mountSidebar()` 构造（sidebar 的 `body` 就是本函数的
+   * `root`）。而"先建 body、后再塞 handle 进来"的两段式初始化比一个 sink 更脆。
+   */
+  let updateSink: ((available: boolean) => void) | null = null;
+
+  /** 当前该不该亮"有新版本"——**唯一判据**，红点、贴边条、sink 全用它 */
+  const updateAvailable = (): boolean => updateStatus?.phase === 'available';
 
   function ensureUpdateDismissed(): void {
     if (dismissSending) return;
@@ -1187,7 +1206,16 @@ export function mountPanelBody(actions: PanelActions): PanelController {
      */
     ensureUpdateRead();
 
-    updateDot.hidden = updateStatus?.phase !== 'available';
+    updateDot.hidden = !updateAvailable();
+
+    /**
+     * 同一个判据喂给**贴边条**（2026-11-17）。
+     *
+     * ⚠️ 判据必须与上一行**完全一致**（同一个 `phase`），不要另算一遍 ——
+     * 两条通道对"有没有新版"给出不同答案，比只有一条通道更糟。
+     * `updateStatus === null`（读不到状态）⇒ 两个都灭：看不见的东西不许下结论。
+     */
+    updateSink?.(updateAvailable());
 
     /**
      * 「关于」Tab **不依赖页面模型**：面板在任何页面上都能看版本与更新。
@@ -1206,12 +1234,44 @@ export function mountPanelBody(actions: PanelActions): PanelController {
             void requestUpdateCheck()
               .then((reply) => {
                 if (reply.status) updateStatus = reply.status;
-                // 四种结局说的话不同：304/限流/失败混成一句会让用户不知道等还是报 bug
-                if (reply.outcome === 'ok') showNotice('检查完成', true);
-                else if (reply.outcome === 'unchanged') showNotice('已是最新版本', true);
-                else if (reply.outcome === 'rate-limited')
+                /**
+                 * ## 文案只由「有没有新版」决定，`ok` / `unchanged` **不参与**
+                 *
+                 * `unchanged` 来自 HTTP **304**，它的语义是「**远端**自上次检查以来没变」，
+                 * 与「本地是否落后」没有半点关系。真机踩过：本地 1.0.0、远端 1.1.0、
+                 * 上次已取到过 1.1.0 的元数据 ⇒ 这次条件请求 304 ⇒ 说「已是最新版本」，
+                 * 而卡片正写着「有新版本 v1.1.0」—— **同一个面板两句话互相打架**。
+                 *
+                 * 所以 `ok` 与 `unchanged` 在用户可感知层面**没有区别**（区别只在 HTTP 层），
+                 * 合并成一支；该说什么完全取决于 `isNewerThan`。
+                 *
+                 * ⚠️ **不能用 `phase` 判**：停在「关于」Tab 时 `ensureUpdateDismissed()`
+                 * 已经把 phase 变成 `'dismissed'`，用它会在这个节骨眼上说"已是最新"。
+                 *
+                 * `rate-limited` / `failed` 仍各自一支：那是"该等"与"该报 bug"的区别，
+                 * 混进成功里用户就不知道下一步做什么（`docs/02-ui-spec.md` §5.3 反模式表）。
+                 */
+                const next = reply.status ?? null;
+                const hasNewer =
+                  next !== null && isNewerThan(next.latestVersion, next.currentVersion);
+
+                if (reply.outcome === 'rate-limited') {
                   showNotice(reply.reason ?? 'GitHub 限流', false);
-                else if (reply.outcome === 'failed') showNotice(reply.reason ?? '检查失败', false);
+                } else if (reply.outcome === 'failed') {
+                  showNotice(reply.reason ?? '检查失败', false);
+                } else if (hasNewer) {
+                  showNotice(`发现新版本 v${String(next?.latestVersion)}`, true);
+                } else if (next === null) {
+                  /**
+                   * `outcome` 是 `ok`/`unchanged` 却没带回 `status` ——
+                   * 按构造不可达（`handleUpdateCheck` 每个分支都带 `status`），
+                   * 但真出现时**不许**说「已是最新」：不知道就是不知道（§0 铁律）。
+                   * 这里说中性的一句，用的还是原来 `ok` 支那四个字。
+                   */
+                  showNotice('检查完成', true);
+                } else {
+                  showNotice('已是最新版本', true);
+                }
               })
               .finally(() => {
                 updateBusy = false;
@@ -1496,6 +1556,15 @@ export function mountPanelBody(actions: PanelActions): PanelController {
 
   return {
     showTab,
+    /**
+     * 接上「有新版本」信号（贴边条）。**接上时立刻用当前状态调一次** ——
+     * 否则"先建 body 后建 sidebar"这个顺序会丢掉挂载那一刻已经读到的状态，
+     * 用户得等下一次重画才看得到提示。
+     */
+    setUpdateSink(sink) {
+      updateSink = sink;
+      sink(updateAvailable());
+    },
     setModel(next) {
       model = next;
       render();
