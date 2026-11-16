@@ -110,6 +110,11 @@ ADR 里没有的，查 [03-open-questions.md](./03-open-questions.md) 末尾的"
 
 先读 [04-project-structure.md](./04-project-structure.md) §2「各层职责与禁令」。**别凭直觉往目录里塞文件**——禁令都是有原因的。
 
+### 我要改界面 / 视觉
+
+规则看 [02-ui-spec.md](./02-ui-spec.md) §6，值看 `src/design/tokens.css`（两处分工见方案 §9 R1）。
+2026-11 起有一份 UI 改版施工方案：[plans/2026-11-16-ui-redesign-plan.md](./plans/2026-11-16-ui-redesign-plan.md)（**草案，待拍板**，未动代码）。
+
 ### 我要发布一个版本
 
 读 [guides/releasing.md](./guides/releasing.md)（命名、zip 结构、发布步骤）
