@@ -6,7 +6,7 @@
 
 <p align="center"><b>B站助手 · 画质与净化</b></p>
 
-<p align="center">把会员账号能看的画质在播放器里放出来，把广告和不想看的推荐清掉。</p>
+<p align="center">画质按你账号的权益给足，广告和不想看的推荐自动清掉。</p>
 
 <p align="center">
   <a href="https://github.com/1290000/bili-pluma/releases"><img src="https://img.shields.io/github/v/release/1290000/bili-pluma?label=Release&logo=github&logoColor=white&color=2f81f7" alt="Release"></a><!-- secrets-ok: 仓库所有者用户名，公开信息，非凭据 -->
