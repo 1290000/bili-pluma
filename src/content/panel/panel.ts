@@ -1455,11 +1455,32 @@ export function mountPanelBody(actions: PanelActions): PanelController {
        *
        * 角标开关是**懒读**的（首次进这个 Tab 才读），不占首屏。
        */
-      case 'display':
+      case 'display': {
         ensureBadgeRead();
+        /**
+         * ## 角标能不能出现（2026-11-16）
+         *
+         * `buildBadge()` 的第一条判据是「没在代理 → 不显示」——角标的语义是
+         * "我现在被接管了"。所以：
+         *   - `page` 身份 → 不装规则 → 角标恒不出现
+         *   - 没凭据 → 不装规则 → 同上
+         *
+         * 这两种状态下开关仍然可点就是 UI 的错：用户开了却什么也看不到。
+         * 判据与「自动接管取流」同源（`hasCredential` 是 `proxy/status` 的硬证据，
+         * 比身份更可靠），但**多一条 page 分支** —— 那个开关对 page 也算可用，
+         * 因为 page 模式下它另有含义，而角标在 page 下是真的没有。
+         */
+        const badgeDisabledReason =
+          streamingIdentity === 'page'
+            ? '当前用浏览器账号取流 —— 角标只在扩展接管生效时出现'
+            : !(model?.account.hasCredential ?? false)
+              ? '还没有可用的取流账号 —— 到「账号」Tab 扫码登录后，角标才会出现'
+              : null;
         replaceChildren(content, [
           displayTab(badgeEnabled, {
             toggleBadge: (n) => void writeBadge(n),
+            badgeUsable: badgeDisabledReason === null,
+            badgeDisabledReason,
             /**
              * ⚠️ 推荐流开关传**自己的**本地镜像 `feedAccountEnabled`，
              * **不是** `streamingIdentity` —— 那是"两个功能独立"在调用点上的落地。
@@ -1491,6 +1512,7 @@ export function mountPanelBody(actions: PanelActions): PanelController {
           }),
         ]);
         break;
+      }
 
       case 'account':
         replaceChildren(content, [

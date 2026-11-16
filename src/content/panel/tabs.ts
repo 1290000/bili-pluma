@@ -338,6 +338,21 @@ export function displayTab(
     toggleBadge: (next: boolean) => void;
     openDiag: () => void;
     /**
+     * ── 角标此刻有没有可能出现（2026-11-16）──
+     *
+     * 用户报告：「没有登录扩展账号的时候，页内角标的开关即便打开了也不会出现页内角标」。
+     *
+     * 这不是 bug —— `buildBadge()` 的第一条判据就是「没在代理 → 不显示」，
+     * 而角标的语义是"**我现在被接管了**"。没接管时挂个角标只是干扰。
+     *
+     * 但**开关照样能打开**就是 UI 的问题了：用户看到"开了却没反应"，
+     * 只能以为坏了。所以这里按「自动接管取流」同一套办法处理 ——
+     * 本质不可用时**灰掉并说明原因**，同时**保留用户设的值**（登录后自动生效）。
+     */
+    badgeUsable: boolean;
+    /** 不可用的原因（人话，直接渲染）。`badgeUsable === true` 时传 `null` */
+    badgeDisabledReason: string | null;
+    /**
      * ── 首页推荐流开关（2026-11-11 从「账号」Tab 迁来）──
      *
      * ## 为什么归「显示」而不是「账号」
@@ -379,23 +394,39 @@ export function displayTab(
   box.appendChild(
     switchRow({
       label: '页内角标',
-      hint: '播放器右下角显示当前实际分辨率、帧率、音频编码',
+      /**
+       * hint 把条件放在最前面（2026-11-16）。
+       *
+       * 用户报的困惑是"开了却没有角标"——除了开关可点这件事，hint 本身也没说
+       * 角标**只在接管生效时**才画。补上这句，`self`（两账号相同，不装规则）
+       * 那种边缘形态也能自解释，不必再为它单开一条判据。
+       */
+      hint: '接管生效时，在播放器右下角显示实际分辨率、帧率、音频编码',
       checked: badgeEnabled === true,
-      disabled: badgeEnabled === null,
+      /**
+       * 两种"不可操作"必须分开（与「自动接管取流」同一纪律）：
+       *   - `badgeEnabled === null` → 读不到设置，此刻不可操作
+       *   - `!badgeUsable`          → 本质不可能出现角标（没接管）
+       * 用 `dim` 只标后者：把"正在读"也按暗等于说"这功能坏了"。
+       */
+      disabled: badgeEnabled === null || !actions.badgeUsable,
+      dim: !actions.badgeUsable,
       onToggle: actions.toggleBadge,
     }),
   );
   /**
-   * ## 读不到时**说出原因**（2026-11-12，task-5 静默点 2）
+   * ## 不可用要说出原因（2026-11-16）
    *
-   * 旧实现：读失败 → 开关永久灰着 → **面板上一个字都没有**。
-   * 用户不知道是加载中、坏了、还是自己关掉了。
+   * 用户的原话就是最好的说明：「开关即便打开了也不会出现页内角标」——
+   * 他能观察到的只有一个"开了没用"的开关，而面板一个字都没解释。
    *
-   * ⚠️ 只在 `badgeReadFailed === true` 时渲染 —— 别在"正在读"那一瞬
-   * 就弹一句失败（那会让每次进 Tab 都闪一下红字）。
+   * 优先级：读失败 > 本质不可用。前者是更基础的问题（连开关值都读不到），
+   * 先说"去扫码"会让用户白折腾一次。
    */
   if (actions.badgeReadFailed) {
     box.appendChild(el('p', 'pane-note', '读不到角标开关的当前设置 —— 收起重开面板可重试'));
+  } else if (!actions.badgeUsable && actions.badgeDisabledReason) {
+    box.appendChild(el('p', 'pane-note', actions.badgeDisabledReason));
   }
 
   /**

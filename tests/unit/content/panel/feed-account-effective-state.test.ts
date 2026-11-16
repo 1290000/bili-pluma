@@ -38,6 +38,9 @@ function acts(overrides: Record<string, unknown> = {}) {
   return {
     toggleBadge: () => undefined,
     openDiag: () => undefined,
+    /** 默认按「已接管」态：本组关心的是推荐流开关的 dim，别让角标那边掺进来 */
+    badgeUsable: true,
+    badgeDisabledReason: null,
     feedAccountEnabled: false,
     toggleFeedAccount: () => undefined,
     hasCredential: false,
@@ -179,16 +182,30 @@ describe('★★ 无凭据 ⇒ 整行淡（dim），不是只表盘淡', () => {
   });
 
   /**
-   * 顺带钉住"别把 dim 传染给隔壁"：「页内角标」的灰属于**此刻不可操作**
-   * （读取中 / 读失败，会自己恢复），它**不许**整行淡。
+   * 顺带钉住"别把 dim 传染给隔壁"：「页内角标」在**读不到设置**时属于
+   * "此刻不可操作"（会自己恢复），它**不许**整行淡。
+   *
+   * ⚠️ 2026-11-16 补：角标自己也有**本质不可用**的形态（没接管 → 角标不可能出现），
+   * 那一种**该**整行淡。所以这条用例必须显式传 `badgeUsable: true`，
+   * 否则它测的就不是"读不到的灰"，而是另一种灰 —— 两种灰不能混。
    */
-  it('★ 页内角标不跟着整行淡（它是"此刻不可操作"那一类）', () => {
-    const box = displayTab(null, acts({ hasCredential: false, badgeReadFailed: true }));
+  it('★ 读不到设置时的灰不整行淡（它是"此刻不可操作"那一类）', () => {
+    const box = displayTab(null, acts({ badgeUsable: true, badgeReadFailed: true }));
     const badgeRow = Array.from(box.querySelectorAll('.row')).find(
       (r) => (r.querySelector('.row-label')?.firstElementChild?.textContent ?? '') === '页内角标',
     ) as HTMLElement | undefined;
     expect(badgeRow, '找不到页内角标那一行').toBeDefined();
     expect(badgeRow?.classList.contains('dim'), '读不到设置 ≠ 本质不可用').toBe(false);
     expect((badgeRow?.querySelector('input') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('★ 没接管（角标不可能出现）→ 整行淡（本质不可用）', () => {
+    const box = displayTab(true, acts({ badgeUsable: false, badgeDisabledReason: '还没接管' }));
+    const badgeRow = Array.from(box.querySelectorAll('.row')).find(
+      (r) => (r.querySelector('.row-label')?.firstElementChild?.textContent ?? '') === '页内角标',
+    ) as HTMLElement | undefined;
+    expect(badgeRow?.classList.contains('dim')).toBe(true);
+    // 值照旧保留：登录后自动生效，不许改成关
+    expect((badgeRow?.querySelector('input') as HTMLInputElement).checked).toBe(true);
   });
 });

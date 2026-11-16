@@ -37,6 +37,9 @@ function acts(overrides: Record<string, unknown> = {}) {
   return {
     toggleBadge: () => undefined,
     openDiag: () => undefined,
+    /** 默认按「已接管」态：本组只关心文案有没有被加回来，不关心可用性 */
+    badgeUsable: true,
+    badgeDisabledReason: null,
     feedAccountEnabled: false,
     toggleFeedAccount: () => undefined,
     hasCredential: false,

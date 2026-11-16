@@ -276,6 +276,46 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
     expect(checkboxFor(display(), '页内角标')).not.toBeNull();
   });
 
+  /**
+   * ## 「开关打开了却没有角标」（2026-11-16，用户报）
+   *
+   * 这不是 bug：`buildBadge()` 第一条判据就是「没在代理 → 不显示」，
+   * 角标的语义是"我现在被接管了"。但**开关照样能点**就是 UI 的错 ——
+   * 用户只能观察到"开了没用"，面板一个字都不解释。
+   *
+   * 修法与「自动接管取流」一致：本质不可用时灰掉 + 说明原因，
+   * 同时**保留用户设的值**（登录后自动生效）。
+   */
+  it('★ 没接管 → 角标开关灰掉并说明原因，但**保留用户设的值**', () => {
+    const box = displayTab(true, {
+      ...DISPLAY_ACTS,
+      badgeUsable: false,
+      badgeDisabledReason: '还没有可用的取流账号 —— 到「账号」Tab 扫码登录后，角标才会出现',
+    });
+    const cb = checkboxFor(box, '页内角标');
+    expect(cb?.disabled, '没接管时开关必须不可点').toBe(true);
+    // 值照旧是 true —— 不许为了"看起来一致"去改用户的设置
+    expect(cb?.checked).toBe(true);
+    expect(box.textContent).toContain('扫码登录');
+  });
+
+  it('★ 读失败优先于"没接管"（更基础的问题先说）', () => {
+    const box = displayTab(null, {
+      ...DISPLAY_ACTS,
+      badgeUsable: false,
+      badgeDisabledReason: '还没有可用的取流账号',
+      badgeReadFailed: true,
+    });
+    expect(box.textContent).toContain('读不到角标开关');
+    expect(box.textContent).not.toContain('还没有可用的取流账号');
+  });
+
+  it('可用时不渲染任何解释文字（不留噪音）', () => {
+    const box = displayTab(true, { ...DISPLAY_ACTS, badgeUsable: true });
+    expect(checkboxFor(box, '页内角标')?.disabled).toBe(false);
+    expect(box.textContent).not.toContain('扫码登录');
+  });
+
   it('★★ 诊断入口在「显示」Tab 里', () => {
     const box = display();
     const entry = [...box.querySelectorAll('.sub-entry')].find((e) =>
@@ -437,6 +477,9 @@ const ACTS = {
 const DISPLAY_ACTS = {
   toggleBadge: () => undefined,
   openDiag: () => undefined,
+  /** 默认按「已接管」的典型态：角标此刻可能出现（不可用态另有专门的用例） */
+  badgeUsable: true,
+  badgeDisabledReason: null,
   feedAccountEnabled: false,
   toggleFeedAccount: () => undefined,
   hasCredential: false,
