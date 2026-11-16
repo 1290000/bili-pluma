@@ -178,11 +178,18 @@ code.emph {
   display: none;
 }
 
+/* 折角用两条边画（同更新窗）：字符箭头字形随字体变，还会把标题基线顶歪 */
 .why-title::before {
-  content: '▸';
+  content: '';
   display: inline-block;
+  width: 5px;
+  height: 5px;
   margin-right: 6px;
-  transition: transform 0.15s;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--pluma-duration) var(--pluma-ease);
+  vertical-align: 1px;
 }
 
 .why[open] .why-title::before {

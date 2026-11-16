@@ -28,7 +28,7 @@
 
 import type { DiagEntry, DiagRow } from '@platform/diagnostics/collect';
 import { tipFor } from '@platform/diagnostics/collect';
-import { el } from './dom';
+import { el, iconChevron } from './dom';
 
 /**
  * 一次「读诊断日志」这件事本身**成没成**。
@@ -364,7 +364,9 @@ export function diagnosticsPane(
   const bar = el('div', 'sub-bar');
   const backBtn = el('button', 'sub-back');
   backBtn.type = 'button';
-  backBtn.textContent = '‹ 返回';
+  // 与 tabs.ts 的 homeCleanPane 同一形态：图标 + 文字（2026-11-16 收口）
+  backBtn.appendChild(iconChevron('left'));
+  backBtn.appendChild(el('span', undefined, '返回'));
   backBtn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     ev.preventDefault();

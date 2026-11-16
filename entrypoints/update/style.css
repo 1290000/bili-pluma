@@ -192,13 +192,22 @@ progress {
   display: none;
 }
 
-/* 收起时给一个 ▸，展开时换成 ▾ —— 没有 JS，纯 CSS */
+/* 收起时折角指右、展开时指下 —— 纯 CSS，用两条边画，不用字符
+   （字符箭头在中文字体里字形与基线各家不同，见 02-ui-spec §6.3） */
 .fold > summary::before {
-  content: '▸ ';
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease-out;
 }
 
 .fold[open] > summary::before {
-  content: '▾ ';
+  transform: rotate(45deg);
 }
 
 .fold p {
