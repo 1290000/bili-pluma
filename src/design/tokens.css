@@ -97,8 +97,11 @@
      必须 `border: 0`（border 与 elevation 并存会被 DSH 那套 ui-theme spec 判红） */
   --pluma-elevation-stroke-color: var(--pluma-line);
   --pluma-elevation-stroke: 0 0 0 0.5px var(--pluma-elevation-stroke-color);
-  --pluma-elevation-panel:
-    var(--pluma-elevation-stroke), 0 3px 8px 0 rgba(0, 0, 0, 0.03), 0 0 16px 0 rgba(0, 0, 0, 0.02);
+  /* 只有柔光、不含描边的那一层。贴边条要它：它自己有一根 22% 的真描边
+     （8px 宽的东西需要更清楚的边界才在白页上看得见），
+     再叠 elevation 的 0.5px 描边就成了双线。 */
+  --pluma-elevation-glow: 0 3px 8px 0 rgba(0, 0, 0, 0.03), 0 0 16px 0 rgba(0, 0, 0, 0.02);
+  --pluma-elevation-panel: var(--pluma-elevation-stroke), var(--pluma-elevation-glow);
   --pluma-elevation-prominent:
     var(--pluma-elevation-stroke), 0 3px 8px 0 rgba(0, 0, 0, 0.04), 0 0 20px 0 rgba(0, 0, 0, 0.05);
 

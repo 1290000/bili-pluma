@@ -63,8 +63,15 @@ export const PANEL_CSS = `
   /* 底色交给 ::before；这里只留边框 —— 8px 的东西没有 elevation，
      一根 0.5px 的真边框就够（DSH 规则：真 border 与 elevation 不并存，这里没有后者） */
   background: transparent;
-  border: 0.5px solid var(--pluma-border);
+  /* 22% 的描边（2026-11-16，用户裁决 B）。原来的 15% 在白页上量出来是
+     217/255 那一档灰 —— 一条两像素内的浅线，几乎看不见。
+     材质在这个位置**物理上不可能显形**：背后是纯白边距，模糊白还是白，
+     实测条内 253 对页外 255，差的这两级肉眼分不出。
+     所以"看得见"这件事只能由边界和柔光承担，不能靠材质。 */
+  border: 0.5px solid color-mix(in srgb, var(--pluma-text) 22%, transparent);
   border-left: none;
+  /* 只取柔光那一层，不要 elevation 的 0.5px 描边（那会和上面的 border 画成双线） */
+  box-shadow: var(--pluma-elevation-glow);
   cursor: pointer;
   pointer-events: auto;
   position: relative;
