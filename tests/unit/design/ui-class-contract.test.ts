@@ -162,6 +162,7 @@ describe('v2 令牌（Stage 0）', () => {
 
   /** Stage 0 必须已声明的 v2 名字。加名字可以，删要连同方案一起改 */
   const V2 = [
+    '--pluma-canvas',
     '--pluma-menu-fill',
     '--pluma-menu-blur',
     '--pluma-card',
