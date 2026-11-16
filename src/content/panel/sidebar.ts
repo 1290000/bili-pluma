@@ -228,39 +228,54 @@ export const PANEL_CSS = `
 }
 
 /* ── Tab 栏 ──
-   ## 为什么四个 Tab 放得下（2026-11-10 新增「显示」时算过）
-   面板 280px 减左右 padding 28px = 252px，再减 3 个 gap（2px x 3 = 6px）= 246px。
-   .tab 是 flex 1 1 0，每格 61.5px。
-   中文「画质」在 13px 字号下约 26px，.tab 的 padding 是 5px 0（横向零 padding），
-   富余 52px，不需要缩字号也不需要改图标布局。
-   若将来加第 5 个 Tab：每格降到 48px，仍然够（26px 文字 + 22px 余量）。 */
+   ## 五个 Tab 放得下（2026-11-16 改版重算；原注释算的是"四个 Tab / 280px"）
+   面板 300px 减左右 padding 28px = 272px，再减 4 个 gap（2px × 4 = 8px）= 264px。
+   .tab 是 flex 1 1 0，每格 **52.8px**。
+   中文「画质」在 13px 字号下约 26px，横向零 padding、纵向 min-height 32px，
+   富余 26px —— 不需要缩字号，也不需要改成图标。
+
+   ## 为什么从「浅蓝圆角底」改成「下划线」（2026-11-16）
+   参考图实测：激活项 = 蓝字 + 2px 下划线，**没有底色块**
+   （截图里 83 个实心蓝像素 ≈ 2px × 40px 的一条，正好是下划线）。
+   底色块在五格等分时会把每格都画成一个按钮，整条读起来像工具栏；
+   下划线只标记"当前在哪一页"，符合 02 §0 的查看器定位。 */
 .tabs {
   display: flex;
   gap: 2px;
-  padding-bottom: 6px;
-  /* 这里**不再画线**（2026-11-16 改版）。原来「.sheet-head」一条 + 「.tabs」一条，
-     两条相距 6px，看起来像表格的双层线；而参考图实测只有标题下那一根
-     （截图竖扫 y≈56 有线、Tab 行下方没有）。
-     分隔改由激活 Tab 的 2px 下划线承担 —— 见「.tab.active」。 */
+  /* 无 border-bottom：整块面板只剩 sheet-head 那一条横贯线。
+     这里也不留 padding-bottom —— 下划线与内容之间的呼吸由 .panel-content 的
+     padding-top 给，多一层 padding 会让下划线浮在半空。 */
+  padding-bottom: 0;
 }
 
 .tab {
   /* 红点用绝对定位挂在右上角，所以这里必须是定位上下文 */
   position: relative;
   flex: 1 1 0;
-  padding: 5px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* border-box：min-height 要含那 2px 下划线，否则切 Tab 时行高会多 2px */
+  box-sizing: border-box;
+  min-height: var(--pluma-h-tab);
+  padding: 0;
   border: none;
-  border-radius: var(--pluma-radius-control);
+  /* 透明下划线占位：激活只换颜色，**不改变行高**（否则每次切 Tab 内容都跳 2px） */
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   background: transparent;
   color: var(--pluma-text-muted);
   font-family: inherit;
   font-size: var(--pluma-font-body);
   cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
+  transition:
+    color var(--pluma-duration) var(--pluma-ease),
+    border-color var(--pluma-duration) var(--pluma-ease);
 }
 
+/* hover 只改文字色，**不给底色** —— 底色会和"激活"抢注意力（D2） */
 .tab:hover {
-  background: var(--pluma-accent-bg);
+  color: var(--pluma-text);
 }
 
 /* 「关于」Tab 的红点：有新版本时出现。
@@ -428,10 +443,14 @@ export const PANEL_CSS = `
   color: var(--pluma-text);
 }
 
+/* 激活态 = 蓝字 + 2px 下划线，**没有底色**（2026-11-16 改版）。
+   显式写 background: transparent，而不是"悄悄删掉老那条浅蓝底" ——
+   这样下一个人想加"选中底色"时必须先动这一行，动不了就会看见冲突。 */
 .tab.active {
-  background: var(--pluma-accent-bg);
-  color: var(--pluma-text);
-  font-weight: 600;
+  background: transparent;
+  color: var(--pluma-accent);
+  border-bottom-color: var(--pluma-accent);
+  font-weight: var(--pluma-font-weight-strong);
 }
 
 .panel-content {
