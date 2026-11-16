@@ -46,7 +46,13 @@ export const PANEL_CSS = `
 
 /* ── 静息态：8px 贴边条 ──
    宽度 8px 来自 ADR 0033 决定一。只有这一条接收鼠标事件（宿主是 pointer-events:none），
-   所以它不会挡住页面左侧的内容 —— 命中区只有这 8px。 */
+   所以它不会挡住页面左侧的内容 —— 命中区只有这 8px。
+
+   ## 2026-11-16：贴边条也用材质（用户真机反馈「没有用上新材质，死白一条」）
+   方案 §4.1 原本判断"8px 宽看不出模糊，不值得"，**这条判断错了**：
+   blur 的采样半径是 40px，磨砂感来自它**周边的页面内容**，不是这 8px 自身 ——
+   白页面上"72% 白"确实和"模糊过的白"看不出差别，但在有内容的页面上
+   死白一条非常突兀（用户截图为证）。 */
 .strip {
   display: flex;
   align-items: center;
@@ -54,16 +60,33 @@ export const PANEL_CSS = `
   width: 8px;
   height: 72px;
   border-radius: 0 var(--pluma-radius-control) var(--pluma-radius-control) 0;
-  background: color-mix(in srgb, var(--pluma-surface) 72%, transparent);
+  /* 底色交给 ::before；这里只留边框 —— 8px 的东西没有 elevation，
+     一根 0.5px 的真边框就够（DSH 规则：真 border 与 elevation 不并存，这里没有后者） */
+  background: transparent;
   border: 0.5px solid var(--pluma-border);
   border-left: none;
   cursor: pointer;
   pointer-events: auto;
-  transition: background-color 0.15s;
+  position: relative;
+  isolation: isolate;
 }
 
-.strip:hover {
-  background: color-mix(in srgb, var(--pluma-surface) 92%, transparent);
+/* 与 .sheet 同一份材质。hover 靠把材质调"实"来表达（混 20% surface），
+   不再像旧版那样整块换底色 —— 那在磨砂语言里等于闪一下。 */
+.strip::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: var(--pluma-menu-fill);
+  backdrop-filter: var(--pluma-menu-blur);
+  pointer-events: none;
+  transition: background-color var(--pluma-duration) var(--pluma-ease);
+}
+
+.strip:hover::before {
+  background: color-mix(in srgb, var(--pluma-menu-fill) 80%, var(--pluma-surface));
 }
 
 /* 贴边条上的三个点：纯视觉暗示"这里能点"，不是图标字库 */
@@ -131,14 +154,24 @@ export const PANEL_CSS = `
 
 /* 回退：内核不认 backdrop-filter 时，只剩一层 70% 透明 —— 换成实色。
    v1 只支持 Chrome/Edge（AGENTS §3 第 9 条），但"不认"不等于"不存在"：
-   旧内核、被禁用的 GPU 合成都可能走到这里，那时面板会变成"能看见页面文字"。 */
+   旧内核、被禁用的 GPU 合成都可能走到这里，那时面板会变成"能看见页面文字"。
+   贴边条回到改版前的半透明白（没有模糊垫底，72% 白恰好是"隐约可见"） */
 @supports not (backdrop-filter: blur(1px)) {
   .sheet {
     background: var(--pluma-surface);
   }
 
-  .sheet::before {
+  .sheet::before,
+  .strip::before {
     display: none;
+  }
+
+  .strip {
+    background: color-mix(in srgb, var(--pluma-surface) 72%, transparent);
+  }
+
+  .strip:hover {
+    background: color-mix(in srgb, var(--pluma-surface) 92%, transparent);
   }
 }
 
@@ -148,8 +181,17 @@ export const PANEL_CSS = `
     background: var(--pluma-surface);
   }
 
-  .sheet::before {
+  .sheet::before,
+  .strip::before {
     display: none;
+  }
+
+  .strip {
+    background: color-mix(in srgb, var(--pluma-surface) 72%, transparent);
+  }
+
+  .strip:hover {
+    background: color-mix(in srgb, var(--pluma-surface) 92%, transparent);
   }
 }
 
@@ -318,7 +360,9 @@ export const PANEL_CSS = `
 }
 
 /* 元信息卡：与 「.unlock-card」 **同一款**（padding / 边框 / 圆角 / 底色），
-   不新造一套卡视觉。卡内 4px 是"行距"，与组间距 12px 是两个量级。 */
+   不新造一套卡视觉。卡内 4px 是"行距"，与组间距 12px 是两个量级。
+   2026-11-16：底换 --pluma-card（半透明）—— 用户真机反馈「关于页这块白底突兀」，
+   与解锁卡同一天、同一个原因，一次改齐。 */
 .about-meta {
   display: flex;
   flex-direction: column;
@@ -326,7 +370,7 @@ export const PANEL_CSS = `
   padding: 8px 10px;
   border: 0.5px solid var(--pluma-border);
   border-radius: var(--pluma-radius-card);
-  background: var(--pluma-surface);
+  background: var(--pluma-card);
 }
 
 /* 卡头：标题左、状态徽标右 —— 与 「.unlock-head」 同一模式 */
@@ -529,12 +573,15 @@ export const PANEL_CSS = `
   color: var(--pluma-warning);
 }
 
-/* ── 解锁画质卡（对应 02-ui-spec §2.3）── */
+/* ── 解锁画质卡（对应 02-ui-spec §2.3）──
+   2026-11-16：底从 --pluma-surface（实色白）换成 --pluma-card（半透明）。
+   用户真机反馈：磨砂底板上一块实白卡"很突兀" —— 卡应该让材质透出来，
+   只用一档更亮来分层（方案 §4.5）。 */
 .unlock-card {
   padding: 8px 10px;
   border: 0.5px solid var(--pluma-border);
   border-radius: var(--pluma-radius-card);
-  background: var(--pluma-surface);
+  background: var(--pluma-card);
 }
 
 .unlock-head {
