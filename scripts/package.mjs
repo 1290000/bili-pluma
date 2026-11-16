@@ -264,7 +264,7 @@ async function releaseNotes(version) {
 
   return `## Pluma ${version}
 
-B站助手 · 画质与净化。把会员账号能看的画质在播放器里放出来，把广告和不想看的推荐清掉；用主账号浏览、点赞、收藏，另用一个大会员账号专门负责取流。
+B站助手 · 画质与净化。
 
 ### 本版内容
 
@@ -272,15 +272,13 @@ ${section}
 
 ### 安装
 
-下载 \`pluma-${version}.zip\`，解压到固定文件夹。在 \`edge://extensions\`（Chrome 用 \`chrome://extensions\`）
-打开「开发者模式」，点「加载解压缩的扩展」，选中解压出的文件夹。
+1. 下载 `pluma-${version}.zip`，解压到**固定文件夹**（以后更新会覆盖这里）
+2. 打开 `edge://extensions`（Chrome 用 `chrome://extensions`），开启「开发者模式」
+3. 点「加载解压缩的扩展」，选中解压出的文件夹
+4. 打开任意 B站 页面，鼠标贴到页面最左边缘 —— 面板会滑出，登录和设置都在那里
 
-装好后，把鼠标贴到 B站 页面最左边（约 8px 的细条），面板会滑出来 —— 登录和设置都在那里。
-
-需要 Chrome 120+ 或 Edge，两个浏览器共用同一份产物。
-自己从源码构建：\`pnpm install && pnpm build\`，加载 \`.output/chrome-mv3\`。
-
-该产物由本项目开发者构建，未经过浏览器扩展商店签名，仅供学习交流使用。
+需要 Chrome 120+ 或 Edge。未经过商店签名，仅供学习交流使用。
+从源码构建：`pnpm install && pnpm build`，加载 `.output/chrome-mv3`。
 `;
 }
 

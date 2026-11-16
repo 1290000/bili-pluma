@@ -130,6 +130,11 @@ jobs:
 
           TITLE=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json name --jq '.name // ""')
           [ -n "$TITLE" ] || TITLE="$TAG"
+          # 频道里靠话题标签归档和检索（同 #KeiHome 那种用法）。加在标题末尾、
+          # **带一个空格** —— 紧贴着版本号 Telegram 不会把它识别成 hashtag。
+          # 为什么不直接写进 Release 的 name：那样 GitHub 的 Release 页标题也会带上
+          # 一个只在 Telegram 里有意义的标签。
+          TITLE="$TITLE #Pluma"
 
           # 只取「本版内容」一节。下载 / 怎么用 / 边界 / 许可证都在 Release 页，
           # 群里重复一遍没意义，还会把 caption 撑爆。
@@ -155,10 +160,12 @@ jobs:
           TITLE_HTML=$(printf '%s' "$TITLE" | esc)
           SECTION_HTML=$(printf '%s' "$SECTION" | esc)
 
-          # <blockquote> 就是频道里常见的那个「左侧竖线 + 浅色底」效果。
+          # <blockquote> 就是频道里常见的那个「左侧竖线 + 浅色底」效果；
+          # 加 expandable 后它默认**折成一行**，右侧带展开箭头 —— 群里不用先滚过
+          # 十几行更新日志才能看到底下的下载按钮（Bot API 7.0+ 起支持）。
           # 正文为空时（Release 没写说明）不能发空标签，Telegram 会拒。
           if [ -n "$SECTION_HTML" ]; then
-            CAPTION=$(printf '<b>%s</b>\n<blockquote>%s</blockquote>' "$TITLE_HTML" "$SECTION_HTML")
+            CAPTION=$(printf '<b>%s</b>\n<blockquote expandable>%s</blockquote>' "$TITLE_HTML" "$SECTION_HTML")
           else
             CAPTION=$(printf '<b>%s</b>' "$TITLE_HTML")
           fi
