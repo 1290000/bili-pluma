@@ -1,4 +1,14 @@
-/* 更新窗口样式。窄、单列、只需要能读。 */
+/**
+ * 更新窗口样式（2026-11-17 重排）。
+ *
+ * ## 版式规则只有三条
+ *
+ * 1. **一个填充色块**：主按钮 `#start` 是窗口里唯一实心强调色 —— 它就是"下一步"。
+ *    其余可点的东西（「选择」/「更换」、折叠标题）都不许抢这个注意力。
+ * 2. **组间距 > 组内间距**：窗口只有 440px，靠间距分层比靠装饰靠谱。
+ * 3. **颜色只来自 tokens**：`--pluma-*` 一套到底，警告用 `--pluma-warning`
+ *    （与面板 `.pane-note.warn` 同一个琥珀色，一个项目只该有一种"警告"）。
+ */
 
 body {
   margin: 0;
@@ -15,72 +25,181 @@ body {
 }
 
 h1 {
-  margin: 0 0 12px;
+  margin: 0 0 4px;
   font-size: var(--pluma-font-title, 15px);
-  font-weight: 500;
-}
-
-section {
-  margin: 14px 0;
+  font-weight: 600;
 }
 
 p {
   margin: 0 0 6px;
 }
 
-.muted {
+/* ── 版本行：h1 的副标题，读起来是一句话而不是一个段落 ── */
+.version {
+  margin: 0 0 14px;
   color: var(--pluma-text-muted, #666);
+  font-size: var(--pluma-font-caption, 12px);
+  font-variant-numeric: tabular-nums;
 }
 
-.hint {
+/* ── 步骤行：① 选目录 ──
+   这是窗口里唯一"有先后关系"的东西，所以给它序号与边框 —— 边框同时把它
+   和下面的主按钮分成两组（组间距 14px > 组内 4px）。 */
+.step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 0.5px solid var(--pluma-border, #d0d0d0);
+  border-radius: var(--pluma-radius-card, 12px);
+  margin-bottom: 14px;
+}
+
+.step-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.step .t1,
+.step .t2 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step .t1 {
+  font-weight: 500;
+}
+
+.step .t2 {
   color: var(--pluma-text-muted, #666);
   font-size: var(--pluma-font-caption, 12px);
 }
 
-button {
-  font: inherit;
-  padding: 6px 14px;
-  border-radius: var(--pluma-radius-control, 6px);
+/* 序号圆点：未完成是描边 + 数字，完成填充强调色 + ✓，出错填充警告色 + ! */
+.step .n {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
   border: 1px solid var(--pluma-border, #d0d0d0);
-  background: var(--pluma-accent-bg, #eef3fb);
-  color: inherit;
+  color: var(--pluma-text-muted, #666);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.step.ok .n {
+  border-color: var(--pluma-accent);
+  background: var(--pluma-accent);
+  color: var(--pluma-surface, #fff);
+}
+
+.step.bad .n {
+  border-color: var(--pluma-warning, #b26a00);
+  background: var(--pluma-warning, #b26a00);
+  color: var(--pluma-surface, #fff);
+}
+
+.step.bad .t1 {
+  color: var(--pluma-warning, #b26a00);
+}
+
+/* 行内动作：无边框文字按钮。它与主按钮抢注意力的话，用户就不知道该点哪个了 */
+.step-act {
+  flex: 0 0 auto;
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  color: var(--pluma-accent);
+  font: inherit;
+  font-size: var(--pluma-font-caption, 12px);
   cursor: pointer;
 }
 
-button:disabled {
+.step-act:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.step-act:disabled {
+  color: var(--pluma-text-muted, #666);
+  cursor: not-allowed;
+}
+
+/* ── 主按钮：窗口里唯一的填充色块 ── */
+#start {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--pluma-accent);
+  border-radius: var(--pluma-radius-control, 6px);
+  background: var(--pluma-accent);
+  color: var(--pluma-surface, #fff);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+#start:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+/* 禁用态靠降低不透明度表达 —— 文案不变（"立即更新"恒为同一个动作） */
+#start:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
 
-button.secondary {
-  background: transparent;
-}
-
-/**
- * 目录行的"出问题了"态（2026-11-17）：选错目录 / 读不到 manifest。
- *
- * 这个窗口没有自己的配色 —— 复用 `tokens.css` 的 `--pluma-warning`，
- * 与面板里 `.pane-note.warn` 是同一个琥珀色（同一个项目里"警告"只该有一种颜色）。
- * 带 fallback 是因为该变量来自 main.ts 引入的 tokens.css，万一它没加载上，
- * 这一行也得看得见。
- */
-#dir-line.warn {
-  color: var(--pluma-warning, #b26a00);
-  font-weight: 500;
-}
-
 progress {
+  display: block;
   width: 100%;
   height: 6px;
+  margin-top: 10px;
 }
 
+/* 状态行：空时由 main.ts 加 hidden，不留空行占位 */
 .status {
-  min-height: 1.6em;
+  margin-top: 10px;
   font-weight: 500;
+}
+
+/* ── 折叠区（说明 / 详情）──
+   默认收起；失败时「详情」由 main.ts 打开。抽屉本身不占首屏高度。 */
+.fold {
+  margin-top: 14px;
+  font-size: var(--pluma-font-caption, 12px);
+  color: var(--pluma-text-muted, #666);
+}
+
+.fold > summary {
+  color: var(--pluma-accent);
+  cursor: pointer;
+  list-style: none;
+}
+
+.fold > summary::marker,
+.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* 收起时给一个 ▸，展开时换成 ▾ —— 没有 JS，纯 CSS */
+.fold > summary::before {
+  content: '▸ ';
+}
+
+.fold[open] > summary::before {
+  content: '▾ ';
+}
+
+.fold p {
+  margin: 6px 0 0;
 }
 
 .log {
-  margin: 0;
+  margin: 8px 0 0;
   max-height: 180px;
   overflow: auto;
   font-size: var(--pluma-font-caption, 12px);
