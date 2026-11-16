@@ -14,6 +14,30 @@
  * CSS 变量**不穿透 shadow 边界**，所以角标必须把这整份文本塞进 shadow root。
  * 只写 `:root` 的话变量在 shadow 里全部失效，角标会变成无样式的裸元素。
  * `:host` 在 shadow tree 里指代宿主元素，加上它两处都能命中。
+ *
+ * ---
+ *
+ * ## 2026-11-16：v2 令牌（UI 改版 Stage 0）
+ *
+ * 这一版**只新增声明，不新增任何使用**。所有新名字在代码里还没有消费者，
+ * 而"没被引用的自定义属性不产生任何渲染效果" —— 所以面板外观与改前
+ * **逐像素一致**。这既是 Stage 0 的退出条件，也是"一次只改一个视觉变量"
+ * 的第一次执行（`docs/plans/2026-11-16-ui-redesign-plan.md` §6）。
+ *
+ * 新值从 Stage 1 起才会真正生效；翻转顺序见文件末尾的「翻转清单」。
+ *
+ * ### 三条规矩
+ *
+ * 1. **值只写在这里**。`docs/02-ui-spec.md` §6 只写"角色与用法"，不抄 hex ——
+ *    两处各写一份必然漂移（AGENTS.md §6.1 的原话）。
+ * 2. **换值是独立 commit**。给一个旧名字换值 = 一次视觉变更，必须单独提交，
+ *    否则真机反馈"变好看了"无法归因到哪一个改动。
+ * 3. ⚠️ **`--pluma-elevation-*` 里带 `var()`，它在本元素上就替换完了**。
+ *    自定义属性的 `var()` 在**计算该元素的 computed value 时**替换，
+ *    继承下去的是替换后的具体值。所以给某个表面换描边色时，必须把
+ *    `--pluma-elevation-panel` 整条**重新声明**，只改 `--pluma-elevation-stroke-color`
+ *    不会波及已经算好的那一份。（DSH 为了让重绑生效写了 `body, body *` 逐元素声明，
+ *    见 `packages/client/ui-theme/src/styles/gradient-shadow-text.css` 的注释。）
  */
 
 :host,
@@ -39,6 +63,78 @@
 
   --pluma-font-sans:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif;
+
+  /* ──────────────────────────────────────────────────────────────
+   * v2 新增（Stage 0：只声明，不消费）
+   * ──────────────────────────────────────────────────────────────
+   *
+   * 材质 / 描边 / 语义色三组来自 DSH 的实测配方
+   * （`docs/plans/2026-11-16-ui-redesign-plan.md` §2.2 有出处与逐字对照）。
+   */
+
+  /* 浮层材质：70% 近白 + 40px 模糊。**不能直接写在容器上**，
+     必须是 `::before` 那样单独一层 —— 写在容器上会改变二级浮层的
+     fixed 包含块，定位整体错位（见 sidebar.ts 里 `.sheet::before` 的注释）。 */
+  --pluma-menu-fill: rgba(252, 253, 254, 0.7);
+  --pluma-menu-blur: blur(40px) saturate(150%);
+
+  /* 面板内的卡片：半透明，让材质透出来。独立窗口仍用 --pluma-surface */
+  --pluma-card: rgba(255, 255, 255, 0.5);
+
+  /* 凹陷面：日志、二维码底、只读块 */
+  --pluma-sunken: #e9eae9;
+
+  /* 发丝线。`--pluma-border` 是它的前身（0.15 太重，v2 拆成两档） */
+  --pluma-line: rgba(20, 22, 26, 0.1);
+  --pluma-line-strong: rgba(20, 22, 26, 0.16);
+
+  /* 状态色：**绿是"事实：正常"，蓝是"交互：这里/去做"**，两者语义互斥 */
+  --pluma-ok: #1fa855;
+  --pluma-ok-dot: #28d667;
+  --pluma-accent-soft: #e9effd;
+
+  /* Elevation 三件套：**0.5px 描边是 box-shadow 的第一层**，所以用它的组件
+     必须 `border: 0`（border 与 elevation 并存会被 DSH 那套 ui-theme spec 判红） */
+  --pluma-elevation-stroke-color: var(--pluma-line);
+  --pluma-elevation-stroke: 0 0 0 0.5px var(--pluma-elevation-stroke-color);
+  --pluma-elevation-panel:
+    var(--pluma-elevation-stroke), 0 3px 8px 0 rgba(0, 0, 0, 0.03), 0 0 16px 0 rgba(0, 0, 0, 0.02);
+  --pluma-elevation-prominent:
+    var(--pluma-elevation-stroke), 0 3px 8px 0 rgba(0, 0, 0, 0.04), 0 0 20px 0 rgba(0, 0, 0, 0.05);
+
+  /* 间距阶：组内 1~3（2/4/6），组间 4~6（8/12/16），区块 7~8（20/24） */
+  --pluma-space-1: 2px;
+  --pluma-space-2: 4px;
+  --pluma-space-3: 6px;
+  --pluma-space-4: 8px;
+  --pluma-space-5: 12px;
+  --pluma-space-6: 16px;
+  --pluma-space-7: 20px;
+  --pluma-space-8: 24px;
+
+  /* 圆角：卡 / 控件两档沿用旧名（v2 要改值，但那是一次独立视觉变更）；
+     chip 与胶囊是新增的，避免各处再写死 4px / 999px */
+  --pluma-radius-chip: 6px;
+  --pluma-radius-pill: 999px;
+
+  /* 控件高度。现状多数 28~29，普遍偏挤 */
+  --pluma-h-control: 30px;
+  --pluma-h-row: 36px;
+  --pluma-h-tab: 32px;
+  --pluma-h-list-row: 40px;
+
+  /* 排版：中文只有 400 / 600 两档可用（雅黑/苹方没有真 500，
+     浏览器合成加粗在小字号下发虚），所以不引入 500 */
+  --pluma-font-weight-strong: 600;
+  --pluma-line-height-body: 1.45;
+  --pluma-line-height-meta: 1.35;
+
+  /* 动效：只动颜色与 transform，不做位移与缩放 */
+  --pluma-duration: 120ms;
+  --pluma-ease: ease-out;
+
+  /* 图标：内联 SVG 的描边宽度（不在字库里找箭头） */
+  --pluma-icon-stroke: 1.5;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -50,5 +146,33 @@
     --pluma-text-muted: #9ca3af;
     --pluma-surface: #1f1f1f;
     --pluma-border: rgba(255, 255, 255, 0.15);
+
+    /* ── v2 新增（深色） ── */
+    --pluma-menu-fill: rgba(48, 49, 54, 0.64);
+    --pluma-card: rgba(255, 255, 255, 0.06);
+    --pluma-sunken: #151719;
+    --pluma-line: rgba(255, 255, 255, 0.1);
+    --pluma-line-strong: rgba(255, 255, 255, 0.16);
+    --pluma-ok: #3dd68c;
+    --pluma-ok-dot: #3dd68c;
+    --pluma-accent-soft: #1e2a44;
   }
 }
+
+/**
+ * ## 翻转清单（Stage 1 起按这个顺序改，一次一个 commit）
+ *
+ * 每一条要么"给旧名字换值"，要么"把旧名字换成新名字"，**不做结构改动**：
+ *
+ * | 阶段 | 动作 | 影响面 |
+ * | --- | --- | --- |
+ * | Stage 1 | `.sheet` 套材质（新增 `::before`，用 `--pluma-menu-fill/blur`） | 面板底板 |
+ * | Stage 1 | `--pluma-radius-card` 12 → 10 | 所有卡片 |
+ * | Stage 1 | `--pluma-border` 的引用替换成 `--pluma-line`（先换名，不换值） | 全部发丝线 |
+ * | Stage 2 | `--pluma-accent` #378add → #3E77F0 | Tab / 主按钮 / 链接 |
+ * | Stage 2 | `--pluma-accent-bg` → `--pluma-accent-soft`（换名 + 微调值） | 选中底、hover 底 |
+ * | Stage 2 | `--pluma-text` #1a1a1a → #1F2226、`--pluma-text-muted` #6b7280 → #6E747D | 全部文字 |
+ * | Stage 5 | 删掉本清单与所有 v1 遗留名（那时全仓已无引用） | —— |
+ *
+ * ⚠️ 上表是**顺序**，不是"可以合并提交"。每行一个 commit，各自带一张真机截图。
+ */
