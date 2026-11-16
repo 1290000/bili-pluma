@@ -94,6 +94,48 @@ export function resolvePrimaryCard(page: CardPage, cached: CachedProfile | null)
 }
 
 /**
+ * 播放页拿到**实时**主账号时，用它压过缓存结果。
+ *
+ * ## 为什么必须有这一步（2026-11-16，用户报的真机问题）
+ *
+ * 现象：在播放页退出取流账号后，主账号卡一直显示「读取中…」，
+ * **必须刷新整个页面**才恢复。
+ *
+ * 根因是两条各自都成立的规则撞在一起：
+ *  1. `account/remove` 会 `clearPrimaryProfile()`（理由：用户点"退出"的心理预期是
+ *     "不用这个扩展了"，还留着他的昵称说不通）
+ *  2. 面板的 `readPrimary()` **只读缓存**，实时值传的是 `null`
+ *     （原注释说"实时覆盖在模型重取时由 panel-data 自己拼"—— 而 `buildPanelModel`
+ *     当时是直接把入参 `primary` 赋给 `account.primary`，**那句拼接根本不存在**）
+ *
+ * 于是缓存一清，A 卡就退到 `loggedIn: 'unknown'` → 「读取中…」；
+ * 而缓存的唯一写入方是"播放页加载时保存档案"，所以只有刷新页面才能重新填上。
+ *
+ * ## 判据
+ *
+ * - `live.user.uname` 有值 → 实时优先。这比缓存**更新**，也能修"缓存过期 7 天"
+ *   在播放页仍显示旧昵称的问题
+ * - 没有 live → **保持原样**，不推断成「未登录」：`user` 为 null 也可能只是数据没到
+ *
+ * @param primary 已由缓存 / 调用方算好的卡片
+ * @param live    播放页 `pageView.primary.user`；非播放页传 `null`。
+ *                这里只要求 `uname` / `level` 两个字段 —— 不引 `PrimaryUser`
+ *                是为了让本文件继续保持"零依赖共享层"（与 `PlayPrimarySnapshot`
+ *                本地声明同一个理由）。
+ */
+export function withLivePrimaryUser(
+  primary: PrimaryCard,
+  live: { uname: string; level: number | null } | null | undefined,
+): PrimaryCard {
+  if (!live?.uname) return primary;
+  /**
+   * `loggedIn` 记 `'yes'` 不是编数据：`user` 里能读到昵称，说明那一刻页面
+   * 就是从登录态渲染出来的。读不到昵称的情况走上面的早退，不会到这。
+   */
+  return { uname: live.uname, level: live.level ?? null, loggedIn: 'yes', source: 'live' };
+}
+
+/**
  * 主账号栏在**没有昵称**时该写什么。
  *
  * ## 为什么不能一律写「打开视频页后可见」

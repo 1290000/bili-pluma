@@ -895,6 +895,11 @@ export function accountTab(
      *
      * ## ⚠️ `identity === null` 时**仍然渲染**（2026-11-11 修正）
      *
+     * ⚠️ 2026-11-16 补一句前提：**下面这条"不许消失"只在入口该出现的状态下成立**。
+     * 入口该不该出现由外层条件决定（开关开着 + 有账号）—— 开关关着时整块不渲染，
+     * 那是**有意的信息减法**，不是"控件消失是隐形 bug"那个坑：
+     * 此时"用哪个号取流"本来就不生效，显示它只会与开关读起来重复。
+     *
      * ### 上一版是错的
      *
      * 上一版写的是 `if (streamingIdentity !== null) { … }` —— **`null` 时整块消失**。
@@ -914,17 +919,17 @@ export function accountTab(
      *
      * ### 现在的规则
      *
-     * | 值 | 胶囊 | 可点 |
+     * | 值 | 图标按钮 | 可点 |
      * | --- | --- | --- |
-     * | `'extension'` | 「取流：扩展账号」 | ✅ |
-     * | `'page'` | 「取流：浏览器账号」 | ✅ |
-     * | **`null`** | 「**取流身份：未知**」 | ❌（点了也不知道切成什么） |
+     * | `'extension'` | 双向箭头，aria 说明「当前用扩展账号」 | ✅ |
+     * | `'page'` | 双向箭头，aria 说明「当前用浏览器账号」 | ✅ |
+     * | **`null`** | 灰色双向箭头，aria 说明「还没读到」 | ❌（点了也不知道切成什么） |
      *
      * 未知态**不可点**：在没有读到当前值时，"切到另一个"这个动作的目标是不确定的
      * —— 若当前其实已经是 `page`，用户点一下反而切到了 `extension`。
      * **宁可少一个动作，不可让动作的结果违反预期。**
      */
-    {
+    if (a.proxyEnabled === true && a.hasCredential) {
       const identity = actions.streamingIdentity;
       const known = identity !== null;
       const button = el('button', `acct-identity-btn${known ? '' : ' unknown'}`);

@@ -460,6 +460,7 @@ describe('账号 Tab', () => {
       unknown: false,
       hasCredential: true,
       needsLogin: false,
+      proxyEnabled: true,
       ...overrides,
     };
   }
@@ -813,6 +814,8 @@ describe('取流身份胶囊（步骤 4，2026-11-11）', () => {
     unknown: false,
     hasCredential: true,
     needsLogin: false,
+    /** 2026-11-16：身份入口只在「开关开着 + 有账号」时渲染 */
+    proxyEnabled: true,
   };
 
   function render(
@@ -921,6 +924,37 @@ describe('取流身份胶囊（步骤 4，2026-11-11）', () => {
       expect(text).not.toContain('关闭');
     }
   });
+
+  /**
+   * ## 入口该不该出现（2026-11-16 裁决 A）
+   *
+   * 用户看到的现场：「已停用」+ 开关关 + 一行「取流：扩展账号」——
+   * 那行说的是**设置值**，不是**生效值**，所以读起来自相矛盾。
+   *
+   * 规则：只在「开关开着 + 有账号」时渲染。其余状态下"用哪个号取流"
+   * 本来就不生效，显示它只会与开关读起来重复。
+   *
+   * ⚠️ 这与"控件消失是隐形 bug"不冲突：那条讲的是**读不到值**时也不能消失，
+   * 这里讲的是**这个功能此刻不该出现**。两者判据不同，别混。
+   */
+  it('★ 开关关着 → 入口不渲染（但 B 卡还在）', () => {
+    const box = accountTab({ ...BASE, proxyEnabled: false }, Date.now(), 'play', { ...ACTS });
+    expect(box.querySelector('.acct-identity-btn')).toBeNull();
+    // 减法只针对"不生效的设置值"，账号本身照常显示
+    expect(box.querySelector('.acct-row.playback')).not.toBeNull();
+  });
+
+  it('★ 没有账号 → 入口不渲染（此时只能浏览器取流，切身份没有区别）', () => {
+    const box = accountTab({ ...BASE, hasCredential: false, playback: null }, Date.now(), 'play', {
+      ...ACTS,
+    });
+    expect(box.querySelector('.acct-identity-btn')).toBeNull();
+  });
+
+  it('开关开着 + 有账号 → 入口在（这是唯一有意义的状态）', () => {
+    const box = accountTab({ ...BASE, proxyEnabled: true }, Date.now(), 'play', { ...ACTS });
+    expect(box.querySelector('.acct-identity-btn')).not.toBeNull();
+  });
   /**
    * ## task-10 剩余：`page` 身份下「没凭据」不是「没配置」（2026-11-11）
    *
@@ -1022,6 +1056,8 @@ describe('显示 Tab：首页推荐流开关（2026-11-11 从账号 Tab 迁来�
     unknown: false,
     hasCredential: true,
     needsLogin: false,
+    /** 2026-11-16：身份入口只在「开关开着 + 有账号」时渲染 */
+    proxyEnabled: true,
   };
 
   function renderDisplay(

@@ -46,6 +46,7 @@ function modelWith(hasCredential: boolean): PanelModel {
       unknown: false,
       hasCredential,
       needsLogin: !hasCredential,
+      proxyEnabled: true,
     },
     pageKind: 'play',
     pageStateKind: 'ok',

@@ -63,6 +63,7 @@ function modelWithPlayback(): PanelModel {
       unknown: false,
       hasCredential: true,
       needsLogin: false,
+      proxyEnabled: true,
     },
     pageKind: 'play',
     pageStateKind: 'ok',

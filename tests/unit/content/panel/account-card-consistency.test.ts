@@ -41,6 +41,7 @@ function viewWithoutProfile() {
     unknown: false,
     hasCredential: true,
     needsLogin: false,
+    proxyEnabled: true,
   };
 }
 

@@ -266,6 +266,53 @@ describe('buildPopupSnapshot：缺消息时的降级', () => {
   });
 });
 
+describe('buildPanelModel：主账号用实时值压过缓存（2026-11-16 真机 bug）', () => {
+  /**
+   * 现场：在播放页退出取流账号 → `account/remove` 清掉了主账号档案缓存 →
+   * 面板的 `readPrimary()` 只读缓存 → A 卡停在「读取中…」，
+   * **必须刷新整个页面**（缓存的唯一写入时机）才恢复。
+   *
+   * 这里守的是模型层的那一步：`pageView.primary.user` 必须真的被用上。
+   */
+  const READING: PrimaryCard = { uname: null, level: null, loggedIn: 'unknown', source: 'none' };
+
+  function withLiveUser(uname: string, level: number | null) {
+    const base = pageView();
+    // `pageView()` 的返回类型带 `| null`（buildPanelModel 的入参形状），这里收窄
+    if (!base) throw new Error('pageView() 恒为非 null');
+    return { ...base, primary: { ...base.primary, user: { uname, face: null, level } } };
+  }
+
+  it('★ 缓存空了 + 播放页有实时 user → A 卡拿到昵称，不再停在「读取中…」', () => {
+    const model = buildPanelModel({
+      snapshot: snapshot(),
+      pageView: withLiveUser('主号昵称', 6),
+      primary: READING,
+      clean: null,
+      pageKind: 'play',
+      accountKnown: true,
+      pageStateKind: 'ok',
+    });
+    expect(model.account.primary.uname).toBe('主号昵称');
+    expect(model.account.primary.level).toBe(6);
+    // 反例：把 withLivePrimaryUser 那层去掉 → 这里会是 null（显示占位符）
+    expect(model.account.primary.uname).not.toBeNull();
+  });
+
+  it('非播放页不吃这条路（那里没有 pageView，缓存空了就是空了）', () => {
+    const model = buildPanelModel({
+      snapshot: snapshot(),
+      pageView: withLiveUser('主号昵称', 6),
+      primary: READING,
+      clean: null,
+      pageKind: 'other',
+      accountKnown: true,
+      pageStateKind: 'ok',
+    });
+    expect(model.account.primary.uname).toBeNull();
+  });
+});
+
 describe('buildPanelModel：总开关关着时不画锁画质卡', () => {
   it('★ 开关关着 → unlock 为 null（即使有 pageView）', () => {
     /**

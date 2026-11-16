@@ -48,6 +48,7 @@ function model(): PanelModel {
       playback: null,
       unknown: false,
       hasCredential: false,
+      proxyEnabled: false,
       needsLogin: true,
     },
     pageKind: 'other',

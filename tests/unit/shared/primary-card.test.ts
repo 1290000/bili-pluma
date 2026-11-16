@@ -21,7 +21,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { primaryPlaceholder, resolvePrimaryCard } from '@shared/utils/primary-card';
+import {
+  type PrimaryCard,
+  primaryPlaceholder,
+  resolvePrimaryCard,
+  withLivePrimaryUser,
+} from '@shared/utils/primary-card';
 
 /** 缓存里存过的档案（模拟"上次在播放页读到了"） */
 const CACHED = { uname: '上次的昵称', level: 5 };
@@ -142,5 +147,47 @@ describe('primaryPlaceholder —— 没昵称时写什么', () => {
 
   it('非播放页 + unknown → 「打开视频页后可见」（那句话在这里成立）', () => {
     expect(primaryPlaceholder('other', 'unknown')).toBe('打开视频页后可见');
+  });
+});
+
+describe('withLivePrimaryUser —— 播放页实时值压过缓存（2026-11-16 真机 bug）', () => {
+  /**
+   * 现场：在播放页退出取流账号 → `account/remove` 会清掉主账号档案缓存 →
+   * 面板的 `readPrimary()` 只读缓存 → A 卡停在「读取中…」，
+   * **必须刷新整个页面**（缓存的唯一写入时机）才恢复。
+   *
+   * 修法就是这一条：本函数手上一直有 `pageView.primary.user`，之前只喂给画质卡。
+   */
+  const READING: PrimaryCard = { uname: null, level: null, loggedIn: 'unknown', source: 'none' };
+
+  it('实时有昵称 → 用它，并把 loggedIn 记成 yes', () => {
+    const r = withLivePrimaryUser(READING, { uname: '主号昵称', level: 6 });
+    expect(r).toEqual({ uname: '主号昵称', level: 6, loggedIn: 'yes', source: 'live' });
+  });
+
+  it('★ 这正是"退出取流账号后不再卡在读取中"的那条路径', () => {
+    const r = withLivePrimaryUser(READING, { uname: '主号昵称', level: 6 });
+    /**
+     * 判据是**昵称不再是 null**——`primaryPlaceholder()` 只在 `uname` 为空时
+     * 才会被调用（它是占位符函数，不是"该显示什么"的函数）。
+     * 所以这里断言昵称，而不是去调它再比对文案。
+     */
+    expect(r.uname).toBe('主号昵称');
+    expect(READING.uname).toBeNull();
+  });
+
+  it('实时没有昵称 → 保持原样，不推断成未登录', () => {
+    // user 为 null 也可能只是数据没到；把 unknown 改成 no 等于编结论
+    expect(withLivePrimaryUser(READING, null)).toBe(READING);
+    expect(withLivePrimaryUser(READING, { uname: '', level: null })).toBe(READING);
+  });
+
+  it('已有缓存值、实时更准 → 覆盖（顺带修"缓存过期 7 天后仍显示旧昵称"）', () => {
+    const cached: PrimaryCard = { uname: '旧昵称', level: 4, loggedIn: 'yes', source: 'cached' };
+    expect(withLivePrimaryUser(cached, { uname: '新昵称', level: 6 }).uname).toBe('新昵称');
+  });
+
+  it('等级读不到 → level 记 null，不编一个数字', () => {
+    expect(withLivePrimaryUser(READING, { uname: 'x', level: null }).level).toBeNull();
   });
 });

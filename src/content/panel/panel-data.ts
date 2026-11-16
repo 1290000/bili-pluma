@@ -70,7 +70,7 @@ import { diag } from '@platform/storage/diag-store';
 import type { StatBucket } from '@shared/types/stats';
 import type { UpdateCheckOutcome, UpdateStatusView } from '@shared/types/update';
 import type { PageTracksView } from '@shared/types/playinfo';
-import type { PrimaryCard } from '@shared/utils/primary-card';
+import { withLivePrimaryUser, type PrimaryCard } from '@shared/utils/primary-card';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
 
 // ─────────────────────────── 渲染模型 ───────────────────────────
@@ -119,6 +119,20 @@ export interface AccountView {
   /** 凭据在不在（`proxy/status.hasCredential`，同步硬证据） */
   hasCredential: boolean;
   needsLogin: boolean;
+  /**
+   * 总开关开着吗（`proxy/status.enabled`）。`null` = 还没读到。
+   *
+   * ## 账号 Tab 为什么要这个（2026-11-16）
+   *
+   * 「切换取流身份」那个入口只在**开关开着、且有账号**时才有意义：
+   *   - 开关关着 → 实际就是浏览器账号在取流，切身份只改一个不生效的设置值
+   *   - 没有账号 → 只能浏览器取流，切到 `page` 也没有区别
+   *
+   * 之前它在所有状态下都渲染，于是出现「已停用 + 开关关 + 这行说用扩展账号取流」
+   * 的自相矛盾（它显示的是**设置值**，不是**生效值**）。用户原话：
+   * 「取流：扩展账号这几个字可以删了」。
+   */
+  proxyEnabled: boolean | null;
 }
 
 /** 面板的完整渲染模型 */
@@ -381,11 +395,28 @@ export function buildPanelModel(input: {
     quality,
     clean,
     account: {
-      primary,
+      /**
+       * ⚠️ **必须过 `withLivePrimaryUser()`**（2026-11-16，真机 bug）。
+       *
+       * 调用方传进来的 `primary` 只来自**缓存**（`entrypoints/content-panel.content.ts`
+       * 的 `readPrimary()`，实时值刻意传 `null` 以免重复发消息）。而
+       * `account/remove` 会 `clearPrimaryProfile()` —— 于是退出取流账号之后，
+       * 缓存空了，这张卡永远停在「读取中…」，**只有刷新整个页面**（缓存的
+       * 唯一写入时机）才会恢复。
+       *
+       * 而本函数手上其实一直有实时数据（`pageView.primary.user`，来自
+       * `page/summary:get`），之前只把它喂给画质卡，A 卡没用 —— 原注释写的
+       * "实时覆盖由 panel-data 自己拼"在代码里并不存在。
+       */
+      primary: withLivePrimaryUser(
+        primary,
+        pageKind === 'play' ? (pageView?.primary.user ?? null) : null,
+      ),
       playback: snapshot?.account ?? null,
       unknown: snapshot === null || !accountKnown,
       hasCredential: snapshot?.proxy.hasCredential ?? false,
       needsLogin: view?.needsLogin ?? false,
+      proxyEnabled: snapshot ? snapshot.proxy.enabled : null,
     },
     pageKind,
     pageStateKind,

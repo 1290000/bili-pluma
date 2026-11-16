@@ -116,6 +116,7 @@ function model(overrides: Partial<PanelModel> = {}): PanelModel {
       unknown: false,
       hasCredential: true,
       needsLogin: false,
+      proxyEnabled: true,
     },
     pageKind: 'other',
     pageStateKind: 'ok',

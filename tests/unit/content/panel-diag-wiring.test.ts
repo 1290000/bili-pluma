@@ -112,6 +112,7 @@ function model(): PanelModel {
       unknown: false,
       hasCredential: true,
       needsLogin: false,
+      proxyEnabled: true,
     },
     pageKind: 'other',
     pageStateKind: 'ok',
