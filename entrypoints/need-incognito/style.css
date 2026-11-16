@@ -15,7 +15,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--pluma-surface);
+  background: var(--pluma-canvas);
   color: var(--pluma-text);
   font-family: var(--pluma-font-sans);
   font-size: 14px;
@@ -92,10 +92,11 @@ body {
   font-size: 13px;
   border-radius: var(--pluma-radius-control);
   cursor: pointer;
-  padding: 7px 14px;
+  min-height: 32px;
+  padding: 6px 14px;
   transition:
-    background 0.15s,
-    border-color 0.15s;
+    background-color var(--pluma-duration) var(--pluma-ease),
+    border-color var(--pluma-duration) var(--pluma-ease);
 }
 
 .btn-primary {
@@ -110,7 +111,7 @@ body {
 }
 
 .btn-ghost {
-  border: 1px solid var(--pluma-border);
+  border: 1px solid var(--pluma-line-strong);
   background: transparent;
   color: var(--pluma-text);
 }
