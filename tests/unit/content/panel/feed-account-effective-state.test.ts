@@ -143,3 +143,52 @@ describe('★★ 与取流身份**无关**（两个功能独立，不许回归�
     expect(feedSwitch(withoutCred)?.checked).toBe(false);
   });
 });
+
+/**
+ * 「灰法」：没有托管账号属于**本质不可用** ⇒ 整行淡（2026-11-17）。
+ *
+ * ## 用户报的是什么
+ *
+ * > 「没有登录扩展账号时，首页推荐流…的选项**灰的不明显**，
+ * >  应该改为像没有开启删除广告时保留活动横幅的选项那样的灰」
+ *
+ * `switchRow` 有两个独立的灰：`disabled` 只表盘淡、`dim` 整行淡（含标签）。
+ * 这条开关依赖"有没有托管账号"—— 用户不去扫码就永远点不了，所以是**本质不可用**，
+ * 该用 `dim`；原来只传了 `disabled`，于是灰得不明显。
+ *
+ * 断言 `.row.dim` 而不断 `opacity`：前者是语义，后者是实现细节。
+ */
+describe('★★ 无凭据 ⇒ 整行淡（dim），不是只表盘淡', () => {
+  /** 取推荐流那一行的**行元素**（不是开关） */
+  function feedRowEl(root: HTMLElement): HTMLElement | null {
+    for (const row of root.querySelectorAll('.row')) {
+      const label = row.querySelector('.row-label')?.firstElementChild?.textContent ?? '';
+      if (label === '首页推荐流使用取流账号') return row as HTMLElement;
+    }
+    return null;
+  }
+
+  it('★★ hasCredential=false ⇒ 这一行带 .dim', () => {
+    const box = displayTab(null, acts({ hasCredential: false }));
+    expect(feedRowEl(box)?.classList.contains('dim'), '整行淡才有"本质不可用"的观感').toBe(true);
+  });
+
+  it('★★ hasCredential=true ⇒ 没有 .dim（可用时不许发灰）', () => {
+    const box = displayTab(null, acts({ hasCredential: true }));
+    expect(feedRowEl(box)?.classList.contains('dim')).toBe(false);
+  });
+
+  /**
+   * 顺带钉住"别把 dim 传染给隔壁"：「页内角标」的灰属于**此刻不可操作**
+   * （读取中 / 读失败，会自己恢复），它**不许**整行淡。
+   */
+  it('★ 页内角标不跟着整行淡（它是"此刻不可操作"那一类）', () => {
+    const box = displayTab(null, acts({ hasCredential: false, badgeReadFailed: true }));
+    const badgeRow = Array.from(box.querySelectorAll('.row')).find(
+      (r) => (r.querySelector('.row-label')?.firstElementChild?.textContent ?? '') === '页内角标',
+    ) as HTMLElement | undefined;
+    expect(badgeRow, '找不到页内角标那一行').toBeDefined();
+    expect(badgeRow?.classList.contains('dim'), '读不到设置 ≠ 本质不可用').toBe(false);
+    expect((badgeRow?.querySelector('input') as HTMLInputElement).disabled).toBe(true);
+  });
+});

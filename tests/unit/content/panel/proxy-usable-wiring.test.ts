@@ -76,6 +76,24 @@ function proxySwitch(root: HTMLElement): HTMLInputElement | null {
   return null;
 }
 
+/** 同上，但能控制 `proxyEnabled`（`null` = 读不到 `proxy/status`） */
+function modelWithProxy(hasCredential: boolean, proxyEnabled: boolean | null): PanelModel {
+  const base = modelWith(hasCredential);
+  return { ...base, quality: { ...base.quality, proxyEnabled } };
+}
+
+/** 取「自动接管取流」那一行的**行元素**（不是开关） */
+function proxyRow(root: HTMLElement): HTMLElement | null {
+  for (const row of root.querySelectorAll('.row')) {
+    if (
+      (row.querySelector('.row-label')?.firstElementChild?.textContent ?? '') === '自动接管取流'
+    ) {
+      return row as HTMLElement;
+    }
+  }
+  return null;
+}
+
 let controller: PanelController | null = null;
 
 beforeEach(() => {
@@ -149,5 +167,63 @@ describe('★ 身份未知时不擅自禁用', () => {
     controller.showTab('quality');
 
     expect(proxySwitch(controller.root)?.disabled, '身份未知就擅自禁用了').toBe(false);
+  });
+});
+
+/**
+ * 「灰法」：**两种灰不是一回事**（2026-11-17）。
+ *
+ * `switchRow` 的 `disabled` 只表盘淡（**此刻**不可操作，会自己恢复），
+ * `dim` 整行淡（**本质**不可用，得先去满足依赖）。
+ *
+ * 「自动接管取流」的判据是混合的，所以 dim 只认其中**根本**的那一半：
+ *
+ * | 情形 | 本质？ | 该怎样 |
+ * | --- | --- | --- |
+ * | 没有可用账号（`!proxyUsable`） | 本质不可用 | 整行淡 |
+ * | 状态读不到（`proxyEnabled === null`） | 此刻不可操作 | 只表盘淡 |
+ *
+ * ⚠️ 所以是 `dim: !proxyUsable`，**不是** `dim: proxyDisabled`（后者把两者混在一起）。
+ */
+describe('★★ 整行淡只用于"本质不可用"（没账号），不用于"读不到状态"', () => {
+  it('★★ extension + 无凭据（proxyUsable=false）⇒ 整行淡', () => {
+    controller = mountPanelBody(acts('extension') as never);
+    controller.setModel(modelWithProxy(false, true));
+    controller.showTab('quality');
+
+    expect(proxyRow(controller.root)?.classList.contains('dim'), '没账号是根本缺条件').toBe(true);
+    expect(proxySwitch(controller.root)?.disabled).toBe(true);
+  });
+
+  it('★★ 只是状态读不到（proxyEnabled=null，但账号可用）⇒ **不**整行淡', () => {
+    // `page` 身份 ⇒ isStreamingReady 为 true ⇒ proxyUsable=true
+    controller = mountPanelBody(acts('page') as never);
+    controller.setModel(modelWithProxy(false, null));
+    controller.showTab('quality');
+
+    expect(
+      proxyRow(controller.root)?.classList.contains('dim'),
+      '读不到状态会自己恢复，按整行暗等于说"这功能坏了"',
+    ).toBe(false);
+    // 但它此刻确实不可操作 ⇒ 仍然禁用（表盘淡）
+    expect(proxySwitch(controller.root)?.disabled).toBe(true);
+  });
+
+  it('★ 两者同时成立（没账号 + 读不到状态）⇒ 整行淡（没账号是更根本的原因）', () => {
+    controller = mountPanelBody(acts('extension') as never);
+    controller.setModel(modelWithProxy(false, null));
+    controller.showTab('quality');
+
+    expect(proxyRow(controller.root)?.classList.contains('dim')).toBe(true);
+    expect(proxySwitch(controller.root)?.disabled).toBe(true);
+  });
+
+  it('★ 有凭据且状态正常 ⇒ 不淡、可点', () => {
+    controller = mountPanelBody(acts('extension') as never);
+    controller.setModel(modelWithProxy(true, true));
+    controller.showTab('quality');
+
+    expect(proxyRow(controller.root)?.classList.contains('dim')).toBe(false);
+    expect(proxySwitch(controller.root)?.disabled).toBe(false);
   });
 });

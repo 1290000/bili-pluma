@@ -51,10 +51,26 @@ export function onClick(node: HTMLElement, handler: () => void): void {
 /**
  * 一行「标签 + 开关」。
  *
+ * ## ⚠️ 两种"灰"是两件事，别混（2026-11-17）
+ *
+ * | 传什么 | 效果 | 语义 | 例子 |
+ * | --- | --- | --- | --- |
+ * | 只传 `disabled` | 只**表盘**淡（`.switch.busy`） | **此刻**不可操作 | 读取中 / 读取失败 |
+ * | 加传 `dim` | **整行**淡，含标签（`.row.dim`） | **本质**不可用（依赖不满足） | 没有账号 / 父开关关着 |
+ *
+ * 判据一句话：**"用户做点什么，它就会变可用吗？"**
+ * 会（等读出来就好）⇒ 只 `disabled`；不会（得先去登录 / 先开父开关）⇒ 加 `dim`。
+ *
+ * 两者可以同时传 —— 那时按 `dim` 渲染整行，表盘同时是 busy 态。
+ *
+ * 为什么要把这条写在这里：`dim` 原先只在净化子项那一处调用点上有解释，
+ * 其余调用点一直在踩（"没有账号"只传了 `disabled`，用户反馈"灰得不明显"）。
+ *
  * @param label 标题
  * @param hint 副标题（空则不渲染）
  * @param checked 当前值
  * @param disabled 是否禁用（`true` 时不可点，**且不显示为"关"**）
+ * @param dim 是否**本质不可用**（整行淡）。见上表，别拿它表示"读取中"
  * @param onToggle 切换回调
  */
 export function switchRow(input: {
@@ -62,6 +78,7 @@ export function switchRow(input: {
   hint?: string | undefined;
   checked: boolean;
   disabled?: boolean | undefined;
+  /** **本质不可用**（依赖不满足）⇒ 整行淡。别拿它表示"读取中"，那是 `disabled` */
   dim?: boolean | undefined;
   onToggle: (next: boolean) => void;
 }): HTMLElement {

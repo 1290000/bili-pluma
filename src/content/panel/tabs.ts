@@ -152,6 +152,21 @@ export function qualityTab(
        */
       checked: q.proxyEnabled === true,
       disabled: proxyDisabled,
+      /**
+       * ⚠️ 判据是 `!proxyUsable`，**不是 `proxyDisabled`**（2026-11-17）。
+       *
+       * `proxyDisabled` 混了两件性质不同的事：
+       *
+       * | 情形 | 本质？ | 该怎样 |
+       * | --- | --- | --- |
+       * | `!proxyUsable`（没有可用账号） | 本质不可用 | **整行淡**（`dim`） |
+       * | `proxyEnabled === null`（状态读不到） | 此刻不可操作 | 只表盘淡 |
+       *
+       * 后者会自己恢复（下次读成功就正常了），把整行按暗等于告诉用户
+       * "这功能坏了"。两者同时成立时 `dim` 为真 —— 没账号是更根本的原因。
+       * 提示文案的优先级（先说"读不到状态"）是另一件事，与视觉无关。
+       */
+      dim: !actions.proxyUsable,
       onToggle: actions.toggleProxy,
     }),
   );
@@ -439,6 +454,16 @@ export function displayTab(
        * 那是"两个功能独立"在代码上的落地（原判据，迁 Tab 时原样保留）。
        */
       disabled: !actions.hasCredential,
+      /**
+       * `dim` = **本质不可用**（依赖不满足），不是"此刻不可操作"。
+       *
+       * 没有托管账号是**根本缺条件**：用户做什么都不会让它变得可点，
+       * 所以整行（含标签）一起淡，与净化子项「保留活动横幅」同一个观感。
+       * 只表盘淡（`disabled` 单独）是留给"读取中 / 读失败"的 —— 那种灰会自己恢复。
+       *
+       * 用户原话：没登录扩展账号时这里"灰得不明显"（2026-11-17）。
+       */
+      dim: !actions.hasCredential,
       onToggle: actions.toggleFeedAccount,
     }),
   );
