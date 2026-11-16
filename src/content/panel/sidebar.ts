@@ -718,14 +718,19 @@ export const PANEL_CSS = `
 }
 
 /* ── 二级浮层入口 / 返回条 ── */
+/* 二级入口行（2026-11-16）：
+   - min-height 与开关行同档（36px）：它俩在同一个 Tab 里上下挨着，
+     7+19+7=33 与 36 差 3px，肉眼能看出"这个入口小一号"
+   - margin-top 归零：组间距已由 .tab-pane 的 12px 给，再叠 2px 就是 14
+   - 描边走 10% 发丝（原本 15%，在半透明底上偏重） */
 .sub-entry {
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
-  margin-top: 2px;
-  padding: 7px 8px;
-  border: 0.5px solid var(--pluma-border);
+  min-height: var(--pluma-h-row);
+  padding: 6px 8px;
+  border: 0.5px solid var(--pluma-line);
   border-radius: var(--pluma-radius-control);
   background: transparent;
   color: var(--pluma-text);
@@ -733,6 +738,7 @@ export const PANEL_CSS = `
   font-size: var(--pluma-font-body);
   text-align: left;
   cursor: pointer;
+  transition: background-color var(--pluma-duration) var(--pluma-ease);
 }
 
 .sub-entry:hover {
