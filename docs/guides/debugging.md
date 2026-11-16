@@ -266,6 +266,39 @@ console.log({
 
 ---
 
+## 3.1 浏览器自己的登录态（与扩展无关的那一半）
+
+排查"画质为什么这么高/这么低"时，**先分清身份来自哪一边**：浏览器的 B站 登录态，
+还是扩展的取流账号（`page.handler.ts` 里 `not-configured` / `page-identity` / `self` 三种 reason）。
+
+### ⚠️ `document.cookie` 里看不到 `SESSDATA`，不代表没登录
+
+`SESSDATA` 是 **HttpOnly**。所以这个判据是错的：
+
+```js
+document.cookie.includes('SESSDATA');   // 登录着也可能是 false
+```
+
+**2026-11-16 实测**：`document.cookie` 里没有 `SESSDATA`（只有 `DedeUserID` / `bili_jct` /
+`bili_ticket` 等），据此会得出"游客态"；但同页 `nav` 接口返回 `isLogin: true`，
+`vipStatus: 1`，播放器画质菜单里「1080P 高码率（大会员）」是选中态 —— 浏览器其实登录着大会员，
+扩展**完全没参与**（面板显示「已停用」+「没有可用的取流账号」）。
+
+正确判据：
+
+```js
+// 页面控制台，看浏览器自己的身份（nav 不在代理白名单里，不会被 DNR 改 Cookie）
+const nav = await (await fetch('https://api.bilibili.com/x/web-interface/nav', {
+  credentials: 'include',
+})).json();
+({ isLogin: nav.data?.isLogin, mid: nav.data?.mid, vip: nav.data?.vipStatus });
+```
+
+再用可读的 `DedeUserID` 与 `nav.data.mid` 对一下：相等 ⇒ 页面身份就是这个号。
+`DedeUserID` 本身不是凭据，可以读；**不要打印 `SESSDATA`**（它在请求头里，脚本也读不到）。
+
+---
+
 ## 4. 看 content script 的日志
 
 content script 的 console 输出在**页面自己的控制台**里（F12 → Console），不在 SW 控制台。
