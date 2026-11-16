@@ -1,0 +1,194 @@
+/**
+ * 加载事件 → 归一后的时间轴。
+ *
+ * 分层：`core/` 纯函数，零 IO、零浏览器 API（`chrome` / `window` / `document` /
+ * `fetch(` 都不许出现）。采集在 content script，归一在这里，所以这段能在 Node 里全覆盖。
+ *
+ * ## 这个模块守的是什么
+ *
+ * 守的是"诊断页画出来的那条时间轴，与真实发生的事一一对应"。事件由几个互不相识的采集钩子
+ * 投递（main-world 的 playurl hook、isolated 的 `PerformanceObserver`、`<video>` 的事件），
+ * 投递顺序与时间顺序不保证一致，所以归一要做三件事，且每件都有对错之分：
+ *
+ * 1. **非有限数 / 负数时间戳直接丢，不修正成 0。** 修正成 0 会在时间轴上凭空多出一个
+ *    "页面刚开始就发生了这件事"的假节点 —— 比缺一个节点更容易骗人，因为它看起来是数据。
+ * 2. **排序要稳定**：主键 `t`，次键用 `LoadStage` 的声明顺序。否则同一毫秒内的
+ *    `playurl-req` / `playurl-res` 每次渲染位置随机，用户截图对比时对不上。
+ * 3. **绝不补造事件。** 输入没有就不输出。缺一个节点只是少一条信息，
+ *    补一个占位节点则是**编造事实** —— 诊断工具一旦编数据，整份报告的信用就没了。
+ *
+ * ## ⚠️ 时间戳只排序，绝不"修正"
+ *
+ * 曾经有一版在排序之前先做"单调性夹平"（当前 `t` 小于上一条就改成上一条的值），
+ * 并输出 `adjusted` 计数。整段删掉的原因不是口味：
+ *
+ * - **同源，本身有序。** `seg-req` / `seg-res` 取自**同一条** resource entry 的
+ *   `startTime` / `responseEnd`，不存在跨源时钟偏差；`t` 就是事实。
+ * - **夹平那一步永远不可能触发。** 排序完成后 `t` 已非递减，"当前 t 小于上一条"恒为假，
+ *   `adjusted` 恒为 0 —— 界面写"N 条被修正"只是因为它数不到，是个假指标。
+ * - **它会改写事实。** 一个真的更早的事件会被抬成前一条的时间，而"更早"恰恰可能是要
+ *   被看见的异常（比如采集钩子装晚了）。
+ *
+ * 所以：若某天真出现 `seg-res` 早于 `seg-req`，**照原样显示**。那是采集侧的问题，
+ * 应该被发现，而不是被抹平成一个看着合理的顺序。
+ *
+ * 上限 200 条（与采集侧环形缓冲一致）：超出时保留**最新的** 200 条，并置 `truncated`，
+ * 让界面能明说"前面还有事件被丢了"，而不是安静地只显示后段。
+ */
+
+import type { CdnKind } from '@core/cdn/classify';
+
+/** 加载阶段。声明顺序**就是**同一 `t` 下的渲染顺序，不要依赖字母序 */
+export type LoadStage =
+  | 'nav'
+  | 'playurl-req'
+  | 'playurl-res'
+  | 'ext-patch'
+  | 'seg-req'
+  | 'seg-res'
+  | 'canplay'
+  | 'playing'
+  | 'switch'
+  | 'stall'
+  | 'error'
+  | 'blocked';
+
+/** 一条加载事件 */
+export interface LoadEvent {
+  /** ms，相对 `performance.timeOrigin` */
+  t: number;
+  /** 阶段 */
+  stage: LoadStage;
+  /** 只有 hostname，**永不带 query**（query 里是 `upsig` / `deadline` 这类取流凭据） */
+  host?: string;
+  /** 该 host 的线路分类，便于面板直接显示，不必再算一遍 */
+  kind?: CdnKind;
+  /** 只管内存里的原始说明，不进导出（导出只取 t / stage / host / kind） */
+  note?: string;
+}
+
+/** `buildTimeline()` 的产出 */
+export interface LoadTimeline {
+  /** 归一后的事件，按 `t` 升序且已去重 */
+  events: LoadEvent[];
+  /** 是否因超出上限而丢掉过较早的事件 */
+  truncated: boolean;
+}
+
+/** 默认上限：与采集侧环形缓冲（200 条）保持一致，避免"采集丢了、这里却以为全有" */
+const DEFAULT_LIMIT = 200;
+
+/** 同一 `t` 的排序依据 —— 直接用下面数组的下标，声明顺序即语义 */
+const STAGE_ORDER: readonly LoadStage[] = [
+  'nav',
+  'playurl-req',
+  'playurl-res',
+  'ext-patch',
+  'seg-req',
+  'seg-res',
+  'canplay',
+  'playing',
+  'switch',
+  'stall',
+  'error',
+  'blocked',
+];
+
+/**
+ * 阶段在同 `t` 组内的排序权重。
+ *
+ * 用 `indexOf` 而不是 `Record<LoadStage, number>` 查表：非法阶段名（上游传了字符串）
+ * 会落到末尾而不是 `undefined`，排序比较不会变成 `NaN`（`NaN` 比较的返回值是实现细节，
+ * 会让 `sort` 行为不确定）。注释里的"声明顺序"也只有一个来源，不会两处漂移。
+ */
+function rankOf(stage: LoadStage): number {
+  const index = STAGE_ORDER.indexOf(stage);
+  return index < 0 ? STAGE_ORDER.length : index;
+}
+
+/** 去重键里区分"没有 host"与"host 是空串"——两者不同，不该互相吞掉 */
+function dedupeKey(t: number, stage: LoadStage, host: string | undefined): string {
+  const hostPart = host === undefined ? '\u0000' : `h:${host}`;
+  return `${t}\u0000${stage}\u0000${hostPart}`;
+}
+
+/**
+ * 把采集到的原始事件归一成可渲染的时间轴。
+ *
+ * 处理顺序：丢弃非法 → 排序 → 去重 → 截断。**没有**"修正时间戳"这一步：
+ * `t` 只被排序、从不被改写（理由见文件头 §"时间戳只排序，绝不修正"）。
+ *
+ * **不改入参**：入参是采集侧的环形缓冲，就地改会污染原始数据。
+ *
+ * @param raw 采集到的原始事件，允许乱序、允许重复、允许时间戳非法
+ * @param limit 保留的最新事件条数，默认 200；`NaN` 退回默认值，负数按 0 处理
+ * @returns 归一后的时间轴与"是否丢过较早事件"的标记
+ */
+export function buildTimeline(
+  raw: readonly LoadEvent[],
+  limit: number = DEFAULT_LIMIT,
+): LoadTimeline {
+  const max = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : DEFAULT_LIMIT;
+
+  // 1. 非法时间戳直接丢。`Number.isFinite` 同时挡住 NaN 与 ±Infinity；`< 0` 不属于本时基
+  const valid = raw.filter((event) => Number.isFinite(event.t) && event.t >= 0);
+
+  // 2. 排序：主键 t（时间戳原样保留，绝不夹平），次键阶段声明顺序（同 t 时渲染稳定）
+  const sorted = [...valid].sort((a, b) => {
+    if (a.t !== b.t) return a.t - b.t;
+    return rankOf(a.stage) - rankOf(b.stage);
+  });
+
+  const events: LoadEvent[] = [];
+  const seen = new Set<string>();
+
+  for (const event of sorted) {
+    // 3. 去重：stage + host + t 三者全同只留一条（`note` 不同也算同一条，它是同一件事）。
+    //    同 t 的同构事件在排序后会被并到一起，但中间可能夹着别的 host，
+    //    所以用 Set 记键而不是只比"上一条"。
+    const key = dedupeKey(event.t, event.stage, event.host);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    events.push(event);
+  }
+
+  // 4. 截断：保留最新的一段，并明确标记丢过东西
+  const truncated = events.length > max;
+  return {
+    events: truncated ? events.slice(events.length - max) : events,
+    truncated,
+  };
+}
+
+/**
+ * 找出播放中实际发生的线路切换。
+ *
+ * 取所有 `seg-req` 的 `host` 序列，相邻不同就产出一条 `{ t, from, to }`，
+ * `t` 用**后一条**（切过去那一次请求）的时间。
+ *
+ * 用 `seg-req` 而不是 `playurl-res` 的候选列表：候选是"可以用的"，分片请求才是
+ * "真的用了" —— 只看候选会把"备了但没用"误报成切换。
+ *
+ * @param events 已归一的事件（传 `buildTimeline()` 的 `events`）；按传入顺序扫，不重新排序
+ * @returns 切换点列表；空输入或只有一条 seg-req 时返回 `[]`
+ */
+export function detectSwitches(
+  events: readonly LoadEvent[],
+): { t: number; from: string; to: string }[] {
+  const switches: { t: number; from: string; to: string }[] = [];
+  let previousHost: string | null = null;
+
+  for (const event of events) {
+    if (event.stage !== 'seg-req') continue;
+    // 没有 host 的分片事件无法参与比较：跳过，但不重置上一条（否则会被当成"断点"）
+    const host = event.host;
+    if (host === undefined || host.length === 0) continue;
+
+    if (previousHost !== null && host !== previousHost) {
+      switches.push({ t: event.t, from: previousHost, to: host });
+    }
+    previousHost = host;
+  }
+
+  return switches;
+}
