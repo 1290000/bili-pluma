@@ -7,11 +7,13 @@ import {
   checkPendingUpdate,
   handleUpdateDismiss,
   handleUpdateStatus,
+  handleUpdateReload,
   runStartupUpdateCheck,
 } from '@/src/background/handlers/update.handler';
 // 2026-11-17 起 `toStatusView` 在 core（与 `resolvePhase` 相邻），不在 handler 里
 import { DEFAULT_UPDATE_STATE, toStatusView, type UpdateState } from '@core/update/state';
 import { UPDATE_STATE_KEY } from '@platform/update/state-store';
+import { UPDATE_RELOAD_DELAY_MS } from '@shared/constants/update';
 import type { ReleaseSource } from '@core/update/check';
 
 const CURRENT = '1.1.0';
@@ -251,6 +253,133 @@ describe('handleUpdateDismiss：打开「关于」Tab 即视为已读', () => {
     stubChrome(stateWith({ latest: { ...RELEASE, version: '1.3.0' }, dismissedVersion: '1.2.0' }));
     const next = await handleUpdateStatus();
     expect(next.status.phase).toBe('available');
+  });
+});
+
+describe('handleUpdateReload：关窗 → reload（顺序不能反）', () => {
+  /**
+   * ## 这条对应 2026-11-17 的第二个真机 bug
+   *
+   * 更新页写完文件后自己调 `chrome.runtime.reload()`：页面被销毁、**没人关窗**，
+   * Chrome 把那个 440×600 的 popup 填成**空白新标签页**。用户既看不到"更新好了"，
+   * 窗口也不消失。
+   *
+   * 所以收尾移到 SW：先 `windows.remove`，再延后 150ms `runtime.reload`。
+   * 这里钉住三件事：①关的是 update.html 所在窗口 ②reload 确实发生
+   * ③**reload 必须晚于关窗**（延后一拍）。
+   */
+  interface ReloadHarness {
+    removed: number[];
+    reloaded: () => number;
+    queries: Array<Record<string, unknown>>;
+  }
+
+  function stubForReload(tabs: Array<{ windowId?: number | undefined }>): ReloadHarness {
+    const removed: number[] = [];
+    const queries: Array<Record<string, unknown>> = [];
+    let reloadCount = 0;
+
+    vi.stubGlobal('chrome', {
+      runtime: {
+        getURL: (path: string) => `chrome-extension://test/${path}`,
+        reload: () => {
+          reloadCount += 1;
+        },
+        getManifest: () => ({ version: CURRENT }),
+      },
+      tabs: {
+        query: (q: Record<string, unknown>) => {
+          queries.push(q);
+          return Promise.resolve(tabs);
+        },
+      },
+      windows: {
+        WINDOW_ID_NONE: -1,
+        remove: (id: number) => {
+          removed.push(id);
+          return Promise.resolve();
+        },
+      },
+    });
+
+    return { removed, reloaded: () => reloadCount, queries };
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('★★ 关掉 update.html 所在的两个窗口，然后 reload（reload 必须延后）', async () => {
+    vi.useFakeTimers();
+    const h = stubForReload([{ windowId: 7 }, { windowId: 9 }]);
+
+    const reply = await handleUpdateReload();
+
+    expect(reply.type).toBe('update/reload:ok');
+    // 用 URL 现查窗口，而不是记 windowId —— 窗口可能开很久，SW 这期间重启过
+    expect(h.queries[0]).toEqual({ url: 'chrome-extension://test/update.html' });
+    expect(h.removed, '关窗是收尾的一半，漏掉就是那个空白新标签页').toEqual([7, 9]);
+    expect(h.reloaded(), 'reload 不能早于关窗生效 —— 窗口会被剩成空白页').toBe(0);
+
+    vi.advanceTimersByTime(UPDATE_RELOAD_DELAY_MS);
+    expect(h.reloaded()).toBe(1);
+  });
+
+  it('★ 两个标签在同一个窗口：只关那个窗口（重复调也不出错）', async () => {
+    vi.useFakeTimers();
+    const h = stubForReload([{ windowId: 7 }, { windowId: 7 }]);
+
+    await handleUpdateReload();
+    vi.advanceTimersByTime(UPDATE_RELOAD_DELAY_MS);
+
+    expect(new Set(h.removed)).toEqual(new Set([7]));
+    expect(h.reloaded()).toBe(1);
+  });
+
+  it('★ 没有 update.html 标签时也不许抛，reload 照常发生', async () => {
+    vi.useFakeTimers();
+    const h = stubForReload([]);
+
+    await expect(handleUpdateReload()).resolves.toEqual({ type: 'update/reload:ok' });
+    expect(h.removed).toEqual([]);
+
+    vi.advanceTimersByTime(UPDATE_RELOAD_DELAY_MS);
+    expect(h.reloaded()).toBe(1);
+  });
+
+  it('★ windowId 缺失 / 为 WINDOW_ID_NONE 时**不许**调 windows.remove（-1 不是窗口）', async () => {
+    vi.useFakeTimers();
+    const h = stubForReload([{ windowId: undefined }, { windowId: -1 }, { windowId: 5 }]);
+
+    await handleUpdateReload();
+    vi.advanceTimersByTime(UPDATE_RELOAD_DELAY_MS);
+
+    expect(h.removed).toEqual([5]);
+    expect(h.reloaded()).toBe(1);
+  });
+
+  it('★ 关窗失败也要继续 reload（关不掉比重载不了轻）', async () => {
+    vi.useFakeTimers();
+    let reloadCount = 0;
+    vi.stubGlobal('chrome', {
+      runtime: {
+        getURL: (path: string) => `chrome-extension://test/${path}`,
+        reload: () => {
+          reloadCount += 1;
+        },
+        getManifest: () => ({ version: CURRENT }),
+      },
+      tabs: { query: () => Promise.resolve([{ windowId: 7 }]) },
+      windows: {
+        WINDOW_ID_NONE: -1,
+        remove: () => Promise.reject(new Error('no such window')),
+      },
+    });
+
+    await expect(handleUpdateReload()).resolves.toEqual({ type: 'update/reload:ok' });
+    vi.advanceTimersByTime(UPDATE_RELOAD_DELAY_MS);
+    expect(reloadCount).toBe(1);
   });
 });
 

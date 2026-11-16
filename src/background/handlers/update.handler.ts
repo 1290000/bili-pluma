@@ -21,7 +21,7 @@ import {
 import { fetchLatestRelease } from '@platform/update/github';
 import { readUpdateState, writeUpdateState } from '@platform/update/state-store';
 import { currentVersion } from '@platform/update/version';
-import { UPDATE_MANUAL_COOLDOWN_MS } from '@shared/constants/update';
+import { UPDATE_MANUAL_COOLDOWN_MS, UPDATE_RELOAD_DELAY_MS } from '@shared/constants/update';
 import type { UpdateCheckOutcome, UpdateStatusView } from '@shared/types/update';
 
 /** 真实实现；测试里换成桩。 */
@@ -230,4 +230,51 @@ export async function handleUpdateOpen(): Promise<{ type: 'update/open:ok'; open
   } catch {
     return { type: 'update/open:ok', opened: false };
   }
+}
+
+/**
+ * 更新页写完文件后的收尾：**先关掉它自己，再重载扩展**（2026-11-17）。
+ *
+ * ## 为什么这两步必须由 SW 做（顺序还不能反）
+ *
+ * | 谁做 / 什么顺序 | 结果 |
+ * | --- | --- |
+ * | 页面先 `window.close()` 再 reload | 页面上下文已销毁，`reload()` **不会执行** |
+ * | 页面先 reload | 页面先死，**没人关窗** ⇒ Chrome 把那个 440×600 的 popup 填成**空白新标签页**（真机现象） |
+ * | **SW 先关窗、再 reload** | 两件都做到（SW 在 reload 生效前还活着） |
+ *
+ * ## 为什么用 `tabs.query` 找窗口，而不是记 `windowId`
+ *
+ * 更新窗口可能开着好几分钟（用户要选目录、下载、等确认）。这期间 **SW 会被回收重启**，
+ * 模块级变量归零 —— 记下来的 `windowId` 要么是 `undefined`，要么已经是**别的窗口**的 id
+ * （id 会复用，关错窗口比不关更糟）。
+ * 所以每次现查：URL 是我们自己的扩展页，唯一性由 `runtime.getURL` 保证。
+ *
+ * ## 为什么 reload 要延后 150ms
+ *
+ * `windows.remove()` 是异步的，而 `runtime.reload()` 会**立刻**把本 SW 一起销毁。
+ * 不等一拍就 reload，窗口移除可能还没来得及生效 ⇒ 又变成空白新标签页。
+ * 150ms 是"够移除窗口、又不让用户觉得卡住"的经验值。
+ *
+ * @returns `update/reload:ok` —— 但它只是**尽力而为**的确认：
+ *   消息一到就关窗，调用方那边多半已经没了，别指望它。
+ */
+export async function handleUpdateReload(): Promise<{ type: 'update/reload:ok' }> {
+  const url = chrome.runtime.getURL('update.html');
+
+  // 关掉所有更新窗口（正常只有一个；这里不假设，多开时也不能留下空白页）
+  const tabs = await chrome.tabs.query({ url }).catch(() => []);
+  for (const tab of tabs) {
+    const windowId = tab.windowId;
+    if (windowId === undefined || windowId === chrome.windows.WINDOW_ID_NONE) continue;
+    // 移除失败不阻断 reload：关不掉窗口也比重载不了强（下一轮用户还能再点一次）
+    await chrome.windows.remove(windowId).catch(() => undefined);
+  }
+
+  // 让窗口移除先生效，再重载（reload 会连带销毁本 SW，所以这是最后一句）
+  setTimeout(() => {
+    chrome.runtime.reload();
+  }, UPDATE_RELOAD_DELAY_MS);
+
+  return { type: 'update/reload:ok' };
 }

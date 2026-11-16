@@ -21,9 +21,19 @@
  * 其余依赖（`@core/update/*`）都是纯函数，不 mock。
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { maskComments, maskCommentsAndStrings } from '../../../scripts/lib/mask-source';
 import type { UpdateStatusView } from '@shared/types/update';
+
+const ENTRY_RAW = readFileSync(resolve(process.cwd(), 'entrypoints/update/main.ts'), 'utf8');
+/** 注释被抹白：**注释掉的代码在这里看不见**（"临时注掉"是最常见的回退形态） */
+const ENTRY_CODE = maskCommentsAndStrings(ENTRY_RAW);
+/** 只遮注释：用来断言"某段文案/字面量是否出现在代码里" */
+const ENTRY_LITERALS = maskComments(ENTRY_RAW);
 
 /** 与 `entrypoints/update/index.html` 里入口用到的 id 一一对应 */
 const HTML = `
@@ -144,5 +154,46 @@ describe('更新窗口：只有真的"更新"才允许装', () => {
 
     expect(startBtn().disabled).toBe(true);
     expect(versionLine()).toBe('读不到版本信息');
+  });
+});
+
+/**
+ * 收尾：**不再由页面自己 reload**（2026-11-17 第二个真机 bug）。
+ *
+ * 页面自己 `chrome.runtime.reload()` 有两个必然后果：上面那句「正在重新加载…」
+ * 一帧都画不出来，而且**没人关窗** ⇒ 440×600 的 popup 被 Chrome 填成空白新标签页。
+ *
+ * 现在收尾是：写盘 → 显示结果 → 停 800ms → 发 `update/reload` 给 SW（关窗 + reload）。
+ *
+ * 为什么用源码断言：这两个动作的**行为**已由 `update.handler.test.ts` 的
+ * `handleUpdateReload` 一组覆盖；这里要防的是**入口里又出现一句 `runtime.reload()`**
+ * —— 那种回退不会让任何行为测试变红（页面照样"更新成功"），只会让用户再次看到空白页。
+ */
+describe('更新窗口：收尾交给 SW（不许自己 reload）', () => {
+  it('★★★ 入口里不许直接调 runtime.reload()', () => {
+    expect(ENTRY_CODE, '页面自己 reload ⇒ 没人关窗 ⇒ 空白新标签页').not.toContain(
+      'runtime.reload()',
+    );
+  });
+
+  it('★★ 必须发 update/reload，并且是 fire-and-forget（不 await）', () => {
+    expect(ENTRY_LITERALS).toContain("sendMessage({ type: 'update/reload' })");
+    // `void` 前缀就是 fire-and-forget 的写法：窗口马上要没，等应答没有意义
+    expect(ENTRY_CODE).toContain('void requestReload();');
+  });
+
+  it('★★ 发之前必须停一拍，否则"已写入 N 个文件"一帧都画不出来', () => {
+    expect(ENTRY_CODE).toContain('UPDATE_SETTLE_MS');
+    // 顺序：先 await 停留，再 requestReload —— 反过来等于没停留
+    const settleIdx = ENTRY_CODE.indexOf('setTimeout(resolve, UPDATE_SETTLE_MS)');
+    const reloadIdx = ENTRY_CODE.indexOf('void requestReload();');
+    expect(settleIdx).toBeGreaterThan(-1);
+    expect(reloadIdx).toBeGreaterThan(settleIdx);
+  });
+
+  it('★ 成功态要说清"写了几个文件"，并提示刷新才生效', () => {
+    expect(ENTRY_LITERALS).toContain('已写入 ');
+    expect(ENTRY_LITERALS).toContain('正在重新加载扩展');
+    expect(ENTRY_LITERALS, '用户需要知道"刷新后才生效"').toContain('刷新后才生效');
   });
 });

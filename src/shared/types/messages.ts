@@ -170,7 +170,27 @@ export type RequestMsg =
    * ⚠️ 「立即更新」的可用性**不许**只认 `phase === 'available'`
    * （`tabs.ts` 的 `aboutTab`）：dismiss 只表示不再提示，不代表没有更新。
    */
-  | { type: 'update/dismiss' };
+  | { type: 'update/dismiss' }
+  /**
+   * 更新页写完文件后的**收尾**：关掉它自己，再重载扩展（2026-11-17）。
+   *
+   * ## 为什么必须绕回 background 做
+   *
+   * 这两个动作**只能由 SW 依次完成**，页面自己做不到：
+   *
+   * | 顺序 | 结果 |
+   * | --- | --- |
+   * | 页面先 `window.close()` 再 reload | 页面上下文已销毁，reload **不会执行** |
+   * | 页面先 reload | 页面先死，**没人关窗** ⇒ 浏览器把那个 440×600 的 popup 填成空白新标签页 |
+   *
+   * 而 SW 在 `runtime.reload()` 真正生效前还活着，所以它能先关窗、再 reload。
+   *
+   * ## 为什么是 fire-and-forget
+   *
+   * 发完这条消息，窗口马上要被关掉 —— 等应答没有意义（应答回到一个正在消失的上下文）。
+   * 调用方**不要** `await`。
+   */
+  | { type: 'update/reload' };
 /**
  * `page/activate:ok` 的 `reason` —— **唯一真相源**（2026-11-11 提取）。
  *
@@ -498,7 +518,16 @@ export type ResponseMsg =
   | { type: 'update/auto:err'; detail: string | null }
   | { type: 'update/dismiss:err'; detail: string | null }
   | { type: 'update/open:ok'; opened: boolean }
-  | { type: 'update/open:err'; detail: string | null };
+  | { type: 'update/open:err'; detail: string | null }
+  /**
+   * `update/reload` 的应答。
+   *
+   * ⚠️ 它是**尽力而为**的确认，不是"已经重载完了"的承诺：
+   * 消息一到，SW 关窗、150ms 后 reload —— 应答能不能回到调用方都无所谓
+   * （那时窗口多半已经没了）。所以调用方 fire-and-forget，不看这个字段。
+   */
+  | { type: 'update/reload:ok' }
+  | { type: 'update/reload:err'; detail: string | null };
 
 export type Msg = RequestMsg | ResponseMsg;
 

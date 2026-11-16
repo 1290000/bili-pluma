@@ -37,6 +37,29 @@ import {
 } from '@shared/constants/update';
 import type { UpdateStatusView } from '@shared/types/update';
 
+/**
+ * 写完文件后停留多久再关窗（毫秒）。
+ *
+ * 这一拍的存在理由只有一个：让「已写入 N 个文件，正在重新加载扩展…」
+ * **真的画出来**。不留它，下一句就会销毁页面，用户什么都没看到 ——
+ * 那正是"更新完了却像什么都没发生"的观感来源。
+ */
+const UPDATE_SETTLE_MS = 800;
+
+/**
+ * 让 background 关掉本窗口并重载扩展（**fire-and-forget**）。
+ *
+ * 不 `await`：窗口马上要被关掉，应答会回到一个正在消失的上下文。
+ * 也不在这里 `window.close()` —— 那会让随后的 reload 不执行（见调用处那张表）。
+ */
+function requestReload(): void {
+  try {
+    void chrome.runtime.sendMessage({ type: 'update/reload' });
+  } catch {
+    // 上下文已失效（`Extension context invalidated`）⇒ 什么都不用做
+  }
+}
+
 const versionLine = document.getElementById('version-line');
 const dirLine = document.getElementById('dir-line');
 const pickBtn = document.getElementById('pick-dir') as HTMLButtonElement | null;
@@ -242,9 +265,25 @@ async function onStart(): Promise<void> {
       withPendingUpdate(state, { from: status.currentVersion, to: zipVersion, at: Date.now() }),
     );
 
-    // 10) 重载扩展
-    say('正在重新加载扩展…');
-    chrome.runtime.reload();
+    /**
+     * 10) 收尾：**先让人看到结果，再交给 SW 关窗 + 重载**。
+     *
+     * ⚠️ 这里**不能**自己调 `chrome.runtime.reload()`（2026-11-17 真机 bug）：
+     *
+     * | 写法 | 用户看到什么 |
+     * | --- | --- |
+     * | 页面直接 reload | 上面那两行 `say` **一帧都没画出来**（reload 立刻销毁页面），而且没人关窗 ⇒ 440×600 的 popup 被 Chrome 填成**空白新标签页** |
+     * | 先 `window.close()` 再 reload | 页面上下文已销毁，reload **根本不执行** |
+     * | **本写法** | 停留 800ms 让人读到「已写入 N 个文件 / 正在重新加载扩展…」，然后由 SW 关窗、150ms 后 reload |
+     *
+     * 关窗与重载必须成对且有序，只有 SW 能两者都做（它在 reload 生效前还活着）。
+     */
+    say(`已写入 ${String(result.files)} 个文件，正在重新加载扩展…`);
+    appendLog('完成后 B站 页面会提示刷新，刷新后才生效');
+    // 让上面两行真的画出来（不留这一拍，用户永远看不到"写完了"）
+    await new Promise((resolve) => setTimeout(resolve, UPDATE_SETTLE_MS));
+    // fire-and-forget：窗口马上就没了，等应答没有意义
+    void requestReload();
   } catch (error) {
     say(`更新失败：${errorText(error)}`);
     appendLog(`失败：${errorText(error)}`);

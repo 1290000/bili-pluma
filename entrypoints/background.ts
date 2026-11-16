@@ -26,6 +26,7 @@ import {
   handleUpdateCheck,
   handleUpdateDismiss,
   handleUpdateOpen,
+  handleUpdateReload,
   handleUpdateStatus,
   checkPendingUpdate,
   runStartupUpdateCheck,
@@ -634,6 +635,28 @@ export default defineBackground(() => {
         .catch((e: unknown) =>
           sendResponse({
             type: 'update/dismiss:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
+    /**
+     * 更新页写完文件后的收尾（2026-11-17）：关掉更新窗口，再重载扩展。
+     *
+     * ⚠️ 这两步**只能由 SW 做**：页面自己 `window.close()` 之后 reload 不会执行；
+     * 先 reload 则页面先死、没人关窗 ⇒ 那个 popup 被 Chrome 填成空白新标签页。
+     * 详见 `handleUpdateReload()` 的注释。
+     *
+     * 调用了 `setTimeout`（延迟 reload），所以这里**不用** `return true` 等应答 ——
+     * 但 `sendResponse` 仍要先发出去，否则调用方（若还在）会等到超时。
+     */
+    if (type === 'update/reload') {
+      handleUpdateReload()
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'update/reload:err',
             detail: e instanceof Error ? e.name : 'unknown',
           }),
         );

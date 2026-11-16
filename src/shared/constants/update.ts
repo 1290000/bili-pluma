@@ -36,6 +36,21 @@ export const UPDATE_DEFAULT_INTERVAL_DAYS = 1;
 export const UPDATE_MANUAL_COOLDOWN_MS = 60_000;
 
 /**
+ * `windows.remove()` 之后等多久再 `runtime.reload()`（毫秒）。
+ *
+ * ## 为什么要等
+ *
+ * 两者都是异步的，而 `runtime.reload()` 会**立刻**销毁整个 SW（含正在跑的代码）。
+ * 不等一拍就 reload，窗口移除可能还没生效 ⇒ 那个 440×600 的 popup 被 Chrome
+ * 填成**空白新标签页**（2026-11-17 真机现象）。
+ *
+ * ## 为什么是 150
+ *
+ * 够窗口移除生效、又不让用户觉得"卡住了"。调大只会让收尾更慢，没有别的好处。
+ */
+export const UPDATE_RELOAD_DELAY_MS = 150;
+
+/**
  * 允许写进扩展目录的**顶层项**。
  *
  * ⚠️ 这份清单必须跟着 `entrypoints/` 与构建产物走：新增一个 HTML 入口就要加进来，

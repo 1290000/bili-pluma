@@ -44,7 +44,17 @@ zip 靠手动下载手动替换 ⇒ 没有任何自动升级机制。2026-11-15 
 
 **更新动作**：用户点「立即更新」→ 独立扩展窗口 → `showDirectoryPicker` 授权一次目录 →
 下载**精简包**（约 283 KB）→ 零依赖解压 → 白名单校验 → 逐文件写入并回读 size →
-`chrome.runtime.reload()`。
+**收尾**：
+
+1. 显示「已写入 N 个文件，正在重新加载扩展…」，停留 800ms（否则这句一帧都画不出来）
+2. 更新页发 `update/reload` 给 SW，**不再自己 reload**
+3. SW 关掉更新窗口（`tabs.query` 按 `update.html` 现查窗口 → `windows.remove`）
+4. SW 延后 150ms `runtime.reload()`（让窗口移除先生效）
+5. 重载后 SW 启动时 `checkPendingUpdate()` 核对版本；B站 页面上面板自动提示刷新
+
+⚠️ 第 3、4 步**只能由 SW 做**（2026-11-17 真机缺陷）：页面先 `window.close()` 则随后的
+`reload()` 不会执行；页面先 `reload()` 则页面先死、**没人关窗**，Chrome 会把那个
+440×600 的 popup 填成**空白新标签页**。SW 在 reload 生效前还活着，所以由它依次做这两件事。
 
 ## 为什么不用别的路
 
