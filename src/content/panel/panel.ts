@@ -92,9 +92,9 @@ export type PanelTab = (typeof PANEL_TABS)[number];
 /**
  * Tab 显示文字。
  *
- * ⚠️ **四个 Tab 挤在 280px 里**，每个约 68px（扣掉 padding 与 gap）。
- * 两字中文在 13px 字号下约 26px，加 5px 左右 padding 完全放得下 ——
- * 所以**不需要缩字号或改成图标**。见 `PANEL_CSS` 里 `.tab` 的注释。
+ * ⚠️ **五个 Tab 挤在 300px 里**（2026-11-16 改版前是 280px / 四个），
+ * 每个约 56px（扣掉 padding 与 gap）。两字中文在 13px 字号下约 26px，
+ * 完全放得下 —— 所以**不需要缩字号或改成图标**。见 `PANEL_CSS` 里 `.tab` 的注释。
  */
 const TAB_LABEL: Record<PanelTab, string> = {
   quality: '画质',
