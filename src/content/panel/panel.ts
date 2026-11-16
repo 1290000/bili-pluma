@@ -54,6 +54,7 @@ import {
   openUpdateWindow,
   readUpdateStatus,
   requestUpdateCheck,
+  requestUpdateDismiss,
   writeUpdateAuto,
   type PanelModel,
 } from './panel-data';
@@ -124,6 +125,13 @@ export interface PanelController {
   showTab(tab: PanelTab): void;
   /** 重画（模型变了） */
   setModel(model: PanelModel): void;
+  /**
+   * 外部推来一份新的更新状态（来自 `storage.onChanged` 的 `pluma:update-state`）。
+   *
+   * 用于多 Tab 同步：一个面板里看过「关于」之后，别的 Tab 的红点要跟着消失。
+   * **不触发 dismiss** —— 推来的状态不代表"用户看过这一版"。
+   */
+  applyUpdateStatus(next: UpdateStatusView): void;
   /** 当前 Tab */
   currentTab(): PanelTab;
   /** 当前返回栈深度（0 = 一级页） */
@@ -1014,18 +1022,171 @@ export function mountPanelBody(actions: PanelActions): PanelController {
         updateStatus = status;
         updateReadFailed = status === null;
       })
+      /**
+       * ⚠️ 这一段**不能省**（2026-11-17 二轮，把本函数提到 `render()` 顶部时才暴露）。
+       *
+       * `readUpdateStatus()` 是 `async`，`sendMessage` 同步抛（扩展被重载后的
+       * `Extension context invalidated`）或返回 `undefined`（某些测试桩）时，
+       * 它会**reject** 而不是返回 `null`。此时：
+       *
+       * - `updateReadFailed` 仍是 `false` ⇒ 三条早退全失效
+       * - `.finally` 照样 `render()` ⇒ `render()` 又调本函数 ⇒ 再读 ⇒ 再 reject …
+       *
+       * 就是**死循环 + 内存暴涨**（真机上表现为面板卡死、页面 CPU 拉满）。
+       * 把 rejection 与 `status === null` 同等对待（都是"读失败，本会话不再重试"）
+       * 才能把环切断。之前本函数只在「关于」Tab 才被调用，这个环碰不到，所以没暴露。
+       */
+      .catch(() => {
+        updateReadFailed = true;
+      })
       .finally(() => {
         updateReading = false;
         render();
       });
   }
 
+  /**
+   * 打开「关于」Tab 即视为已读（2026-11-17）。
+   *
+   * ## 为什么用"进入 Tab"而不是加一个「×」按钮
+   *
+   * `docs/02-ui-spec.md` §5.3 的版式是定稿的（纵向四行），多一个「×」是净增 UI；
+   * 而"点进关于页说明我已经看到了"本来就是用户的意图。
+   * 安全性靠面板默认 Tab 是 `'quality'` 且**不记忆上次选中** —— 「关于」只能由用户主动点进来。
+   *
+   * ## ⚠️ 必须防重（这里是消息风暴的唯一入口）
+   *
+   * `render()` 是高频函数：`ensureUpdateRead()` 的 `.finally` 会调它，
+   * 每次 Tab 切换、每次存盘都调它。没有防重就是**每帧一条消息**。
+   *
+   * 用**版本号**而不是布尔：`dismissedVersion` 只压"那一版"（`shouldPrompt` 的语义），
+   * 界面上必须跟着一致 —— 否则"同一会话里先看到 v1.2.0、又查到 v1.3.0"时，
+   * v1.3.0 的红点再也消不掉。
+   *
+   * 副作用要说清：如果用户就停在「关于」Tab 上点「检查更新」查出了一个新版本，
+   * 那一次也会立刻算已读（他正看着版本行上的「最新 v1.3.0」，确实看到了）。
+   * 换到别的 Tab 就不会 —— 那时 `render()` 走的是分支外面，根本不调本函数。
+   *
+   * ## ⚠️ 失败静默
+   *
+   * `requestUpdateDismiss()` 返回 `null` 时**什么都不做** —— 红点保留，别的都不变。
+   * dismiss 只是消除提示，它失败不该把 Tab 切成错误态（那会让版本行和按钮一起消失）。
+   * 也**不重试**：失败后每个 `render()` 都重发一次，比红点消不掉糟得多。
+   *
+   * ## ⚠️ `sendMessage` 会**同步抛**，而 `.catch()` 接不到
+   *
+   * 扩展被重载后，`chrome.runtime.sendMessage` 抛的是 `Extension context invalidated`
+   * —— 那是**同步异常**，`panel-data.ts` 里挂在它后面的 `.catch(() => null)` 根本接不到。
+   *
+   * ## ⚠️ 但**光有 `try/catch` 在这里没用**（实测，2026-11-17 二轮）
+   *
+   * `requestUpdateDismiss()` 是 `async` 函数 ⇒ 体内的同步抛会被它自己**转成
+   * rejected promise**，调用方那圈 `try` 里什么都不会发生。真正漏出去的是
+   * **未处理的 promise rejection**：`.finally` 照跑（所以标志位不会卡），
+   * 但控制台留一条 unhandled rejection，而"接住它"只能靠链上的 `.catch()`。
+   *
+   * 两层的分工：
+   *
+   * | 兜什么 | 靠什么 | 今天可达吗 |
+   * | --- | --- | --- |
+   * | `async` 转出来的 rejection（真实会发生的） | 链上的 `.catch()` | ✅ 是 |
+   * | 万一以后 `requestUpdateDismiss` 改成非 `async` 的同步抛 | 外层 `try/catch` | ❌ **不可达** |
+   *
+   * ⚠️ **外层 `try/catch` 今天不可达**：调用一个 `async` 函数本身从不抛
+   * （实测：删掉外层，全部用例绿、行为完全一致）。保留它只为将来那次重构兜底 ——
+   * **不要**把它当成"同步抛已被处理"而去删链上的 `.catch()`，那才是真正生效的那层。
+   *
+   * 复位 `dismissSending` 放 `.finally` —— 成功、失败、抛，三条路都要放，否则锁死。
+   *
+   * 同一类 bug 在 `5b4396f` / `40a2aa9` 修过两次，不要再踩第三次。
+   *
+   * 不复位 `dismissedFor`：上下文都已失效，这次会话的后续请求一样会抛，
+   * 重试没有意义（与"失败不重试"同一条纪律）。
+   */
+  let dismissSending = false;
+  let dismissedFor: string | null = null;
+  /**
+   * 下一次 `render()` **不许**触发 dismiss（一次性）。
+   *
+   * 只有 `applyUpdateStatus()` 会置它 —— 那份状态是 `storage.onChanged` 推来的，
+   * 不代表"用户看过这一版"。见该方法的注释。
+   */
+  let suppressDismissOnce = false;
+
+  function ensureUpdateDismissed(): void {
+    if (dismissSending) return;
+    const latest = updateStatus?.latestVersion ?? null;
+    if (latest === null || updateStatus?.phase !== 'available') return;
+    if (dismissedFor === latest) return;
+
+    dismissedFor = latest;
+    dismissSending = true;
+    try {
+      void requestUpdateDismiss()
+        .then((status) => {
+          // null = 后台没应答 / 没成功：静默保留红点，不切错误态
+          if (status) updateStatus = status;
+        })
+        // ⚠️ 这一句不能省：`async` 函数体内的同步抛会变成 rejection，
+        // 没有它就是一个未处理的 promise rejection（真机表现为控制台一片红）
+        .catch(() => undefined)
+        .finally(() => {
+          dismissSending = false;
+          render();
+        });
+    } catch {
+      // 同步抛（`Extension context invalidated`）：复位在途标志，别把面板锁死
+      dismissSending = false;
+    }
+  }
+
   const render = (): void => {
+    /**
+     * 一次性压制：上一次 `applyUpdateStatus()` 推来的状态不算"用户看过"。
+     *
+     * 必须在**这里**消费（而不是在 `about` 分支里），否则当前不在「关于」时
+     * 标志会残留到下一次真正的 Tab 切换，把那次合法的 dismiss 一起吃掉。
+     */
+    const suppressDismiss = suppressDismissOnce;
+    suppressDismissOnce = false;
+
     // Tab 高亮
     for (const [t, b] of tabButtons) {
       b.classList.toggle('active', t === tab);
       b.setAttribute('aria-selected', t === tab ? 'true' : 'false');
     }
+
+    /**
+     * ⚠️ **必须在算 `updateDot.hidden` 之前、且不在 `about` 分支里**（2026-11-17 修）。
+     *
+     * ## 红点通道曾经整个是死的
+     *
+     * 原先这一句只写在 `if (tab === 'about')` 里面，于是：
+     *
+     * 1. 用户点进「关于」之前 `updateStatus` 恒为 `null` ⇒ 下面那行
+     *    `updateDot.hidden = … !== 'available'` **恒为 true**，红点从来不亮；
+     * 2. 而一旦点进「关于」，`ensureUpdateDismissed()` 立刻把 phase 改成 `'dismissed'`
+     *    ⇒ 红点又隐藏。
+     *
+     * 净效果：红点只在"读到状态 → dismiss 应答"那一个消息往返里存在（毫秒级）。
+     * `docs/02-ui-spec.md` §5.3「通知通道」承诺的 Tab 红点**从未对用户生效**，
+     * 真正起作用的只有工具栏角标。**通知通道必须有独立于 Tab 的触发点**，
+     * 否则它作为通知通道就不存在 —— 用户不点进来就永远看不到它。
+     *
+     * ## 与文件头注释一致
+     *
+     * 上面那段注释原文是「进入「关于」Tab **或重画时**才问后台」，本来就是两条触发路径，
+     * 只是当时只实现了一条。
+     *
+     * ## 代价与递归安全性
+     *
+     * 面板挂载时会多发一条 `update/status`（每页只挂载一次，不是每次 render ——
+     * 三条早退挡着）。递归方面：`ensureUpdateRead` 的 `.finally` 会调 `render()`，
+     * 而 `render()` 又调它 —— 靠的就是 `updateStatus !== null` / `updateReading` /
+     * `updateReadFailed` 那三条早退，**一条都不能删**。
+     */
+    ensureUpdateRead();
+
     updateDot.hidden = updateStatus?.phase !== 'available';
 
     /**
@@ -1033,7 +1194,8 @@ export function mountPanelBody(actions: PanelActions): PanelController {
      * 所以它排在 `!model` 早退之前 —— 否则加载中会看到一个空 Tab。
      */
     if (tab === 'about') {
-      ensureUpdateRead();
+      // 已读到状态且 phase === 'available' 时，进来即视为已读（内部自带防重）
+      if (!suppressDismiss) ensureUpdateDismissed();
       replaceChildren(content, [
         aboutTab(updateStatus, {
           busy: updateBusy,
@@ -1311,6 +1473,22 @@ export function mountPanelBody(actions: PanelActions): PanelController {
      * 复位后 `render()` → `ensureBadgeRead()` 会重新发一次请求。
      */
     if (t === 'display') badgeReadFailed = false;
+    /**
+     * 进「关于」Tab 同理 —— **同一纪律，不是新发明**（2026-11-17 三轮）。
+     *
+     * `updateReadFailed` 是"本会话不再重试"的闸：它挡住了
+     * `render → read → reject → render` 那个死循环（见 `ensureUpdateRead` 的注释）。
+     * 但它也把**瞬时**失败变成了**永久**失败：读一次不成，这个 Tab 就只剩
+     * 「读不到更新状态 —— 关掉面板再打开试试」一行，检查 / 更新 / 开关全不渲染，
+     * 用户唯一的出路是关面板重开。
+     *
+     * 而 P1 把首次读取提前到了**面板挂载那一刻**（页面刚加载、SW 最可能还没醒），
+     * 正是最容易撞上瞬时失败的时刻 —— 所以这个手动重试口不是可选项。
+     *
+     * 每次进 Tab 最多复位 1 次，读到就 `updateStatus !== null` 永久早退，
+     * 读不到就再置 true，**不会成风暴**。
+     */
+    if (t === 'about') updateReadFailed = false;
     render();
   };
 
@@ -1320,6 +1498,30 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     showTab,
     setModel(next) {
       model = next;
+      render();
+    },
+    applyUpdateStatus(next) {
+      /**
+       * ## 为什么要从外面推状态进来（2026-11-17 三轮）
+       *
+       * `updateStatus` 是**面板实例自己的缓存**：`ensureUpdateRead` 读到一次就不再重读。
+       * 于是同一个 B 站页面开两个 Tab 各挂一个面板时，在 A 里看过之后，
+       * **B 的红点还亮着** —— 后台其实已经记成已读了。
+       *
+       * 解法是由 `entrypoints/content-panel.content.ts` 订阅 `pluma:update-state`，
+       * 把新状态推进来。这里只负责替换缓存并重画。
+       *
+       * ## ⚠️ 它**不算**"用户看过这一版"
+       *
+       * 推来的状态来自别的 Tab / 后台自动检查，不是用户打开的「关于」。
+       * 所以置 `suppressDismissOnce`，让紧接着那次 `render()` **不触发** dismiss ——
+       * 否则两个面板会互相踩：A 里刚查出 1.3.0，B 停在「关于」上就把它记成已读，
+       * A 那边红点直接消失。
+       */
+      updateStatus = next;
+      // 拿到了新鲜状态 ⇒ "读失败"这件事已经过去，闸门放开
+      updateReadFailed = false;
+      suppressDismissOnce = true;
       render();
     },
     currentTab: () => tab,

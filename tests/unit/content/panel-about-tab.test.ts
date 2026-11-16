@@ -119,6 +119,41 @@ describe('aboutTab：控件', () => {
     expect(openReleases).not.toHaveBeenCalled();
   });
 
+  /**
+   * 护栏：dismiss 只表示"不再提示"，**不代表没有更新**。
+   *
+   * 曾经的写法是 `disabled = view.phase !== 'available'`，加上"进「关于」Tab 自动 dismiss"
+   * 之后，用户一进来按钮就被永久禁用 —— 从此无法更新，比"红点消不掉"更严重。
+   * 这条测试就是钉住那次回归。
+   */
+  it('phase 是 dismissed 时「立即更新」**必须仍可点**（否则一进关于页就再也更新不了）', () => {
+    const openUpdate = vi.fn();
+    const node = aboutTab(view({ latestVersion: '1.2.0', phase: 'dismissed' }), {
+      ...noop,
+      openUpdate,
+    });
+    const btn = node.querySelector('[data-testid="update-now"]') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+    btn.click();
+    expect(openUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('phase 是 dismissed 时版本行仍说"最新 v1.2.0"，不许谎报"已是最新"', () => {
+    const node = aboutTab(view({ latestVersion: '1.2.0', phase: 'dismissed' }), noop);
+    const line = text(node, 'update-version');
+    expect(line).toContain('最新 v1.2.0');
+    expect(line).not.toContain('已是最新');
+  });
+
+  it('只有真的没有新版（idle / pending-reload）才禁用「立即更新」', () => {
+    for (const phase of ['idle', 'pending-reload'] as const) {
+      const node = aboutTab(view({ phase }), noop);
+      expect((node.querySelector('[data-testid="update-now"]') as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+    }
+  });
+
   it('点 Releases 走 openReleases（与"检查更新"是两个独立动作）', () => {
     const openReleases = vi.fn();
     const node = aboutTab(view(), { ...noop, openReleases });

@@ -180,6 +180,34 @@ describe('resolvePhase', () => {
   });
 });
 
+describe('关掉提示（withDismissed）的整条链路', () => {
+  it('dismiss 当前这一版 ⇒ 不再提示，phase 变 dismissed', () => {
+    const before = stateWith({ latest: NEWER });
+    expect(shouldPrompt(before, CURRENT)).toBe(true);
+    expect(resolvePhase(before, CURRENT)).toBe('available');
+
+    const after = withDismissed(before, NEWER.version);
+    expect(shouldPrompt(after, CURRENT)).toBe(false);
+    expect(resolvePhase(after, CURRENT)).toBe('dismissed');
+    // 关键：**"有更新"这个事实没变** —— 版本行与「立即更新」都靠它
+    expect(isUpdateAvailable(after, CURRENT)).toBe(true);
+  });
+
+  it('下一个版本重新提示（dismissedVersion 只压那一版）', () => {
+    const dismissed = withDismissed(stateWith({ latest: NEWER }), NEWER.version);
+    const nextRelease = { ...NEWER, version: '1.3.0' };
+
+    const after = withCheckResult(dismissed, { at: 1000, etag: null, latest: nextRelease });
+    expect(shouldPrompt(after, CURRENT)).toBe(true);
+    expect(resolvePhase(after, CURRENT)).toBe('available');
+  });
+
+  it('dismiss 不会顺手把 latest 清掉（否则"已是最新"就是谎报）', () => {
+    const after = withDismissed(stateWith({ latest: NEWER }), NEWER.version);
+    expect(after.latest?.version).toBe(NEWER.version);
+  });
+});
+
 describe('更新后自检的两种结局（Step 6）', () => {
   it('成功：withApplied 同时清掉 pendingUpdate 与失败记录', () => {
     const before = withPendingUpdate(

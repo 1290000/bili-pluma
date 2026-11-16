@@ -5,6 +5,7 @@ import {
   handleUpdateAuto,
   handleUpdateCheck,
   checkPendingUpdate,
+  handleUpdateDismiss,
   handleUpdateStatus,
   runStartupUpdateCheck,
   toStatusView,
@@ -183,6 +184,73 @@ describe('handleUpdateAuto', () => {
     const written = h.store.get(UPDATE_STATE_KEY) as UpdateState;
     expect(written.autoCheckEnabled).toBe(false);
     expect(written.lastCheckAt).toBe(12345);
+  });
+});
+
+describe('handleUpdateDismiss：打开「关于」Tab 即视为已读', () => {
+  it('有新版 ⇒ 落盘 dismissedVersion，并**顺手消掉工具栏角标**', async () => {
+    const h = stubChrome(stateWith({ latest: RELEASE }));
+    const reply = await handleUpdateDismiss();
+
+    expect(reply.type).toBe('update/dismiss:ok');
+    expect(reply.status.phase).toBe('dismissed');
+    // 版本行仍然要有最新版 —— dismiss 只压提示
+    expect(reply.status.latestVersion).toBe('1.2.0');
+
+    const written = h.store.get(UPDATE_STATE_KEY) as UpdateState;
+    expect(written.dismissedVersion).toBe('1.2.0');
+
+    // ⚠️ 漏掉 applyUpdateBadge 的话，Tab 红点没了但工具栏还亮着，且再也没有入口能消掉
+    expect(h.badge).toEqual(['']);
+  });
+
+  it('没有 latest ⇒ 一个 version 都不许写（不许凭空记"关过了"）', async () => {
+    const h = stubChrome(null);
+    const reply = await handleUpdateDismiss();
+
+    expect(reply.type).toBe('update/dismiss:ok');
+    expect(reply.status.phase).toBe('idle');
+    expect(h.setCalls).toHaveLength(0);
+    expect(h.store.has(UPDATE_STATE_KEY)).toBe(false);
+  });
+
+  it('latest 与当前版本相同（本机已是最新）⇒ 落盘一次，记的是当前版本，不会误挡下一版', async () => {
+    const h = stubChrome(stateWith({ latest: { ...RELEASE, version: CURRENT } }));
+    const reply = await handleUpdateDismiss();
+    expect(reply.status.phase).toBe('idle');
+    // latest 存在，所以会写一次；但写进去的 dismissedVersion 是"当前这一版"，
+    // 不该让下一版的红点失效
+    const written = h.store.get(UPDATE_STATE_KEY) as UpdateState;
+    expect(written.dismissedVersion).toBe(CURRENT);
+    expect(written.dismissedVersion).not.toBe(RELEASE.version);
+  });
+
+  it('幂等：这一版已经记过 ⇒ 不写盘，但**仍补一次消角标**', async () => {
+    const h = stubChrome(stateWith({ latest: RELEASE, dismissedVersion: '1.2.0' }));
+    const reply = await handleUpdateDismiss();
+
+    expect(reply.type).toBe('update/dismiss:ok');
+    expect(reply.status.phase).toBe('dismissed');
+    expect(h.setCalls, '已经记过这一版还写盘，白推一次 storage.onChanged').toHaveLength(0);
+    /**
+     * ⚠️ 断言是 `['']` 而**不是** `[]`（2026-11-17 三轮）。
+     *
+     * 角标是幂等 set，早退可以跳写盘，**不能**跳 `applyUpdateBadge`：
+     * 上一次 `setBadgeText` 可能自己失败过（内部 catch，SW 刚醒拿不到 action），
+     * 那时 dismissedVersion 已落盘 —— 若这里也跳过，`•` 就永远消不掉，
+     * 而用户唯一的消除入口就是这条消息。
+     */
+    expect(h.badge, '早退把消角标一起跳了 —— 上一次失败的 setBadgeText 再也没人补').toEqual(['']);
+  });
+
+  it('dismiss 之后换一个更新的版本 ⇒ phase 回到 available（下一版要重新提示）', async () => {
+    stubChrome(stateWith({ latest: RELEASE, dismissedVersion: '1.2.0' }));
+    const reply = await handleUpdateStatus();
+    expect(reply.status.phase).toBe('dismissed');
+
+    stubChrome(stateWith({ latest: { ...RELEASE, version: '1.3.0' }, dismissedVersion: '1.2.0' }));
+    const next = await handleUpdateStatus();
+    expect(next.status.phase).toBe('available');
   });
 });
 

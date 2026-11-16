@@ -31,6 +31,8 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
+import { maskCommentsAndStrings } from './lib/mask-source';
+
 /** 受检查的目录（相对仓库根） */
 const CHECKED_DIRS = ['src/core', 'src/shared'];
 
@@ -63,73 +65,15 @@ interface Violation {
 }
 
 /**
- * 把源码里的注释和字符串替换成等长空白，保持列号不变。
+ * ⚠️ 抹白逻辑在 `scripts/lib/mask-source.ts`（2026-11-17 抽出）。
  *
- * 为什么不用正则直接删：删掉会改变列号，报错位置就指错了。
+ * 抽出的原因：`tests/unit/content/panel/entry-panel-update-sync.test.ts` 也要用它
+ * （断言"某行代码真的会被执行"，被注释掉时必须看不见），而本文件以 `void main()`
+ * 结尾、**import 就会跑一遍扫描**，测试不能 import 它。
+ *
+ * **不要在这里再写一份** —— 两份抹白逻辑会以不同的 bug 方式漂移，
+ * 而这个函数的错误是静的（该报的不报 / 不该报的报）。
  */
-function maskCommentsAndStrings(src: string): string {
-  const out = src.split('');
-  let i = 0;
-  const n = src.length;
-
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to && k < n; k += 1) {
-      if (out[k] !== '\n') out[k] = ' ';
-    }
-  };
-
-  while (i < n) {
-    const ch = src[i];
-    const next = src[i + 1];
-
-    // 行注释
-    if (ch === '/' && next === '/') {
-      const end = src.indexOf('\n', i);
-      const stop = end === -1 ? n : end;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-
-    // 块注释
-    if (ch === '/' && next === '*') {
-      const end = src.indexOf('*/', i + 2);
-      const stop = end === -1 ? n : end + 2;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-
-    // 模板字符串（含 ${} 里的代码保持原样太复杂，整体当字符串处理）
-    if (ch === '`') {
-      let j = i + 1;
-      while (j < n && src[j] !== '`') {
-        if (src[j] === '\\') j += 1;
-        j += 1;
-      }
-      blank(i, j + 1);
-      i = j + 1;
-      continue;
-    }
-
-    // 单/双引号字符串
-    if (ch === '"' || ch === "'") {
-      const quote = ch;
-      let j = i + 1;
-      while (j < n && src[j] !== quote) {
-        if (src[j] === '\\') j += 1;
-        j += 1;
-      }
-      blank(i, j + 1);
-      i = j + 1;
-      continue;
-    }
-
-    i += 1;
-  }
-
-  return out.join('');
-}
 
 async function collectTsFiles(dir: string): Promise<string[]> {
   const out: string[] = [];

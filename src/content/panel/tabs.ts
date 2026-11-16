@@ -1253,6 +1253,12 @@ function describeSize(bytes: number | null): string {
  *
  * `view === null` 表示面板与后台没对上（SW 未醒 / 消息失败）。
  * 此时**不显示"已是最新"**——那是谎报。只说明读不到，并让用户重开面板。
+ *
+ * ## `phase` 只决定"提不提示"，不决定"有没有更新"
+ *
+ * `'dismissed'` = 用户已经打开过这个 Tab，这一版不再打扰。
+ * 它**不是**"没有新版"：版本行照常显示「最新 vY」，「立即更新」照常可点。
+ * 官方规格见 `docs/02-ui-spec.md` §5.3「通知通道」那一节。
  */
 export function aboutTab(
   view: UpdateStatusView | null,
@@ -1342,10 +1348,15 @@ export function aboutTab(
    * 前者下载并覆盖文件，后者只是跳去下载页。合成就等于替用户选了。
    *
    * 没有新版时禁用 —— 点了也只会拿到「没有可更新的版本」。
+   *
+   * ⚠️ **`dismissed` 必须也视为可执行**（2026-11-17）。
+   * 它只表示"这一版不再提示"，**不代表没有更新** —— `latestVersion` 仍然比当前新。
+   * 只认 `'available'` 的话，用户点进「关于」Tab（自动 dismiss）之后
+   * 按钮会被永久禁用，**从此无法更新** —— 比"红点消不掉"严重得多的功能倒退。
    */
   const updateBtn = el('button', 'acct-btn', '立即更新');
   updateBtn.type = 'button';
-  updateBtn.disabled = view.phase !== 'available';
+  updateBtn.disabled = view.phase !== 'available' && view.phase !== 'dismissed';
   updateBtn.setAttribute('data-testid', 'update-now');
   updateBtn.addEventListener('click', (ev) => {
     ev.stopPropagation();

@@ -57,6 +57,20 @@ import { resolvePrimaryCard } from '@shared/utils/primary-card';
 import type { StreamingIdentity } from '@shared/constants/streaming-identity';
 import { parsePlayPage } from '@shared/utils/video-page';
 import { readPrimaryProfile } from '@platform/storage/primary-profile-store';
+import { UPDATE_STATE_KEY } from '@platform/update/state-store';
+import { normalizeUpdateState } from '@core/update/state';
+/**
+ * `toStatusView` 与 `currentVersion()` 都来自 background 的更新 handler ——
+ * **本入口是 content script，正常情况下不该依赖 background 的代码**
+ * （AGENTS.md §5.1 允许 `entrypoints → background`，但这是全仓唯一一处这么用的）。
+ *
+ * 为什么仍然这样：`storage.onChanged` 拿到的是**归一化之前**的原始值，
+ * 要变成面板认识的 `UpdateStatusView` 必须走 `toStatusView` —— 那是唯一实现，
+ * 在这里重写一份 phase 判据就会和 `resolvePhase` 漂移。
+ * 换一条路（改发一次 `update/status` 消息）能免掉这个 import，代价是每次
+ * 状态变化多一次消息往返，且要处理"读失败"这条新分支。
+ */
+import { toStatusView } from '@/src/background/handlers/update.handler';
 import {
   PANEL_ENTRY_ENABLED_KEY,
   readFeedAccountEnabled,
@@ -78,6 +92,23 @@ import {
 // tokens.css 的**原始文本**，注入 shadow root 用。
 // ⚠️ 不能用 <link>：CSS 变量不穿透 shadow 边界，必须把规则塞进 shadow 内部
 import tokensCss from '@/src/design/tokens.css?raw';
+
+/**
+ * 当前安装的扩展版本。
+ *
+ * ⚠️ 与 `src/background/handlers/update.handler.ts` 的 `currentVersion()` **同一取法**
+ * （`getManifest().version`，拿不到就 `0.0.0`，绝不因为一个附属信息把面板搞崩）。
+ * 现在有两处实现 —— 因为一处是 SW、一处是 content script，中间没有共享模块。
+ * 若哪天要收敛，正确做法是把 `toStatusView` + 它一起挪进 `core`，
+ * 而不是在两边各改一遍。
+ */
+function currentVersion(): string {
+  try {
+    return chrome.runtime.getManifest().version;
+  } catch {
+    return '0.0.0';
+  }
+}
 
 /**
  * 当前页是不是受支持的播放页。
@@ -984,12 +1015,38 @@ export default defineContentScript({
      * 与角标开关同一模式（`entrypoints/content.ts` 的 `BADGE_ENABLED_KEY` 监听）。
      * 之所以必须监听而不是"开页时读一次"：popup 保存后页面已经加载完了，
      * 不监听就得让用户刷新 —— 而 popup 的文案不会说"刷新生效"。
+     *
+     * 同一个监听也负责**同步自动更新状态**（2026-11-17 三轮），见下面那段。
      */
     const onChanged = (
       changes: Record<string, chrome.storage.StorageChange>,
       area: string,
     ): void => {
       if (area !== 'local') return;
+
+      /**
+       * ## 更新状态同步：一个 Tab 里看过，「另一个 Tab」的红点也要消失
+       *
+       * `updateStatus` 是**面板实例自己的缓存**（`ensureUpdateRead` 读到一次就不再重读），
+       * 所以两个 B站 页面各挂一个面板时：在 A 里点开「关于」（后台记成已读）之后，
+       * **B 的红点仍然亮着** —— 界面与后台事实相反。
+       *
+       * 同理，若 SW 的启动自动检查在面板挂载**之后**才写出"有新版本"，
+       * 那一屏的红点本来也永远不出现。
+       *
+       * 两件事都由这条监听解决：存储变了就把新状态推给面板。
+       *
+       * ⚠️ **不许在这里触发 dismiss**：状态是别的 Tab / 后台写进来的，
+       * 不代表用户看过这一版。`applyUpdateStatus()` 内部已压制
+       * （`suppressDismissOnce`），否则两个面板会互相踩。
+       */
+      const updateChange = changes[UPDATE_STATE_KEY];
+      if (updateChange) {
+        // 存储里的东西一律不可信（可能是老版本写的 / 被手改过）→ 先归一化
+        const state = normalizeUpdateState(updateChange.newValue);
+        controller?.applyUpdateStatus(toStatusView(state, currentVersion()));
+      }
+
       const change = changes[PANEL_ENTRY_ENABLED_KEY];
       if (!change) return;
       enabled = change.newValue !== false;

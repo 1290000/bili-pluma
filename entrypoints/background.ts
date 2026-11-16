@@ -24,6 +24,7 @@ import { handleDiagFacts } from '@/src/background/handlers/diag.handler';
 import {
   handleUpdateAuto,
   handleUpdateCheck,
+  handleUpdateDismiss,
   handleUpdateOpen,
   handleUpdateStatus,
   checkPendingUpdate,
@@ -614,6 +615,25 @@ export default defineBackground(() => {
         .catch((e: unknown) =>
           sendResponse({
             type: 'update/open:err',
+            detail: e instanceof Error ? e.name : 'unknown',
+          }),
+        );
+      return true;
+    }
+
+    /**
+     * 打开「关于」Tab 即视为已读（2026-11-17）。
+     *
+     * 面板侧负责"该不该发"（只在 `phase === 'available'` 且只发一次），
+     * 这里负责落盘 + 消角标。两者分离的理由：**background 是唯一写者**，
+     * 面板直接写 `storage.local` 会绕过 `applyUpdateBadge`，角标就消不掉。
+     */
+    if (type === 'update/dismiss') {
+      handleUpdateDismiss()
+        .then(sendResponse)
+        .catch((e: unknown) =>
+          sendResponse({
+            type: 'update/dismiss:err',
             detail: e instanceof Error ? e.name : 'unknown',
           }),
         );

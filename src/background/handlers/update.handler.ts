@@ -14,6 +14,7 @@ import {
   shouldPrompt,
   withApplied,
   withAutoCheck,
+  withDismissed,
   withFailedUpdate,
   type UpdateState,
 } from '@core/update/state';
@@ -117,6 +118,70 @@ export async function handleUpdateAuto(enabled: boolean): Promise<{
   await writeUpdateState(state);
   await applyUpdateBadge(state, currentVersion());
   return { type: 'update/auto:ok', status: toStatusView(state, currentVersion()) };
+}
+
+/**
+ * 把「当前这一版」标记为已读（2026-11-17）。
+ *
+ * ## 什么时候被调用
+ *
+ * 用户打开面板的「关于」Tab，且当时 `phase === 'available'` —— 视为已读。
+ * 判据在面板侧（`panel.ts` 的 `dismissedFor`，**按版本号**防重），这里只管落盘。
+ *
+ * ## 为什么**必须**顺手调 `applyUpdateBadge`
+ *
+ * 红点由面板自己按 `phase` 画，但工具栏角标是 background 写的。
+ * 漏掉这一句 → Tab 上红点没了、工具栏那个 `•` 还亮着，而用户已经没有
+ * 任何入口能消掉它（「关于」Tab 是唯一入口）—— 那就是这个功能原本的 bug。
+ *
+ * ## 没有 `latest` 时**原样返回**
+ *
+ * 不能"没数据就记一个版本号"：`dismissedVersion` 只该等于**用户真正看见过的**
+ * 那一版。凭空写一个值会让下一版更新出现时"已经算关过了"，红点永远不亮。
+ *
+ * ## 幂等：已经记过这一版就**不再写盘**
+ *
+ * 面板侧已有防重，但这里仍要早退 —— 它是一条**公开的消息**，任何调用方
+ * （将来的 popup、自动化脚本）重复发都不该产生副作用：
+ * 多余的一次 `writeUpdateState` 会推一次 `storage.onChanged`，
+ * 所有监听者（面板自己、更新窗口）都要白重画一帧。
+ *
+ * ⚠️ 早退**只跳写盘**，`applyUpdateBadge` 照调 —— 理由写在分支里那一段。
+ */
+export async function handleUpdateDismiss(): Promise<{
+  type: 'update/dismiss:ok';
+  status: UpdateStatusView;
+}> {
+  const state = await readUpdateState();
+  const version = currentVersion();
+
+  if (state.latest === null) {
+    // 没查过 / 查不到最新版 ⇒ 无事可做，也不许伪造一个 dismissedVersion
+    return { type: 'update/dismiss:ok', status: toStatusView(state, version) };
+  }
+
+  // 已经记过这一版 ⇒ 不写盘，但**角标仍要补一次**
+  if (state.dismissedVersion === state.latest.version) {
+    /**
+     * ⚠️ 这里**只跳过写盘，不跳过 `applyUpdateBadge`**（2026-11-17 三轮）。
+     *
+     * 角标是幂等的 `setBadgeText`，多调一次没有副作用；而漏调一次的代价不对称：
+     * 上一次的 `setBadgeText` 可能**自己失败**了（它内部 `catch` 掉，SW 刚被唤醒时
+     * 拿不到 `action`），那时 `dismissedVersion` 已经落盘 —— 如果这里也跳过，
+     * 工具栏那个 `•` 就**再也不会**被补消，而用户唯一的消除入口就是这条消息。
+     *
+     * 这是"界面说 A、实际 B"的经典形状：状态说已读，角标还亮着。
+     */
+    await applyUpdateBadge(state, version);
+    return { type: 'update/dismiss:ok', status: toStatusView(state, version) };
+  }
+
+  const next = withDismissed(state, state.latest.version);
+  // `withDismissed` 恒返回新对象（不像 `withFailedCheck` 可能原样返回），
+  // 所以这里无需比较引用即可写 —— 那一次写是有意义的：phase 从 available 变 dismissed。
+  await writeUpdateState(next);
+  await applyUpdateBadge(next, version);
+  return { type: 'update/dismiss:ok', status: toStatusView(next, version) };
 }
 
 /**

@@ -779,6 +779,29 @@ export async function writeUpdateAuto(enabled: boolean): Promise<UpdateStatusVie
   return reply?.type === 'update/auto:ok' ? (reply.status ?? null) : null;
 }
 
+/**
+ * 把「当前这一版」标记为已读 —— 用户打开「关于」Tab 时调（2026-11-17）。
+ *
+ * 返回新的状态视图；`null` = **没读到 / 没成功**。
+ *
+ * ## `null` 时的语义是"当作没发生"，不是"出错"
+ *
+ * 调用方（`panel.ts`）拿到 `null` 必须**静默保留红点**：
+ * dismiss 只是"别再提示我"，它失败不该把整个 Tab 切成错误态 ——
+ * 版本行、检查按钮都还得能用。这与 `requestUpdateCheck` 的
+ * `{ status: null, outcome: 'failed', reason: … }` 那种"把失败说出来"不同：
+ * 那里用户主动点了按钮在等一个答案，这里他什么都没点。
+ */
+export async function requestUpdateDismiss(): Promise<UpdateStatusView | null> {
+  const reply = (await chrome.runtime
+    .sendMessage({ type: 'update/dismiss' })
+    .catch(() => null)) as {
+    type?: string;
+    status?: UpdateStatusView;
+  } | null;
+  return reply?.type === 'update/dismiss:ok' ? (reply.status ?? null) : null;
+}
+
 /** 打开更新窗口（小窗，由 background 创建）。 */
 export async function openUpdateWindow(): Promise<boolean> {
   const reply = (await chrome.runtime.sendMessage({ type: 'update/open' }).catch(() => null)) as {

@@ -149,7 +149,28 @@ export type RequestMsg =
    * 必须是 background 开：content script 里没有 `chrome.windows`，
    * 而且 `showDirectoryPicker` 只能在**扩展页面**里调（见方案 §1.3）。
    */
-  | { type: 'update/open' };
+  | { type: 'update/open' }
+  /**
+   * 把「当前这一版」标记为已读（2026-11-17）。
+   *
+   * ## 什么时候发
+   *
+   * 用户**打开「关于」Tab** 且当时 `phase === 'available'` —— 即视为已读。
+   * 不另设按钮：`docs/02-ui-spec.md` §5.3 的版式是定稿的，多一个「×」是净增 UI。
+   *
+   * ## 它只压提示，不改变"有更新"这个事实
+   *
+   * 落盘只写 `dismissedVersion`，于是：
+   *
+   * | 受影响的 | 不受影响的 |
+   * | --- | --- |
+   * | Tab 红点、工具栏角标（`shouldPrompt`） | 版本行「当前 vX · 最新 vY」 |
+   * | `resolvePhase()` 从 `available` 变 `dismissed` | 「立即更新」按钮是否可点 |
+   *
+   * ⚠️ 「立即更新」的可用性**不许**只认 `phase === 'available'`
+   * （`tabs.ts` 的 `aboutTab`）：dismiss 只表示不再提示，不代表没有更新。
+   */
+  | { type: 'update/dismiss' };
 /**
  * `page/activate:ok` 的 `reason` —— **唯一真相源**（2026-11-11 提取）。
  *
@@ -465,9 +486,17 @@ export type ResponseMsg =
       reason: string | null;
     }
   | { type: 'update/auto:ok'; status: UpdateStatusView }
+  /**
+   * dismiss 之后的完整状态（而不是只回 `{ ok: true }`）。
+   *
+   * 面板要把 `updateStatus` 就地换成新值再重画 —— 只回"成功"的话，
+   * 它得再发一次 `update/status`，多一次往返且中间那一帧仍是旧 phase（红点会闪回来）。
+   */
+  | { type: 'update/dismiss:ok'; status: UpdateStatusView }
   | { type: 'update/status:err'; detail: string | null }
   | { type: 'update/check:err'; detail: string | null }
   | { type: 'update/auto:err'; detail: string | null }
+  | { type: 'update/dismiss:err'; detail: string | null }
   | { type: 'update/open:ok'; opened: boolean }
   | { type: 'update/open:err'; detail: string | null };
 
