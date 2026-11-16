@@ -778,30 +778,38 @@ export const PANEL_CSS = `
   font-weight: 600;
 }
 
-/* ── 账号卡（对应 02-ui-spec §2.4：A 灰 / B 信息色）── */
+/* ── 账号卡（2026-11-16 改版：A 平 / B 浮，不再用"灰底 vs 蓝底"）──
+   | 卡 | 原来 | 现在 | 为什么 |
+   | --- | --- | --- | --- |
+   | A 浏览器当前登录态 | 10% 灰底 | **无底色** | 它是背景信息，不是扩展管的东西；铺一层灰会读成"一张点不动的卡" |
+   | B 取流账号 | 浅蓝底（accent-bg） | **--pluma-card + 发丝** | 蓝在新语言里只表示"当前/可执行"（裁决 A）；这张卡是"我的账号"，该靠明度浮起来而不是靠颜色 |
+
+   ⚠️ 层级靠"有没有面"表达，不靠加粗、不靠颜色 —— 与面板底板同一套材质语言。 */
 .acct-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 8px;
+  padding: 8px 10px;
   border-radius: var(--pluma-radius-card);
 }
 
 .acct-row.primary {
-  background: color-mix(in srgb, var(--pluma-text-muted) 10%, transparent);
+  background: transparent;
 }
 
 .acct-row.playback {
-  background: var(--pluma-accent-bg);
+  background: var(--pluma-card);
+  border: 0.5px solid var(--pluma-line);
 }
 
+/* 24 → 28px：24 里塞一个 11px 汉字，四周只剩 6px，看起来像"字挤在圈里" */
 .acct-avatar {
   display: flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   background: color-mix(in srgb, var(--pluma-text-muted) 22%, transparent);
   color: var(--pluma-text);
@@ -849,8 +857,8 @@ export const PANEL_CSS = `
 .acct-pill-row {
   display: flex;
   align-items: center;
-  /* 与 .acct-row 的 padding: 7px 8px 左内边距对齐 */
-  padding: 0 8px;
+  /* 与 .acct-row 的 padding: 8px 10px 左内边距对齐 */
+  padding: 0 10px;
   margin-top: 2px;
 }
 
