@@ -19,7 +19,7 @@ import type { CleanOptionKey, CleanPreferences } from '@/src/content/site-clean/
 import { CLEAN_OPTION_META } from '@/src/content/site-clean/clean-options';
 import { OBSERVED_CATEGORIES } from '@/src/content/site-clean/home-selectors';
 import { describeAdDebugCaveat, type AccountView, type QualityView } from './panel-data';
-import { el, pill, switchRow } from './dom';
+import { el, iconChevron, pill, switchRow } from './dom';
 import { describeExpiry, describeHealth } from '@core/ui/popup-state';
 import { describeStreamingIdentity } from '@core/ui/streaming-pill';
 import { isNewerThan } from '@core/update/state';
@@ -279,7 +279,7 @@ export function cleanTab(
   sub.appendChild(
     el('span', 'sub-entry-hint', count > 0 ? `已隐藏 ${String(count)} 类` : '9 个分类'),
   );
-  sub.appendChild(el('span', 'sub-entry-chevron', '▸'));
+  sub.appendChild(entryChevron());
   sub.addEventListener('click', (ev) => {
     ev.stopPropagation();
     ev.preventDefault();
@@ -479,7 +479,7 @@ export function displayTab(
   diag.type = 'button';
   diag.appendChild(el('span', undefined, '诊断'));
   diag.appendChild(el('span', 'sub-entry-hint', '自检信息 · 日志 · 导出'));
-  diag.appendChild(el('span', 'sub-entry-chevron', '▸'));
+  diag.appendChild(entryChevron());
   diag.addEventListener('click', (ev) => {
     ev.stopPropagation();
     ev.preventDefault();
@@ -499,6 +499,18 @@ export function displayTab(
    * 它是排查 InPrivate 权限的**唯一入口**（`wxt.config.ts` 的注释原话）。
    */
 
+  return box;
+}
+
+/**
+ * 二级入口右侧的「›」。
+ *
+ * 抽成一行是因为它有两处调用（首页净化 / 诊断），而"两个地方各拼一次"就是
+ * 下次其中一处改样的起点 —— 与 `.acct-actions` 那条纪律同一个道理。
+ */
+function entryChevron(): HTMLElement {
+  const box = el('span', 'sub-entry-chevron');
+  box.appendChild(iconChevron('right'));
   return box;
 }
 
@@ -528,7 +540,8 @@ export function homeCleanPane(
   const bar = el('div', 'sub-bar');
   const backBtn = el('button', 'sub-back');
   backBtn.type = 'button';
-  backBtn.textContent = '‹ 返回';
+  backBtn.appendChild(iconChevron('left'));
+  backBtn.appendChild(el('span', undefined, '返回'));
   backBtn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     ev.preventDefault();

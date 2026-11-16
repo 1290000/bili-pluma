@@ -745,9 +745,12 @@ export const PANEL_CSS = `
   font-size: var(--pluma-font-caption);
 }
 
+/* 图标容器：字符箭头换成 SVG 后，这里只管对齐与颜色（2026-11-16） */
 .sub-entry-chevron {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
   color: var(--pluma-text-muted);
-  font-size: var(--pluma-font-caption);
 }
 
 .sub-bar {
@@ -759,7 +762,10 @@ export const PANEL_CSS = `
 }
 
 .sub-back {
-  padding: 2px 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
   border: none;
   border-radius: var(--pluma-radius-control);
   background: transparent;

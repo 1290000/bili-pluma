@@ -159,3 +159,36 @@ export function replaceChildren(container: HTMLElement, children: readonly Node[
   container.textContent = '';
   for (const c of children) container.appendChild(c);
 }
+
+/**
+ * 方向箭头（二级入口的 `›` / 返回条的 `‹`）。
+ *
+ * ## 为什么不用 `▸` `‹` 字符
+ *
+ * 与 `iconClose` 同一个理由：中文字体里这三个箭头的**字形、宽度、基线**
+ * 各家都不一样，同一份 CSS 在 Edge（雅黑）和 macOS（苹方）上视觉高度能差 1~2px。
+ * 而它们出现在"可点的一行"里 —— 图标错位会被读成"这一行没对齐"。
+ *
+ * @param direction `'right'` = 进入二级（`›`）；`'left'` = 返回（`‹`）
+ */
+export function iconChevron(direction: 'left' | 'right', size = 12): SVGSVGElement {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 12 12');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-linecap', 'round');
+  svg.setAttribute('stroke-linejoin', 'round');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.style.pointerEvents = 'none';
+  svg.style.flex = '0 0 auto';
+
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', direction === 'right' ? 'M4.5 2.5 8 6l-3.5 3.5' : 'M7.5 2.5 4 6l3.5 3.5');
+  svg.appendChild(path);
+
+  return svg;
+}
