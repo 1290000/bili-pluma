@@ -167,8 +167,8 @@
  * | 阶段 | 动作 | 影响面 |
  * | --- | --- | --- |
  * | Stage 1 | `.sheet` 套材质（新增 `::before`，用 `--pluma-menu-fill/blur`） | 面板底板 |
- * | Stage 1 | `--pluma-radius-card` 12 → 10 | 所有卡片 |
- * | Stage 1 | `--pluma-border` 的引用替换成 `--pluma-line`（先换名，不换值） | 全部发丝线 |
+ * | Stage 1 | `--pluma-border` 的在面板壳里的引用换成 `--pluma-line`（先换名） | 头部那条线 |
+ * | Stage 2 | `--pluma-radius-card` 12 → 10 | 所有卡片 |
  * | Stage 2 | `--pluma-accent` #378add → #3E77F0 | Tab / 主按钮 / 链接 |
  * | Stage 2 | `--pluma-accent-bg` → `--pluma-accent-soft`（换名 + 微调值） | 选中底、hover 底 |
  * | Stage 2 | `--pluma-text` #1a1a1a → #1F2226、`--pluma-text-muted` #6b7280 → #6E747D | 全部文字 |

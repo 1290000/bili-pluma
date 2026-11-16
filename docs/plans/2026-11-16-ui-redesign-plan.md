@@ -483,15 +483,32 @@ ancestor backdrop root or a new fixed-position containing block."
 > 基线截图用 `bsk`（真实登录态）+ 明/暗两次；命令与坑见 [browser-skill-setup.md](../guides/browser-skill-setup.md)。
 > 无登录态的界面（更新窗、无痕页）用 CDP，不需要登录态。
 
-### Stage 1 · 壳
+### Stage 1 · 壳 —— **代码已完成 2026-11-16（真机实测待补）**
 
 | 项 | 内容 |
 | --- | --- |
-| 前置 | **先补 Stage 0 的 ③ 基线截图**（明/暗各一套）。没有"改前"，后面四个 commit 的"好看多了"都无法复核 |
-| 改动文件 | `sidebar.ts`（`PANEL_CSS` 的 `.sheet/.sheet-head/.tabs/.tab` 段）、`panel.ts`（无结构改动，只加一个 `section-head` 类） |
-| 一次只改一个变量 | ① **材质**（含 `@supports` 回退）② 线合并 ③ Tab 下划线 ④ 图标按钮 —— 四项**分四个 commit**，否则真机说"好看多了"也无法归因 |
+| 前置 | **先补 Stage 0 的 ③ 基线截图**（明/暗各一套）。没有"改前"，后面几个 commit 的"好看多了"都无法复核 |
+| 改动文件 | `sidebar.ts`（`PANEL_CSS` 的 `.sheet/.sheet-head/.tabs/.tab/.close` 段）、`panel.ts` / `tabs.ts`（只同步宽度注释）、`dom.ts`（新增 `iconClose()`） |
+| 一次只改一个变量 | ① **材质**（含 `@supports` 回退）② **宽度** ③ 线合并 ④ 线色 ⑤ Tab 下划线 ⑥ 图标按钮 —— **六个 commit**，各自带截图（截图待补） |
 | 退出条件 | ① 的 commit 必须附**一条实测**：真机里 `getComputedStyle(sheet).backdropFilter` 有值、截图能看到背后内容被模糊（不是纯半透明），并记下播放页/直播页帧率；其余：5 个 Tab 都能切换；红点在「关于」上不跑偏；贴边条 `has-update` 仍可见；面板不遮挡播放器控件区 |
 | 回滚 | `git revert` 单个 commit |
+
+**实际交付（6 个 commit）：**
+
+| commit | 内容 |
+| --- | --- |
+| `db37617` | 底板换材质：`::before` 铺 70% + `blur(40px) saturate(150%)`，`border: 0` + `--pluma-elevation-panel`，两条回退 |
+| `f1a655f` | 280 → 300px，同步四处按旧宽度写的注释 |
+| `3814915` | 删掉 Tab 行那条线（只留头部一条） |
+| `d126a4d` | 修上一提交在 CSS 模板里误用的反引号（见下方坑） |
+| `1f10824` | 头部那条线换 `--pluma-line`（10%） |
+| `be0b165` | Tab 改下划线式（蓝字 + 2px，无底色；2px 透明占位防跳动） |
+| `d832ce4` | 关闭按钮换内联 SVG，命中区 20 → 24px；顺带加"模板里禁第二个反引号"的守卫 |
+
+⚠️ **踩到的坑（已写成测试）**：`PANEL_CSS` 是模板字符串，在它里面写注释时用了
+Markdown 反引号（`` ` ``）会把字符串提前截断 —— 当天踩了两次，第二次还因为
+`prettier --check ... | tail` 的退出码取自 `tail` 而**误提交**（HANDOFF 里记过同一条）。
+现在 `tests/unit/design/ui-class-contract.test.ts` 有一条守卫盯着这件事。
 
 ### Stage 2 · 内容组件
 
@@ -518,6 +535,7 @@ ancestor backdrop root or a new fixed-position containing block."
 | --- | --- |
 | 删旧 | 删掉 Stage 0 保留的旧变量别名、`.about-pane` 的 gap 补丁、`▸/‹/×` 字符用法 |
 | 写回 | 把 §4 的规则写进 [02-ui-spec.md](../02-ui-spec.md) §6（**只写规则与角色，不抄 hex**，值以 `tokens.css` 为准） |
+| 补决策 | 写 ADR 0037「底板改用半透明材质」：记**模糊的性能代价**与三条回退，并在 `docs/README.md` 的 ADR 表登记（`check-adr-index` 会断言两边一致） |
 | 深色 | 逐屏核一遍对比度与档位差 |
 | 退出条件 | §9 验收全过 + `node scripts/verify.mjs` 全绿 |
 
@@ -638,9 +656,13 @@ ancestor backdrop root or a new fixed-position containing block."
 
 ---
 
-## 10. 待你裁决的 5 件事
+## 10. 六件待拍板的事 —— **已拍板（2026-11-16）**
 
-> 这 5 条会影响后面所有工作量，**建议先定再开工**。
+> 用户原话：「§10 的 A–F 六条就按你建议的来」。裁决结果：
+> **A 改绿 · B 加宽到 300px · C 改下划线 · D 先保持 #378ADD · E 升为全局规则 · F 不搬 corner-shape**。
+>
+> 已落地：B（`f1a655f`）、C（`be0b165`）。未落地：A / D 属 Stage 2 的换色，
+> E 属 Stage 2 的 `.tab-pane` 全局 gap —— 换色必须单独成 commit，不能和结构改动混。
 
 | # | 问题 | 选项 | 我的建议 |
 | --- | --- | --- | --- |
