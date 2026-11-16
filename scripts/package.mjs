@@ -272,13 +272,13 @@ ${section}
 
 ### 安装
 
-1. 下载 `pluma-${version}.zip`，解压到**固定文件夹**（以后更新会覆盖这里）
-2. 打开 `edge://extensions`（Chrome 用 `chrome://extensions`），开启「开发者模式」
+1. 下载 \`pluma-${version}.zip\`，解压到**固定文件夹**（以后更新会覆盖这里）
+2. 打开 \`edge://extensions\`（Chrome 用 \`chrome://extensions\`），开启「开发者模式」
 3. 点「加载解压缩的扩展」，选中解压出的文件夹
 4. 打开任意 B站 页面，鼠标贴到页面最左边缘 —— 面板会滑出，登录和设置都在那里
 
 需要 Chrome 120+ 或 Edge。未经过商店签名，仅供学习交流使用。
-从源码构建：`pnpm install && pnpm build`，加载 `.output/chrome-mv3`。
+从源码构建：\`pnpm install && pnpm build\`，加载 \`.output/chrome-mv3\`。
 `;
 }
 
