@@ -8,7 +8,8 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--pluma-surface);
+  /* 2026-11-16（Stage 4）：独立窗口用 canvas 一档灰，内容面才用 surface */
+  background: var(--pluma-canvas);
   color: var(--pluma-text);
   font-family: var(--pluma-font-sans);
   font-size: var(--pluma-font-body);
@@ -36,12 +37,14 @@ body {
   text-align: center;
 }
 
+/* 二维码卡必须是**近白**底：扫码靠的是黑白对比与静区，
+   原来的浅蓝底（accent-bg）在弱光下会降低识别率。 */
 .qr-card {
   width: 300px;
   height: 300px;
   border-radius: var(--pluma-radius-card);
-  border: 0.5px solid var(--pluma-border);
-  background: var(--pluma-accent-bg);
+  border: 0.5px solid var(--pluma-line);
+  background: var(--pluma-surface);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -106,14 +109,18 @@ body {
 
 .refresh {
   margin-top: 14px;
-  padding: 8px 20px;
+  min-height: var(--pluma-h-control);
+  padding: 4px 20px;
   font-family: inherit;
   font-size: var(--pluma-font-body);
   color: var(--pluma-text);
   background: transparent;
-  border: 0.5px solid var(--pluma-border);
+  border: 0.5px solid var(--pluma-line);
   border-radius: var(--pluma-radius-control);
   cursor: pointer;
+  transition:
+    border-color var(--pluma-duration) var(--pluma-ease),
+    color var(--pluma-duration) var(--pluma-ease);
 }
 
 .refresh:hover {
