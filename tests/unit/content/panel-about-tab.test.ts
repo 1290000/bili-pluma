@@ -144,6 +144,43 @@ describe('aboutTab：状态徽标（仅「有新版本」时出现）', () => {
   });
 
   /**
+   * ## 本地比线上新 ≠ 有新版本（2026-11-17 真机 bug）
+   *
+   * 用户装了 1.2.0 的包、线上最新还是 1.1.0。旧判据是
+   * `latest !== view.currentVersion`（字符串不等）⇒ 卡头挂上「有新版本」，
+   * 而「立即更新」用 `phase`（走 `isNewer`）⇒ `idle` ⇒ 禁用。
+   *
+   * **同一个面板，上半部分说有新版、下半部分说没有。** 这条钉住它。
+   *
+   * 变异验证：把 `isNewerThan(latest, view.currentVersion)` 换回
+   * `latest !== view.currentVersion` → 本条必红（徽标冒出来）。
+   */
+  it('★★★ 线上 1.1.0 / 本地 1.2.0 ⇒ 没有新版：无徽标、版本行说「已是最新」', () => {
+    const node = aboutTab(
+      view({ currentVersion: '1.2.0', latestVersion: '1.1.0', phase: 'idle' }),
+      noop,
+    );
+    expect(testid(node, 'update-badge'), '本地比线上新，不该报「有新版本」').toBeNull();
+    expect(text(node, 'update-current')).toBe('v1.2.0');
+    expect(text(node, 'update-latest')).toBe('已是最新');
+    // 与「立即更新」的可用性一致（同一条判据 ⇒ 按钮禁用的同时也无徽标）
+    expect((testid(node, 'update-now') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  /**
+   * `latestVersion === null`（从没检查过）也**不能**报新版。
+   *
+   * 它和"比过了发现不新"不是一回事，但两者都**不该**出现「有新版本」徽标。
+   * （这一行文案是既有行为：`已是最新`。是否要改成"还没查过"是另一个产品决定，
+   * 见回报里的说明 —— 本轮不动，只钉住"不报新版"。）
+   */
+  it('latest=null（从没查过）⇒ 无徽标，也不出现任何版本号', () => {
+    const node = aboutTab(view({ latestVersion: null }), noop);
+    expect(testid(node, 'update-badge')).toBeNull();
+    expect(text(node, 'update-latest')).toBe('已是最新');
+  });
+
+  /**
    * dismiss 之后 `phase` 变 `dismissed`，但"有新版"这个事实没变：
    * 红点该消失（不再提示），卡里的徽标该留着（用户已经在这一页上了，不是打扰）。
    */

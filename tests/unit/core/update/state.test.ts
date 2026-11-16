@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_UPDATE_STATE,
+  isNewerThan,
   isUpdateAvailable,
   normalizeUpdateState,
   resolvePhase,
@@ -87,6 +88,44 @@ describe('isUpdateAvailable', () => {
     expect(
       isUpdateAvailable(stateWith({ latest: { ...NEWER, version: 'garbage' } }), CURRENT),
     ).toBe(false);
+  });
+});
+
+describe('isNewerThan：全仓唯一判据（字符串不等 ≠ 更新）', () => {
+  /**
+   * ## 这条就是 2026-11-17 真机 bug 的最小复现
+   *
+   * 用户装了 1.2.0 的包、线上最新还是 1.1.0。旧代码 `latest !== currentVersion`
+   * 是 `'1.1.0' !== '1.2.0'` ⇒ true ⇒ 面板卡头挂「有新版本」，
+   * 而按钮用 `phase`（走 `isNewer`）算出来是 `idle` ⇒ 禁用。**同一个面板自相矛盾。**
+   * 更新窗口那两处更严重：会让「立即更新」可点 ⇒ **允许降级安装**。
+   */
+  it('★★★ 线上 1.1.0 / 本地 1.2.0 ⇒ false（本地更新，不是"有新版本"）', () => {
+    expect(isNewerThan('1.1.0', '1.2.0')).toBe(false);
+  });
+
+  it('线上 1.2.0 / 本地 1.1.0 ⇒ true', () => {
+    expect(isNewerThan('1.2.0', '1.1.0')).toBe(true);
+  });
+
+  it('同版本 ⇒ false', () => {
+    expect(isNewerThan('1.2.0', '1.2.0')).toBe(false);
+  });
+
+  it('没查到最新版（null）⇒ false，且不抛', () => {
+    expect(isNewerThan(null, '1.2.0')).toBe(false);
+  });
+
+  it('★ 版本号解析不了 ⇒ false（解析失败必须被吞掉，不许炸到调用方 UI）', () => {
+    expect(() => isNewerThan('abc', '1.2.0')).not.toThrow();
+    expect(isNewerThan('abc', '1.2.0')).toBe(false);
+    expect(isNewerThan('1.2.0', 'abc')).toBe(false);
+  });
+
+  it('多段版本按数字比，不是按字符串比', () => {
+    // 字典序会认为 '1.10.0' < '1.9.0'，数字序才是对的
+    expect(isNewerThan('1.10.0', '1.9.0')).toBe(true);
+    expect(isNewerThan('1.9.0', '1.10.0')).toBe(false);
   });
 });
 

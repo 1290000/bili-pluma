@@ -22,6 +22,7 @@ import { describeAdDebugCaveat, type AccountView, type QualityView } from './pan
 import { el, pill, switchRow } from './dom';
 import { describeExpiry, describeHealth } from '@core/ui/popup-state';
 import { describeStreamingIdentity } from '@core/ui/streaming-pill';
+import { isNewerThan } from '@core/update/state';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
 import type { UpdateStatusView } from '@shared/types/update';
 import { CONTRIBUTORS } from '@/src/generated/contributors';
@@ -1373,8 +1374,15 @@ export function aboutTab(
 
   const latest = view.latestVersion;
   const size = describeSize(view.latestSizeBytes);
-  /** 有没有"比当前新"的正式版。**与提示是否显示无关**（dismiss 后它仍然为 true） */
-  const hasNewer = latest !== null && latest !== view.currentVersion;
+  /**
+   * 有没有"比当前新"的正式版。**与提示是否显示无关**（dismiss 后它仍然为 true）。
+   *
+   * ⚠️ 判据必须走 `isNewerThan`（逐段数字比较），**不是** `latest !== currentVersion`。
+   * 后者是字符串不等：本地装了 1.2.0、线上最新还是 1.1.0 时它返回 true ⇒
+   * 卡头挂上「有新版本」，而下面的按钮用 `phase` 算出来是 `idle` 所以是禁用的 ——
+   * 同一个面板自相矛盾（2026-11-17 真机冒烟抓到的 bug）。
+   */
+  const hasNewer = isNewerThan(latest, view.currentVersion);
 
   // ── ① 元信息卡 ──────────────────────────────────────────────
   const card = el('div', 'about-meta');

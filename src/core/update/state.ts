@@ -150,15 +150,49 @@ export function normalizeUpdateState(raw: unknown): UpdateState {
   };
 }
 
-/** 是否存在"比当前版本新"的正式版。**与提示是否显示无关**。 */
-export function isUpdateAvailable(state: UpdateState, currentVersion: string): boolean {
-  if (!state.latest) return false;
+/**
+ * 「线上版本是否比当前**新**」—— **全仓唯一判据**。
+ *
+ * ## 为什么需要这个包装（2026-11-17 真机 bug 的直接原因）
+ *
+ * 面板和更新窗口曾经各自写 `latest !== currentVersion` 来判断"有没有更新"。
+ * 那是**字符串不等**，不是"更新"：本地跑 1.2.0、线上最新 1.1.0（用户装了
+ * 更新的包，但还没发布）时，`'1.1.0' !== '1.2.0'` 为真 ⇒ 界面上半部分报
+ * **「有新版本」**，下半部分用 `phase`（走 `isNewer`，正确）却把按钮**禁用** ——
+ * 同一个面板自相矛盾。更新窗口更糟：它会让「立即更新」可点，等于允许**降级安装**。
+ *
+ * 所以判据只能有一处：`isNewer`（逐段数字比较）。这个函数再补两件事：
+ *
+ * 1. `latest === null`（没查过 / 没拿到）⇒ `false`。调用方**不必**先判空。
+ * 2. `isNewer` 在版本号解析不了时会抛 —— 在这里吞掉，统一成 `false`。
+ *    否则每个调用方都要自己写 try/catch，迟早有人漏写，然后一个乱码版本号
+ *    把面板整块炸掉。
+ *
+ * ⚠️ **`false` 的含义是"没有可装的更新"，不是"已是最新"**。
+ * 这两件事在 UI 上必须分开：`latest === null` 是"根本没比过"，
+ * 不能拿 `false` 去显示「已是最新」（那是谎报）。
+ *
+ * @param latest 线上最新正式版（`UpdateStatusView.latestVersion`），没查到传 `null`
+ * @param current 当前安装的版本
+ */
+export function isNewerThan(latest: string | null, current: string): boolean {
+  if (latest === null) return false;
   try {
-    return isNewer(state.latest.version, currentVersion);
+    return isNewer(latest, current);
   } catch {
     // 版本号解析不了 ⇒ 当作"没有更新"。宁可漏提示，也不要在 UI 上显示一个乱码版本号。
     return false;
   }
+}
+
+/**
+ * 是否存在"比当前版本新"的正式版。**与提示是否显示无关**。
+ *
+ * 只是 `isNewerThan` 的 state 版包装 —— 判据与 try/catch **不在这里重复**，
+ * 否则两条路会以不同的方式漂移。
+ */
+export function isUpdateAvailable(state: UpdateState, currentVersion: string): boolean {
+  return isNewerThan(state.latest?.version ?? null, currentVersion);
 }
 
 /** 当前该不该**主动提示**（红点 / 提示条）。用户关掉的那一版不再提示。 */

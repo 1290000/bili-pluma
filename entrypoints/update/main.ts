@@ -19,7 +19,7 @@ import '@/src/design/tokens.css';
 
 import { planWrites, readManifestVersion } from '@core/update/plan';
 import { readUpdateState, writeUpdateState } from '@platform/update/state-store';
-import { withPendingUpdate } from '@core/update/state';
+import { isNewerThan, withPendingUpdate } from '@core/update/state';
 import { readZip } from '@core/update/zip';
 import {
   ensureWritable,
@@ -71,10 +71,14 @@ function setProgress(value: number | null): void {
 
 function syncButtons(): void {
   if (startBtn) {
-    const hasTarget =
-      status !== null &&
-      status.latestVersion !== null &&
-      status.latestVersion !== status.currentVersion;
+    /**
+     * ⚠️ 判据走 `isNewerThan`，**不是** `latestVersion !== currentVersion`。
+     *
+     * 字符串不等会把"本地比线上新"（装了未发布的包）判成"有目标" ⇒
+     * 按钮可点 ⇒ 允许**降级安装**。2026-11-17 真机冒烟抓到的就是这一处
+     * （面板卡头挂「有新版本」而按钮禁用，同一个面板两套判据）。
+     */
+    const hasTarget = status !== null && isNewerThan(status.latestVersion, status.currentVersion);
     startBtn.disabled = busy || !hasTarget;
   }
   if (pickBtn) pickBtn.disabled = busy;
@@ -88,8 +92,11 @@ async function readStatus(): Promise<void> {
   status = reply?.type === 'update/status:ok' ? (reply.status ?? null) : null;
 
   if (versionLine) {
+    // 与 `syncButtons()` 同一判据（`isNewerThan`）：两处若各写一份，
+    // 就会出现"行里说有新版、按钮却是灰的"这种自相矛盾
+    const hasNewer = status !== null && isNewerThan(status.latestVersion, status.currentVersion);
     versionLine.textContent = status
-      ? status.latestVersion && status.latestVersion !== status.currentVersion
+      ? hasNewer
         ? `当前 v${status.currentVersion} → v${status.latestVersion}`
         : `当前 v${status.currentVersion} · 已是最新`
       : '读不到版本信息';

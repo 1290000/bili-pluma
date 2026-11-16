@@ -18,13 +18,13 @@
 
 import type { LatestRelease, UpdateState } from '@core/update/state';
 import {
+  isNewerThan,
   withCheckResult,
   withFailedCheck,
   withManualCheckAt,
   withNoChange,
 } from '@core/update/state';
 import { canManualCheck, shouldCheck } from '@core/update/gate';
-import { compareVersions } from '@core/update/version';
 import type { UpdateCheckOutcome } from '@shared/types/update';
 
 export type LatestReleaseResult =
@@ -134,13 +134,17 @@ export async function runCheck(options: RunCheckOptions): Promise<CheckResult> {
   }
 }
 
-/** 有没有"比当前版本新"的版本。**只判断，不改状态**。 */
+/**
+ * 有没有"比当前版本新"的版本。**只判断，不改状态**。
+ *
+ * ⚠️ 实现只是 `isNewerThan` 的薄包装（2026-11-17 收敛）。它原本自带一份
+ * `compareVersions(...) > 0` + try/catch —— 与 `state.ts` 的 `isUpdateAvailable`
+ * 是**第二份判据**，两边各自演进就会出"检查认为有新版、界面认为没有"的分裂。
+ * 判据只许有一处（`isNewerThan`），这里不再重复任何比较或兜错逻辑。
+ *
+ * 注：本函数目前**没有生产调用方**（只有自己的单测）。保留它是因为
+ * `runCheck` 的调用方将来可能要在"已拿到 release 但还没落库"时先问一句。
+ */
 export function releaseIsNewer(release: LatestRelease | null, currentVersion: string): boolean {
-  if (!release) return false;
-  try {
-    return compareVersions(release.version, currentVersion) > 0;
-  } catch {
-    // 版本号解析不了 ⇒ 当作"没有更新"（与 state.ts 的 isUpdateAvailable 保持同一口径）
-    return false;
-  }
+  return isNewerThan(release?.version ?? null, currentVersion);
 }
