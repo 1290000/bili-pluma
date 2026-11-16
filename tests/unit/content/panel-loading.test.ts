@@ -36,6 +36,8 @@ import {
   describeCounts,
   describeLine,
   describeKindPill,
+  describePcdnCaveat,
+  legendKinds,
   loadingDetailPane,
   loadingQuickRow,
   stageLabel,
@@ -181,8 +183,8 @@ describe('线路文案：七种情况逐条钉住', () => {
 // ─────────────────────────── 副行与计数 ───────────────────────────
 
 describe('速览副行：开局 Ns · N 条线路', () => {
-  it('有 playing → 开局 3.3s · 3 条线路', () => {
-    expect(buildLoadingQuick(ok())?.sub).toBe('开局 3.3s · 3 条线路');
+  it('有 playing → 开局 3.27s · 3 条线路', () => {
+    expect(buildLoadingQuick(ok())?.sub).toBe('开局 3.27s · 3 条线路');
   });
 
   it('★ playing 缺失 → 整行不显示（不补 0）', () => {
@@ -193,7 +195,7 @@ describe('速览副行：开局 Ns · N 条线路', () => {
 
 describe('结论卡的三个小计数', () => {
   it('开局 / 线路数 / 切换次数都算对（实测快照是真的换了两次线）', () => {
-    expect(describeCounts(snapshot())).toEqual(['开局 3.3s', '3 条线路', '2 次切换']);
+    expect(describeCounts(snapshot())).toEqual(['开局 3.27s', '3 条线路', '2 次切换']);
   });
 
   it('没有切换就不出现「0 次切换」（不补 0）', () => {
@@ -218,79 +220,165 @@ describe('结论卡的三个小计数', () => {
   });
 });
 
+// ─────────────────────────── 图例与自洽说明 ───────────────────────────
+
+describe('图例：跟着本次数据走', () => {
+  it('顺序固定：官方 → P2P → 第三方（不按出现顺序）', () => {
+    const snap = snapshot({
+      hosts: [
+        { host: 'a.bilivideo.com', cls: 'official', flavor: null, count: 3 },
+        { host: 'b.akamaized.net', cls: 'third-party', flavor: null, count: 2 },
+        { host: 'c.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 1 },
+      ],
+    });
+    expect(legendKinds(snap)).toEqual(['official', 'pcdn', 'third-party']);
+  });
+
+  it('events 里出现、hosts 里没有的类别也算（两边取并）', () => {
+    const snap = snapshot({
+      hosts: [],
+      events: [{ t: 10, stage: 'seg-req', host: 'x.mcdn.bilivideo.cn', kind: 'pcdn' }],
+    });
+    expect(legendKinds(snap)).toEqual(['pcdn']);
+  });
+
+  it('unknown 不算线路，不进图例', () => {
+    const snap = snapshot({
+      hosts: [{ host: 'x.example', cls: 'unknown', flavor: null, count: 1 }],
+      events: [],
+    });
+    expect(legendKinds(snap)).toEqual([]);
+  });
+});
+
+describe('结论卡的自洽说明', () => {
+  it('数的是 hosts 里 cls 为 pcdn 的条数', () => {
+    const two = snapshot({
+      hosts: [
+        { host: 'a.bilivideo.com', cls: 'official', flavor: null, count: 9 },
+        { host: 'b.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 2 },
+        { host: 'c.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 1 },
+      ],
+    });
+    expect(describePcdnCaveat(two)).toBe('其中 2 条是 P2P 线路，未占主导');
+  });
+
+  it('actual 是 P2P / 没有 actual / 没有 P2P → 都不出现', () => {
+    expect(
+      describePcdnCaveat(
+        snapshot({ actual: { host: 'x.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null } }),
+      ),
+    ).toBeNull();
+    expect(describePcdnCaveat(snapshot({ actual: null, confidence: 'none' }))).toBeNull();
+    expect(
+      describePcdnCaveat(
+        snapshot({
+          hosts: [{ host: 'a.bilivideo.com', cls: 'official', flavor: null, count: 1 }],
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
 // ─────────────────────────── 时间轴 ───────────────────────────
 
-describe('时间轴：9 个节点、阶段名、+x.xs 增量', () => {
+describe('时间轴：请求与返回配对成一行', () => {
   const rows = buildTimelineRows(snapshot().events);
 
-  it('★ 实测快照渲染出 9 个节点（不多不少）', () => {
-    expect(rows).toHaveLength(9);
+  it('★ 实测快照 9 条事件 → 6 行（3 段配对 + 3 个里程碑）', () => {
+    /**
+     * 反例：把 `buildTimelineRows` 里的 `if (event.stage === 'seg-res') continue`
+     * 去掉 → 又变回 9 行，用户重新看不出哪个返回属于哪个请求。
+     */
+    expect(rows).toHaveLength(6);
+    expect(rows.map((r) => r.kind)).toEqual([
+      'event',
+      'segment',
+      'event',
+      'event',
+      'segment',
+      'segment',
+    ]);
   });
 
-  it('阶段中文名是固定映射（不是把英文换个说法）', () => {
+  it('★ 每行的标题与右列元信息（配对区间带耗时）', () => {
     expect(rows.map((r) => r.label)).toEqual([
       '卡了一下',
-      '开始下载分片',
-      '分片到达',
+      '下载分片',
       '可以播放',
       '开始播放',
-      '开始下载分片',
-      '分片到达',
-      '开始下载分片',
-      '分片到达',
+      '下载分片',
+      '下载分片',
     ]);
-  });
-
-  it('t 照实打印（两位小数，毫秒不丢）', () => {
-    expect(rows.map((r) => r.at)).toEqual([
+    expect(rows.map((r) => r.meta)).toEqual([
       '1.77s',
-      '2.53s',
-      '2.82s',
-      '3.27s',
-      '3.27s',
-      '3.74s',
-      '3.89s',
-      '4.16s',
-      '4.22s',
+      '2.53s → 2.82s · 0.29s',
+      '3.27s +0.45s',
+      '3.27s +0.00s',
+      '3.74s → 3.89s · 0.15s',
+      '4.16s → 4.22s · 0.06s',
     ]);
   });
 
-  it('★ +x.xs 相对**上一条**：首条没有增量，其余逐条算对', () => {
-    expect(rows.map((r) => r.delta)).toEqual([
-      null,
-      '+0.8s',
-      '+0.3s',
-      '+0.5s',
-      '+0.0s',
-      '+0.5s',
-      '+0.2s',
-      '+0.3s',
-      '+0.1s',
-    ]);
+  it('里程碑的增量是相对**上一条行的结束时刻**（配对行用 doneAt）', () => {
+    /**
+     * `可以播放` 的 +0.45s 是 3268.2 − 2815.3（上一条分片**返回**的时刻）。
+     * 如果用请求时刻（2525.9），这段会算成 +0.74s，把下载耗时算进间隔里。
+     */
+    expect(rows[2]?.meta).toBe('3.27s +0.45s');
   });
 
-  it('明细：有 host 才有那一行，没有就留空（不显示占位符）', () => {
+  it('明细：配对行给出 host，里程碑没有就留空（不显示占位符）', () => {
     expect(rows[0]?.detail).toBeNull();
     expect(rows[1]?.detail).toBe('cn-jsnt-ct-01-07.bilivideo.com');
-    expect(rows[5]?.detail).toBe('xy220x180x77x45xy.mcdn.bilivideo.cn');
+    expect(rows[4]?.detail).toBe('xy220x180x77x45xy.mcdn.bilivideo.cn');
   });
 
-  it('色调与形状按 kind：官方实心圆 / PCDN 菱形 / 无关阶段空心圆', () => {
-    expect(rows[1]).toMatchObject({ tone: 'ok', marker: 'disc' });
-    expect(rows[5]).toMatchObject({ tone: 'warn', marker: 'diamond' });
-    expect(rows[0]).toMatchObject({ tone: 'muted', marker: 'ring' });
+  it('★ 里程碑不用圆点（marker === null），线路行才用', () => {
+    expect(rows[0]?.marker).toBeNull(); // 卡了一下
+    expect(rows[2]?.marker).toBeNull(); // 可以播放
+    expect(rows[3]?.marker).toBeNull(); // 开始播放
+    expect(rows[1]).toMatchObject({ marker: 'disc', tone: 'ok' });
+    expect(rows[4]).toMatchObject({ marker: 'diamond', tone: 'warn' });
   });
 
-  it('ext-patch 用强调色、error / blocked 用危险色（阶段优先于线路）', () => {
+  it('★ 未等到返回的请求写「未完成」，用次要文字色（不是危险色）', () => {
+    const unmatched = buildTimelineRows([
+      { t: 100, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'pcdn' },
+    ]);
+    expect(unmatched[0]).toMatchObject({
+      kind: 'segment',
+      meta: '0.10s · 未完成',
+      dimTitle: true,
+      dangerTitle: false,
+      marker: 'diamond',
+    });
+  });
+
+  it('配不上的 seg-res 不出行（对应请求在采集窗口外）', () => {
+    const onlyRes = buildTimelineRows([
+      { t: 100, stage: 'seg-res', host: 'a.bilivideo.com', kind: 'official' },
+    ]);
+    expect(onlyRes).toEqual([]);
+  });
+
+  it('error / blocked 的标题走危险色', () => {
     const special = buildTimelineRows([
-      { t: 10, stage: 'ext-patch' },
-      { t: 20, stage: 'error', note: 'code=3' },
+      { t: 10, stage: 'error', note: 'code=3' },
       { t: 30, stage: 'blocked', host: 'a.bilivideo.com', kind: 'official' },
     ]);
-    expect(special[0]).toMatchObject({ tone: 'accent', marker: 'ring' });
-    expect(special[1]).toMatchObject({ tone: 'bad' });
-    // blocked 即使带了 official 也走危险色：被屏蔽是比"哪条线路"更该被看见的事
-    expect(special[2]).toMatchObject({ tone: 'bad' });
+    for (const row of special) {
+      expect(row.dangerTitle).toBe(true);
+      // 里程碑仍然不用圆点
+      expect(row.marker).toBeNull();
+    }
+  });
+
+  it('`switch` 带 kind 时用线路形状（它是"换到哪条线"，不是里程碑）', () => {
+    const switched = buildTimelineRows([
+      { t: 10, stage: 'switch', host: 'a.bilivideo.com', kind: 'pcdn' },
+    ]);
+    expect(switched[0]).toMatchObject({ kind: 'event', marker: 'diamond', tone: 'warn' });
   });
 
   it('12 个阶段都有中文名（漏一个会显示成英文）', () => {
@@ -311,6 +399,8 @@ describe('时间轴：9 个节点、阶段名、+x.xs 增量', () => {
     for (const s of stages) expect(stageLabel(s)).not.toBe(s);
     expect(stageLabel('switch')).toBe('换了一条线路');
     expect(stageLabel('playurl-res')).toBe('B站 返回线路清单');
+    // 配对行用更短的「下载分片」，但技术名映射本身不变（诊断页还在用）
+    expect(stageLabel('seg-req')).toBe('开始下载分片');
   });
 });
 
@@ -376,7 +466,7 @@ describe('速览行 DOM', () => {
     expect(row.textContent).toContain('线路');
     expect(row.textContent).toContain('B站官方线路（自建 CDN）');
     expect(row.textContent).toContain('详情');
-    expect(row.querySelector('.ld-quick-sub')?.textContent).toBe('开局 3.3s · 3 条线路');
+    expect(row.querySelector('.ld-quick-sub')?.textContent).toBe('开局 3.27s · 3 条线路');
     // 圆点真的画了一个 SVG 形状（不是字符）
     expect(row.querySelector('.ld-quick-dot svg')).not.toBeNull();
 
@@ -481,42 +571,99 @@ describe('「本次加载」浮层', () => {
     expect(box.querySelector('.ld-conclusion-title')?.textContent).toBe('B站官方线路（自建 CDN）');
     expect(box.querySelector('.ld-conclusion .pill')?.textContent).toBe('官方 CDN');
     expect([...box.querySelectorAll('.ld-count')].map((n) => n.textContent)).toEqual([
-      '开局 3.3s',
+      '开局 3.27s',
       '3 条线路',
       '2 次切换',
     ]);
   });
 
-  it('★ 时间轴：渲染出 9 行，每行有阶段名与右侧增量', () => {
+  it('★ 结论卡：P2P 存在时补一句自洽说明（裁决 ②）', () => {
+    const box = loadingDetailPane(ok(), spyActions());
+    const note = box.querySelector('.ld-conclusion-note');
+    expect(note?.textContent).toBe('其中 1 条是 P2P 线路，未占主导');
+    // 不许出现"回退"：我们没有数据能证明发生过回退
+    expect(note?.textContent).not.toContain('回退');
+  });
+
+  it('结论本身就是 P2P 时，不再补那句（否则大字与说明打架）', () => {
+    const pcdnSnap = ok({
+      actual: { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null },
+    });
+    const box = loadingDetailPane(pcdnSnap, spyActions());
+    expect(box.querySelector('.ld-conclusion-title')?.textContent).toBe('第三方加速线路（PCDN）');
+    expect(box.querySelector('.ld-conclusion-note')).toBeNull();
+  });
+
+  it('没有 P2P 时整句不出现', () => {
+    const clean = ok({
+      actual: { host: 'cn-jsnt-ct-01-07.bilivideo.com', cls: 'official', flavor: 'self-built' },
+      hosts: [
+        {
+          host: 'cn-jsnt-ct-01-07.bilivideo.com',
+          cls: 'official',
+          flavor: 'self-built',
+          count: 12,
+        },
+      ],
+    });
+    expect(loadingDetailPane(clean, spyActions()).querySelector('.ld-conclusion-note')).toBeNull();
+  });
+
+  it('★ 时间轴：9 条事件渲染成 6 行（配对后不再交错）', () => {
     const box = loadingDetailPane(ok(), spyActions());
     const rows = [...box.querySelectorAll('.ld-row')];
-    expect(rows).toHaveLength(9);
+    expect(rows).toHaveLength(6);
     expect(rows[0]?.querySelector('.ld-title')?.textContent).toBe('卡了一下');
-    expect(rows[1]?.querySelector('.ld-title')?.textContent).toBe('开始下载分片');
-    expect(rows[1]?.querySelector('.ld-delta')?.textContent).toBe('2.53s +0.8s');
-    // 首条没有"上一条"，右列只有绝对时刻
+    expect(rows[1]?.querySelector('.ld-title')?.textContent).toBe('下载分片');
+    expect(rows[1]?.querySelector('.ld-delta')?.textContent).toBe('2.53s → 2.82s · 0.29s');
+    // 里程碑只有时刻（首条没有上一条）
     expect(rows[0]?.querySelector('.ld-delta')?.textContent).toBe('1.77s');
-    // 没有 host 的行不渲染明细
+    // 配对行有 host 明细，里程碑没有
     expect(rows[0]?.querySelector('.ld-detail')).toBeNull();
     expect(rows[1]?.querySelector('.ld-detail')?.textContent).toBe(
       'cn-jsnt-ct-01-07.bilivideo.com',
     );
-    // 最后一行的竖线要隐藏（留一条悬空线会被读成"还有下文"）
-    expect(rows).toHaveLength(9);
   });
 
-  it('★ 图例四项都在（形状 + 文字）', () => {
+  it('★ 里程碑画短竖线（.ld-tick），线路行画圆点（.ld-node）', () => {
+    const box = loadingDetailPane(ok(), spyActions());
+    const rows = [...box.querySelectorAll('.ld-row')];
+    // 3 个里程碑（卡了一下 / 可以播放 / 开始播放）
+    expect(box.querySelectorAll('.ld-tick')).toHaveLength(3);
+    expect(rows[0]?.querySelector('.ld-node')).toBeNull();
+    expect(rows[0]?.querySelector('.ld-tick')).not.toBeNull();
+    // 3 段配对
+    expect(box.querySelectorAll('.ld-node')).toHaveLength(3);
+    expect(rows[1]?.querySelector('.ld-tick')).toBeNull();
+  });
+
+  it('★ 图例只列本次真的出现过的线路（官方 + P2P），不写死四项', () => {
+    /**
+     * 反例：把图例改回固定四项 → 会多出「第三方」「扩展介入」，
+     * 而这次的事件里一个都没有 —— 图例承诺了不存在的形状。
+     */
     const box = loadingDetailPane(ok(), spyActions());
     const items = [...box.querySelectorAll('.ld-legend-item')];
-    expect(items).toHaveLength(4);
     expect(items.map((i) => i.querySelector('.ld-legend-text')?.textContent)).toEqual([
       '官方',
       'P2P',
-      '第三方',
-      '扩展介入',
     ]);
     // 每一项都画了形状，不是只有一个色块
     for (const i of items) expect(i.querySelector('svg')).not.toBeNull();
+    expect(box.textContent).not.toContain('扩展介入');
+  });
+
+  it('★ 一个线路类别都没有时，图例整块不渲染（不画空图例）', () => {
+    const empty = ok({
+      confidence: 'none',
+      actual: null,
+      hosts: [],
+      events: [{ t: 100, stage: 'canplay' }],
+    });
+    const box = loadingDetailPane(empty, spyActions());
+    expect(box.querySelector('.ld-legend')).toBeNull();
+    // 小标题也不留
+    expect(box.textContent).not.toContain('图例');
   });
 
   it('★ truncated → 明说"更早的事件被丢掉了"（不许静默）', () => {

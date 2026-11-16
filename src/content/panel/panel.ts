@@ -1395,6 +1395,15 @@ export function mountPanelBody(actions: PanelActions): PanelController {
             logs: diagData.logs,
             version: diagVersion(),
             logsMeta: diagData.logsMeta,
+            /**
+             * 加载快照的通道结局（T7）。
+             *
+             * ⚠️ 传 `model.loading`（画质 Tab 速览行读的**同一份**），不在这里
+             * 重新取数：诊断页要说的是"这一次加载"，重取只会得到同一份内存状态，
+             * 却多一次 2 秒空窗。`undefined` 与 `absent` 同义，浮层会如实说
+             * "本页没有加载记录"。
+             */
+            loading: model?.loading,
           },
           {
             back: () => {
@@ -1430,6 +1439,14 @@ export function mountPanelBody(actions: PanelActions): PanelController {
                     readAt: now.getTime(),
                   },
                   version: diagVersion(),
+                  /**
+                   * 第八个字段（T8）：本次加载。
+                   *
+                   * `model?.loading` 缺席时给 `{kind:'absent'}` —— 与渲染侧
+                   * （`diagnosticsPane` 的 `data.loading`）**同一个兜底**，
+                   * 导出与界面不会一个说"没有记录"、另一个说"读取失败"。
+                   */
+                  loading: model?.loading ?? { kind: 'absent' },
                   now,
                   trace: diagTrace,
                   echo: diagEcho,

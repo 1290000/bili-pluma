@@ -761,6 +761,14 @@ export const PANEL_CSS = `
   color: var(--pluma-text-muted);
 }
 
+/* 展开态：同一枚 › 转 90 度变成朝下（2026-11-20，T7 的「原始事件」）。
+   转一个 transform 比再备一份 SVG 好 —— 少一个"两个图标长得不一样"的机会。
+   动效只动 transform，符合 tokens.css 的「只动颜色与 transform」。
+   ⚠️ 本文件是模板字符串：注释里**不许出现反引号**（踩过三次，有守卫测试）。 */
+.sub-entry-chevron.open {
+  transform: rotate(90deg);
+}
+
 .sub-bar {
   display: flex;
   align-items: center;
@@ -1079,6 +1087,24 @@ export const PANEL_CSS = `
   color: var(--pluma-danger);
 }
 
+/* 第三档色调（2026-11-20，T7）：warn。
+   诊断页的「当前线路 / 本次线路」在观测到 PCDN 时要变黄 —— 那是这一整块
+   唯一想让人看见的事。只上 .diag-value 的颜色，不动状态点：点那一列
+   表示"自检项成没成"，与"线路是哪种"不是同一件事。
+   特异性 0,2,0（两个类），与 .diag-row.bad .diag-value 相同、且两者互斥，
+   所以谁先谁后都不会打架（顺序只是可读性）。 */
+.diag-row.warn .diag-value {
+  color: var(--pluma-warning);
+}
+
+/* 折叠态的原始事件表必须真的不占地方。
+   ⚠️ 少了这一条 hidden 是**无效的**：.diag-logs 自己的 display:flex
+   会盖掉 UA 样式表里的 [hidden] { display: none }（作者样式优先），
+   于是"折叠"只是一个属性、界面照旧铺开。同 .tab-dot[hidden] 那一条。 */
+.diag-logs[hidden] {
+  display: none;
+}
+
 .diag-log {
   display: flex;
   gap: 6px;
@@ -1270,9 +1296,19 @@ export const PANEL_CSS = `
   font-variant-numeric: tabular-nums;
 }
 
+/* 结论卡底部那句"为什么官方线路上还有 P2P"（2026-11-20，裁决 ②）。
+   整行独占（width:100%）—— 它解释的是**整张结论卡**，不是某个计数，
+   挤在计数那一排里会被读成第四个数。 */
+.ld-conclusion-note {
+  width: 100%;
+  color: var(--pluma-text-muted);
+  font-size: var(--pluma-font-caption);
+  line-height: 1.35;
+}
+
 /* ── 时间轴 ──
-   左列 30px（28px 圆点 + 下方 2px 竖线），右列自适应。
-   行高 = 圆点 28 + 上下留白，明细行只在有 host 时出现。 */
+   左列 30px：线路行放 28px 圆点、里程碑放 10px 短竖线（另一种东西，不共用形状）；
+   两种都由一条 2px 竖线连起来。右列自适应，明细行只在有 host 时出现。 */
 .ld-timeline {
   display: flex;
   flex-direction: column;
@@ -1303,6 +1339,21 @@ export const PANEL_CSS = `
   height: 28px;
   border-radius: 50%;
   background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+/* 里程碑的标记：一根 10px 高的短竖线（2026-11-20，裁决 ④）。
+   里程碑（卡了一下 / 可以播放 / 开始播放 / 播放出错 / 页面开始）是
+   "时间走到了这里"，不是"数据从哪条线路来" —— 它们**不占用线路形状**，
+   否则会和图例里的圆/菱形撞形，看着像"一种没在图例里的线路"。
+   颜色用 --pluma-line：这一列在里程碑上不表达任何状态。
+   margin-top 9px 让它的中线落在 19px 标题行的中线上（4 + 19/2 ≈ 13.5）。 */
+.ld-tick {
+  display: block;
+  width: 2px;
+  height: 10px;
+  margin-top: 9px;
+  border-radius: 1px;
+  background: var(--pluma-line);
 }
 
 /* 竖线从圆点下沿接到下一行的圆点上沿。用 --pluma-line-strong（16%）而不是
@@ -1343,7 +1394,13 @@ export const PANEL_CSS = `
   line-height: var(--pluma-line-height-body);
 }
 
-/* 时刻与增量：tabular-nums 让 9 行右边缘对齐（否则 1.77s 与 10.20s 差半个字宽） */
+/* 右列元信息（名字沿用 ld-delta：它已在类名契约里，改名等于毁约）。
+   现在装三种形态：配对区间 4.22s → 4.39s · 0.17s、未完成 4.22s · 未完成、
+   里程碑 3.18s +0.40s。tabular-nums 让所有行右边缘对齐 —— 各行的数字位数
+   不一样，不固定字宽会读成"这几行没对齐"。
+   ⚠️ 本文件是模板字符串：注释里**不许出现反引号**（踩过五次）。
+   守卫在 tests/unit/design/panel-css-source.test.ts 里，它只读源码文本、
+   不 import 本文件，所以字符串被截断时它仍然跑得起来。 */
 .ld-delta {
   flex: 0 0 auto;
   color: var(--pluma-text-muted);

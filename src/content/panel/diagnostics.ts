@@ -28,7 +28,10 @@
 
 import type { DiagEntry, DiagRow } from '@platform/diagnostics/collect';
 import { tipFor } from '@platform/diagnostics/collect';
+import type { CdnKind } from '@core/cdn/classify';
+import { detectSwitches } from '@core/loading/timeline';
 import { el, iconChevron } from './dom';
+import { playingEvent, type LoadingOutcome } from './loading-pane';
 
 /**
  * 一次「读诊断日志」这件事本身**成没成**。
@@ -159,6 +162,221 @@ export interface ExportPayloadSource {
    * 和"真的没有日志"**长得一模一样**。所以这里必须有独立的 `ok`。
    */
   logsMeta: LogsMeta;
+  /**
+   * 加载时间轴的**通道结局**（2026-11-20，T8 第八个字段）。
+   *
+   * 传的是面板模型里那一份原始结局，不是渲染后的文案 ——
+   * 导出要的是数据，`buildLoadingExport()` 负责裁剪成可外传的形状。
+   */
+  loading: LoadingOutcome;
+}
+
+// ─────────────────────── 第八个字段：本次加载（T8，2026-11-20）───────────────────────
+
+/**
+ * 导出里 host 的白名单。
+ *
+ * ## 为什么要白名单化，而不是"反正只有 hostname"
+ *
+ * 快照是从**另一个 content script 实例**经 `postMessage` 过来的普通对象 ——
+ * 形状由发送方决定，面板只在桥那里粗验了 `present` / `events`。
+ * 导出是**唯一会离开本机的文件**，所以这里的判据不能建立在"上游会守规矩"上。
+ *
+ * 只允许小写字母 / 数字 / 点 / 连字符（`abc-1.bilivideo.com` 这种），
+ * 长度取 DNS 上限 253。任何其它内容（含 `:` 端口、`/` 路径、`?` query、大写）
+ * 一律写成 `'invalid'` —— 不留原文，也就没有"只漏半截"的可能。
+ */
+export function sanitizeHost(host: unknown): string {
+  if (typeof host !== 'string') return 'invalid';
+  return /^[a-z0-9.-]{1,253}$/.test(host) ? host : 'invalid';
+}
+
+/** 导出里允许出现的线路类别（`CdnKind` 的全集，逐个列出以防上游漂移） */
+const EXPORT_CLASSES: readonly CdnKind[] = ['official', 'pcdn', 'third-party', 'unknown'];
+
+/** 导出里允许出现的官方二级分类；`null` 是合法值（认不出机型） */
+const EXPORT_FLAVORS: readonly ('self-built' | 'partner')[] = ['self-built', 'partner'];
+
+/**
+ * 导出里允许出现的阶段。
+ *
+ * ## ⚠️ `'unknown'` **不在 `LoadStage` 里**，它是导出层专属的同义词
+ *
+ * 别去 `core/loading/timeline.ts` 找它 —— 那里没有，也不该加：`LoadStage` 是
+ * "采集侧能产出什么"的枚举，而 `'unknown'` 是"**收到的不是那 12 个值之一**"。
+ * 两者的主语不同（2026-11-20 Lead 裁决，留兜底值、但把这件事写在这里）。
+ *
+ * 为什么保留而不是丢弃整条事件：丢了就没法解释"为什么条数对不上"；
+ * 标成 `unknown` 至少让读的人知道**有一条事件我们没看懂**。
+ */
+const EXPORT_STAGES: readonly string[] = [
+  'nav',
+  'playurl-req',
+  'playurl-res',
+  'ext-patch',
+  'seg-req',
+  'seg-res',
+  'canplay',
+  'playing',
+  'switch',
+  'stall',
+  'error',
+  'blocked',
+  /** ⚠️ 导出层兜底值，不是 `LoadStage` 的成员（见上） */
+  'unknown',
+];
+
+/** 一条 host 统计进导出后最多留几条（按 count 降序取前 N，总数另给 `hostCount`） */
+const EXPORT_HOST_LIMIT = 20;
+
+/** 只取枚举内的值；认不出就用兜底值（**不把原串带出去**） */
+function pickOne<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : fallback;
+}
+
+/** 非有限数一律当 0 —— JSON 装不下 `NaN`，而 `null` 会让消费方以为"没这个字段" */
+function finite(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/** 一条事件在导出里的形状。**只有这四个键**，见 `buildLoadingExport` */
+export interface LoadingExportEvent {
+  t: number;
+  stage: string;
+  host?: string;
+  kind?: string;
+}
+
+/**
+ * 第八个字段的形状。字段顺序即导出顺序。
+ *
+ * ## 为什么 `status !== 'ok'` 时其余字段是"空"而不是"猜一个"
+ *
+ * 拿不到快照时，"0 条线路 / 0 次切换"看起来像**测到了 0**。所以那三态只有
+ * `status` 是真话，其余给 `null` / `[]` / `0`，并且**消费方必须先看 `status`**。
+ * 这与 `logsMeta.ok` 同一条纪律：读失败不许伪装成空态。
+ *
+ * ## ⚠️ 这里**没有** `capturedAt`（2026-11-20 Lead 裁决）
+ *
+ * 第一版加过一个 `capturedAt`，值是"组装导出的时刻" —— 那个名字在说谎：
+ * `LoadingSnapshotLite` 里**没有采集时间戳**（采集器只记每条事件相对
+ * `timeOrigin` 的偏移），而顶层 `exportedAt` 已经把"导出时刻"写了一遍。
+ * 同一份数据写两遍，还带一个会让人以为"快照是那一刻抓的"的名字。
+ *
+ * 将来真要让采集器回带采集时刻（`fetchLoadingSnapshot` 加一个 `at`），
+ * 再把它加回来**并给真值** —— 那时这个名字才有意义。
+ */
+export interface LoadingExport {
+  status: 'ok' | 'absent' | 'unanswered';
+  present: boolean;
+  confidence: 'measured' | 'none';
+  actual: { host: string; cls: string; flavor: string | null } | null;
+  hosts: Array<{ host: string; cls: string; flavor: string | null; count: number }>;
+  /** 截断**之前**的 host 总数 */
+  hostCount: number;
+  hostsTruncated: boolean;
+  events: LoadingExportEvent[];
+  eventsTruncated: boolean;
+  video: { readyState: number; durationSec: number; height: number; errorCode: number } | null;
+}
+
+/**
+ * 通道结局 → 可外传的加载字段（**导出的唯一入口**）。
+ *
+ * ## 四条硬裁剪（每一条都有单测）
+ *
+ * | 规则 | 做法 |
+ * | --- | --- |
+ * | 剥 `note` | `LoadEvent.note` 可能是 `MediaError.code=3` 这类自由文本，只挑四个键输出 |
+ * | host 白名单 | `sanitizeHost()`，认不出一律 `'invalid'` |
+ * | 枚举化 | `status` / `confidence` / `cls` / `flavor` / `stage` / `kind` 只可能是固定值 |
+ * | 无 query / 无 path | host 走白名单之后，本来就没有 `/` 与 `?` 能进来 |
+ *
+ * 不接时刻参数：这一块**没有**任何时间戳字段（见 `LoadingExport` 的注释），
+ * 顶层 `exportedAt` 已经表达了导出时刻。
+ *
+ * @param outcome 面板模型里那一份原始结局
+ */
+export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
+  if (outcome.kind !== 'ok') {
+    return {
+      status: outcome.kind,
+      present: false,
+      confidence: 'none',
+      actual: null,
+      hosts: [],
+      hostCount: 0,
+      hostsTruncated: false,
+      events: [],
+      eventsTruncated: false,
+      video: null,
+    };
+  }
+
+  const snapshot = outcome.snapshot;
+
+  const actual =
+    snapshot.actual === null
+      ? null
+      : {
+          host: sanitizeHost(snapshot.actual.host),
+          cls: pickOne(snapshot.actual.cls, EXPORT_CLASSES, 'unknown'),
+          flavor:
+            snapshot.actual.flavor === null
+              ? null
+              : pickOne(snapshot.actual.flavor, EXPORT_FLAVORS, 'partner'),
+        };
+
+  const allHosts = Array.isArray(snapshot.hosts) ? snapshot.hosts : [];
+  const hosts = allHosts.slice(0, EXPORT_HOST_LIMIT).map((h) => ({
+    host: sanitizeHost(h.host),
+    cls: pickOne(h.cls, EXPORT_CLASSES, 'unknown'),
+    flavor: h.flavor === null ? null : pickOne(h.flavor, EXPORT_FLAVORS, 'partner'),
+    count: finite(h.count),
+  }));
+
+  const allEvents = Array.isArray(snapshot.events) ? snapshot.events : [];
+  const events: LoadingExportEvent[] = allEvents.slice(0, LOADING_EVENT_LIMIT).map((e) => {
+    /**
+     * ⚠️ **逐个字段挑**，绝不用展开（`{...e}`）—— `note` 会跟着出去，
+     * 而它可能含 `MediaError.code` 之类自由文本。这是本轮唯一一条
+     * "少写一行就泄漏"的地方，所以是白名单而不是黑名单。
+     */
+    const out: LoadingExportEvent = {
+      t: finite(e.t),
+      stage: pickOne(e.stage, EXPORT_STAGES, 'unknown'),
+    };
+    if (typeof e.host === 'string' && e.host.length > 0) out.host = sanitizeHost(e.host);
+    if (typeof e.kind === 'string' && e.kind.length > 0) {
+      out.kind = pickOne(e.kind, EXPORT_CLASSES, 'unknown');
+    }
+    return out;
+  });
+
+  const video = snapshot.video;
+
+  return {
+    status: 'ok',
+    present: snapshot.present === true,
+    confidence: snapshot.confidence === 'measured' ? 'measured' : 'none',
+    actual,
+    hosts,
+    hostCount: allHosts.length,
+    hostsTruncated: allHosts.length > EXPORT_HOST_LIMIT,
+    events,
+    eventsTruncated: allEvents.length > LOADING_EVENT_LIMIT,
+    video:
+      video === null
+        ? null
+        : {
+            readyState: finite(video.readyState),
+            durationSec: finite(video.durationSec),
+            height: finite(video.height),
+            errorCode: finite(video.errorCode),
+          },
+  };
 }
 
 /** 组装导出 JSON 的文本。**不开新的字段**，见上面注释 */
@@ -204,6 +422,23 @@ export function buildExportPayload(src: ExportPayloadSource): string {
        * **伪装成"没有日志"**，而导出恰恰是最需要它诚实的那一刻。
        */
       logsMeta: src.logsMeta,
+      /**
+       * ⚠️ 第八个字段（2026-11-20，T8）：**本次加载**。
+       *
+       * 它与前七个的区别：前七个都是"扩展自己的状态"，只有它描述
+       * **页面自己在做什么**（分片从哪条线路来的）。形状见 `LoadingExport`。
+       *
+       * 三道闸，缺一不可：
+       *
+       * 1. **只挑四个键**（`t` / `stage` / `host` / `kind`）—— `LoadEvent.note`
+       *    可能含 `MediaError.code` 这类自由文本，白名单式挑字段而不是黑名单式删
+       * 2. **host 白名单化**（`sanitizeHost()`），query / path / 端口根本进不来
+       * 3. **枚举化**（`pickOne`）—— 上游给了不认识的类别/阶段也不会把原串带出去
+       *
+       * ⚠️ `status !== 'ok'` 时其余字段是 `null` / `[]` / `0`，**不是猜出来的默认值**。
+       * 消费方必须先看 `status` —— 与 `logsMeta.ok` 同一条纪律。
+       */
+      loading: buildLoadingExport(src.loading),
     },
     null,
     2,
@@ -283,6 +518,168 @@ function logRow(e: DiagEntry): HTMLElement {
   return row;
 }
 
+// ─────────────────────── 「本次加载」区块（T7，2026-11-20）───────────────────────
+
+/**
+ * 线路类别 → 中文短名。
+ *
+ * ⚠️ 与 `loading-pane.ts` 的 `B站官方线路（自建 CDN）` **不是同一套文案**：
+ * 那是普通层（用户在画质 Tab 里看的），这里是 **L3 技术层** ——
+ * 排查时要能对着 `classify.ts` 的枚举值念出来，所以摘要行用技术名
+ * （`official` / `pcdn`），只在这个紧凑的"线路数"括号里用短名。
+ */
+const CLASS_SHORT: Record<CdnKind, string> = {
+  official: '官方',
+  pcdn: 'PCDN',
+  'third-party': '第三方',
+  unknown: '未知',
+};
+
+/** 枚举顺序（线路数括号里的顺序，固定，不按出现顺序） */
+const CLASS_ORDER: readonly CdnKind[] = ['official', 'pcdn', 'third-party', 'unknown'];
+
+/** 毫秒数照实打印（`2525.9ms`）。非有限数标出来，不四舍五入成一个看着合理的值 */
+function msText(t: number): string {
+  return Number.isFinite(t) ? `${Math.round(t * 10) / 10}ms` : 'invalid';
+}
+
+/**
+ * 原始事件表最多渲染几行。
+ *
+ * ⚠️ 与导出用的 `LOADING_EVENT_LIMIT` **是同一个值、也是同一个常量**：
+ * 界面与导出条数一致，才能拿着截图和 JSON 逐行核对。
+ */
+const LOADING_EVENT_LIMIT = 40;
+
+/**
+ * 「本次加载」区块要渲染的节点（顺序即插入顺序）。
+ *
+ * ## 三态必须分开画（本节最要紧的一条）
+ *
+ * | 结局 | 表现 |
+ * | --- | --- |
+ * | `ok` | 五行摘要 + 可折叠的原始事件表 |
+ * | `absent` | 一行中性色：本页没有加载记录（不是播放页） |
+ * | `unanswered` | 一行**危险色**：读取失败（无应答）—— 刷新页面后重试 |
+ *
+ * ⚠️ `unanswered` 画成"没有记录"就是 `logsMeta.ok` 那次事故的复发：
+ * 读失败伪装成空态，用户和排查者都会去查错方向。
+ *
+ * @param outcome 面板模型里那一份原始结局（`undefined` 与 `absent` 同义）
+ */
+export function loadingSectionNodes(outcome: LoadingOutcome | undefined): HTMLElement[] {
+  const nodes: HTMLElement[] = [el('p', 'diag-section', '本次加载')];
+
+  if (outcome === undefined || outcome.kind !== 'ok') {
+    if (outcome?.kind === 'unanswered') {
+      nodes.push(
+        factRow({
+          label: '加载记录',
+          value: '加载快照读取失败（无应答）—— 刷新页面后重试',
+          ok: false,
+        }),
+      );
+    } else {
+      nodes.push(factRow({ label: '加载记录', value: '本页没有加载记录（不是播放页）' }));
+    }
+    return nodes;
+  }
+
+  const snapshot = outcome.snapshot;
+
+  // ── 摘要行：技术层，允许完整 host ──
+  const actual = snapshot.actual;
+  const actualValue =
+    actual === null
+      ? '未识别'
+      : `${actual.cls} · ${actual.flavor === null ? 'null' : actual.flavor} · ${actual.host}`;
+
+  const byClass = new Map<CdnKind, number>();
+  for (const h of snapshot.hosts) byClass.set(h.cls, (byClass.get(h.cls) ?? 0) + 1);
+  const breakdown = CLASS_ORDER.filter((c) => (byClass.get(c) ?? 0) > 0).map(
+    (c) => `${CLASS_SHORT[c]} ${String(byClass.get(c) ?? 0)}`,
+  );
+  const hostsValue = `${String(snapshot.hosts.length)} 条${breakdown.length > 0 ? `（${breakdown.join(' · ')}）` : ''}`;
+  const hasPcdn = (byClass.get('pcdn') ?? 0) > 0;
+
+  const current = factRow({ label: '当前线路', value: actualValue });
+  // 走了 PCDN 就给警告色：那是这个功能唯一想让人看见的事
+  if (actual?.cls === 'pcdn') current.classList.add('warn');
+
+  const hostsRow = factRow({ label: '本次线路', value: hostsValue });
+  // ⚠️ 只给 `.diag-value` 上色（`.diag-row.warn`），不动状态点 ——
+  // 点这一列表示的是"自检项成没成"，与"线路是哪种"不是一回事
+  if (hasPcdn) hostsRow.classList.add('warn');
+
+  const playing = playingEvent(snapshot.events);
+
+  nodes.push(current, hostsRow);
+  nodes.push(
+    factRow({
+      label: '开局耗时',
+      // 没有 playing 就写「未记录」，**不补 0**（0.00s 会被读成"开局极快"）
+      value: playing === null ? '未记录' : `${(playing.t / 1000).toFixed(2)}s`,
+    }),
+  );
+  nodes.push(factRow({ label: '换线次数', value: String(detectSwitches(snapshot.events).length) }));
+  nodes.push(factRow({ label: '快照状态', value: snapshot.confidence }));
+
+  // ── 原始事件表（默认折叠）──
+  const shown = snapshot.events.slice(0, LOADING_EVENT_LIMIT);
+
+  const button = el('button', 'sub-entry');
+  button.type = 'button';
+  button.appendChild(el('span', undefined, `原始事件（${String(snapshot.events.length)} 条）`));
+  const chevron = el('span', 'sub-entry-chevron');
+  chevron.appendChild(iconChevron('right'));
+  button.appendChild(chevron);
+
+  const list = el('div', 'diag-logs');
+  list.hidden = true;
+  for (const [i, e] of shown.entries()) {
+    const row = el('div', 'diag-log');
+    row.appendChild(el('span', 'diag-time', `#${String(i + 1)}`));
+    row.appendChild(el('span', 'diag-time', msText(e.t)));
+    row.appendChild(el('span', 'diag-step', String(e.stage)));
+    if (e.host !== undefined && e.host.length > 0) {
+      row.appendChild(el('span', 'diag-detail', e.host));
+    }
+    if (e.kind !== undefined && e.kind.length > 0) {
+      row.appendChild(el('span', 'diag-time', String(e.kind)));
+    }
+    list.appendChild(row);
+  }
+  /**
+   * 截断必须**说出来**：只显示 40 条而不讲，用户会以为"这次加载只有 40 个事件"。
+   * 与 `buildTimeline()` 的 `truncated` 同一条纪律（界面不许静默省略）。
+   */
+  if (snapshot.events.length > LOADING_EVENT_LIMIT) {
+    const more = el('div', 'diag-log');
+    more.appendChild(
+      el(
+        'span',
+        'diag-detail',
+        `只显示前 ${String(LOADING_EVENT_LIMIT)} 条（共 ${String(snapshot.events.length)} 条）`,
+      ),
+    );
+    list.appendChild(more);
+  }
+
+  button.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    ev.preventDefault();
+    list.hidden = !list.hidden;
+    /**
+     * 展开态把箭头转 90 度（`›` → `⌄`）。用 `open` 类而不是换一个图标：
+     * 换图标要多一份 SVG，而"同一枚箭头换个朝向"本来就是一个 transform。
+     */
+    chevron.classList.toggle('open', !list.hidden);
+  });
+
+  nodes.push(button, list);
+  return nodes;
+}
+
 /**
  * `logsMeta` **缺失时**的唯一兜底（渲染侧与导出侧共用，不许各写一份）。
  *
@@ -349,6 +746,15 @@ export function diagnosticsPane(
      * 全函数只通过下面这个 `meta` 变量读它，不许再写 `data.logsMeta.…`。
      */
     logsMeta?: LogsMeta | undefined;
+    /**
+     * 加载时间轴的通道结局（2026-11-20，T7）。
+     *
+     * ⚠️ **可以传 `undefined`**：与 `logsMeta` 同一个理由（调用方在"还没采到"
+     * 时会传 `undefined`）。`undefined` 与 `absent` 同义 —— 不渲染任何看起来
+     * 像数据的行，只说"本页没有加载记录"。真正的"读取失败"只有
+     * `unanswered` 那一种，见 `loadingSectionNodes()`。
+     */
+    loading?: LoadingOutcome | undefined;
   },
   actions: { back: () => void; exportJson: () => void; refresh: () => void },
 ): HTMLElement {
@@ -396,6 +802,20 @@ export function diagnosticsPane(
 
   // ── 一句"该看哪"（与 options 同一个 tipFor）──
   box.appendChild(el('p', 'pane-note', tipFor(data.rows)));
+
+  /**
+   * ── 本次加载（T7，2026-11-20）──
+   *
+   * 位置是**刻意的**：紧跟在 `tipFor()` 那句"该看哪"之后、自检信息之前。
+   *
+   * - 放在最前：它回答的是"这一次播放怎么样"，是最常见的排查起点
+   * - 不插进「自检信息」里：那一块是 `collectFacts()` 的产出（扩展自己的状态），
+   *   混进页面侧的数据会让"自检项成没成"这条竖线不再成立
+   *
+   * 三态（ok / absent / unanswered）由 `loadingSectionNodes()` 一处决定，
+   * 本函数不重复判。
+   */
+  for (const node of loadingSectionNodes(data.loading)) box.appendChild(node);
 
   // ── 自检信息 ──
   box.appendChild(el('p', 'diag-section', '自检信息'));

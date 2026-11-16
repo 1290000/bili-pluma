@@ -126,11 +126,15 @@ const CONTRACT: Record<string, readonly string[]> = {
     'ld-conclusion-title',
     'ld-conclusion-tag',
     'ld-conclusion-counts',
+    /** 2026-11-20（裁决 ②）：结论与时间轴自洽的那句解释（只在有 P2P 时出现） */
+    'ld-conclusion-note',
     'ld-count',
     'ld-timeline',
     'ld-row',
     'ld-node-wrap',
     'ld-node',
+    /** 2026-11-20（裁决 ④）：里程碑的短竖线，与线路的圆/菱形/三角是两套形状 */
+    'ld-tick',
     'ld-conn',
     'ld-body',
     'ld-title-row',
@@ -166,6 +170,18 @@ const COMPOUND = [
   '.pane-note.warn',
   '.unlock-title.good',
   '.unlock-title.muted',
+  /**
+   * 2026-11-20（T7）三枚。它们都**不是新类名**，而是既有类的第三个状态 ——
+   * 所以登记在这里而不是上面的分组里。三个的共同点是"少一条就静默失效"：
+   *
+   * - `.diag-row.warn` → 观测到 PCDN 时那两行不变黄，"这一块唯一想让人看见的事"没了颜色
+   * - `.diag-logs[hidden]` → **折叠是一个属性、界面照旧铺开**（作者样式的 display:flex
+   *   会盖掉 UA 的 `[hidden]{display:none}`），原始事件表默认就占满一整屏
+   * - `.sub-entry-chevron.open` → 展开后箭头不转向，用户无从判断当前是开还是关
+   */
+  '.diag-row.warn',
+  '.diag-logs[hidden]',
+  '.sub-entry-chevron.open',
 ] as const;
 
 /** 该 CSS 里是否定义了恰好这个类（`.row` 不能命中 `.row-label`） */

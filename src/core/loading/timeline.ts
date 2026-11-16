@@ -192,3 +192,95 @@ export function detectSwitches(
 
   return switches;
 }
+
+/**
+ * 一对「分片请求 → 分片返回」。
+ *
+ * `doneAt` / `ms` 为 `null` 表示**只有请求、没配对到返回**（详见 `pairSegments`）。
+ */
+export interface SegmentPair {
+  /** 请求发出的时刻 */
+  t: number;
+  /** 返回时刻；`null` = 没有配对到返回 */
+  doneAt: number | null;
+  /** `doneAt - t`；`null` = 同上 */
+  ms: number | null;
+  /** 这条分片走的 host；不参与配对时为 `null`（正常情况下必有） */
+  host: string | null;
+  /** 该 host 的线路分类（取自**请求**那一条） */
+  kind: CdnKind | null;
+}
+
+/**
+ * 把 `seg-req` / `seg-res` 配成一对一对，**按 host 各自 FIFO**。
+ *
+ * ## 为什么必须配对（2026-11-20 真机截图）
+ *
+ * B站 会**同时**对两条线路发分片请求（竞速 / 预载），于是事件是交错的：
+ *
+ * ```text
+ * 4.22s  seg-req  xy116…mcdn        ← 请求 A
+ * 4.23s  seg-req  cn-zjih-ct-04-03  ← 请求 B
+ * 4.39s  seg-res  +0.2s             ← 其实是 A 的返回
+ * 4.97s  seg-res  +0.6s             ← 其实是 B 的返回
+ * ```
+ *
+ * 平铺着看，**没有任何线索**说明哪个返回属于哪个请求 —— 而"第几秒发出、
+ * 第几秒回来"正是这个功能的原始需求。配对之后这条信息才第一次存在。
+ *
+ * ## 配对规则
+ *
+ * - **按 host 各自维护一个 FIFO 队列**：`seg-req` 入队，`seg-res` 配给该 host
+ *   **最早那条未配对的**。跨 host 绝不错配（不同线路的耗时没有可比性）。
+ * - **没有 host 的事件不参与配对**（`LoadEvent.host` 是可选的，采集侧一定会给，
+ *   但这里是纯函数，不假设上游守规矩）。
+ * - **配不上的 `seg-res` 直接丢弃**：它对应的请求落在采集窗口外
+ *   （环形缓冲被挤掉了），凭空造一条"只有返回"的记录比不显示更容易误导。
+ * - 配不上的 `seg-req` 保留，`doneAt` / `ms` 为 `null`。
+ *   ⚠️ 这**不是错误**：竞速里被丢弃的那条请求正常得很，界面不可以用危险色。
+ *
+ * ## 为什么 `ms` 允许为负而不夹平
+ *
+ * 与 `buildTimeline()` 文件头同一条纪律：时间戳只排序，绝不修正。
+ * 真出现 `seg-res` 早于它自己的 `seg-req`，那是采集侧的问题，应该被看见。
+ *
+ * @param events 已归一的事件（传 `buildTimeline()` 的 `events`）；按传入顺序扫，不重新排序
+ * @returns 配对结果，**按请求发出的顺序**（不是按返回顺序）
+ */
+export function pairSegments(events: readonly LoadEvent[]): SegmentPair[] {
+  /** host → 该 host 还没等到返回的请求（FIFO） */
+  const pending = new Map<string, SegmentPair[]>();
+  const pairs: SegmentPair[] = [];
+
+  for (const event of events) {
+    if (event.stage !== 'seg-req' && event.stage !== 'seg-res') continue;
+
+    const host = event.host;
+    if (host === undefined || host.length === 0) continue;
+
+    if (event.stage === 'seg-req') {
+      const pair: SegmentPair = {
+        t: event.t,
+        doneAt: null,
+        ms: null,
+        host,
+        kind: event.kind ?? null,
+      };
+      const queue = pending.get(host);
+      if (queue === undefined) pending.set(host, [pair]);
+      else queue.push(pair);
+      // 返回顺序按"请求发出的顺序"：入队时就把位置定下来
+      pairs.push(pair);
+      continue;
+    }
+
+    const queue = pending.get(host);
+    if (queue === undefined || queue.length === 0) continue;
+    const paired = queue.shift();
+    if (paired === undefined) continue;
+    paired.doneAt = event.t;
+    paired.ms = event.t - paired.t;
+  }
+
+  return pairs;
+}

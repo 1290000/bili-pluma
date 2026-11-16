@@ -243,10 +243,25 @@ describe('★ 诊断浮层接线', () => {
       ?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     await flush();
 
-    expect(c.root.querySelector('.diag-row.ok')).not.toBeNull();
-    expect(c.root.querySelector('.diag-row.bad')).not.toBeNull();
+    /**
+     * ⚠️ 断言必须**限定在 `.diag-facts`（自检信息那块）**里。
+     *
+     * 2026-11-20（T7）：诊断浮层在自检信息**之前**新增了「本次加载」区块，
+     * 它也由 `factRow()` 拼出来（因此也是 `.diag-row`）。原来这三条按
+     * `c.root.querySelectorAll('.diag-row')` 数全屏，于是把新块的那些行
+     * 一起数了进去（中性行从 1 变 2）。
+     *
+     * 本用例的本意是"自检项的三种 ok 值各画成什么样"，**主语是自检信息**，
+     * 所以收窄到 `.diag-facts` 不是放宽判据，是把它写准确 —— 顺带让以后
+     * 再往这个浮层加行时不会误伤。
+     */
+    const facts = c.root.querySelector('.diag-facts');
+    expect(facts).not.toBeNull();
+
+    expect(facts?.querySelector('.diag-row.ok')).not.toBeNull();
+    expect(facts?.querySelector('.diag-row.bad')).not.toBeNull();
     // 中性行既不是 ok 也不是 bad
-    const rows = [...c.root.querySelectorAll('.diag-row')];
+    const rows = [...(facts?.querySelectorAll('.diag-row') ?? [])];
     expect(
       rows.filter((r) => !r.classList.contains('ok') && !r.classList.contains('bad')).length,
     ).toBe(1);

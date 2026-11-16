@@ -37,7 +37,13 @@
  */
 
 import type { CdnKind, OfficialFlavor } from '@core/cdn/classify';
-import { detectSwitches, type LoadEvent, type LoadStage } from '@core/loading/timeline';
+import {
+  detectSwitches,
+  pairSegments,
+  type LoadEvent,
+  type LoadStage,
+  type SegmentPair,
+} from '@core/loading/timeline';
 import type { LoadingSnapshotLite } from '@/src/content/isolated/loading-trace';
 
 import { el, iconChevron, onClick, pill } from './dom';
@@ -195,13 +201,18 @@ export function describeKindPill(
 
 // ─────────────────────────── 纯函数：数值与序列 ───────────────────────────
 
-/** 秒（1 位小数）。`toFixed` 比 `Math.round` 稳：`.5` 的方向由字符串规则定，不看实现 */
-function seconds1(ms: number): string {
-  return (ms / 1000).toFixed(1);
-}
-
-/** 绝对时刻（2 位小数，`0.42s` 这种）。面板里要能对上采集侧报的毫秒数 */
-function seconds2(ms: number): string {
+/**
+ * 秒（**统一 2 位小数**）。
+ *
+ * ## 为什么不是 1 位（2026-11-20 Lead 裁决 ⑤）
+ *
+ * 真机截图里「开局 3.2s」与时间轴「3.18s」是同一个数字的两种精度 ——
+ * 用户对照时会以为是两个不同的值。面板里所有时间现在只有一种精度：
+ * `开局 3.18s`、`4.22s → 4.39s · 0.17s`、`+0.40s`。
+ *
+ * `toFixed` 比 `Math.round` 稳：`.5` 的方向由十进制字符串规则定，不看实现。
+ */
+function seconds(ms: number): string {
   return (ms / 1000).toFixed(2);
 }
 
@@ -211,24 +222,24 @@ export function playingEvent(events: readonly LoadEvent[]): LoadEvent | null {
 }
 
 /**
- * 速览行的副行：`开局 3.3s · 3 条线路`。
+ * 速览行的副行：`开局 3.18s · 3 条线路`。
  *
  * ## 单位是 `s`，不是「秒」（2026-11-20 Lead 裁决）
  *
- * 面板里 `s` 已经是既定单位：时间轴 `0.42s`、增量 `+0.8s`、尾注 `+x.xs`。
- * 副行写「秒」会让**同一张卡里的同一个数字**出现两种写法（`开局 1.8s` 与
- * `1.8s`），用户对照时会以为是两个不同的值。
+ * 面板里 `s` 已经是既定单位：时间轴 `0.42s`、增量 `+0.40s`、尾注 `+x.xxs`。
+ * 副行写「秒」会让**同一张卡里的同一个数字**出现两种写法（`开局 1.80s` 与
+ * `1.80s`），用户对照时会以为是两个不同的值。
  *
  * ## `playing` 缺失时整行不显示（不补 0）
  *
- * "开局 0.0s"是一句**看起来像数据**的话，而事实是"没测到开始播放" ——
+ * "开局 0.00s"是一句**看起来像数据**的话，而事实是"没测到开始播放" ——
  * 补 0 会把"缺一条信息"伪装成"测到了一个很好的值"。
  * `core/loading/timeline.ts` 文件头第 3 条（绝不补造事件）是同一个道理。
  */
 export function describeQuickSub(snapshot: LoadingSnapshotLite): string | null {
   const playing = playingEvent(snapshot.events);
   if (playing === null) return null;
-  return `开局 ${seconds1(playing.t)}s · ${String(snapshot.hosts.length)} 条线路`;
+  return `开局 ${seconds(playing.t)}s · ${String(snapshot.hosts.length)} 条线路`;
 }
 
 /**
@@ -241,7 +252,7 @@ export function describeCounts(snapshot: LoadingSnapshotLite): string[] {
   const counts: string[] = [];
 
   const playing = playingEvent(snapshot.events);
-  if (playing !== null) counts.push(`开局 ${seconds1(playing.t)}s`);
+  if (playing !== null) counts.push(`开局 ${seconds(playing.t)}s`);
 
   if (snapshot.hosts.length > 0) counts.push(`${String(snapshot.hosts.length)} 条线路`);
 
@@ -251,26 +262,79 @@ export function describeCounts(snapshot: LoadingSnapshotLite): string[] {
   return counts;
 }
 
-/** 一条时间轴行（纯数据，DOM 由 `loadingDetailPane` 装配） */
-export interface TimelineRow {
-  stage: LoadStage;
-  /** 阶段中文名 */
-  label: string;
-  /** 绝对时刻，如 `2.53s` */
-  at: string;
-  /** 相对上一条的增量，如 `+0.8s`；**首条为 `null`**（没有"上一条"） */
-  delta: string | null;
-  /** 明细（有 host 才有一行）；`null` = 不渲染，不留占位符 */
-  detail: string | null;
-  tone: LoadingTone;
-  marker: MarkerShape;
+/**
+ * 结论卡里那句"为什么官方线路上还有 P2P 节点"（2026-11-20 Lead 裁决 ②）。
+ *
+ * ## 不解释会自相矛盾
+ *
+ * 真机截图：结论卡写「B站官方线路（自建 CDN）」+ 徽章「官方 CDN」，
+ * 而时间轴上有两个橙色 P2P 节点 —— 普通用户看到会卡住：走官方为什么有 P2P？
+ *
+ * 技术上没错：`actual` 取的是**请求数最多**的那条线路（`snapshotOf` 的判据），
+ * 竞速里另一条也会被用上一两次。所以这里要**把判据说出来**。
+ *
+ * ## ⚠️ 不许写"已回退"
+ *
+ * 我们没有数据能证明发生过回退（没有"什么时候被踢下来"的观测）。
+ * 只陈述事实："有几条 P2P 线路，且没占主导" —— 字数不多，但每个字都有据。
+ *
+ * @returns `null` = 不需要这句（没有 P2P，或者结论本身就是 P2P）
+ */
+export function describePcdnCaveat(snapshot: LoadingSnapshotLite): string | null {
+  const actual = snapshot.actual;
+  // 结论已经是 P2P 了："其中 N 条是 P2P，未占主导"会与大字结论打架
+  if (actual === null || actual.cls === 'pcdn') return null;
+
+  const pcdnHosts = snapshot.hosts.filter((h) => h.cls === 'pcdn').length;
+  if (pcdnHosts === 0) return null;
+
+  return `其中 ${String(pcdnHosts)} 条是 P2P 线路，未占主导`;
 }
 
+// ─────────────────────────── 时间轴行 ───────────────────────────
+
+/** 一条时间轴行（纯数据，DOM 由 `loadingDetailPane` 装配） */
+export interface TimelineRow {
+  /** `segment` = 配对好的「请求→返回」；`event` = 里程碑等单点事件 */
+  kind: 'segment' | 'event';
+  stage: LoadStage;
+  /** 左侧标题 */
+  label: string;
+  /**
+   * 右列那一整块元信息（这一行最右侧的小字）。三种形态：
+   * - 配对成功：`4.22s → 4.39s · 0.17s`
+   * - 只有请求：`4.22s · 未完成`
+   * - 里程碑：`3.18s +0.40s`（后半个是距上一条的增量）
+   */
+  meta: string;
+  /** 明细（有 host 才有一行）；`null` = 不渲染，不留占位符 */
+  detail: string | null;
+  /**
+   * 线路形状。`null` = **里程碑**，左侧画一根短竖线而不是圆点
+   * （2026-11-20 Lead 裁决 ④：里程碑不是线路，不该共用形状）。
+   */
+  marker: MarkerShape | null;
+  /** 圆点色调（只在 `marker !== null` 时起作用） */
+  tone: LoadingTone;
+  /** 标题用次要文字色（只有"未完成"的请求会用它，**不是危险色**） */
+  dimTitle: boolean;
+  /** 标题用危险色（`error` / `blocked`） */
+  dangerTitle: boolean;
+}
+
+/** 配对行里的线段文案。比 `stageLabel('seg-req')` 短：它代表一整段，不是那一刻 */
+const SEGMENT_LABEL = '下载分片';
+
 /**
- * 阶段 → 颜色 + 形状。
+ * 阶段 → 颜色 + 形状（只对**线路行**有意义）。
  *
  * 优先级：**阶段先于线路**。`ext-patch`（扩展介入）与 `error` / `blocked`
  * 与"哪条线路"无关，用阶段自己的语义色 —— 它们恰恰是排查时要一眼找到的两种。
+ *
+ * ⚠️ 里程碑（`canplay` / `playing` / …）**不再用这个函数的形状**：
+ * 它们在 `buildTimelineRows` 里走 `marker: null`（短竖线），
+ * 因为空心圆与图例里的线路形状撞形（2026-11-20 Lead 裁决 ④）。
+ * 本函数对它们仍返回一个值，但调用方不会拿它画圆点。
  */
 export function describeEventMarker(event: LoadEvent): { tone: LoadingTone; marker: MarkerShape } {
   if (event.stage === 'ext-patch') return { tone: 'accent', marker: 'ring' };
@@ -290,31 +354,116 @@ export function describeEventMarker(event: LoadEvent): { tone: LoadingTone; mark
 }
 
 /**
- * 事件序列 → 时间轴行。
+ * 分片事件在 `pairSegments()` 的返回里怎么找回来。
  *
- * 竖向位置 = **传入顺序**（`buildTimeline()` 已按 `t` 升序排好，且稳定），
- * 这里**不再排序** —— 再排一次就等于对同一件事有两处判据。
+ * `buildTimeline()` 已经按 `t + stage + host` 去过重，所以同一时刻同一 host
+ * 的 `seg-req` 只可能有一条 —— `(t, host)` 是它的唯一键。
+ */
+function segKey(t: number, host: string | null): string {
+  return `${String(t)}\u0000${host ?? ''}`;
+}
+
+/**
+ * 这条事件该不该用"线路形状"。
  *
- * `delta` 相对**上一条**（不是上一条同阶段的）：用户看的是"这一段时间花在哪"，
- * 相邻两步之间的间隔才是他感知到的卡顿。
+ * 只有**分片请求**（配对行）和 `switch`（换线）谈得上"哪条线路"。
+ * 里程碑（`canplay` / `playing` / `stall` / `error` / `nav` / `playurl-*`）
+ * 与线路无关，用短竖线 —— 否则它们与图例里的空心圆撞形，看着像"未激活"。
+ */
+function isLineRow(event: LoadEvent): boolean {
+  if (event.kind === undefined) return false;
+  return event.stage === 'seg-req' || event.stage === 'switch';
+}
+
+/**
+ * 事件序列 → 时间轴行（**请求与返回合并成一行**）。
+ *
+ * ## 为什么合并（2026-11-20 真机截图，本轮最重要的一条）
+ *
+ * B站 会同时向两条线路发分片请求，`seg-req` / `seg-res` 交错排列，平铺着看
+ * 分不清哪个返回属于哪个请求。配对规则与理由写在 `core/loading/timeline.ts`
+ * 的 `pairSegments()` 头上，这里只负责**渲染成一行**：
+ *
+ * ```text
+ * ◇ 下载分片              4.22s → 4.39s · 0.17s
+ *   xy116x196x140x34xy.mcdn.bilivideo.cn
+ * ```
+ *
+ * ## 哪些事件会被吃掉
+ *
+ * - `seg-res` **一律**不出独立行：配上的已经并进请求那行，配不上的按
+ *   `pairSegments()` 的规则丢弃（对应的请求在采集窗口外，凭空造一条"只有返回"
+ *   比不显示更容易误导）。
+ * - 其它阶段各占一行（里程碑）。
+ *
+ * 真机那份 9 条事件因此变成 **6 行**（3 段配对 + stall / canplay / playing）。
+ *
+ * 竖向位置 = 传入顺序（`buildTimeline()` 已排好），这里**不再排序**。
  */
 export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
+  const pairByKey = new Map<string, SegmentPair>();
+  for (const pair of pairSegments(events)) pairByKey.set(segKey(pair.t, pair.host), pair);
+
   const rows: TimelineRow[] = [];
+  /**
+   * 上一条**显示出来的行**的结束时刻。
+   *
+   * 配对行用 `doneAt`（不是请求时刻）：里程碑的"+x.xxs"要回答的是
+   * "上一个动作**做完**之后隔了多久"，用请求时刻会把这段下载耗时算进间隔里。
+   * 被吃掉的 `seg-res` 不更新它（它们不是行）。
+   */
   let previous: number | null = null;
 
   for (const event of events) {
-    const { tone, marker } = describeEventMarker(event);
-    rows.push({
-      stage: event.stage,
-      label: stageLabel(event.stage),
-      at: `${seconds2(event.t)}s`,
-      delta: previous === null ? null : `+${seconds1(event.t - previous)}s`,
-      // 没有 host 就不渲染明细行 —— 占位符（`—` / `未知`）会让人以为这里本该有值
-      detail: event.host === undefined || event.host.length === 0 ? null : event.host,
-      tone,
-      marker,
-    });
-    previous = event.t;
+    // 返回不单独成行，见函数头
+    if (event.stage === 'seg-res') continue;
+
+    const pair =
+      event.stage === 'seg-req' && event.host !== undefined && event.host.length > 0
+        ? pairByKey.get(segKey(event.t, event.host))
+        : undefined;
+
+    if (pair !== undefined) {
+      const unmatched = pair.doneAt === null || pair.ms === null;
+      const look = describeEventMarker(event);
+      rows.push({
+        kind: 'segment',
+        stage: event.stage,
+        label: SEGMENT_LABEL,
+        meta: unmatched
+          ? `${seconds(pair.t)}s · 未完成`
+          : `${seconds(pair.t)}s → ${seconds(pair.doneAt ?? pair.t)}s · ${seconds(pair.ms ?? 0)}s`,
+        detail: pair.host,
+        marker: look.marker,
+        tone: look.tone,
+        /**
+         * ⚠️ 未完成用**次要文字色**，不用危险色：竞速里被丢弃的那条请求
+         * 正常得很，涂红会让用户以为网络出问题了。
+         */
+        dimTitle: unmatched,
+        dangerTitle: false,
+      });
+      previous = pair.doneAt ?? pair.t;
+    } else {
+      const line = isLineRow(event);
+      const look = describeEventMarker(event);
+      rows.push({
+        kind: 'event',
+        stage: event.stage,
+        label: stageLabel(event.stage),
+        meta:
+          previous === null
+            ? `${seconds(event.t)}s`
+            : `${seconds(event.t)}s +${seconds(event.t - previous)}s`,
+        detail: event.host === undefined || event.host.length === 0 ? null : event.host,
+        // 里程碑没有线路形状：左侧画短竖线（见 TimelineRow.marker 的注释）
+        marker: line ? look.marker : null,
+        tone: look.tone,
+        dimTitle: false,
+        dangerTitle: event.stage === 'error' || event.stage === 'blocked',
+      });
+      previous = event.t;
+    }
   }
 
   return rows;
@@ -481,13 +630,52 @@ export function loadingQuickRow(view: LoadingQuickView, onOpen?: () => void): HT
 
 // ─────────────────────────── DOM：二级浮层 ───────────────────────────
 
-/** 图例四项。文案与形状都是**固定的**：它们解释的是"画的是什么"，不是数据 */
-const LEGEND: ReadonlyArray<{ text: string; shape: MarkerShape; tone: LoadingTone }> = [
-  { text: '官方', shape: 'disc', tone: 'ok' },
-  { text: 'P2P', shape: 'diamond', tone: 'warn' },
-  { text: '第三方', shape: 'triangle', tone: 'muted' },
-  { text: '扩展介入', shape: 'ring', tone: 'accent' },
+/**
+ * 图例的外观表：**只解释"画的形状是什么意思"**，不含任何数据。
+ *
+ * ## ⚠️ 图例按数据动态生成，不再写死四项（2026-11-20 Lead 裁决 ③）
+ *
+ * 旧实现固定列四项，其中「扩展介入」与「第三方」在真机上**永远不会出现**：
+ * 我们所有打点都在 isolated 侧，没有任何事件能产出 `ext-patch`。
+ * 图例承诺了不存在的类别 —— 那是在解释一个不会出现的形状。
+ *
+ * 现在只列**本次真的出现过**的线路类别（`legendKinds()`），一项都没有就整块不画。
+ * `扩展介入` 已从图例删掉：等真有 `ext-patch` 数据源那天再加回来。
+ */
+const LEGEND_LOOK: Record<
+  'official' | 'pcdn' | 'third-party',
+  { text: string; shape: MarkerShape; tone: LoadingTone }
+> = {
+  official: { text: '官方', shape: 'disc', tone: 'ok' },
+  pcdn: { text: 'P2P', shape: 'diamond', tone: 'warn' },
+  'third-party': { text: '第三方', shape: 'triangle', tone: 'muted' },
+};
+
+/** 图例的固定顺序：官方 → P2P → 第三方（不按出现顺序，免得每次截图都不一样） */
+const LEGEND_ORDER: readonly ('official' | 'pcdn' | 'third-party')[] = [
+  'official',
+  'pcdn',
+  'third-party',
 ];
+
+/**
+ * 本次真的出现过的线路类别（图例用）。
+ *
+ * 来源是 `hosts[].cls` 与 `events[].kind` **两边取并**：
+ * 只看 hosts 会漏掉"请求发生过但统计没记到"的边角，只看 events 会漏掉
+ * 那些只出现在 hosts 里的线路（事件被环形缓冲挤掉时就是这样）。
+ * `unknown` 不算线路，不进图例。
+ */
+export function legendKinds(
+  snapshot: LoadingSnapshotLite,
+): Array<'official' | 'pcdn' | 'third-party'> {
+  const seen = new Set<string>();
+  for (const h of snapshot.hosts) seen.add(h.cls);
+  for (const e of snapshot.events) {
+    if (e.kind !== undefined) seen.add(e.kind);
+  }
+  return LEGEND_ORDER.filter((k) => seen.has(k));
+}
 
 /** 二级浮层「本次加载」要调出去的三件事 */
 export interface LoadingDetailActions {
@@ -568,6 +756,13 @@ function conclusionCard(snapshot: LoadingSnapshotLite): HTMLElement {
     card.appendChild(row);
   }
 
+  /**
+   * 结论与时间轴自洽（裁决 ②）：结论说官方、时间轴上却有橙色 P2P 节点时，
+   * 在这一行说清"那几条没占主导"。没有 P2P 就整句不出现。
+   */
+  const caveat = describePcdnCaveat(snapshot);
+  if (caveat !== null) card.appendChild(el('span', 'ld-conclusion-note', caveat));
+
   return card;
 }
 
@@ -578,22 +773,35 @@ function timelineRow(row: TimelineRow, isLast: boolean): HTMLElement {
   const wrap = el('div', 'ld-node-wrap');
   // 竖线连接上下两个点：最后一行的线会挂不到下一个点，所以隐藏
   if (!isLast) wrap.appendChild(el('span', 'ld-conn'));
-  const node = el('div', `ld-node ld-tone-${row.tone}`);
-  node.appendChild(markerSvg(row.marker));
-  wrap.appendChild(node);
+
+  if (row.marker === null) {
+    /**
+     * 里程碑：一根 10px 的短竖线，**不画圆点**（裁决 ④）。
+     *
+     * 它们是"时间走到了这里"，不是"数据从哪条线路来" —— 共用圆点会让用户
+     * 把它们当成一种线路，而且和空心圆撞形、看着像"未激活"。
+     */
+    wrap.appendChild(el('span', 'ld-tick'));
+  } else {
+    const node = el('div', `ld-node ld-tone-${row.tone}`);
+    node.appendChild(markerSvg(row.marker));
+    wrap.appendChild(node);
+  }
   line.appendChild(wrap);
 
   const body = el('div', 'ld-body');
   const titleRow = el('div', 'ld-title-row');
-  titleRow.appendChild(el('span', 'ld-title', row.label));
+  const titleClass = `ld-title${row.dimTitle ? ' ld-tone-muted' : ''}${
+    row.dangerTitle ? ' ld-tone-bad' : ''
+  }`;
+  titleRow.appendChild(el('span', titleClass, row.label));
   /**
-   * 右列两件事：绝对时刻 + 相对增量。首条没有"上一条"，只显示时刻。
-   * ⚠️ 两个数字都写在同一行右侧，用 `tabular-nums` 让它们纵向对齐 ——
-   * 否则 `+0.8s` 与 `+10.2s` 会把右边的边距撑得忽宽忽窄。
+   * 右列元信息（`ld-delta` 这个名字留着不改 —— 它在类名契约里）。
+   *
+   * ⚠️ 用 `tabular-nums` 让所有行右边缘对齐：`+0.40s` 与 `+10.20s`
+   * 字宽不同，不对齐会读成"这几行没对齐"。
    */
-  titleRow.appendChild(
-    el('span', 'ld-delta', row.delta === null ? row.at : `${row.at} ${row.delta}`),
-  );
+  titleRow.appendChild(el('span', 'ld-delta', row.meta));
   body.appendChild(titleRow);
 
   if (row.detail !== null) body.appendChild(el('span', 'ld-detail', row.detail));
@@ -612,15 +820,19 @@ function timelineRow(row: TimelineRow, isLast: boolean): HTMLElement {
  * ┌──────────────────────────────┐
  * │ (44) 本次加载                 │
  * │      B站官方线路（自建 CDN） [官方 CDN] │
- * │      开局 3.3s  3 条线路  2 次切换     │
+ * │      开局 3.27s  3 条线路  2 次切换   │
+ * │      其中 1 条是 P2P 线路，未占主导   │
  * └──────────────────────────────┘
  * 时间轴
- * ● 页面开始            1.77s
- * │ 开始下载分片        2.53s +0.8s
- * ...
- * 图例  ● 官方  ◆ P2P  ▲ 第三方  ○ 扩展介入
+ * ▏卡了一下              1.77s
+ * ● 下载分片             2.53s → 2.82s · 0.29s
+ * │ cn-jsnt-ct-01-07.bilivideo.com
+ * ▏可以播放              3.27s +0.45s
+ * ◆ 下载分片             3.74s → 3.89s · 0.15s
+ * │ xy220x180x77x45xy.mcdn.bilivideo.cn
+ * 图例  ● 官方  ◆ P2P
  * 查看完整诊断 ›
- * 时间从页面开始加载算起；右侧 +x.xs 是比上一条多花的时间。
+ * 时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，…
  * ```
  *
  * ## 拿不到数据时**不画空壳**
@@ -679,20 +891,34 @@ export function loadingDetailPane(
     box.appendChild(timeline);
   }
 
-  box.appendChild(el('p', 'diag-section', '图例'));
-  const legend = el('div', 'ld-legend');
-  for (const item of LEGEND) {
-    const cell = el('div', `ld-legend-item ld-tone-${item.tone}`);
-    cell.appendChild(markerSvg(item.shape));
-    cell.appendChild(el('span', 'ld-legend-text', item.text));
-    legend.appendChild(cell);
+  /**
+   * 图例：**按本次出现的类别动态生成**（裁决 ③）。
+   *
+   * 一项都没有时整块不渲染 —— 包括那个「图例」小标题。画一个空图例等于说
+   * "这里有形状要解释"，而实际一个形状都没有。
+   */
+  const kinds = legendKinds(snapshot);
+  if (kinds.length > 0) {
+    box.appendChild(el('p', 'diag-section', '图例'));
+    const legend = el('div', 'ld-legend');
+    for (const kind of kinds) {
+      const look = LEGEND_LOOK[kind];
+      const cell = el('div', `ld-legend-item ld-tone-${look.tone}`);
+      cell.appendChild(markerSvg(look.shape));
+      cell.appendChild(el('span', 'ld-legend-text', look.text));
+      legend.appendChild(cell);
+    }
+    box.appendChild(legend);
   }
-  box.appendChild(legend);
 
   box.appendChild(diagnosticsEntry(actions));
 
   box.appendChild(
-    el('p', 'pane-note', '时间从页面开始加载算起；右侧 +x.xs 是比上一条多花的时间。'),
+    el(
+      'p',
+      'pane-note',
+      '时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，下载分片那几行给的是请求到返回的耗时。',
+    ),
   );
 
   return box;

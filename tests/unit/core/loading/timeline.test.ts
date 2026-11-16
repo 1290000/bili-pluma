@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { LoadEvent, LoadStage } from '@core/loading/timeline';
-import { buildTimeline, detectSwitches } from '@core/loading/timeline';
+import { buildTimeline, detectSwitches, pairSegments } from '@core/loading/timeline';
 
 /**
  * 守的是"时间轴画出来的每个节点都对应真实发生的事，且时间戳是原始值"。
@@ -236,5 +236,113 @@ describe('detectSwitches：分片请求真的换了 host 才算切换', () => {
     ]).events;
 
     expect(detectSwitches(events)).toEqual([]);
+  });
+});
+
+/**
+ * `pairSegments()`：把 `seg-req` / `seg-res` 按 host 各自 FIFO 配成对。
+ *
+ * ## 这一组守的是什么
+ *
+ * 真机截图里 B站 **同时**向两条线路发分片请求（竞速 / 预载），事件是交错的：
+ *
+ * ```text
+ * 4.22s  seg-req  xy116…mcdn        ← 请求 A
+ * 4.23s  seg-req  cn-zjih-ct-04-03  ← 请求 B
+ * 4.39s  seg-res  xy116…mcdn        ← A 的返回
+ * 4.97s  seg-res  cn-zjih-ct-04-03  ← B 的返回
+ * ```
+ *
+ * 只要配对错了（例如"按出现顺序一对一"而不是"按 host 配对"），界面就会显示
+ * `4.22s → 4.97s · 0.75s` 这种**根本不存在的耗时** —— 数字看着完全正常，
+ * 却是错的。所以每一类边界都要有一条。
+ */
+describe('pairSegments：按 host 各自 FIFO 配对', () => {
+  /** 造一条分片事件（可带 kind） */
+  function seg(
+    t: number,
+    stage: 'seg-req' | 'seg-res',
+    host: string,
+    kind?: 'official' | 'pcdn',
+  ): LoadEvent {
+    return kind === undefined ? { t, stage, host } : { t, stage, host, kind };
+  }
+
+  it('正常配对：一条 req + 一条 res → doneAt / ms', () => {
+    const pairs = pairSegments([seg(100, 'seg-req', 'a', 'official'), seg(250, 'seg-res', 'a')]);
+    expect(pairs).toEqual([{ t: 100, doneAt: 250, ms: 150, host: 'a', kind: 'official' }]);
+  });
+
+  it('★ 两条线路交错：各自配各自的，绝不错配', () => {
+    const pairs = pairSegments([
+      seg(4220, 'seg-req', 'xy.mcdn.bilivideo.cn', 'pcdn'),
+      seg(4230, 'seg-req', 'cn-zjih-ct-04-03.bilivideo.com', 'official'),
+      seg(4390, 'seg-res', 'xy.mcdn.bilivideo.cn'),
+      seg(4970, 'seg-res', 'cn-zjih-ct-04-03.bilivideo.com'),
+    ]);
+
+    expect(pairs.map((p) => [p.host, p.ms])).toEqual([
+      ['xy.mcdn.bilivideo.cn', 170],
+      ['cn-zjih-ct-04-03.bilivideo.com', 740],
+    ]);
+  });
+
+  it('★ 同一 host 连续两条 req、只有一条 res → 配给**最早**那条', () => {
+    const pairs = pairSegments([
+      seg(100, 'seg-req', 'a'),
+      seg(200, 'seg-req', 'a'),
+      seg(300, 'seg-res', 'a'),
+    ]);
+
+    expect(pairs[0]).toMatchObject({ t: 100, doneAt: 300, ms: 200 });
+    // 第二条还是"没等到返回"的状态
+    expect(pairs[1]).toMatchObject({ t: 200, doneAt: null, ms: null });
+  });
+
+  it('只有 req 没有 res → 保留，doneAt / ms 为 null（不是错误，是没等到）', () => {
+    const pairs = pairSegments([seg(100, 'seg-req', 'a', 'pcdn')]);
+    expect(pairs).toEqual([{ t: 100, doneAt: null, ms: null, host: 'a', kind: 'pcdn' }]);
+  });
+
+  it('★ 只有 res 没有 req → 丢弃（对应请求在采集窗口外，不许凭空造一条）', () => {
+    expect(pairSegments([seg(100, 'seg-res', 'a')])).toEqual([]);
+  });
+
+  it('没有 host 的事件不参与配对', () => {
+    const pairs = pairSegments([
+      { t: 10, stage: 'seg-req' },
+      { t: 20, stage: 'seg-res' },
+    ]);
+    expect(pairs).toEqual([]);
+  });
+
+  it('别的阶段不参与（canplay / stall 之类）', () => {
+    const pairs = pairSegments([
+      ev(10, 'canplay'),
+      seg(20, 'seg-req', 'a'),
+      ev(30, 'stall'),
+      seg(40, 'seg-res', 'a'),
+    ]);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0]?.ms).toBe(20);
+  });
+
+  it('结果按**请求发出**的顺序，不是返回的顺序', () => {
+    const pairs = pairSegments([
+      seg(100, 'seg-req', 'slow'),
+      seg(110, 'seg-req', 'fast'),
+      seg(120, 'seg-res', 'fast'),
+      seg(900, 'seg-res', 'slow'),
+    ]);
+    expect(pairs.map((p) => p.host)).toEqual(['slow', 'fast']);
+  });
+
+  it('kind 取自**请求**那一条（返回事件不带 kind 也能配对）', () => {
+    const pairs = pairSegments([seg(100, 'seg-req', 'a', 'official'), seg(150, 'seg-res', 'a')]);
+    expect(pairs[0]?.kind).toBe('official');
+  });
+
+  it('空输入 → 空数组', () => {
+    expect(pairSegments([])).toEqual([]);
   });
 });

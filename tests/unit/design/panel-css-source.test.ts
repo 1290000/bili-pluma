@@ -41,6 +41,40 @@ describe('PANEL_CSS 源码卫生', () => {
     expect(ticks).toHaveLength(1);
   });
 
+  /**
+   * ★ 游离反引号：**逐行**找，并在失败时点名是第几行（2026-11-20，Lead 要求）。
+   *
+   * ## 为什么上面那条不够
+   *
+   * 上面那条只能回答"多了几个"，回答不了"在哪一行"。而 `tsc` 报的是
+   * `TS1127 Invalid character`，位置指向**被截断之后**的语句 ——
+   * 与真正写错的那行注释隔了几百行，实测踩了五次都是靠肉眼扫回来的。
+   *
+   * 这一条把判据换成**合法的结尾长什么样**：模板里只允许两种反引号 ——
+   * 开头那个（在 `export const PANEL_CSS = ` 这一行），和**独占一行**的 `` `; ``。
+   * 其余任何一行出现反引号，就是注释里写了 Markdown 记号。
+   */
+  it('★ 反引号只许出现在开头与行首的结尾（失败时点名行号）', () => {
+    const lines = SOURCE.split('\n');
+    const startLine = lines.findIndex((l) => l.startsWith('export const PANEL_CSS = `'));
+    expect(startLine).toBeGreaterThan(-1);
+
+    const offenders: string[] = [];
+    let closed = false;
+    for (let i = startLine + 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? '';
+      // 合法的结尾：整行只有一个反引号加分号
+      if (line === '`;') {
+        closed = true;
+        break;
+      }
+      if (line.includes('`')) offenders.push(`第 ${String(i + 1)} 行：${line.trim()}`);
+    }
+
+    expect(closed, '没找到行首的结尾 `;，模板字符串可能被截断了').toBe(true);
+    expect(offenders, '模板字符串内部出现了游离反引号（注释里写了 Markdown 记号）').toEqual([]);
+  });
+
   it('花括号是配平的（截断的另一半常表现为少一个 }）', () => {
     const body = panelCssBody();
     const open = (body.match(/{/g) ?? []).length;

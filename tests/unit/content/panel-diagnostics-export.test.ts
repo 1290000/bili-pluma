@@ -27,8 +27,11 @@ import {
   describeLogsError,
   diagnosticsPane,
   exportFileName,
+  type LoadingExport,
 } from '../../../src/content/panel/diagnostics';
 import type { DiagEntry, DiagRow } from '../../../src/platform/diagnostics/collect';
+import type { LoadingOutcome } from '../../../src/content/panel/loading-pane';
+import type { LoadingSnapshotLite } from '../../../src/content/isolated/loading-trace';
 
 /** 会被当作"泄漏"的敏感串。大小写都算。 */
 const SECRETS = [
@@ -38,6 +41,28 @@ const SECRETS = [
   'SESSDATA=',
   'bili_jct=',
   'DedeUserID=',
+];
+
+/**
+ * 取流 URL 里那几个"看着不像凭据、其实是凭据"的参数名（2026-11-20，T8）。
+ *
+ * ## 为什么它们必须进词表
+ *
+ * 加载快照里只有 hostname（采集侧把 query 全丢了），理论上扫不到这些词。
+ * 但"理论上有防线"与"有检查"是两件事 —— 这个项目已经踩过多次
+ * 「实现看着对、没有任何东西在验」。所以词表里放的是**如果哪天有人
+ * 把 `hostFromUrl` 换成 `url`，第一个会露出来的那些词**。
+ *
+ * `https?://` 同理：一旦哪条路径带进来一个完整 URL，它一定出现。
+ * ⚠️ `sign` 用词边界：`/sign/` 会误伤 `design`，而误报会逼人删掉这条检查。
+ */
+const FORBIDDEN_PATTERNS: readonly RegExp[] = [
+  /upsig/i,
+  /uparams/i,
+  /w_rid/i,
+  /\bsign\b/i,
+  /\btoken\b/i,
+  /https?:\/\//i,
 ];
 
 const NOW = new Date('2026-11-10T12:34:56Z');
@@ -86,7 +111,45 @@ function payload(rows: DiagRow[], logs: DiagEntry[]): string {
       instanceId: 'ab12cd',
       readAt: NOW.getTime(),
     },
+    /**
+     * 第八个字段（2026-11-20，T8）：本次加载。
+     *
+     * ⚠️ 默认给的是一份**真实形状**的快照（含一条带 `note` 的事件）——
+     * 一份"干净的假数据"证明不了 `note` 被剥掉，而 `note` 正是本轮
+     * 唯一一条"少写一行就泄漏"的地方。
+     */
+    loading: { kind: 'ok', snapshot: loadingSnapshot() },
   });
+}
+
+/**
+ * 一份实测快照（与 `poc/probe/pcdn-diag` 同源）。
+ *
+ * ⚠️ 第 3 条事件带着 `note: 'MediaError.code=3'` —— 真实的 `error` 事件就是
+ * 长这样（`loading-trace.ts` 把 `MediaError.code` 塞进 `note`）。
+ * 它是本文件的**主要假想泄漏源**：导出必须把它剥掉。
+ */
+function loadingSnapshot(overrides: Partial<LoadingSnapshotLite> = {}): LoadingSnapshotLite {
+  return {
+    present: true,
+    confidence: 'measured',
+    actual: { host: 'cn-jsnt-ct-01-07.bilivideo.com', cls: 'official', flavor: 'self-built' },
+    hosts: [
+      { host: 'cn-jsnt-ct-01-07.bilivideo.com', cls: 'official', flavor: 'self-built', count: 12 },
+      { host: 'cn-jsnt-ct-01-06.bilivideo.com', cls: 'official', flavor: 'self-built', count: 11 },
+      { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 1 },
+    ],
+    events: [
+      { t: 1772, stage: 'stall' },
+      { t: 2525.9, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+      // 开局耗时取这一条（`playing.t` = 2525.9ms → 2.53s）
+      { t: 2525.9, stage: 'playing' },
+      { t: 3737.1, stage: 'error', note: 'MediaError.code=3' },
+    ],
+    truncated: false,
+    video: { readyState: 4, durationSec: 213, height: 360, errorCode: 0 },
+    ...overrides,
+  };
 }
 
 describe('★ 面板诊断导出不含凭据', () => {
@@ -94,6 +157,13 @@ describe('★ 面板诊断导出不含凭据', () => {
     const json = payload(realRows(), realLogs()).toLowerCase();
     for (const s of SECRETS) {
       expect(json, `导出里出现了 ${s}`).not.toContain(s.toLowerCase());
+    }
+  });
+
+  it('★ 整包里搜不到取流 URL 的参数名 / 完整 URL（T8 扩的词表）', () => {
+    const json = payload(realRows(), realLogs());
+    for (const re of FORBIDDEN_PATTERNS) {
+      expect(re.test(json), `导出里命中了 ${String(re)}`).toBe(false);
     }
   });
 
@@ -120,7 +190,7 @@ describe('★ 面板诊断导出不含凭据', () => {
 });
 
 describe('★ 形状守卫：顶层字段固定', () => {
-  it('payload 的顶层键恰好是 exportedAt / version / facts / logs / trace / echo / logsMeta', () => {
+  it('payload 的顶层键恰好是 exportedAt / version / facts / logs / trace / echo / logsMeta / loading', () => {
     /**
      * 多一个字段就可能多一条泄漏路径，少了也不会报错 —— 两边都得钉住。
      * 反例：往 `buildExportPayload` 里加 `credential: ...` → 本条必红。
@@ -132,12 +202,16 @@ describe('★ 形状守卫：顶层字段固定', () => {
      * ⚠️ `logsMeta` 是 2026-11-12（task-26）加的第一个**含自由文本**的字段。
      * 它的 `err` 必须走 `describeLogsError()` 的白名单，绝不能是 `String(e)` ——
      * 下面的「err 白名单」用例守着这一点。
+     *
+     * ⚠️ `loading` 是 2026-11-20（T8，第八个），由 `buildLoadingExport()` 产出。
+     * 它也是白名单式的（四个键 + 三个枚举），**不许**把快照整个摊平进来。
      */
     const obj = JSON.parse(payload(realRows(), realLogs())) as Record<string, unknown>;
     expect(Object.keys(obj).sort()).toEqual([
       'echo',
       'exportedAt',
       'facts',
+      'loading',
       'logs',
       'logsMeta',
       'trace',
@@ -271,6 +345,8 @@ describe('★ logsMeta.err 白名单（task-26）', () => {
           instanceId: 'ab12cd',
           readAt: NOW.getTime(),
         },
+        // 第八个字段也要给（必填）—— 这一条测的是 err 白名单，给它最空的一态
+        loading: { kind: 'absent' },
       }),
     ) as { logsMeta: { err: string } };
     const json = JSON.stringify(obj).toLowerCase();
@@ -413,5 +489,317 @@ describe('文件名', () => {
     const a = exportFileName(new Date('2026-11-10T01:00:00Z'));
     const b = exportFileName(new Date('2026-11-10T01:00:01Z'));
     expect(a).not.toBe(b);
+  });
+});
+
+// ─────────────────────── 第八个字段：本次加载（T8，2026-11-20）───────────────────────
+
+/** 只取导出里那一块 —— 隔离检查，不受 `facts` 里既有路径串的干扰 */
+function loadingOf(outcome: LoadingOutcome): LoadingExport {
+  const json = buildExportPayload({
+    rows: [],
+    logs: [],
+    version: '0.0.0-test',
+    now: NOW,
+    trace: null,
+    echo: null,
+    logsMeta: {
+      ok: true,
+      err: null,
+      count: 0,
+      limit: 30,
+      instanceId: 'ab12cd',
+      readAt: NOW.getTime(),
+    },
+    loading: outcome,
+  });
+  return (JSON.parse(json) as { loading: LoadingExport }).loading;
+}
+
+describe('★ loading：四条硬裁剪（每条一个用例）', () => {
+  it('★★ 剥 note：带 `MediaError.code=3` 的事件导出后，note 与 MediaError 都不见了', () => {
+    /**
+     * ## 这条是本轮**唯一一条"少写一行就泄漏"**的守卫
+     *
+     * `LoadEvent.note` 是自由文本（`error` 事件写的正是 `MediaError.code`）。
+     * 实现里只要图省事写成 `{ ...e }`，它就会跟着出去 ——
+     * 而且导出包看起来"结构完全正常"，没有任何东西会报错。
+     *
+     * 反例：把 `buildLoadingExport` 里的逐个挑字段改成 `{ ...e }` → 本条必红。
+     */
+    const out = loadingOf({ kind: 'ok', snapshot: loadingSnapshot() });
+    const text = JSON.stringify(out);
+    expect(text).not.toContain('MediaError');
+    expect(text).not.toContain('note');
+    expect(text).not.toContain('code=3');
+
+    // 键集合也钉死：只允许这四个（`error` 那条没有 host / kind，所以只有两个键）
+    const allowed = new Set(['t', 'stage', 'host', 'kind']);
+    for (const e of out.events) {
+      for (const k of Object.keys(e)) expect(allowed.has(k), `导出了多余的键 ${k}`).toBe(true);
+    }
+    expect(Object.keys(out.events[1] ?? {})).toEqual(['t', 'stage', 'host', 'kind']);
+  });
+
+  it('★ host 白名单化：带 query / 端口 / 路径的一律写成 invalid', () => {
+    const dirty = loadingSnapshot({
+      actual: { host: 'evil.example/?upsig=abc', cls: 'official', flavor: null },
+      hosts: [{ host: 'Evil.Example:8080', cls: 'official', flavor: null, count: 3 }],
+    });
+    const out = loadingOf({ kind: 'ok', snapshot: dirty });
+    expect(out.actual?.host).toBe('invalid');
+    expect(out.hosts[0]?.host).toBe('invalid');
+    // 原文一个字节都不许留
+    const text = JSON.stringify(out);
+    expect(text).not.toContain('upsig');
+    expect(text).not.toContain('evil');
+    expect(text).not.toContain('8080');
+  });
+
+  it('★ 枚举化：不认识的 stage / kind / cls / flavor 只落固定值，原串不外泄', () => {
+    const junk = loadingSnapshot({
+      actual: { host: 'a.bilivideo.com', cls: 'wat' as never, flavor: 'weird' as never },
+      events: [
+        { t: 10, stage: 'bogus' as never },
+        { t: 20, stage: 'seg-req', kind: 'wat' as never },
+      ],
+      hosts: [{ host: 'a.bilivideo.com', cls: 'wat' as never, flavor: 'weird' as never, count: 1 }],
+    });
+    const out = loadingOf({ kind: 'ok', snapshot: junk });
+
+    expect(out.actual?.cls).toBe('unknown');
+    expect(out.actual?.flavor).toBe('partner'); // 兜底值，但仍是**允许集合**里的值
+    expect(out.events.map((e) => e.stage)).toEqual(['unknown', 'seg-req']);
+    expect(out.events[1]?.kind).toBe('unknown');
+
+    const text = JSON.stringify(out);
+    expect(text).not.toContain('bogus');
+    expect(text).not.toContain('wat');
+    expect(text).not.toContain('weird');
+  });
+
+  it('★ 无 query / 无 path：loading 子树里一个 ? 一个 / 都没有', () => {
+    /**
+     * ⚠️ 只扫 `loading` 这一块，**不扫整包**：`facts` 里有一行真实的自检值
+     * `filter=/x/player/wbi/playurl`（见 `realRows()`），那是既有的、正当的内容。
+     * 整包断言"没有 `/`"会把它判成违规，而为了让那条变绿只能删掉自检信息 ——
+     * 那是拿"检查好看"换掉"排查有用"。
+     */
+    const text = JSON.stringify(loadingOf({ kind: 'ok', snapshot: loadingSnapshot() }));
+    expect(text).not.toContain('?');
+    expect(text).not.toContain('/');
+  });
+
+  it('★ loading 里没有任何时间戳字段（`capturedAt` 已被裁决删除）', () => {
+    /**
+     * 第一版有一个 `capturedAt`，值是"组装导出的时刻"—— 名字在说谎（读的人会
+     * 以为"快照是那一刻抓的"），而且与顶层 `exportedAt` 是同一份数据写两遍。
+     *
+     * 反例：把 `capturedAt` 加回 `buildLoadingExport` → 本条必红。
+     */
+    const out = loadingOf({ kind: 'ok', snapshot: loadingSnapshot() });
+    expect(Object.keys(out)).toEqual([
+      'status',
+      'present',
+      'confidence',
+      'actual',
+      'hosts',
+      'hostCount',
+      'hostsTruncated',
+      'events',
+      'eventsTruncated',
+      'video',
+    ]);
+    expect(JSON.stringify(out)).not.toContain('capturedAt');
+  });
+});
+
+describe('★ loading：三态不许合并', () => {
+  it('ok → status=ok，其余字段是真数据', () => {
+    const out = loadingOf({ kind: 'ok', snapshot: loadingSnapshot() });
+    expect(out.status).toBe('ok');
+    expect(out.present).toBe(true);
+    expect(out.confidence).toBe('measured');
+    expect(out.hostCount).toBe(3);
+    expect(out.events).toHaveLength(4);
+    expect(out.video?.durationSec).toBe(213);
+  });
+
+  it('★ absent → status=absent，其余一律空（不给看起来像数据的默认值）', () => {
+    const out = loadingOf({ kind: 'absent' });
+    expect(out.status).toBe('absent');
+    expect(out.present).toBe(false);
+    expect(out.actual).toBeNull();
+    expect(out.hosts).toEqual([]);
+    expect(out.hostCount).toBe(0);
+    expect(out.events).toEqual([]);
+    expect(out.video).toBeNull();
+  });
+
+  it('★★ unanswered 不会被写成 absent（读失败不许伪装成没有）', () => {
+    /**
+     * 这是 `logsMeta.ok` 那次事故的同一条纪律：读失败与"真的没有"
+     * 在**导出里**也必须分得开 —— 导出恰恰是最需要它诚实的那一刻。
+     */
+    const out = loadingOf({ kind: 'unanswered' });
+    expect(out.status).toBe('unanswered');
+    expect(out.status).not.toBe('absent');
+    expect(out.status).not.toBe('ok');
+  });
+});
+
+describe('★ loading：截断上限', () => {
+  it('hosts 最多 20 条，但 hostCount 仍是总数', () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({
+      host: `cn-node-${String(i)}.bilivideo.com`,
+      cls: 'official' as const,
+      flavor: 'self-built' as const,
+      count: 100 - i,
+    }));
+    const out = loadingOf({ kind: 'ok', snapshot: loadingSnapshot({ hosts: many }) });
+    expect(out.hosts).toHaveLength(20);
+    expect(out.hostCount).toBe(25);
+    expect(out.hostsTruncated).toBe(true);
+  });
+
+  it('events 最多 40 条，并置 eventsTruncated', () => {
+    const many = Array.from({ length: 45 }, (_, i) => ({ t: i * 10, stage: 'stall' as const }));
+    const out = loadingOf({ kind: 'ok', snapshot: loadingSnapshot({ events: many }) });
+    expect(out.events).toHaveLength(40);
+    expect(out.eventsTruncated).toBe(true);
+  });
+
+  it('没超上限时两个 truncated 都是 false', () => {
+    const out = loadingOf({ kind: 'ok', snapshot: loadingSnapshot() });
+    expect(out.hostsTruncated).toBe(false);
+    expect(out.eventsTruncated).toBe(false);
+  });
+});
+
+// ─────────────────────── 诊断页「本次加载」区块（T7，2026-11-20）───────────────────────
+
+describe('★★ 诊断页「本次加载」（T7）', () => {
+  const acts = { back: () => undefined, exportJson: () => undefined, refresh: () => undefined };
+
+  function pane(outcome?: LoadingOutcome): HTMLElement {
+    return diagnosticsPane(
+      {
+        rows: [],
+        logs: [],
+        version: '0.0.0-test',
+        /**
+         * ⚠️ `logsMeta` 必须给一个**正常**值。
+         *
+         * 不给的话 `describeLogsMetaFallback()` 会渲染出「诊断日志读取失败」那一行 ——
+         * 它也是一个 `.diag-row`，会混进本组对 `.diag-label` / `textContent` 的断言里
+         * （第一版就是这么红的：多出一个"诊断日志读取失败"标签）。本组要测的是
+         * **本次加载那一块**，所以把日志那一段固定在"没有日志"的正常态。
+         */
+        logsMeta: {
+          ok: true,
+          err: null,
+          count: 0,
+          limit: 30,
+          instanceId: 'ab12cd',
+          readAt: NOW.getTime(),
+        },
+        loading: outcome,
+      },
+      acts,
+    );
+  }
+
+  it('ok：五行技术摘要 + 原始事件入口', () => {
+    const box = pane({ kind: 'ok', snapshot: loadingSnapshot() });
+    const labels = [...box.querySelectorAll('.diag-label')].map((n) => n.textContent);
+    expect(labels).toEqual(['当前线路', '本次线路', '开局耗时', '换线次数', '快照状态']);
+
+    const values = [...box.querySelectorAll('.diag-value')].map((n) => n.textContent);
+    // 技术名，不是「B站官方线路」那套用户文案
+    expect(values[0]).toBe('official · self-built · cn-jsnt-ct-01-07.bilivideo.com');
+    // 括号里给按类别的条数
+    expect(values[1]).toBe('3 条（官方 2 · PCDN 1）');
+    // playing.t = 2525.9ms
+    expect(values[2]).toBe('2.53s');
+  });
+
+  it('ok：观测到 PCDN 时那两行变警告色（.diag-row.warn）', () => {
+    const box = pane({ kind: 'ok', snapshot: loadingSnapshot() });
+    const warns = [...box.querySelectorAll('.diag-row.warn')].map(
+      (n) => n.querySelector('.diag-label')?.textContent,
+    );
+    // 本次线路里有 PCDN 1 条 → 至少那行要黄
+    expect(warns).toContain('本次线路');
+  });
+
+  it('★ absent：一行中性色，且**不出现**「读取失败」', () => {
+    const box = pane({ kind: 'absent' });
+    const text = box.textContent ?? '';
+    expect(text).toContain('本页没有加载记录（不是播放页）');
+    expect(text).not.toContain('读取失败');
+    // 没有可展开的原始事件（导出按钮仍在，所以按文案找）
+    const raw = [...box.querySelectorAll('.sub-entry')].filter((n) =>
+      (n.textContent ?? '').includes('原始事件'),
+    );
+    expect(raw).toHaveLength(0);
+  });
+
+  it('★★ unanswered：危险色，且**不是**「没有记录」', () => {
+    /**
+     * 反例：把 `loadingSectionNodes` 的 `unanswered` 分支改成和 `absent` 一样
+     * → 本条必红（它会显示"本页没有加载记录"，把人送去查错方向）。
+     */
+    const box = pane({ kind: 'unanswered' });
+    const text = box.textContent ?? '';
+    expect(text).toContain('加载快照读取失败（无应答）');
+    expect(text).toContain('刷新页面后重试');
+    expect(text).not.toContain('本页没有加载记录');
+    expect(box.querySelector('.diag-row.bad')).not.toBeNull();
+  });
+
+  it('原始事件表：默认折叠，点一下展开（箭头同时转向）', () => {
+    const box = pane({ kind: 'ok', snapshot: loadingSnapshot() });
+    const button = box.querySelector<HTMLButtonElement>('.sub-entry');
+    const list = box.querySelector<HTMLElement>('.diag-logs');
+    expect(button?.textContent).toContain('原始事件（4 条）');
+    expect(list?.hidden).toBe(true);
+
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(list?.hidden).toBe(false);
+    expect(box.querySelector('.sub-entry-chevron')?.className).toContain('open');
+
+    button?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(list?.hidden).toBe(true);
+  });
+
+  it('原始事件的每行给技术名（`seg-req` 而不是「开始下载分片」）', () => {
+    const box = pane({ kind: 'ok', snapshot: loadingSnapshot() });
+    const rows = [...box.querySelectorAll('.diag-log')];
+    // 事件只有 4 条，所以按钮外只有这 4 行
+    expect(rows).toHaveLength(4);
+    expect(rows[1]?.textContent).toContain('2525.9ms');
+    expect(rows[1]?.textContent).toContain('seg-req');
+    expect(rows[1]?.textContent).toContain('cn-jsnt-ct-01-07.bilivideo.com');
+    expect(rows[1]?.textContent).toContain('official');
+    // 阶段名不许出现中文
+    expect(box.textContent ?? '').not.toContain('开始下载分片');
+  });
+
+  it('★ 超过 40 条时只渲染 40 行，并在末尾说明总数（不许静默）', () => {
+    const many = Array.from({ length: 45 }, (_, i) => ({
+      t: i * 10,
+      stage: 'stall' as const,
+    }));
+    const box = pane({ kind: 'ok', snapshot: loadingSnapshot({ events: many }) });
+    expect(box.querySelectorAll('.diag-log')).toHaveLength(40 + 1); // +1 是那行说明
+    expect(box.textContent ?? '').toContain('只显示前 40 条（共 45 条）');
+  });
+
+  it('位置：在「自检信息」之前（它是最常见的排查起点）', () => {
+    const box = pane({ kind: 'ok', snapshot: loadingSnapshot() });
+    const sections = [...box.querySelectorAll('.diag-section')].map((n) => n.textContent);
+    expect(sections[0]).toBe('本次加载');
+    expect(sections).toContain('自检信息');
+    expect(sections.indexOf('本次加载')).toBeLessThan(sections.indexOf('自检信息'));
   });
 });
