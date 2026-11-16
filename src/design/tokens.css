@@ -26,6 +26,13 @@
  *
  * 新值从 Stage 1 起才会真正生效；翻转顺序见文件末尾的「翻转清单」。
  *
+ * ### 2026-11-16：语义色是**算出来的**，不是挑出来的
+ *
+ * 正文 13px / 元数据 11px 都要过 WCAG AA 4.5:1。`--pluma-text-muted`、
+ * `--pluma-ok`、`--pluma-warning`、`--pluma-danger` 四个都压深过一轮，
+ * 依据是对 canvas / surface / 白底三处的实测（脚本在改版方案 §9 记录）。
+ * **改这几个值之前先重算对比度**，肉眼看不出 4.3 与 4.6 的差别。
+ *
  * ### 三条规矩
  *
  * 1. **值只写在这里**。`docs/02-ui-spec.md` §6 只写"角色与用法"，不抄 hex ——
@@ -46,11 +53,11 @@
 
   --pluma-accent: #378add;
   --pluma-accent-bg: #e6f1fb;
-  --pluma-danger: #e24b4a;
-  --pluma-warning: #ef9f27;
+  --pluma-danger: #c24140;
+  --pluma-warning: #976419;
 
   --pluma-text: #1f2226;
-  --pluma-text-muted: #6e747d;
+  --pluma-text-muted: #696e77;
   --pluma-surface: #ffffff;
   --pluma-border: rgba(0, 0, 0, 0.15);
 
@@ -93,7 +100,7 @@
   --pluma-line-strong: rgba(20, 22, 26, 0.16);
 
   /* 状态色：**绿是"事实：正常"，蓝是"交互：这里/去做"**，两者语义互斥 */
-  --pluma-ok: #1fa855;
+  --pluma-ok: #15743b;
   --pluma-ok-dot: #28d667;
   --pluma-accent-soft: #e9effd;
 
@@ -156,6 +163,8 @@
 
     /* ── v2 新增（深色） ── */
     --pluma-canvas: #1a1c1e;
+    --pluma-danger: #e45655;
+    --pluma-warning: #f0b44c;
     --pluma-menu-fill: rgba(48, 49, 54, 0.64);
     --pluma-card: rgba(255, 255, 255, 0.06);
     --pluma-sunken: #151719;
