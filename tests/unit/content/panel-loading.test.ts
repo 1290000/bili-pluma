@@ -415,6 +415,135 @@ describe('时间轴：请求与返回配对成一行', () => {
   });
 });
 
+// ─────────────────────────── 取流请求（playurl） ───────────────────────────
+
+/**
+ * 一份**带取流请求**的事件序列：0s 原点 → 取流 → 返回清单 → 分片 → 可播放。
+ *
+ * 这就是用户真机上那条完整链路（时间取自 2026-11-20 真机截图：
+ * 第一片在 1.53s，而在此之前有两次 playurl）。
+ */
+const CHAIN_EVENTS: LoadEvent[] = [
+  { t: 0, stage: 'nav' },
+  { t: 210.5, stage: 'playurl-req' },
+  { t: 384.25, stage: 'playurl-res' },
+  { t: 1530, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+  { t: 1700, stage: 'seg-res', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+  { t: 2100, stage: 'canplay' },
+  { t: 2200, stage: 'playing' },
+];
+
+describe('取流请求（playurl）在时间轴上', () => {
+  it('★ 行序：页面开始加载 → 发出取流请求 → B站 返回线路清单 → 下载视频片段 → 可以播放', () => {
+    const rows = buildTimelineRows(CHAIN_EVENTS);
+    expect(rows.map((r) => r.label)).toEqual([
+      '页面开始加载',
+      '发出取流请求',
+      'B站 返回线路清单',
+      '下载视频片段',
+      '可以播放',
+      '开始播放',
+    ]);
+    expect(rows.map((r) => r.kind)).toEqual([
+      'event',
+      'event',
+      'event',
+      'segment',
+      'event',
+      'event',
+    ]);
+  });
+
+  it('★ 两行都走里程碑的短竖线（它们不是线路，没有形状）', () => {
+    const rows = buildTimelineRows(CHAIN_EVENTS);
+    expect(rows[0]).toMatchObject({ marker: null, tone: 'muted' });
+    expect(rows[1]).toMatchObject({ marker: null, tone: 'muted' });
+    expect(rows[2]).toMatchObject({ marker: null, tone: 'muted' });
+    // 分片行仍然用线路形状（对照）
+    expect(rows[3]).toMatchObject({ marker: 'disc', tone: 'ok' });
+  });
+
+  it('⛔ `--pluma-accent` 只留给 ext-patch：取流两行不许是 accent', () => {
+    const rows = buildTimelineRows(CHAIN_EVENTS);
+    expect(rows.filter((r) => r.tone === 'accent')).toEqual([]);
+  });
+
+  it('没有 host 明细（接口请求不是某条线路的流量）', () => {
+    const rows = buildTimelineRows(CHAIN_EVENTS);
+    expect(rows[1]?.detail).toBeNull();
+    expect(rows[2]?.detail).toBeNull();
+  });
+
+  it('★ 参与空档计算：原点与取流之间隔 5 秒就插一条分隔行', () => {
+    /**
+     * 反例：若把 playurl 事件排除在"上一条行"的更新之外，间隔会被算成
+     * "0s → 5.53s" 一整段 —— 而那 5 秒里明明有取流这件事。
+     */
+    const sparse: LoadEvent[] = [
+      { t: 0, stage: 'nav' },
+      { t: 5000, stage: 'playurl-req' },
+      { t: 5530, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' },
+    ];
+    const rows = buildTimelineRows(sparse);
+    expect(rows.map((r) => r.kind)).toEqual(['event', 'gap', 'event', 'segment']);
+    expect(rows[1]?.label).toBe('⋯ 5.00s（这段时间的片段未逐段列出）');
+  });
+
+  it('⛔ 图例里不出现取流（它不是线路类别）', () => {
+    const box = loadingDetailPane(
+      ok({
+        events: CHAIN_EVENTS,
+        hosts: [
+          {
+            host: 'cn-jsnt-ct-01-07.bilivideo.com',
+            cls: 'official',
+            flavor: 'self-built',
+            count: 1,
+          },
+        ],
+        actual: { host: 'cn-jsnt-ct-01-07.bilivideo.com', cls: 'official', flavor: 'self-built' },
+      }),
+      { back: () => undefined, refresh: () => undefined, openDiagnostics: () => undefined },
+    );
+    const texts = [...box.querySelectorAll('.ld-legend-text')].map((n) => n.textContent);
+    expect(texts).toEqual(['官方']);
+    expect(texts.join()).not.toContain('取流');
+  });
+
+  it('★ 完整链路渲染全文（0s 原点 → 取流 → 返回 → 分片 → 播放）', () => {
+    const box = loadingDetailPane(
+      ok({
+        events: CHAIN_EVENTS,
+        hosts: [
+          {
+            host: 'cn-jsnt-ct-01-07.bilivideo.com',
+            cls: 'official',
+            flavor: 'self-built',
+            count: 1,
+          },
+        ],
+        actual: { host: 'cn-jsnt-ct-01-07.bilivideo.com', cls: 'official', flavor: 'self-built' },
+      }),
+      { back: () => undefined, refresh: () => undefined, openDiagnostics: () => undefined },
+    );
+
+    const lines = [...box.querySelectorAll('.ld-row')].map((row) => {
+      const title = row.querySelector('.ld-title')?.textContent ?? '';
+      const meta = row.querySelector('.ld-delta')?.textContent ?? '';
+      const detail = row.querySelector('.ld-detail')?.textContent ?? '';
+      return `${title} ${meta} ${detail}`.trim();
+    });
+    expect(lines).toEqual([
+      '页面开始加载 0.00s',
+      '发出取流请求 0.21s +0.21s',
+      'B站 返回线路清单 0.38s +0.17s',
+      '下载视频片段 1.53s → 1.70s · 0.17s cn-jsnt-ct-01-07.bilivideo.com',
+      '可以播放 2.10s +0.40s',
+      '开始播放 2.20s +0.10s',
+    ]);
+  });
+});
+
 // ─────────────────────────── 空档分隔行 ───────────────────────────
 
 describe('空档分隔行：间隔 ≥ 2 秒才插一条', () => {

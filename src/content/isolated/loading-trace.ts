@@ -237,6 +237,77 @@ function isMediaPath(pathname: string): boolean {
 }
 
 /**
+ * B站 取流接口的路径标识（2026-11-20，T12）。
+ *
+ * 覆盖三种已知形状，都靠同一个子串命中：
+ * ```
+ * /x/player/playurl          ← 普通视频（旧接口）
+ * /x/player/wbi/playurl      ← 普通视频（WBI 签名版）
+ * /pgc/player/web/playurl/v2 ← 番剧 / PGC
+ * ```
+ */
+const PLAYURL_PATH_MARKER = '/playurl';
+
+/** B站 自己的域。**必须带点**做后缀判断，否则 `evilbilibili.com` 会被放进来 */
+const BILI_DOMAIN = 'bilibili.com';
+
+/**
+ * 这个 URL 是不是**B站 自己的取流接口**请求（`playurl`）。
+ *
+ * ## 为什么需要这条通道（用户在真机上指着时间轴第一行问的话）
+ *
+ * 「1.53s 之前是做什么去了？」—— 采集器只收媒体分片，`playurl` 这类接口请求
+ * 被 `isMediaPath()` 挡掉了，于是时间轴从 0s 直接跳到第一个片段，中间
+ * 「发出取流请求 → B站 返回线路清单」整段是盲区。而这两件事恰恰是原始需求里
+ * "第几秒发出请求、第几秒返回数据"的那一半。
+ *
+ * ## ⚠️ 这不是"放宽媒体判据"
+ *
+ * `isMediaPath()` / `classifyCdn()` **一个字都没动**。这是**并列的第二条通道**：
+ *
+ * | 通道 | 回答的问题 | 带不带 host |
+ * | --- | --- | --- |
+ * | 媒体分片（`resolveMediaHost`） | 数据**从哪条线路**来 | 带（host + cls） |
+ * | 取流接口（本函数） | **第几秒**发出请求 / 拿到清单 | **不带** |
+ *
+ * `api.bilibili.com` 不是线路，把它写进 `hosts` 会让「N 条线路」的计数虚高 ——
+ * 而那个数字是用户判断"是不是被切走了"的主要依据。
+ *
+ * @param parsed 已解析的 URL（pathname 只在这里被判读一次，不存）
+ */
+function isPlayurlApi(parsed: URL): boolean {
+  const host = parsed.hostname.toLowerCase();
+  if (host !== BILI_DOMAIN && !host.endsWith(`.${BILI_DOMAIN}`)) return false;
+  return parsed.pathname.includes(PLAYURL_PATH_MARKER);
+}
+
+/**
+ * 记录一条 playurl 请求 —— 第二条通道，与媒体分片**并列**（见 `isPlayurlApi()`）。
+ *
+ * 产出两条事件：`playurl-req` @ `startTime`、`playurl-res` @ `responseEnd`。
+ * **不带 `host`、不带 `kind`**：它们不是线路（理由见 `isPlayurlApi()`）。
+ *
+ * ## 每一次都记，不做去重
+ *
+ * 画质切换、换轨、PGC 换集都会重新拉一次 playurl —— 那**是**事实，一次播放里
+ * 有几次取流就有几对节点。闸门（`cls` 变化才发分片事件）不能套在这里：
+ * 它压的是"几百条同类别分片"，而 playurl 一次播放只有个位数。
+ * PGC 换集的旧数据由 `resetLoadingTrace()` 兜底清掉。
+ *
+ * @param state 采集器状态（就地修改）
+ * @param entry 一条 resource 条目
+ * @returns 是否命中（`false` = 不是 playurl，交给媒体通道继续判）
+ */
+export function recordPlayurl(state: LoadingTraceState, entry: ResourceEntryLike): boolean {
+  const parsed = parseUrl(entry.name);
+  if (parsed === null || !isPlayurlApi(parsed)) return false;
+
+  pushEvent(state, { t: entry.startTime, stage: 'playurl-req' });
+  pushEvent(state, { t: entry.responseEnd, stage: 'playurl-res' });
+  return true;
+}
+
+/**
  * URL → 「这条请求算不算媒体分片、属于哪条线路」。
  *
  * 两道判据，缺一不可：
@@ -297,6 +368,30 @@ export function pushEvent(state: LoadingTraceState, event: LoadEvent): void {
 }
 
 /**
+ * 记录时间轴的**原点**：`nav` @ `t = 0`。
+ *
+ * ## 为什么这不是"编一条事件"
+ *
+ * 时间轴的时基本来就是**页面导航开始**（`PerformanceResourceTiming.startTime` 与
+ * `performance.now()` 都以 `timeOrigin` 为原点），尾注里那句"时间从页面开始加载
+ * 算起"说的就是它。以前这句话只是文字，用户看到第一行是 `1.53s` 时会问
+ * "1.53 秒之前干什么去了"—— 把原点画出来，那句话就变成了看得见的锚点。
+ *
+ * `t = 0` 是**定义**，不是测量值：导航开始那一刻没有比它更早的可观测点。
+ *
+ * ## 只在**安装时**记一次，`resetLoadingTrace()` 之后不补
+ *
+ * PGC 换集是 SPA 内切换，文档没有重新导航 —— 那时再补一条 `nav @ 0` 会把
+ * "页面开始加载"插到换集之后的时间轴里，等于陈述一件没发生的事（而且会在它
+ * 与这一集的第一个事件之间插出一条几分钟的空档行）。
+ *
+ * @param state 采集器状态（就地修改）
+ */
+export function recordNavStart(state: LoadingTraceState): void {
+  pushEvent(state, { t: 0, stage: 'nav' });
+}
+
+/**
  * 处理一条 resource 条目。
  *
  * ## 闸门：**线路类别变化**才产出事件
@@ -324,11 +419,27 @@ export function pushEvent(state: LoadingTraceState, event: LoadEvent): void {
  * 想从事件反推"到底用了哪几个 host、各发了多少请求"已经不可能。
  * 所以 `hosts[].count` **每条真实累加**，与事件是否发出完全解耦。
  *
+ * ## 两条并列的通道（2026-11-20，T12）
+ *
+ * 同一个 `PerformanceObserver` 交进来的条目走两条互不干扰的判据：
+ *
+ * 1. **取流接口**（`recordPlayurl()`）：`playurl` 请求 → `playurl-req` / `playurl-res`。
+ *    不带 host、不计入 `hosts`、**不碰** `lastSegReqCls` 闸门状态。
+ * 2. **媒体分片**（本函数剩下的部分）：按 `cls` 闸门产出 `seg-req` / `seg-res`。
+ *
+ * 顺序是"先接口后分片"，因为前者判据更窄（host 必须是 B站 自己 + 路径含 `/playurl`），
+ * 命中即返回；两条判据的**取值空间本来就不相交**（`bilibili.com` 不是任何 CDN 域），
+ * 所以这个顺序只是省一次分类，不是语义依赖。
+ *
  * @param state 采集器状态（就地修改）
  * @param entry 一条 resource 条目
  * @returns 本次是否**换了线路类别**（产出了一条新的 `seg-req`）
  */
 export function recordResource(state: LoadingTraceState, entry: ResourceEntryLike): boolean {
+  // 通道 1：B站 取流接口。命中就直接返回 —— 它不是线路，不该进 hosts，也不该动闸门
+  if (recordPlayurl(state, entry)) return false;
+
+  // 通道 2：媒体分片（下面全是原来的逻辑，一字未改）
   const resolved = resolveMediaHost(entry.name);
   if (resolved === null) return false;
 
@@ -548,6 +659,15 @@ export function attachLoadingTraceVideo(): void {
  */
 export function installLoadingTrace(): () => void {
   if (disposeCurrent !== null) return disposeCurrent;
+
+  /**
+   * 原点先画（`nav` @ 0，见 `recordNavStart()`）。
+   *
+   * 放在观察器之前：`buffered: true` 会把安装前就发生的条目补进来，其中可能有
+   * `startTime` 比"现在"更早的 playurl —— 先记 nav 不影响顺序（`buildTimeline()`
+   * 按 `t` 排序），只是让"这条时间轴有原点"这件事与"有没有装成观察器"无关。
+   */
+  recordNavStart(state);
 
   const Observer = globalThis.PerformanceObserver;
   let resourceObserver: PerformanceObserver | null = null;

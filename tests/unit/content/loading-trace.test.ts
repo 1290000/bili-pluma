@@ -34,6 +34,8 @@ import {
   noteExtPatch,
   pushEvent,
   recordExtPatch,
+  recordNavStart,
+  recordPlayurl,
   recordResource,
   recordVideoStage,
   resetLoadingTrace,
@@ -176,6 +178,119 @@ describe('resolveMediaHost —— 路径判据：只认媒体分片（2026-11-19
     expect(serialized).not.toContain('upgcxcode');
     expect(serialized).not.toContain('webmask');
     expect(serialized).not.toContain('?');
+  });
+});
+
+describe('recordPlayurl —— 第二条通道：B站 取流接口（T12）', () => {
+  /** 普通视频的 playurl（旧接口） */
+  const PLAYURL = 'https://api.bilibili.com/x/player/playurl?avid=1&cid=999&qn=80&fnval=4048';
+  /** PGC 的 playurl（路径更深一层，靠同一个子串命中） */
+  const PGC_PLAYURL = 'https://api.bilibili.com/pgc/player/web/playurl/v2?ep_id=12345&qn=80';
+  /** 同域但不是取流的接口 —— 这条如果被收，时间轴会被无关请求塞满 */
+  const NAV_API = 'https://api.bilibili.com/x/web-interface/nav';
+
+  it('★ playurl → 一对 playurl-req / playurl-res，时间戳原样', () => {
+    const state = createTraceState();
+    const hit = recordPlayurl(state, { name: PLAYURL, startTime: 210.5, responseEnd: 384.25 });
+
+    expect(hit).toBe(true);
+    expect(state.events.map((e) => [e.stage, e.t])).toEqual([
+      ['playurl-req', 210.5],
+      ['playurl-res', 384.25],
+    ]);
+  });
+
+  it('★ 不带 host / kind（api.bilibili.com 不是线路）', () => {
+    const state = createTraceState();
+    recordPlayurl(state, { name: PLAYURL, startTime: 10, responseEnd: 20 });
+
+    for (const event of state.events) {
+      expect(event.host).toBeUndefined();
+      expect(event.kind).toBeUndefined();
+    }
+  });
+
+  it('⛔ 不增加 hosts 计数（「N 条线路」不许被接口请求污染）', () => {
+    const state = createTraceState();
+    recordResource(state, { name: SEGMENT_URL, startTime: 100, responseEnd: 200 });
+    const before = state.hosts.size;
+
+    recordResource(state, { name: PLAYURL, startTime: 210, responseEnd: 300 });
+
+    expect(state.hosts.size).toBe(before);
+    expect(state.hosts.has('api.bilibili.com')).toBe(false);
+  });
+
+  it('⛔ 其它 api 请求一条都不收（nav / 日志 / 心跳）', () => {
+    const state = createTraceState();
+    for (const name of [
+      NAV_API,
+      'https://api.bilibili.com/x/web-interface/view?bvid=BV1xx411c7mD',
+      'https://data.bilibili.com/log/web?type=1',
+    ]) {
+      expect(recordPlayurl(state, { name, startTime: 1, responseEnd: 2 })).toBe(false);
+      recordResource(state, { name, startTime: 1, responseEnd: 2 });
+    }
+
+    expect(state.events).toEqual([]);
+    expect(state.hosts.size).toBe(0);
+  });
+
+  it('PGC 的 /pgc/player/web/playurl/v2 也命中（番剧同样有取流这一步）', () => {
+    const state = createTraceState();
+    expect(recordPlayurl(state, { name: PGC_PLAYURL, startTime: 5, responseEnd: 9 })).toBe(true);
+    expect(state.events.map((e) => e.stage)).toEqual(['playurl-req', 'playurl-res']);
+  });
+
+  it('每一次 playurl 都记（画质切换 / 换轨会重新拉，那是事实）', () => {
+    const state = createTraceState();
+    recordResource(state, { name: PLAYURL, startTime: 100, responseEnd: 150 });
+    recordResource(state, { name: PLAYURL, startTime: 9000, responseEnd: 9080 });
+
+    expect(state.events.filter((e) => e.stage === 'playurl-req')).toHaveLength(2);
+    expect(state.events.filter((e) => e.stage === 'playurl-res')).toHaveLength(2);
+  });
+
+  it('★ 不打断分片闸门：playurl 夹在两条同类别分片之间，分片事件仍是 2 条', () => {
+    /**
+     * 反例：把 `recordPlayurl()` 放进闸门判断之后、或让它碰 `lastSegReqCls`，
+     * 那么"取流 → 同类别分片"就会被误判成一次类别变化，时间轴上多出一对
+     * 并不存在的分片节点（用户会以为换了线）。
+     */
+    const state = createTraceState();
+    recordResource(state, { name: SEGMENT_URL, startTime: 100, responseEnd: 200 });
+    recordResource(state, { name: PLAYURL, startTime: 210, responseEnd: 300 });
+    recordResource(state, { name: SEGMENT_URL, startTime: 400, responseEnd: 500 });
+
+    expect(state.events.filter((e) => e.stage === 'seg-req')).toHaveLength(1);
+    expect(state.hosts.get('xy116x196x140x25xy.mcdn.bilivideo.cn')?.count).toBe(2);
+    // 顺序：分片 → 取流 → 返回（playurl 事件没有把分片事件挤掉）
+    expect(state.events.map((e) => e.stage)).toEqual([
+      'seg-req',
+      'seg-res',
+      'playurl-req',
+      'playurl-res',
+    ]);
+  });
+
+  it('⛔ 别把任意域上的 /playurl 当取流（后缀判据要带点）', () => {
+    const state = createTraceState();
+    for (const name of [
+      'https://evil.com/x/player/playurl',
+      'https://evilbilibili.com/x/player/playurl',
+      'https://bilibili.com.evil.com/x/player/playurl',
+    ]) {
+      expect(recordPlayurl(state, { name, startTime: 1, responseEnd: 2 })).toBe(false);
+    }
+    expect(state.events).toEqual([]);
+  });
+
+  it('非法时间戳的那一半被丢掉，不会只留下半条配对', () => {
+    const state = createTraceState();
+    recordPlayurl(state, { name: PLAYURL, startTime: Number.NaN, responseEnd: 300 });
+
+    // pushEvent 的纪律：非有限数直接丢，不修正成 0
+    expect(state.events.map((e) => [e.stage, e.t])).toEqual([['playurl-res', 300]]);
   });
 });
 
@@ -555,6 +670,29 @@ describe('recordExtPatch —— 「扩展介入」一次页面只记一条', () 
     const second = createTraceState();
     expect(second.extPatchRecorded).toBe(false);
     expect(recordExtPatch(second, 20)).toBe(true);
+  });
+});
+
+describe('recordNavStart —— 时间轴的原点', () => {
+  /**
+   * 纯函数这一半。**接线**（安装时真的记了这条）在
+   * `loading-trace-nav.test.ts`（jsdom，要 `document`）。
+   */
+  it('记一条 nav @ 0（时基原点就是导航开始，不是测量值）', () => {
+    const state = createTraceState();
+    recordNavStart(state);
+
+    expect(state.events).toEqual([{ t: 0, stage: 'nav' }]);
+  });
+
+  it('★ 在 buildTimeline 里排在所有事件之前（哪怕它最后才被追加）', () => {
+    const state = createTraceState();
+    recordResource(state, { name: SEGMENT_URL, startTime: 1530, responseEnd: 1600 });
+    recordNavStart(state);
+
+    const events = buildTimeline(state.events, 200).events;
+    expect(events.map((e) => e.stage)).toEqual(['nav', 'seg-req', 'seg-res']);
+    expect(events[0]?.t).toBe(0);
   });
 });
 
