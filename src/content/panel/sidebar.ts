@@ -362,7 +362,8 @@ export const PANEL_CSS = `
   flex-direction: column;
   gap: 4px;
   padding: 8px 10px;
-  border: 0.5px solid var(--pluma-border);
+  /* 与 .unlock-card 同一档描边（见上） */
+  border: 0.5px solid var(--pluma-line);
   border-radius: var(--pluma-radius-card);
   background: var(--pluma-card);
 }
@@ -518,13 +519,16 @@ export const PANEL_CSS = `
   align-items: center;
 }
 
+/* 胶囊 18px 高（2026-11-16 度量）：原来靠 padding + line-height 撑出约 19.4px，
+   高度随字号漂；写死高度后，胶囊与它旁边 11px 文字的基线才对得稳。 */
 .pill {
   display: inline-flex;
   align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
+  height: 18px;
+  padding: 0 8px;
+  border-radius: var(--pluma-radius-pill);
   font-size: var(--pluma-font-caption);
-  line-height: 1.4;
+  line-height: 1;
 }
 
 .pill-neutral {
@@ -573,7 +577,9 @@ export const PANEL_CSS = `
    只用一档更亮来分层（方案 §4.5）。 */
 .unlock-card {
   padding: 8px 10px;
-  border: 0.5px solid var(--pluma-border);
+  /* 描边走发丝（10%）：卡底只有 50% 白，去掉描边会在磨砂底上"消失"，
+     而 15% 又像画了个框 —— 10% 是这两者之间唯一说得通的值。 */
+  border: 0.5px solid var(--pluma-line);
   border-radius: var(--pluma-radius-card);
   background: var(--pluma-card);
 }
@@ -612,9 +618,10 @@ export const PANEL_CSS = `
   margin-top: 6px;
 }
 
+/* 徽章圆角走令牌（4 → 6px）：4px 在 11px 字高上像个直角块 */
 .badge-chip {
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--pluma-radius-chip);
   background: var(--pluma-accent-bg);
   color: var(--pluma-accent);
   font-size: var(--pluma-font-caption);
