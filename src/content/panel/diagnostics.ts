@@ -29,7 +29,7 @@
 import type { DiagEntry, DiagRow } from '@platform/diagnostics/collect';
 import { tipFor } from '@platform/diagnostics/collect';
 import type { CdnKind } from '@core/cdn/classify';
-import { detectSwitches } from '@core/loading/timeline';
+import { currentSegment, detectSwitches } from '@core/loading/timeline';
 import { el, iconChevron } from './dom';
 import { playingEvent, type LoadingOutcome } from './loading-pane';
 
@@ -203,11 +203,14 @@ const EXPORT_FLAVORS: readonly ('self-built' | 'partner')[] = ['self-built', 'pa
  * ## ⚠️ `'unknown'` **不在 `LoadStage` 里**，它是导出层专属的同义词
  *
  * 别去 `core/loading/timeline.ts` 找它 —— 那里没有，也不该加：`LoadStage` 是
- * "采集侧能产出什么"的枚举，而 `'unknown'` 是"**收到的不是那 12 个值之一**"。
+ * "采集侧能产出什么"的枚举，而 `'unknown'` 是"**收到的不是那 10 个值之一**"。
  * 两者的主语不同（2026-11-20 Lead 裁决，留兜底值、但把这件事写在这里）。
  *
  * 为什么保留而不是丢弃整条事件：丢了就没法解释"为什么条数对不上"；
  * 标成 `unknown` 至少让读的人知道**有一条事件我们没看懂**。
+ *
+ * ⚠️ 2026-11-20（T13）：`switch` / `blocked` 随 `LoadStage` 一起删了 ——
+ * 它们从来没有生产者，列在这里等于告诉消费者"可能有这两种事件"。
  */
 const EXPORT_STAGES: readonly string[] = [
   'nav',
@@ -218,10 +221,8 @@ const EXPORT_STAGES: readonly string[] = [
   'seg-res',
   'canplay',
   'playing',
-  'switch',
   'stall',
   'error',
-  'blocked',
   /** ⚠️ 导出层兜底值，不是 `LoadStage` 的成员（见上） */
   'unknown',
 ];
@@ -241,12 +242,47 @@ function finite(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
-/** 一条事件在导出里的形状。**只有这四个键**，见 `buildLoadingExport` */
+/**
+ * 一条事件在导出里的形状。
+ *
+ * ## 2026-11-20（T13，P1-6）：`error` 多一个 `code`
+ *
+ * `MediaError.code` 以前采了又扔（`recordVideoStage()` 写进 `note`，导出按白名单
+ * 剥掉）。后果是排查时「播放出错」和「卡了一下」在导出里长得一样 ——
+ * 分不清"网慢"与"被拦"。现在**只对 `stage === 'error'`** 把 `note` 里的
+ * `code=N` 解析成数字字段。
+ *
+ * ⚠️ 解析不到就**不加这个键**，绝不写 `0`：`0` 是 `MEDIA_ERR_ABORTED` 的合法码，
+ * 写下去等于陈述"用户主动中止了"。这与 `finite()` 把非有限数当 0 的处理不同 ——
+ * 那些字段（`t` / `count`）本来就必须有值。
+ */
 export interface LoadingExportEvent {
   t: number;
   stage: string;
   host?: string;
   kind?: string;
+  /** `MediaError.code`（只有 `stage === 'error'` 且解析得到时才有） */
+  code?: number;
+}
+
+/**
+ * 从 `note` 里取 `MediaError.code`。
+ *
+ * `recordVideoStage()` 写的是 `code=3` 这种形式（见 `loading-trace.ts`）。
+ * 只认这一种形状；取不到返回 `null`（调用方据此**不加键**）。
+ *
+ * @param note 事件的 `note` 字段
+ */
+function parseErrorCode(note: string | undefined): number | null {
+  if (note === undefined) return null;
+  /**
+   * 容两种写法：生产端是 `code=3`，而排查笔记里可能被写成 `MediaError.code=3`。
+   * 前面那个字符类排除 `[a-z0-9_]`，所以 `xcode=3` 这类不会被误读。
+   */
+  const match = /(?:^|[^a-z0-9_])code=(\d+)/i.exec(note);
+  if (match === null) return null;
+  const code = Number(match[1]);
+  return Number.isInteger(code) && code >= 0 ? code : null;
 }
 
 /**
@@ -278,7 +314,25 @@ export interface LoadingExport {
   hostCount: number;
   hostsTruncated: boolean;
   events: LoadingExportEvent[];
+  /**
+   * 快照内事件超过 `LOADING_EVENT_LIMIT` 而被**这里**截掉的（界面/导出各 40 条）。
+   *
+   * ⚠️ 与下面的 `eventsLostBeforeWindow` **不是同一件事**，两者必须能分开读：
+   *
+   * | 字段 | 谁丢的 | 含义 |
+   * | --- | --- | --- |
+   * | `eventsTruncated` | 导出这一层 | 快照里有更多条，导出只装前 40 条 |
+   * | `eventsLostBeforeWindow` | **采集器的环形缓冲** | 更早的事件在采集时就没了，`events[0]` 不是页面开始 |
+   */
   eventsTruncated: boolean;
+  /**
+   * 采集窗口是否已经截断（来自 `snapshot.truncated`，2026-11-20 T13/P1-7）。
+   *
+   * 语义是"**时间轴的开头不是页面开始**"：环形缓冲只留最近 200 条，
+   * 更早的被丢掉了。以前这个信息只活在 L2 浮层里，导出里没有出口 ——
+   * 消费者看到 `eventsTruncated: false` 会以为一条都没丢过。
+   */
+  eventsLostBeforeWindow: boolean;
   video: { readyState: number; durationSec: number; height: number; errorCode: number } | null;
 }
 
@@ -311,6 +365,7 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
       hostsTruncated: false,
       events: [],
       eventsTruncated: false,
+      eventsLostBeforeWindow: false,
       video: null,
     };
   }
@@ -352,6 +407,14 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
     if (typeof e.kind === 'string' && e.kind.length > 0) {
       out.kind = pickOne(e.kind, EXPORT_CLASSES, 'unknown');
     }
+    /**
+     * `MediaError.code`：只对 `error` 解析，解析不到**不加键**（见
+     * `LoadingExportEvent` 的注释 —— 写 0 会被读成 `MEDIA_ERR_ABORTED`）。
+     */
+    if (out.stage === 'error') {
+      const code = parseErrorCode(e.note);
+      if (code !== null) out.code = code;
+    }
     return out;
   });
 
@@ -367,6 +430,8 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
     hostsTruncated: allHosts.length > EXPORT_HOST_LIMIT,
     events,
     eventsTruncated: allEvents.length > LOADING_EVENT_LIMIT,
+    // ⚠️ 来自采集器（环形缓冲），与上一行的"导出层只装 40 条"是两件事
+    eventsLostBeforeWindow: snapshot.truncated === true,
     video:
       video === null
         ? null
@@ -588,11 +653,19 @@ export function loadingSectionNodes(outcome: LoadingOutcome | undefined): HTMLEl
   const snapshot = outcome.snapshot;
 
   // ── 摘要行：技术层，允许完整 host ──
+  /**
+   * `flavor === null` 显示成 `—`（2026-11-20，T13 文案）。
+   *
+   * 以前这里直接打印 `null` —— 那是 **JSON 字面量**，不是给用户看的文案。
+   * 技术层的读者会以为是"字段缺失 / 解析失败"，而 `null` 的真实含义是
+   * "`classifyCdn()` 认不出是自建还是服务商，它不猜"。破折号表达"没有值"，
+   * 与导出的 `null`（给机器）分工明确。
+   */
+  const flavorText = (flavor: string | null): string => (flavor === null ? '—' : flavor);
+
   const actual = snapshot.actual;
   const actualValue =
-    actual === null
-      ? '未识别'
-      : `${actual.cls} · ${actual.flavor === null ? 'null' : actual.flavor} · ${actual.host}`;
+    actual === null ? '未识别' : `${actual.cls} · ${flavorText(actual.flavor)} · ${actual.host}`;
 
   const byClass = new Map<CdnKind, number>();
   for (const h of snapshot.hosts) byClass.set(h.cls, (byClass.get(h.cls) ?? 0) + 1);
@@ -602,9 +675,49 @@ export function loadingSectionNodes(outcome: LoadingOutcome | undefined): HTMLEl
   const hostsValue = `${String(snapshot.hosts.length)} 条${breakdown.length > 0 ? `（${breakdown.join(' · ')}）` : ''}`;
   const hasPcdn = (byClass.get('pcdn') ?? 0) > 0;
 
-  const current = factRow({ label: '当前线路', value: actualValue });
-  // 走了 PCDN 就给警告色：那是这个功能唯一想让人看见的事
-  if (actual?.cls === 'pcdn') current.classList.add('warn');
+  /**
+   * ## 两行线路，别二选一（2026-11-20，T13/P0-2）
+   *
+   * 旧实现只有一行「当前线路」，值取自 `hosts` 按 count 排序的第一条（argmax）。
+   * 中途被切到 PCDN 之后，argmax 仍可能指着**已经不再用**的那条 ——
+   * 界面却写着"当前"。两个问题混在一个词里，答案必然是错的。
+   *
+   * 现在分开：
+   * - `主要线路（按请求数）` = argmax，回答"这次整体主要走哪条"
+   * - `当前线路（最后一次请求）` = 最后一条 `seg-req`，回答"此刻在用哪条"
+   *
+   * 两者是**同一条**时只显示一行「当前线路」—— 否则两行一模一样的值，
+   * 读的人会怀疑自己漏了什么。
+   */
+  const current = currentSegment(snapshot.events);
+  const currentHost = current?.host ?? null;
+  /**
+   * 当前线路的 `cls` / `flavor`：优先用 `hosts` 里的统计（那里有 `flavor`），
+   * 找不到就退回事件自带的 `kind`（`hosts` 被环形截断过时可能查不到）。
+   */
+  const currentStat =
+    currentHost === null ? undefined : snapshot.hosts.find((h) => h.host === currentHost);
+  const currentCls = currentStat?.cls ?? current?.kind ?? null;
+  const currentValue =
+    currentHost === null
+      ? '未记录'
+      : `${String(currentCls)} · ${flavorText(currentStat?.flavor ?? null)} · ${currentHost}`;
+
+  if (actual !== null && actual.host === currentHost) {
+    const only = factRow({ label: '当前线路', value: currentValue });
+    if (currentCls === 'pcdn') only.classList.add('warn');
+    nodes.push(only);
+  } else {
+    const mainRow = factRow({ label: '主要线路（按请求数）', value: actualValue });
+    // 走了 PCDN 就给警告色：那是这个功能唯一想让人看见的事
+    if (actual?.cls === 'pcdn') mainRow.classList.add('warn');
+
+    const currentRow = factRow({ label: '当前线路（最后一次请求）', value: currentValue });
+    // 当前线路是 P2P 时更要紧：用户**此刻**正在被切走
+    if (currentCls === 'pcdn') currentRow.classList.add('warn');
+
+    nodes.push(mainRow, currentRow);
+  }
 
   const hostsRow = factRow({ label: '本次线路', value: hostsValue });
   // ⚠️ 只给 `.diag-value` 上色（`.diag-row.warn`），不动状态点 ——
@@ -613,7 +726,7 @@ export function loadingSectionNodes(outcome: LoadingOutcome | undefined): HTMLEl
 
   const playing = playingEvent(snapshot.events);
 
-  nodes.push(current, hostsRow);
+  nodes.push(hostsRow);
   nodes.push(
     factRow({
       label: '开局耗时',
@@ -623,6 +736,19 @@ export function loadingSectionNodes(outcome: LoadingOutcome | undefined): HTMLEl
   );
   nodes.push(factRow({ label: '换线次数', value: String(detectSwitches(snapshot.events).length) }));
   nodes.push(factRow({ label: '快照状态', value: snapshot.confidence }));
+  /**
+   * ## 采集窗口（2026-11-20，T13/P1-7）
+   *
+   * `snapshot.truncated` 以前只在 L2 浮层里说一句，诊断页没有出口 ——
+   * 于是排查者看原始事件表时以为第一条就是页面开始。这里明确写出来，
+   * 并且与"导出只装 40 条"（`eventsTruncated`）**分开**：那个是这一层截的，
+   * 这个才是采集时就丢了的。
+   */
+  nodes.push(
+    snapshot.truncated
+      ? factRow({ label: '采集窗口', value: '已截断（早期事件被丢弃）', ok: false })
+      : factRow({ label: '采集窗口', value: '完整' }),
+  );
 
   // ── 原始事件表（默认折叠）──
   const shown = snapshot.events.slice(0, LOADING_EVENT_LIMIT);

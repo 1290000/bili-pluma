@@ -40,8 +40,9 @@
  *
  * - host：只走 `classifyCdn()` 的结果，**不另写域名表**——
  *   「哪些 host 算媒体域」若抄一份清单，与 `core/cdn/classify.ts` 必然漂移：
- *   那边新增一个 PCDN 供应商域，这边就会安静地采不到（`cls === 'unknown'` 被过滤），
- *   诊断页显示"没有 PCDN" —— 又是一个"界面一切正常"的失败方向。
+ *   那边新增一个 PCDN 供应商域，这边就会安静地采不到。
+ *   ⚠️ 2026-11-20（P0-1）修的就是这条漂移的后果：`unknown` 现在**照常计数**，
+ *   只是不参与"当前线路"的结论（见 `resolveMediaHost()` 的表格）。
  * - path：必须是媒体分片（`isMediaPath()`）。同域下的静态资源
  *   （`bvc.bilivideo.com/pbp/data`、`upos-sz-staticcos-cmask/…/*.webmask`）
  *   会被判成"官方线路"混进线路表，**而且一旦它们落在 pcdn 域上就是假警报**。
@@ -54,17 +55,28 @@ import { buildTimeline, type LoadEvent } from '@core/loading/timeline';
 /** 采集侧环形缓冲上限：与 `buildTimeline()` 的默认 `limit` 一致（200） */
 const EVENT_LIMIT = 200;
 
-/** `actual` / `hosts` 里只认这三类；`unknown` 不算线路 */
+/**
+ * 能进 `actual`（结论大字 / 「当前线路」）的类别。
+ *
+ * ⚠️ **`hosts` 不受这个数组限制**：`unknown` 的 host 照样在里面计数
+ * （2026-11-20，P0-1）。这里只回答"能不能拿来当结论" —— 认不出来源的线路
+ * 不能替用户下"你在用哪条线"的结论，但**必须**能被看见。
+ */
 const REAL_KINDS: readonly CdnKind[] = ['official', 'pcdn', 'third-party'];
 
 /**
  * 置信度。
  *
  * - `measured`：真的看到了 resource 条目（有 host 就有分片请求，是测出来的）
- * - `inferred`：**当前不用**。留给将来"只有 playurl 候选、没有分片"的场景
- * - `none`：什么都没看到（hosts 为空）
+ * - `none`：什么都没看到（`hosts` 为空）
+ *
+ * ## 2026-11-20（T13）：删掉 `inferred`
+ *
+ * 它从加进来到删掉**没有任何生产者**（导出层早已收窄成 `measured | none`）。
+ * 类型里留着一个永远不出现的值，就是空承诺 —— 读代码的人会以为"只有 playurl
+ * 候选、没有分片"这种情况已经在处理了，实际上没有任何代码算过它。
  */
-export type LoadingConfidence = 'measured' | 'inferred' | 'none';
+export type LoadingConfidence = 'measured' | 'none';
 
 /** 一个 host 的累计统计 */
 export interface HostStat {
@@ -150,6 +162,29 @@ export interface LoadingTraceState {
    * 它的职责是"我改了就说"，"只显示一次"是显示层的事）。
    */
   extPatchRecorded: boolean;
+  /**
+   * **本页的取流是否由扩展代理**（2026-11-20，T13，P0-3）。
+   *
+   * ## 值从哪来，为什么可信
+   *
+   * `entrypoints/content.ts` 收到 `page/activate:ok` 后调
+   * `setLoadingTraceProxied(res.activated === true)` —— `activated` 是
+   * **background 的回报**（DNR 规则真的装上了），不是"用户配了账号"的推断。
+   * 默认 `false`：回包之前我们**不知道**，而"不知道"必须表现得像"没有"。
+   *
+   * ## 用它做什么
+   *
+   * `recordPlayurl()` 命中时，若本页由扩展代理，就补一条 `ext-patch`
+   * （`note: '接管取流'`）。这样**首次观看**（没有历史进度要还原，主世界那条
+   * `reportExtPatch()` 不会发）也能在时间轴上看到「扩展介入」。
+   *
+   * ## 为什么它不会在 `page` 身份下误报
+   *
+   * `page` 身份时 background 回 `activated: false`（reason `page-identity`），
+   * 这个字段就是 `false`，一条 `ext-patch` 都不会补 —— 那是**正确的不出现**：
+   * 用户自己就是大会员，扩展确实没有参与取流。
+   */
+  streamingProxied: boolean;
 }
 
 /** 造一份空状态 */
@@ -160,7 +195,20 @@ export function createTraceState(): LoadingTraceState {
     truncated: false,
     lastSegReqCls: null,
     extPatchRecorded: false,
+    streamingProxied: false,
   };
+}
+
+/**
+ * 告诉采集器"本页取流是否由扩展代理"（`page/activate` 回包时调用）。
+ *
+ * 只写一个布尔，不碰任何已采集的数据：回包可能晚于第一批分片（~400ms），
+ * 那时把已经记下的事件回填成"扩展介入"就是在改写历史。
+ *
+ * @param proxied `res.activated === true`；不知道时**不要调**（默认 false 更保守）
+ */
+export function setLoadingTraceProxied(proxied: boolean): void {
+  state.streamingProxied = proxied;
 }
 
 /**
@@ -304,6 +352,21 @@ export function recordPlayurl(state: LoadingTraceState, entry: ResourceEntryLike
 
   pushEvent(state, { t: entry.startTime, stage: 'playurl-req' });
   pushEvent(state, { t: entry.responseEnd, stage: 'playurl-res' });
+
+  /**
+   * ## 本页由扩展代理 → 这一次取流就是扩展介入（P0-3）
+   *
+   * 主世界那条 `reportExtPatch()` 只在"真的改写了响应"（还原观看进度）时发，
+   * 所以**首次观看**（没有历史进度可还原）永远不会出现「扩展介入」——
+   * 而扩展其实在介入（DNR 换掉了 Cookie）。这里补上第二种触发点。
+   *
+   * - `t` 用同一个 `startTime`：介入发生在**请求发出那一刻**，不是返回后。
+   * - 去重共用 `extPatchRecorded`：同一次页面只留第一条。谁先到谁算
+   *   （通常这里先到，因为请求先于响应）。
+   * - `note` 区分两种介入：`接管取流`（DNR 代理）vs `改写响应`（进度还原）。
+   */
+  if (state.streamingProxied) recordExtPatch(state, entry.startTime, '接管取流');
+
   return true;
 }
 
@@ -312,7 +375,24 @@ export function recordPlayurl(state: LoadingTraceState, entry: ResourceEntryLike
  *
  * 两道判据，缺一不可：
  *   1. **路径**是媒体分片（`isMediaPath`）—— 挡掉同域下的静态资源（见那里的实测）
- *   2. **host** 命中分类（`classifyCdn`，`cls !== 'unknown'`）
+ *   2. **host** 能被 `classifyCdn` 解析出来（任何 `cls` 都收，含 `unknown`）
+ *
+ * ## 2026-11-20（T13，P0-1）：`unknown` **不再被丢弃**
+ *
+ * 旧实现在 `cls === 'unknown'` 时 `return null`，后果是一整类失败方向：
+ * B站 新增一个 PCDN 供应商域时，`hosts` 里没有它 → 面板显示「0 条线路 /
+ * 没有 PCDN」，而流量确实在跑。**界面看起来一切正常**，正是最难发现的那种错。
+ *
+ * 现在的分工：
+ *
+ * | 谁 | 怎么对待 `unknown` |
+ * | --- | --- |
+ * | `hosts` 计数 | **照常累加**（"用过哪些 host"是事实，与认不认得无关） |
+ * | `actual`（结论大字） | **不参与**（只在 `REAL_KINDS` 里挑，见 `snapshotOf`） |
+ * | 界面 | 单独一态：「有 N 条线路认不出来源」+ 虚线空心圆 |
+ *
+ * 前置门仍然是 `isMediaPath()`：同域静态资源（`/pbp/data`、`*.webmask`）
+ * 照样进不来 —— 那条判据一个字都没动。
  *
  * **不要**在这里加 `initiatorType` 判断 —— MSE 分片走 `xmlhttprequest`，
  * PGC 可能走 `fetch`，按类型过滤会把其中一类整体漏掉。
@@ -329,7 +409,8 @@ export function recordPlayurl(state: LoadingTraceState, entry: ResourceEntryLike
  * **`host` 仍是唯一被保留下来的字符串** —— query 与 path 都不进任何结构。
  *
  * @param url resource 条目的 `name`
- * @returns 媒体分片则返回 host + 线路；不是媒体分片（或解析不出 host）返回 `null`
+ * @returns 媒体分片则返回 host + 线路（`cls` 可能是 `unknown`）；
+ *   不是媒体分片（或解析不出 host）返回 `null`
  */
 export function resolveMediaHost(url: string): MediaHost | null {
   const parsed = parseUrl(url);
@@ -343,7 +424,7 @@ export function resolveMediaHost(url: string): MediaHost | null {
 
   // query 在这一行被判读，之后不再被任何结构引用（见上面的边界说明）
   const { cls, flavor } = classifyCdn(host, parsed.search);
-  if (cls === 'unknown') return null;
+  // ⚠️ 不再因为 `unknown` 返回 null —— 见函数头 P0-1 那一段
   return { host, cls, flavor };
 }
 
@@ -492,9 +573,19 @@ export function recordVideoStage(
 }
 
 /**
- * 记录一条「扩展介入」（主世界真的改写了取流响应）。
+ * 记录一条「扩展介入」（扩展真的动了这一次取流）。
  *
- * ## 数据从哪来
+ * ## 两个触发点（2026-11-20，T13/P0-3 补上第二个）
+ *
+ * | 触发点 | 语义 | `note` |
+ * | --- | --- | --- |
+ * | `recordPlayurl()` + `state.streamingProxied` | DNR 换掉 Cookie，**接管**了取流 | `接管取流` |
+ * | `noteExtPatch()`（主世界 `reportExtPatch()`） | 改写了 playurl 响应体（还原进度） | `改写响应` |
+ *
+ * 只有第二个触发点时，**首次观看**（没有历史进度可还原）永远不会出现这一行 ——
+ * 而扩展其实在介入。这就是 P0-3 说的"覆盖面不够"。
+ *
+ * ## 数据从哪来（第二个触发点）
  *
  * `src/content/main-world.js` 的 `reportExtPatch()`：它在
  * `patchPlayurlXhrProgress()` **确认改写成功**之后发一条
@@ -510,15 +601,19 @@ export function recordVideoStage(
  *
  * @param state 采集器状态（就地修改）
  * @param t 毫秒（主世界的 `performance.now()`，与采集侧同一时基）
+ * @param note 介入方式的短语（`接管取流` / `改写响应`），显示在时间轴明细行
  * @returns 本次是否真的记下了（`false` = 重复 / 时间戳非法 / 已经记过）
  */
-export function recordExtPatch(state: LoadingTraceState, t: number): boolean {
+export function recordExtPatch(state: LoadingTraceState, t: number, note?: string): boolean {
   if (state.extPatchRecorded) return false;
   // 与 `pushEvent()` 同一条纪律：非法时间戳直接丢，不修正成 0
   if (!Number.isFinite(t) || t < 0) return false;
 
   state.extPatchRecorded = true;
-  pushEvent(state, { t, stage: 'ext-patch' });
+  pushEvent(
+    state,
+    note === undefined ? { t, stage: 'ext-patch' } : { t, stage: 'ext-patch', note },
+  );
   return true;
 }
 
@@ -527,9 +622,12 @@ export function recordExtPatch(state: LoadingTraceState, t: number): boolean {
  *
  * 与 `recordExtPatch(state, t)` 的分工和 `resetLoadingTrace()` 一样 ——
  * 单例的读写都在本模块里，外面不需要拿到 `state`。
+ *
+ * `note` 固定写 `改写响应`：主世界这条上报的语义就是"我改了 playurl 的响应体"
+ * （还原观看进度）。另一条触发点（`接管取流`）在 `recordPlayurl()` 里。
  */
 export function noteExtPatch(t: number): boolean {
-  return recordExtPatch(state, t);
+  return recordExtPatch(state, t, '改写响应');
 }
 
 /**

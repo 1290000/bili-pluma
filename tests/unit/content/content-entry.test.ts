@@ -214,5 +214,20 @@ describe('content.ts 特征测试（拆分安全网）', () => {
       // 报了名却没接上：导入与调用必须同时在
       expect(CONTENT).toContain('noteExtPatch,');
     });
+
+    /**
+     * ## T13/P0-3：第二个触发点（接管取流）的判据来源
+     *
+     * 采集器要知道"本页取流是否由扩展代理"，只能由 `page/activate` 的
+     * **回包**告诉它 —— 那是 background 确认"DNR 规则真的装上了"的唯一出口。
+     * 少了这一行，首次观看（没有历史进度可还原）就永远不会出现「扩展介入」，
+     * 而**没有任何别的测试会红**（纯函数那一半是直接给 state 赋值的）。
+     */
+    it('page/activate 回包把 activated 交给采集器（判据不许用"配了账号"推断）', () => {
+      expect(CONTENT).toContain('setLoadingTraceProxied(res.activated === true)');
+      expect(CONTENT).toContain('setLoadingTraceProxied,');
+      // 反例：拿 streamingIdentity 直接推断"扩展在取流" —— page 身份下会误报
+      expect(CONTENT).not.toContain("setLoadingTraceProxied(streamingIdentity === 'extension')");
+    });
   });
 });

@@ -84,6 +84,7 @@ import {
   installLoadingTrace,
   noteExtPatch,
   resetLoadingTrace,
+  setLoadingTraceProxied,
 } from '@/src/content/isolated/loading-trace';
 import {
   createBadgeState,
@@ -2050,6 +2051,19 @@ function report(): void {
      */
     if (res?.type === 'page/activate:ok') {
       badgeState.proxying = res.activated === true;
+
+      /**
+       * ## 把"本页取流是否由扩展代理"交给加载采集器（2026-11-20，T13/P0-3）
+       *
+       * 采集器要在 `playurl` 请求上补一条「扩展介入」，判据必须是
+       * **background 回报的 `activated`**（规则真的装上了），不是"用户配了账号"
+       * 的推断 —— 后者在 `page` 身份、同账号、白名单外等情形下都是假的。
+       *
+       * ⚠️ 回包比第一批请求晚（~400ms）。晚到的那次调用**不回填**已经记下的事件
+       * （`setLoadingTraceProxied()` 只写一个布尔），所以不会把历史改写成
+       * "扩展介入过"。宁可漏报，不可补造。
+       */
+      setLoadingTraceProxied(res.activated === true);
 
       /**
        * ## 把"这次到底有没有第二个身份"回灌给 `pageState`（步骤 3）

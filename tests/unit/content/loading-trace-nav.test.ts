@@ -26,6 +26,7 @@ import {
   getLoadingSnapshot,
   installLoadingTrace,
   resetLoadingTrace,
+  setLoadingTraceProxied,
 } from '@/src/content/isolated/loading-trace';
 
 /** 本文件装过的卸载函数；`null` = 当前没装 */
@@ -79,5 +80,23 @@ describe('installLoadingTrace —— 时间轴的原点（nav @ 0）', () => {
     expect(snapshot.confidence).toBe('none');
     expect(snapshot.actual).toBeNull();
     expect(snapshot.hosts).toEqual([]);
+  });
+
+  /**
+   * `setLoadingTraceProxied()` 只写一个布尔，**不产生事件**。
+   *
+   * 反例：让它顺手补一条 `ext-patch` → 时间轴会在"还没发生任何取流"时
+   * 就出现「扩展介入」，那是在陈述一件没发生的事。
+   */
+  it('setLoadingTraceProxied 只写标记，不往时间轴里塞事件', () => {
+    dispose = installLoadingTrace();
+    const before = getLoadingSnapshot().events.length;
+
+    setLoadingTraceProxied(true);
+    setLoadingTraceProxied(false);
+
+    const after = getLoadingSnapshot();
+    expect(after.events).toHaveLength(before);
+    expect(after.events.some((e) => e.stage === 'ext-patch')).toBe(false);
   });
 });

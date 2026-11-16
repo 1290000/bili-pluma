@@ -38,7 +38,21 @@
 
 import type { CdnKind } from '@core/cdn/classify';
 
-/** 加载阶段。声明顺序**就是**同一 `t` 下的渲染顺序，不要依赖字母序 */
+/**
+ * 加载阶段。声明顺序**就是**同一 `t` 下的渲染顺序，不要依赖字母序。
+ *
+ * ## 2026-11-20（T13）：删掉 `switch` 与 `blocked` —— 它们**没有生产者**
+ *
+ * 两个值从加进来到删掉，全仓没有一处代码产出它们。留着不是"将来可能有用"，
+ * 而是**空承诺**：读枚举的人会以为面板已经能报"换了一条线路"和"已屏蔽"。
+ *
+ * - `switch`：换线已经由「下载视频片段」行的类别变色表达（官方实心圆 /
+ *   P2P 菱形 / 第三方三角），再插一行是同一件事说两遍。
+ *   ⚠️ `detectSwitches()` **保留** —— 它只服务「N 次切换」那个计数，
+ *   不产出事件。
+ * - `blocked`：候选线路过滤（T9′）本期没做。真做的时候再加回来，
+ *   那时它会有生产者、也会有测试。
+ */
 export type LoadStage =
   | 'nav'
   | 'playurl-req'
@@ -48,10 +62,8 @@ export type LoadStage =
   | 'seg-res'
   | 'canplay'
   | 'playing'
-  | 'switch'
   | 'stall'
-  | 'error'
-  | 'blocked';
+  | 'error';
 
 /** 一条加载事件 */
 export interface LoadEvent {
@@ -63,7 +75,12 @@ export interface LoadEvent {
   host?: string;
   /** 该 host 的线路分类，便于面板直接显示，不必再算一遍 */
   kind?: CdnKind;
-  /** 只管内存里的原始说明，不进导出（导出只取 t / stage / host / kind） */
+  /**
+   * 技术层原值 / 短语（`error` 是 `code=3`，`ext-patch` 是 `接管取流` / `改写响应`）。
+   *
+   * 会显示在时间轴的明细行（`.ld-detail`），**不进导出** —— 导出按白名单另取
+   * （`error` 的码由 `diagnostics.ts` 解析成 `code` 数字字段，见那里的注释）。
+   */
   note?: string;
 }
 
@@ -88,10 +105,8 @@ const STAGE_ORDER: readonly LoadStage[] = [
   'seg-res',
   'canplay',
   'playing',
-  'switch',
   'stall',
   'error',
-  'blocked',
 ];
 
 /**
@@ -191,6 +206,37 @@ export function detectSwitches(
   }
 
   return switches;
+}
+
+/**
+ * **最后一次分片请求** —— 也就是"此刻正在用的那条线路"（2026-11-20，P0-2）。
+ *
+ * ## 为什么要它
+ *
+ * `snapshot.actual` 取的是 `hosts` 里**请求数最多**的那条（argmax），语义是
+ * "这次整体主要走哪条"。中途被切到 PCDN 之后，argmax 仍可能指着已经不再用的
+ * 那条 —— 诊断页如果只写「当前线路」，就是在陈述一件已经过期的事。
+ *
+ * 所以两件事分开说：`主要线路（按请求数）` = argmax；`当前线路（最后一次请求）`
+ * = 本函数的返回值。两者相同时界面只显示一行（见 `diagnostics.ts`）。
+ *
+ * ## 为什么用 `seg-req` 而不是 `seg-res`
+ *
+ * 请求发出那一刻就已经在用那条线路了；返回时刻只说明"它答完了"。
+ * 与 `detectSwitches()` 的判据同源（那里也只扫 `seg-req`）。
+ *
+ * @param events 已归一的事件（按传入顺序扫，不重新排序）
+ * @returns 最后一条带 `host` 的 `seg-req`；没有则 `null`
+ */
+export function currentSegment(events: readonly LoadEvent[]): LoadEvent | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event === undefined) continue;
+    if (event.stage !== 'seg-req') continue;
+    if (event.host === undefined || event.host.length === 0) continue;
+    return event;
+  }
+  return null;
 }
 
 /**

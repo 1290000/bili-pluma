@@ -37,7 +37,9 @@ import {
   describeLine,
   describeKindPill,
   describePcdnCaveat,
+  describeSnapshotLine,
   gapText,
+  hostCountText,
   legendEntries,
   legendHasExtPatch,
   legendKinds,
@@ -55,7 +57,7 @@ import {
 } from '../../../src/content/panel/panel-data';
 import { qualityTab } from '../../../src/content/panel/tabs';
 import type { LoadingSnapshotLite } from '../../../src/content/isolated/loading-trace';
-import type { LoadEvent } from '../../../src/core/loading/timeline';
+import type { LoadEvent, LoadStage } from '../../../src/core/loading/timeline';
 
 // ─────────────────────────── 真实快照 ───────────────────────────
 
@@ -170,8 +172,18 @@ describe('线路文案：七种情况逐条钉住', () => {
     expect(quick?.title).not.toContain('还没有');
   });
 
-  it('unknown 类别落「还不知道」，不当成 PCDN（不替用户拦来源不明的域）', () => {
-    expect(describeLine({ cls: 'unknown', flavor: null }).title).toBe('还不知道走哪条线路');
+  it('★ unknown 类别 → 「认不出来源」+ 虚线圆，不当成 PCDN（P0-1）', () => {
+    /**
+     * 反例：`describeLine({cls:'unknown'})` 落回「还不知道走哪条线路」——
+     * 那是"什么都没看到"的说法，而这里是"看到了，只是认不出来"。
+     * 两者合并会让"B站 换了 PCDN 供应商"看起来像"功能没数据"。
+     */
+    const line = describeLine({ cls: 'unknown', flavor: null });
+    expect(line.title).toBe('有 1 条线路认不出来源');
+    expect(line.tone).toBe('muted');
+    // 必须与 ext-patch 的空心圆区分开（色盲第二条线索）
+    expect(line.marker).toBe('dashed');
+    expect(line.marker).not.toBe('ring');
   });
 
   it('结论卡胶囊：官方 / PCDN / 第三方，认不出就没有胶囊', () => {
@@ -282,6 +294,38 @@ describe('结论卡的自洽说明', () => {
       ),
     ).toBeNull();
   });
+
+  /**
+   * ## P0-2：结论看"整次"，这句补充"此刻"
+   *
+   * 结论大字用 argmax（整次主要走官方），而**最后一条分片**已经切到 PCDN ——
+   * 那时还说「其中 N 条是 P2P 线路，未占主导」是误导：用户刚被切走。
+   */
+  it('★ 当前线路（最后一条 seg-req）也是 P2P → 换成「现在正在用 P2P 线路」', () => {
+    const switched = snapshot({
+      // argmax 仍是官方（12 > 1）
+      hosts: [
+        {
+          host: 'cn-jsnt-ct-01-07.bilivideo.com',
+          cls: 'official',
+          flavor: 'self-built',
+          count: 12,
+        },
+        { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 1 },
+      ],
+      events: [
+        { t: 1000, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+        { t: 2000, stage: 'seg-req', host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', kind: 'pcdn' },
+      ],
+    });
+    expect(describePcdnCaveat(switched)).toBe('现在正在用 P2P 线路');
+    // ⛔ 仍然不许写"已回退"：我们没有"什么时候被踢下来"的观测
+    expect(describePcdnCaveat(switched)).not.toContain('回退');
+  });
+
+  it('当前线路仍是官方 → 保持原来那句（未占主导）', () => {
+    expect(describePcdnCaveat(snapshot())).toBe('其中 1 条是 P2P 线路，未占主导');
+  });
 });
 
 // ─────────────────────────── 时间轴 ───────────────────────────
@@ -372,26 +416,34 @@ describe('时间轴：请求与返回配对成一行', () => {
     expect(onlyRes).toEqual([]);
   });
 
-  it('error / blocked 的标题走危险色', () => {
+  it('★ error 的标题走危险色，且把 MediaError.code 放进明细（P1-6）', () => {
+    /**
+     * 反例：`detail` 只认 `host` → 「播放出错」那一行没有明细，
+     * 用户/排查者分不清"网慢"（`stall`）与"被拦"（`error code=3`）。
+     */
     const special = buildTimelineRows([
       { t: 10, stage: 'error', note: 'code=3' },
-      { t: 30, stage: 'blocked', host: 'a.bilivideo.com', kind: 'official' },
+      { t: 30, stage: 'stall' },
     ]);
-    for (const row of special) {
-      expect(row.dangerTitle).toBe(true);
-      // 里程碑仍然不用圆点
-      expect(row.marker).toBeNull();
-    }
+    expect(special[0]).toMatchObject({ dangerTitle: true, detail: 'code=3', marker: null });
+    expect(special[1]).toMatchObject({ dangerTitle: false, detail: null });
   });
 
-  it('`switch` 带 kind 时用线路形状（它是"换到哪条线"，不是里程碑）', () => {
-    const switched = buildTimelineRows([
-      { t: 10, stage: 'switch', host: 'a.bilivideo.com', kind: 'pcdn' },
-    ]);
-    expect(switched[0]).toMatchObject({ kind: 'event', marker: 'diamond', tone: 'warn' });
+  it('⛔ `switch` / `blocked` 已经从枚举里删掉（没有生产者）', () => {
+    /**
+     * 这条守的是"别再加回来一个没有生产者的阶段"：
+     * - 换线已由「下载视频片段」行的类别变色表达，再插一行是重复
+     * - 候选过滤（T9′）本期没做，`blocked` 无从产出
+     *
+     * 类型层面 `LoadStage` 已不接受这两个值（`tsc` 会红）；运行时若有人硬塞，
+     * 走 `stageLabel()` 的兜底**原样显示**，而不是命中某个残留的中文名 ——
+     * 那正是"删干净了"的判据。
+     */
+    expect(stageLabel('switch' as unknown as LoadStage)).toBe('switch');
+    expect(stageLabel('blocked' as unknown as LoadStage)).toBe('blocked');
   });
 
-  it('12 个阶段都有中文名（漏一个会显示成英文）', () => {
+  it('10 个阶段都有中文名（漏一个会显示成英文）', () => {
     const stages = [
       'nav',
       'playurl-req',
@@ -401,17 +453,122 @@ describe('时间轴：请求与返回配对成一行', () => {
       'seg-res',
       'canplay',
       'playing',
-      'switch',
       'stall',
       'error',
-      'blocked',
     ] as const;
     for (const s of stages) expect(stageLabel(s)).not.toBe(s);
-    expect(stageLabel('switch')).toBe('换了一条线路');
-    expect(stageLabel('playurl-res')).toBe('B站 返回线路清单');
+    expect(stageLabel('playurl-res')).toBe('B站返回线路清单');
     // 配对行用更短的「下载视频片段」，但技术名映射本身不变（诊断页还在用）
     expect(stageLabel('seg-req')).toBe('开始下载分片');
     expect(stageLabel('ext-patch')).toBe('扩展介入');
+  });
+});
+
+// ─────────────────────────── P0-1：认不出来源的线路 ───────────────────────────
+
+/** 一条认不出来源的 host（`classifyCdn` 对没实测过的域返回 `unknown`） */
+const UNKNOWN_HOST = {
+  host: 'xyz.example-cdn.com',
+  cls: 'unknown' as const,
+  flavor: null,
+  count: 7,
+};
+
+describe('P0-1 · 认不出来源的线路必须被看见', () => {
+  it('★ 只有 unknown → 「有 N 条线路认不出来源」+ 虚线圆（不是「还不知道」）', () => {
+    /**
+     * 反例（旧行为）：`unknown` 被采集侧丢弃 → `hosts` 为空 → 显示
+     * 「还不知道走哪条线路」。用户会以为功能没数据，而事实是**有流量、只是认不出**。
+     */
+    const quick = buildLoadingQuick(
+      ok({ actual: null, confidence: 'measured', hosts: [UNKNOWN_HOST] }),
+    );
+    expect(quick?.title).toBe('有 1 条线路认不出来源');
+    expect(quick?.tone).toBe('muted');
+    expect(quick?.marker).toBe('dashed');
+  });
+
+  it('⛔ 一条 host 都没有 → 仍然是「还不知道走哪条线路」（三态不许归并）', () => {
+    const quick = buildLoadingQuick(ok({ actual: null, confidence: 'none', hosts: [] }));
+    expect(quick?.title).toBe('还不知道走哪条线路');
+    expect(quick?.marker).toBe('ring');
+  });
+
+  it('★ 有已知线路 + 同时有 unknown → 计数里写清「4 条线路（1 条认不出）」', () => {
+    const snap = snapshot({
+      hosts: [
+        { host: 'a.bilivideo.com', cls: 'official', flavor: null, count: 9 },
+        { host: 'b.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 3 },
+        { host: 'c.akamaized.net', cls: 'third-party', flavor: null, count: 2 },
+        UNKNOWN_HOST,
+      ],
+    });
+    expect(hostCountText(snap)).toBe('4 条线路（1 条认不出）');
+    expect(describeCounts(snap)).toContain('4 条线路（1 条认不出）');
+  });
+
+  it('没有 unknown 时不加那个括号（别让所有快照都变长）', () => {
+    expect(hostCountText(snapshot())).toBe('3 条线路');
+  });
+
+  it('★ unknown 的分片行画虚线空心圆（与 ext-patch 的空心圆区分）', () => {
+    const rows = buildTimelineRows([
+      { t: 100, stage: 'seg-req', host: 'xyz.example-cdn.com', kind: 'unknown' },
+    ]);
+    expect(rows[0]).toMatchObject({ kind: 'segment', marker: 'dashed', tone: 'muted' });
+  });
+
+  it('★ DOM：虚线圆带 stroke-dasharray，图例里有一条「认不出来源」', () => {
+    const box = loadingDetailPane(
+      ok({
+        actual: null,
+        confidence: 'measured',
+        hosts: [UNKNOWN_HOST],
+        events: [{ t: 100, stage: 'seg-req', host: 'xyz.example-cdn.com', kind: 'unknown' }],
+      }),
+      { back: () => undefined, refresh: () => undefined, openDiagnostics: () => undefined },
+    );
+
+    const circle = box.querySelector('.ld-node svg circle');
+    expect(circle).not.toBeNull();
+    expect(circle?.getAttribute('stroke-dasharray')).toBeTruthy();
+    // 图例必须解释这个形状（画出来却没人解释，比不画更容易误导）
+    const texts = [...box.querySelectorAll('.ld-legend-text')].map((n) => n.textContent);
+    expect(texts).toEqual(['认不出来源']);
+    // 结论大字同样是「认不出来源」
+    expect(box.querySelector('.ld-conclusion-title')?.textContent).toBe('有 1 条线路认不出来源');
+  });
+
+  it('★ `describeSnapshotLine()` 三态一次看全（DOM 之外也能直接用）', () => {
+    const onlyUnknown = snapshot({ actual: null, confidence: 'measured', hosts: [UNKNOWN_HOST] });
+    expect(describeSnapshotLine(onlyUnknown)).toMatchObject({
+      title: '有 1 条线路认不出来源',
+      marker: 'dashed',
+      tone: 'muted',
+    });
+    expect(describeSnapshotLine(snapshot()).title).toBe('B站官方线路（自建 CDN）');
+    expect(
+      describeSnapshotLine(snapshot({ actual: null, confidence: 'none', hosts: [] })).title,
+    ).toBe('还不知道走哪条线路');
+  });
+
+  it('图例顺序：三个已知类别 → 认不出来源 → 扩展介入', () => {
+    const snap = snapshot({
+      hosts: [
+        { host: 'a.bilivideo.com', cls: 'official', flavor: null, count: 9 },
+        { host: 'b.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 3 },
+        { host: 'c.akamaized.net', cls: 'third-party', flavor: null, count: 2 },
+        UNKNOWN_HOST,
+      ],
+      events: [{ t: 10, stage: 'ext-patch' }, ...snapshot().events],
+    });
+    expect(legendEntries(snap).map((e) => e.text)).toEqual([
+      '官方',
+      'P2P',
+      '第三方',
+      '认不出来源',
+      '扩展介入',
+    ]);
   });
 });
 
@@ -434,12 +591,12 @@ const CHAIN_EVENTS: LoadEvent[] = [
 ];
 
 describe('取流请求（playurl）在时间轴上', () => {
-  it('★ 行序：页面开始加载 → 发出取流请求 → B站 返回线路清单 → 下载视频片段 → 可以播放', () => {
+  it('★ 行序：页面开始加载 → 发出取流请求 → B站返回线路清单 → 下载视频片段 → 可以播放', () => {
     const rows = buildTimelineRows(CHAIN_EVENTS);
     expect(rows.map((r) => r.label)).toEqual([
       '页面开始加载',
       '发出取流请求',
-      'B站 返回线路清单',
+      'B站返回线路清单',
       '下载视频片段',
       '可以播放',
       '开始播放',
@@ -536,7 +693,7 @@ describe('取流请求（playurl）在时间轴上', () => {
     expect(lines).toEqual([
       '页面开始加载 0.00s',
       '发出取流请求 0.21s +0.21s',
-      'B站 返回线路清单 0.38s +0.17s',
+      'B站返回线路清单 0.38s +0.17s',
       '下载视频片段 1.53s → 1.70s · 0.17s cn-jsnt-ct-01-07.bilivideo.com',
       '可以播放 2.10s +0.40s',
       '开始播放 2.20s +0.10s',
@@ -636,6 +793,21 @@ describe('「扩展介入」事件（ext-patch）', () => {
   it('它不归属任何线路：没有 host 就没有明细行', () => {
     const rows = buildTimelineRows([{ t: 1000, stage: 'ext-patch' }]);
     expect(rows[0]?.detail).toBeNull();
+  });
+
+  /**
+   * ## P0-3：明细说清是哪一种介入
+   *
+   * `ext-patch` 有两个来源：DNR 接管取流（`note: '接管取流'`）与主世界改写响应
+   * （`note: '改写响应'`）。用户看到「扩展介入」时，下一个问题就是"它干了什么"。
+   */
+  it('★ 明细显示介入方式（接管取流 / 改写响应）', () => {
+    const rows = buildTimelineRows([
+      { t: 1000, stage: 'ext-patch', note: '接管取流' },
+      { t: 2000, stage: 'ext-patch', note: '改写响应' },
+    ]);
+    expect(rows[0]?.detail).toBe('接管取流');
+    expect(rows[1]?.detail).toBe('改写响应');
   });
 
   it('⛔ 没有 ext-patch 事件时，时间轴上不出现「扩展介入」', () => {

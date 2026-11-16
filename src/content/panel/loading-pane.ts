@@ -38,6 +38,7 @@
 
 import type { CdnKind, OfficialFlavor } from '@core/cdn/classify';
 import {
+  currentSegment,
   detectSwitches,
   pairSegments,
   type LoadEvent,
@@ -86,8 +87,13 @@ export type LoadingTone = 'ok' | 'warn' | 'muted' | 'bad' | 'accent';
  * | `diamond` | PCDN（空心菱形） |
  * | `triangle` | 第三方（空心三角） |
  * | `ring` | 扩展介入 / 与线路无关的阶段（空心圆） |
+ * | `dashed` | **认不出来源的线路**（虚线空心圆，2026-11-20 P0-1） |
+ *
+ * ⚠️ `dashed` 不是装饰：`unknown` 以前被整类丢弃，现在它会出现在时间轴上，
+ * 而它**不能**与「扩展介入」共用实心/空心圆 —— 那两个圆在色盲眼里一模一样，
+ * 却一个是"我方动作"、一个是"来源不明的流量"，含义完全相反。
  */
-export type MarkerShape = 'disc' | 'diamond' | 'triangle' | 'ring';
+export type MarkerShape = 'disc' | 'diamond' | 'triangle' | 'ring' | 'dashed';
 
 /** 一条线路描述 —— 速览行主行与结论卡大字**共用**这一份，不许各拼一句 */
 export interface LineDescription {
@@ -97,8 +103,11 @@ export interface LineDescription {
 }
 
 /**
- * 阶段中文名。**固定映射**：阶段枚举只有 12 个值，逐个给中文，
+ * 阶段中文名。**固定映射**：阶段枚举只有 10 个值，逐个给中文，
  * 不做"把英文换成中文"的通用转换（那会拼出「开始下载分片」这种半成品）。
+ *
+ * ⚠️ 2026-11-20（T13）：`switch` / `blocked` 两档随枚举一起删了 ——
+ * 它们从来没有生产者，留着就是让读代码的人以为面板能报这两件事。
  */
 const STAGE_LABEL: Record<LoadStage, string> = {
   /**
@@ -110,16 +119,14 @@ const STAGE_LABEL: Record<LoadStage, string> = {
    */
   nav: '页面开始加载',
   'playurl-req': '发出取流请求',
-  'playurl-res': 'B站 返回线路清单',
+  'playurl-res': 'B站返回线路清单',
   'ext-patch': '扩展介入',
   'seg-req': '开始下载分片',
   'seg-res': '分片到达',
   canplay: '可以播放',
   playing: '开始播放',
-  switch: '换了一条线路',
   stall: '卡了一下',
   error: '播放出错',
-  blocked: '已屏蔽',
 };
 
 /**
@@ -133,8 +140,22 @@ export function stageLabel(stage: LoadStage): string {
   return STAGE_LABEL[stage] ?? String(stage);
 }
 
-/** 认不出线路时说的那句话（`actual === null` / `confidence === 'none'`） */
+/** 认不出线路时说的那句话（`actual === null` 且**一条 host 都没有**） */
 const TITLE_UNKNOWN = '还不知道走哪条线路';
+
+/**
+ * 有流量、但**每一条**都认不出来源时说的那句话（2026-11-20，P0-1）。
+ *
+ * 与 `TITLE_UNKNOWN` 是**两件事**，不许合并：前者是"什么都没看到"，
+ * 后者是"看到了 N 条，但没有一条能认出属于哪类 CDN"。合并的后果是
+ * B站 新增一个 PCDN 供应商域时，界面说「还不知道走哪条线路」——
+ * 用户会以为功能没数据，而事实是**有数据、只是我们认不出**。
+ *
+ * @param count 认不出来源的 host 条数（≥ 1）
+ */
+export function describeUnknownSource(count: number): string {
+  return `有 ${String(count)} 条线路认不出来源`;
+}
 
 /** 没人应答时说的那句话。**不许写成「还没有数据」** —— 那是另一件事 */
 const TITLE_UNREADABLE = '读取失败 · 刷新页面后重试';
@@ -182,12 +203,34 @@ export function describeLine(
       return { title: TITLE_THIRD, tone: 'muted', marker: 'triangle' };
     default:
       /**
-       * `unknown`：host 认不出线路。`snapshotOf()` 已经把它从 `actual` 里滤掉了，
-       * 所以正常路径走不到；真走到了就如实说"不知道"，**不当成 PCDN**
-       * （`classify.ts` 第 1 条：不替用户拦来源不明的东西）。
+       * `unknown`：host 认不出线路。`snapshotOf()` 只把 `unknown` 从 `actual` 里
+       * 滤掉（它不进结论），但**会留在 `hosts` 里**（P0-1）。所以这里仍可能被
+       * 直接调用到（例如有人拿 `hosts[0]` 来问），如实说"认不出来源"，
+       * **不当成 PCDN**（`classify.ts` 第 1 条：不替用户拦来源不明的东西）。
        */
-      return { title: TITLE_UNKNOWN, tone: 'muted', marker: 'ring' };
+      return { title: describeUnknownSource(1), tone: 'muted', marker: 'dashed' };
   }
+}
+
+/**
+ * 快照 → 结论行（**三态**，2026-11-20 P0-1）。
+ *
+ * | 情形 | 文案 | 形状 |
+ * | --- | --- | --- |
+ * | 一条 host 都没有 | 「还不知道走哪条线路」 | 空心圆（muted） |
+ * | 有 host，但**全部**认不出来源 | 「有 N 条线路认不出来源」 | **虚线**空心圆 |
+ * | 有已知线路 | 正常线路文案 | 线路形状 |
+ *
+ * 三态**不许归并**：第二态以前被并进第一态（因为 `unknown` 被丢弃 → `hosts`
+ * 是空的），于是"有流量但认不出"看起来和"没流量"一模一样 ——
+ * 那正是这次审计的 P0。
+ */
+export function describeSnapshotLine(snapshot: LoadingSnapshotLite): LineDescription {
+  if (snapshot.actual !== null) return describeLine(snapshot.actual);
+
+  const unknownCount = snapshot.hosts.filter((h) => h.cls === 'unknown').length;
+  if (unknownCount === 0) return describeLine(null);
+  return { title: describeUnknownSource(unknownCount), tone: 'muted', marker: 'dashed' };
 }
 
 /** 结论卡里那个小胶囊。`null` = 没有线路可标（不编一个「未知」标签） */
@@ -229,6 +272,25 @@ export function playingEvent(events: readonly LoadEvent[]): LoadEvent | null {
 }
 
 /**
+ * 线路数文案：`4 条线路（1 条认不出）`。
+ *
+ * ## 为什么括号里必须写出来（2026-11-20，P0-1）
+ *
+ * `unknown` 现在会进 `hosts`（不再被丢弃）。如果只显示总数，用户看到「4 条线路」
+ * 而时间轴上只有 3 个认得出的形状，会以为是渲染 bug。括号把那 1 条的去向说清。
+ *
+ * 认不出来源的条数**不参与**「N 次切换」「当前线路」这类结论 —— 那两处只认
+ * `official` / `pcdn` / `third-party`（`snapshotOf()` 的 `actual` 判据）。
+ */
+export function hostCountText(snapshot: LoadingSnapshotLite): string {
+  const total = snapshot.hosts.length;
+  const unknown = snapshot.hosts.filter((h) => h.cls === 'unknown').length;
+  return unknown > 0
+    ? `${String(total)} 条线路（${String(unknown)} 条认不出）`
+    : `${String(total)} 条线路`;
+}
+
+/**
  * 速览行的副行：`开局 3.18s · 3 条线路`。
  *
  * ## 单位是 `s`，不是「秒」（2026-11-20 Lead 裁决）
@@ -246,7 +308,7 @@ export function playingEvent(events: readonly LoadEvent[]): LoadEvent | null {
 export function describeQuickSub(snapshot: LoadingSnapshotLite): string | null {
   const playing = playingEvent(snapshot.events);
   if (playing === null) return null;
-  return `开局 ${seconds(playing.t)}s · ${String(snapshot.hosts.length)} 条线路`;
+  return `开局 ${seconds(playing.t)}s · ${hostCountText(snapshot)}`;
 }
 
 /**
@@ -261,7 +323,7 @@ export function describeCounts(snapshot: LoadingSnapshotLite): string[] {
   const playing = playingEvent(snapshot.events);
   if (playing !== null) counts.push(`开局 ${seconds(playing.t)}s`);
 
-  if (snapshot.hosts.length > 0) counts.push(`${String(snapshot.hosts.length)} 条线路`);
+  if (snapshot.hosts.length > 0) counts.push(hostCountText(snapshot));
 
   const switches = detectSwitches(snapshot.events).length;
   if (switches > 0) counts.push(`${String(switches)} 次切换`);
@@ -280,10 +342,13 @@ export function describeCounts(snapshot: LoadingSnapshotLite): string[] {
  * 技术上没错：`actual` 取的是**请求数最多**的那条线路（`snapshotOf` 的判据），
  * 竞速里另一条也会被用上一两次。所以这里要**把判据说出来**。
  *
- * ## ⚠️ 不许写"已回退"
+ * ## 2026-11-20（T13，P0-2）：当前线路也是 P2P 时换一句更强的话
  *
- * 我们没有数据能证明发生过回退（没有"什么时候被踢下来"的观测）。
- * 只陈述事实："有几条 P2P 线路，且没占主导" —— 字数不多，但每个字都有据。
+ * 「其中 N 条是 P2P 线路，未占主导」在**当前正在用 P2P** 时是误导：
+ * 用户刚被切走，界面却说"没占主导"。那时改成「现在正在用 P2P 线路」——
+ * 这是一句**可观测的事实**（最后一条 `seg-req` 的 `kind` 就是 `pcdn`）。
+ *
+ * ⚠️ 仍然**不许**写"已回退"：我们没有"什么时候被踢下来"的观测。
  *
  * @returns `null` = 不需要这句（没有 P2P，或者结论本身就是 P2P）
  */
@@ -294,6 +359,12 @@ export function describePcdnCaveat(snapshot: LoadingSnapshotLite): string | null
 
   const pcdnHosts = snapshot.hosts.filter((h) => h.cls === 'pcdn').length;
   if (pcdnHosts === 0) return null;
+
+  /**
+   * 结论看的是**整次加载**（argmax），这句补充的是**此刻**。
+   * 两者不同时以"此刻"为准 —— 那才是用户正在经历的事。
+   */
+  if (currentSegment(snapshot.events)?.kind === 'pcdn') return '现在正在用 P2P 线路';
 
   return `其中 ${String(pcdnHosts)} 条是 P2P 线路，未占主导`;
 }
@@ -331,7 +402,7 @@ export interface TimelineRow {
   tone: LoadingTone;
   /** 标题用次要文字色（"未完成"的请求、空档行） */
   dimTitle: boolean;
-  /** 标题用危险色（`error` / `blocked`） */
+  /** 标题用危险色（只有 `error`） */
   dangerTitle: boolean;
 }
 
@@ -400,20 +471,20 @@ export const TIMELINE_FOOTNOTE =
 /**
  * 阶段 → 颜色 + 形状（只对**线路行**有意义）。
  *
- * 优先级：**阶段先于线路**。`ext-patch`（扩展介入）与 `error` / `blocked`
- * 与"哪条线路"无关，用阶段自己的语义色 —— 它们恰恰是排查时要一眼找到的两种。
+ * 优先级：**阶段先于线路**。`ext-patch`（扩展介入）与 `error` 与"哪条线路"无关，
+ * 用阶段自己的语义色 —— 它们恰恰是排查时要一眼找到的两种。
  *
  * ⚠️ 里程碑（`canplay` / `playing` / …）**不再用这个函数的形状**：
  * 它们在 `buildTimelineRows` 里走 `marker: null`（短竖线），
  * 因为空心圆与图例里的线路形状撞形（2026-11-20 Lead 裁决 ④）。
  * 本函数对它们仍返回一个值，但调用方不会拿它画圆点。
  *
- * `ext-patch` 是例外：它**保留**空心圆 + `accent` —— 它不是里程碑，是"扩展真的
- * 改写了取流响应"这一刻，而且图例里已经有一条「○ 扩展介入」与它对应。
+ * `ext-patch` 是例外：它**保留**空心圆 + `accent` —— 它不是里程碑，是"扩展动了
+ * 这一次取流"这一刻，而且图例里已经有一条「○ 扩展介入」与它对应。
  */
 export function describeEventMarker(event: LoadEvent): { tone: LoadingTone; marker: MarkerShape } {
   if (event.stage === 'ext-patch') return { tone: 'accent', marker: 'ring' };
-  if (event.stage === 'error' || event.stage === 'blocked') return { tone: 'bad', marker: 'ring' };
+  if (event.stage === 'error') return { tone: 'bad', marker: 'ring' };
 
   switch (event.kind) {
     case 'official':
@@ -422,8 +493,15 @@ export function describeEventMarker(event: LoadEvent): { tone: LoadingTone; mark
       return { tone: 'warn', marker: 'diamond' };
     case 'third-party':
       return { tone: 'muted', marker: 'triangle' };
+    /**
+     * `unknown`（2026-11-20，P0-1）：认不出来源的线路**必须画出来**，
+     * 而且必须与「扩展介入」的空心圆区分开 —— 两者含义相反（一个是"我方动作"，
+     * 一个是"来源不明的流量"），色盲用户只能靠形状分辨。
+     */
+    case 'unknown':
+      return { tone: 'muted', marker: 'dashed' };
     default:
-      // 与线路无关的阶段（nav / playurl-* / canplay / playing / stall / switch）
+      // 与线路无关的阶段（nav / playurl-* / canplay / playing / stall / error）
       return { tone: 'muted', marker: 'ring' };
   }
 }
@@ -441,13 +519,36 @@ function segKey(t: number, host: string | null): string {
 /**
  * 这条事件该不该用"线路形状"。
  *
- * 只有**分片请求**（配对行）和 `switch`（换线）谈得上"哪条线路"。
- * 里程碑（`canplay` / `playing` / `stall` / `error` / `nav` / `playurl-*`）
- * 与线路无关，用短竖线 —— 否则它们与图例里的空心圆撞形，看着像"未激活"。
+ * 只有**分片请求**（配对行）谈得上"哪条线路"。里程碑（`canplay` / `playing` /
+ * `stall` / `error` / `nav` / `playurl-*`）与线路无关，用短竖线 —— 否则它们
+ * 与图例里的空心圆撞形，看着像"未激活"。
+ *
+ * ⚠️ 2026-11-20（T13）：`switch` 从枚举里删了（它没有生产者），
+ * 这里跟着只剩 `seg-req`。
  */
 function isLineRow(event: LoadEvent): boolean {
   if (event.kind === undefined) return false;
-  return event.stage === 'seg-req' || event.stage === 'switch';
+  return event.stage === 'seg-req';
+}
+
+/**
+ * 事件的明细行（`.ld-detail`）：**有 host 给 host，没有就给 `note`**。
+ *
+ * `note` 是技术层原值，两条用途：
+ *
+ * | 阶段 | `note` | 显示成 |
+ * | --- | --- | --- |
+ * | `error` | `code=3` | `code=3`（`MediaError.code`，排查"网慢 vs 被拦"靠它） |
+ * | `ext-patch` | `接管取流` / `改写响应` | 同字面，说清是哪一种介入 |
+ *
+ * 都没有就 `null` —— **不渲染空占位**（里程碑本来就没有明细）。
+ *
+ * @param event 一条已归一的事件
+ */
+function eventDetail(event: LoadEvent): string | null {
+  if (event.host !== undefined && event.host.length > 0) return event.host;
+  if (event.note !== undefined && event.note.length > 0) return event.note;
+  return null;
 }
 
 /**
@@ -561,7 +662,7 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
       /**
        * 要不要画圆点。
        *
-       * - 线路行（`seg-req` / 带 `kind` 的 `switch`）用线路形状；
+       * - 线路行（`seg-req`）用线路形状；
        * - `ext-patch`（扩展介入）**也画**：它是空心圆 + `--pluma-accent`，
        *   而且图例里有一条「○ 扩展介入」与它对应（`legendEntries()`）。
        *   裁决 ④ 让里程碑改用短竖线，理由是"空心圆与图例里的线路撞形"——
@@ -577,12 +678,19 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
           previous === null
             ? `${seconds(event.t)}s`
             : `${seconds(event.t)}s +${seconds(event.t - previous)}s`,
-        detail: event.host === undefined || event.host.length === 0 ? null : event.host,
+        /**
+         * 明细：有 host 给 host；没有就用 `note`（`error` 的 `code=3`、
+         * `ext-patch` 的 `接管取流` / `改写响应`）。
+         *
+         * 2026-11-20（P1-6）：`MediaError.code` 以前采了又扔 —— 时间轴上
+         * 「播放出错」和「卡了一下」长得一样，分不清"网慢"与"被拦"。
+         */
+        detail: eventDetail(event),
         // 里程碑没有线路形状：左侧画短竖线（见 TimelineRow.marker 的注释）
         marker: usesMarker ? look.marker : null,
         tone: look.tone,
         dimTitle: false,
-        dangerTitle: event.stage === 'error' || event.stage === 'blocked',
+        dangerTitle: event.stage === 'error',
       });
       previous = event.t;
     }
@@ -624,7 +732,12 @@ export function buildLoadingQuick(outcome: LoadingOutcome | undefined): LoadingQ
   }
 
   const snapshot = outcome.snapshot;
-  const line = snapshot.confidence === 'none' ? describeLine(null) : describeLine(snapshot.actual);
+  /**
+   * ⚠️ 三态由 `describeSnapshotLine()` 决定，**不要**在这里写
+   * `confidence === 'none' ? describeLine(null) : …`：`unknown` 现在会进 `hosts`
+   * 而 `actual` 仍是 `null`，"有流量但全部认不出"会被误显示成"没有数据"（P0-1）。
+   */
+  const line = describeSnapshotLine(snapshot);
 
   return {
     title: line.title,
@@ -679,6 +792,23 @@ function markerSvg(shape: MarkerShape, size = 12): SVGSVGElement {
     const path = document.createElementNS(NS, 'path');
     path.setAttribute('d', 'M6 2.6 10 9.4H2Z');
     svg.appendChild(path);
+    return svg;
+  }
+
+  /**
+   * `dashed`：虚线空心圆 = **认不出来源的线路**（2026-11-20，P0-1）。
+   *
+   * 与 `ring`（扩展介入）几何完全相同，只靠 `stroke-dasharray` 区分 ——
+   * 这正是色盲第二条线索的用法：形状/线型不同，颜色相同也能分开。
+   * 虚线还自带一层语义："这条线我们没能确认"。
+   */
+  if (shape === 'dashed') {
+    const circle = document.createElementNS(NS, 'circle');
+    circle.setAttribute('cx', '6');
+    circle.setAttribute('cy', '6');
+    circle.setAttribute('r', '3');
+    circle.setAttribute('stroke-dasharray', '1.6 1.6');
+    svg.appendChild(circle);
     return svg;
   }
 
@@ -786,6 +916,18 @@ const LEGEND_EXT_PATCH: { text: string; shape: MarkerShape; tone: LoadingTone } 
   tone: 'accent',
 };
 
+/**
+ * 「认不出来源」的图例外观（2026-11-20，P0-1）。
+ *
+ * 虚线空心圆 + 次要色。**必须有这一项**：`unknown` 现在会真的出现在时间轴上，
+ * 一个画出来却没人解释的形状，比不画更容易误导。
+ */
+const LEGEND_UNKNOWN: { text: string; shape: MarkerShape; tone: LoadingTone } = {
+  text: '认不出来源',
+  shape: 'dashed',
+  tone: 'muted',
+};
+
 /** 图例的固定顺序：官方 → P2P → 第三方（不按出现顺序，免得每次截图都不一样） */
 const LEGEND_ORDER: readonly ('official' | 'pcdn' | 'third-party')[] = [
   'official',
@@ -816,23 +958,35 @@ export function legendKinds(
  * 本次事件序列里有没有「扩展介入」。
  *
  * 判据只看**事件**（不看 hosts —— 那里面没有这个阶段）：
- * `ext-patch` 是主世界真的改写了取流响应之后发来的那一条。
+ * `ext-patch` 有两个来源（`recordPlayurl()` 的 `接管取流`、主世界的 `改写响应`），
+ * 时间轴上只留第一条（去重在采集侧，见 `loading-trace.ts`）。
  */
 export function legendHasExtPatch(snapshot: LoadingSnapshotLite): boolean {
   return snapshot.events.some((e) => e.stage === 'ext-patch');
 }
 
+/** 本次有没有认不出来源的 host（`unknown`） */
+export function legendHasUnknown(snapshot: LoadingSnapshotLite): boolean {
+  return snapshot.hosts.some((h) => h.cls === 'unknown');
+}
+
 /**
  * 图例条目（按绘制顺序）。
  *
- * 线路类别在前、「扩展介入」在后 —— 前三个回答"这几条线是什么"，
- * 后面那个回答"扩展在这一刻动过手"，是两件事，不该交错。
- * 一项都没有就返回空数组，调用方据此**整块不画**。
+ * 顺序：官方 → P2P → 第三方 → **认不出** → 扩展介入。
+ *
+ * - 前三个回答"这几条线是什么"；
+ * - 「认不出」是线路层面的第四种情况（`unknown`，2026-11-20 P0-1 起会真的出现），
+ *   它必须排在三个已知类别之后 —— 它是兜底，不是并列的一种 CDN；
+ * - 「扩展介入」回答的是"扩展在这一刻动过手"，与线路无关，所以放最后。
+ *
+ * 一项都没有就返回空数组，调用方据此**整块不画**（图例不承诺没出现的形状）。
  */
 export function legendEntries(
   snapshot: LoadingSnapshotLite,
 ): Array<{ text: string; shape: MarkerShape; tone: LoadingTone }> {
   const entries = legendKinds(snapshot).map((kind) => LEGEND_LOOK[kind]);
+  if (legendHasUnknown(snapshot)) entries.push(LEGEND_UNKNOWN);
   if (legendHasExtPatch(snapshot)) entries.push(LEGEND_EXT_PATCH);
   return entries;
 }
@@ -883,8 +1037,13 @@ function detailBar(actions: LoadingDetailActions): HTMLElement {
 
 /** 结论卡：44px 圆底图标 + 小字 + 大字结论 + 胶囊，下面一排计数 */
 function conclusionCard(snapshot: LoadingSnapshotLite): HTMLElement {
-  const known = snapshot.confidence !== 'none' && snapshot.actual !== null;
-  const line = known ? describeLine(snapshot.actual) : describeLine(null);
+  /**
+   * ⚠️ 三态走 `describeSnapshotLine()`（P0-1）：
+   * 有已知线路 → 正常；有 host 但全部认不出 → 「有 N 条线路认不出来源」+ 虚线圆；
+   * 一条 host 都没有 → 「还不知道走哪条线路」。
+   */
+  const known = snapshot.actual !== null;
+  const line = describeSnapshotLine(snapshot);
 
   /**
    * 色调挂在**卡片**上：44px 圆底用 `color-mix(currentColor 14%)` 调出语义色的淡底，

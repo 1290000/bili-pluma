@@ -526,19 +526,28 @@ describe('★ loading：四条硬裁剪（每条一个用例）', () => {
      * 而且导出包看起来"结构完全正常"，没有任何东西会报错。
      *
      * 反例：把 `buildLoadingExport` 里的逐个挑字段改成 `{ ...e }` → 本条必红。
+     *
+     * ## 2026-11-20（T13，P1-6）：`code` 是**解析后的数字**，不是 `note` 透传
+     *
+     * `"code":3` 是白名单解析的产物（`parseErrorCode()` 只认 `code=数字`），
+     * 所以 `code=3` 这个**文本**仍然不许出现 —— 出现了就说明有人把 note 透传了。
      */
     const out = loadingOf({ kind: 'ok', snapshot: loadingSnapshot() });
     const text = JSON.stringify(out);
     expect(text).not.toContain('MediaError');
     expect(text).not.toContain('note');
     expect(text).not.toContain('code=3');
+    // 但数字形态的 code 必须在（否则 MediaError.code 又被扔了）
+    expect(text).toContain('"code":3');
 
-    // 键集合也钉死：只允许这四个（`error` 那条没有 host / kind，所以只有两个键）
-    const allowed = new Set(['t', 'stage', 'host', 'kind']);
+    // 键集合也钉死：`note` 永远不在里面；`code` 只出现在 error 那条上
+    const allowed = new Set(['t', 'stage', 'host', 'kind', 'code']);
     for (const e of out.events) {
       for (const k of Object.keys(e)) expect(allowed.has(k), `导出了多余的键 ${k}`).toBe(true);
     }
     expect(Object.keys(out.events[1] ?? {})).toEqual(['t', 'stage', 'host', 'kind']);
+    // error 那条：t / stage / code（没有 host / kind，也不带 note）
+    expect(Object.keys(out.events[3] ?? {})).toEqual(['t', 'stage', 'code']);
   });
 
   it('★ host 白名单化：带 query / 端口 / 路径的一律写成 invalid', () => {
@@ -608,6 +617,12 @@ describe('★ loading：四条硬裁剪（每条一个用例）', () => {
       'hostsTruncated',
       'events',
       'eventsTruncated',
+      /**
+       * 2026-11-20（T13/P1-7）：`snapshot.truncated`（采集侧环形缓冲丢过东西）
+       * 的出口。它**不是**时间戳字段，所以留在这里 —— 这一条守的是"没有
+       * `capturedAt` 这类会说谎的时刻字段"。
+       */
+      'eventsLostBeforeWindow',
       'video',
     ]);
     expect(JSON.stringify(out)).not.toContain('capturedAt');
@@ -709,10 +724,22 @@ describe('★★ 诊断页「本次加载」（T7）', () => {
     );
   }
 
-  it('ok：五行技术摘要 + 原始事件入口', () => {
+  it('ok：技术摘要 + 原始事件入口', () => {
     const box = pane({ kind: 'ok', snapshot: loadingSnapshot() });
     const labels = [...box.querySelectorAll('.diag-label')].map((n) => n.textContent);
-    expect(labels).toEqual(['当前线路', '本次线路', '开局耗时', '换线次数', '快照状态']);
+    /**
+     * 2026-11-20（T13）：
+     * - 主要线路与当前线路是**同一条**时只显示一行「当前线路」（P0-2）
+     * - 新增「采集窗口」（P1-7）
+     */
+    expect(labels).toEqual([
+      '当前线路',
+      '本次线路',
+      '开局耗时',
+      '换线次数',
+      '快照状态',
+      '采集窗口',
+    ]);
 
     const values = [...box.querySelectorAll('.diag-value')].map((n) => n.textContent);
     // 技术名，不是「B站官方线路」那套用户文案
@@ -721,6 +748,115 @@ describe('★★ 诊断页「本次加载」（T7）', () => {
     expect(values[1]).toBe('3 条（官方 2 · PCDN 1）');
     // playing.t = 2525.9ms
     expect(values[2]).toBe('2.53s');
+    // 采集窗口：没有丢过东西
+    expect(values[5]).toBe('完整');
+  });
+
+  it('★ P0-2：主要线路 ≠ 当前线路时，两行都显示（别二选一）', () => {
+    /**
+     * 反例（旧实现）：只有一行「当前线路」，值取自 argmax ——
+     * 中途被切到 PCDN 之后，它会指着一条**已经不再用**的线路说"当前"。
+     */
+    const switched = loadingSnapshot({
+      hosts: [
+        {
+          host: 'cn-jsnt-ct-01-07.bilivideo.com',
+          cls: 'official',
+          flavor: 'self-built',
+          count: 12,
+        },
+        { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 1 },
+      ],
+      events: [
+        { t: 1000, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+        { t: 2000, stage: 'seg-req', host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', kind: 'pcdn' },
+      ],
+    });
+    const box = pane({ kind: 'ok', snapshot: switched });
+    const labels = [...box.querySelectorAll('.diag-label')].map((n) => n.textContent);
+
+    expect(labels).toContain('主要线路（按请求数）');
+    expect(labels).toContain('当前线路（最后一次请求）');
+    // 两行并存时不再出现那个含糊的旧标签
+    expect(labels).not.toContain('当前线路');
+
+    const values = [...box.querySelectorAll('.diag-value')].map((n) => n.textContent);
+    // 主要线路 = argmax（12 > 1）
+    expect(values[0]).toBe('official · self-built · cn-jsnt-ct-01-07.bilivideo.com');
+    // 当前线路 = 最后一条 seg-req；`flavor === null` 显示破折号（不是字面 null）
+    expect(values[1]).toBe('pcdn · — · xy220x180x77x45xy.mcdn.bilivideo.cn');
+
+    // 当前线路是 P2P → 那一行必须黄（用户此刻正在被切走）
+    const warns = [...box.querySelectorAll('.diag-row.warn')].map(
+      (n) => n.querySelector('.diag-label')?.textContent,
+    );
+    expect(warns).toContain('当前线路（最后一次请求）');
+  });
+
+  it('两者是同一条时只显示一行「当前线路」（不啰嗦）', () => {
+    const box = pane({ kind: 'ok', snapshot: loadingSnapshot() });
+    const labels = [...box.querySelectorAll('.diag-label')].map((n) => n.textContent);
+    expect(labels).toContain('当前线路');
+    expect(labels).not.toContain('主要线路（按请求数）');
+    expect(labels).not.toContain('当前线路（最后一次请求）');
+  });
+
+  it('★ P1-7：采集窗口 —— 截断时明说「早期事件被丢弃」', () => {
+    const full = pane({ kind: 'ok', snapshot: loadingSnapshot() });
+    expect(
+      [...full.querySelectorAll('.diag-label')].some((n) => n.textContent === '采集窗口'),
+    ).toBe(true);
+
+    const cut = pane({ kind: 'ok', snapshot: loadingSnapshot({ truncated: true }) });
+    const values = [...cut.querySelectorAll('.diag-value')].map((n) => n.textContent);
+    expect(values).toContain('已截断（早期事件被丢弃）');
+    // 截断的行要显眼（红点），因为"时间轴开头不是页面开始"
+    const bad = [...cut.querySelectorAll('.diag-row.bad')].map(
+      (n) => n.querySelector('.diag-label')?.textContent,
+    );
+    expect(bad).toContain('采集窗口');
+  });
+
+  it('★ P1-7：导出里两个 truncated 互相独立（不是同一件事）', () => {
+    /**
+     * | 字段 | 谁丢的 |
+     * | --- | --- |
+     * | `eventsTruncated` | 导出这一层只装 40 条 |
+     * | `eventsLostBeforeWindow` | 采集器的环形缓冲 |
+     *
+     * 反例：让 `eventsLostBeforeWindow` 读 `eventsTruncated`（或反过来）→ 下面
+     * 两个组合里必有一个红。
+     */
+    const few = loadingSnapshot({ truncated: true });
+    const outA = loadingOf({ kind: 'ok', snapshot: few });
+    expect(outA.eventsTruncated).toBe(false);
+    expect(outA.eventsLostBeforeWindow).toBe(true);
+
+    // 60 条事件、但采集侧没丢过
+    const many = loadingSnapshot({
+      truncated: false,
+      events: Array.from({ length: 60 }, (_, i) => ({ t: i, stage: 'stall' as const })),
+    });
+    const outB = loadingOf({ kind: 'ok', snapshot: many });
+    expect(outB.eventsTruncated).toBe(true);
+    expect(outB.eventsLostBeforeWindow).toBe(false);
+  });
+
+  it('★ P1-6：导出里 error 带 code；解析不到就**不加这个键**', () => {
+    const withCode = loadingOf({
+      kind: 'ok',
+      snapshot: loadingSnapshot({
+        events: [{ t: 100, stage: 'error', note: 'code=3' }],
+      }),
+    });
+    expect(withCode.events[0]).toEqual({ t: 100, stage: 'error', code: 3 });
+
+    const noCode = loadingOf({
+      kind: 'ok',
+      snapshot: loadingSnapshot({ events: [{ t: 100, stage: 'error' }] }),
+    });
+    // 不许写 0：0 是 MEDIA_ERR_ABORTED 的合法码，写下去等于陈述"用户主动中止了"
+    expect(Object.keys(noCode.events[0] ?? {})).toEqual(['t', 'stage']);
   });
 
   it('ok：观测到 PCDN 时那两行变警告色（.diag-row.warn）', () => {

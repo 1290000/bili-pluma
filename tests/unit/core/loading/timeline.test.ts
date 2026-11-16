@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import type { LoadEvent, LoadStage } from '@core/loading/timeline';
-import { buildTimeline, detectSwitches, pairSegments } from '@core/loading/timeline';
+import {
+  buildTimeline,
+  currentSegment,
+  detectSwitches,
+  pairSegments,
+} from '@core/loading/timeline';
 
 /**
  * 守的是"时间轴画出来的每个节点都对应真实发生的事，且时间戳是原始值"。
@@ -160,8 +165,8 @@ describe('buildTimeline：同一 t 的事件按 LoadStage 声明顺序排', () =
   });
 
   it('同一 t 组内顺序与输入顺序无关', () => {
-    const a = buildTimeline([ev(1, 'stall'), ev(1, 'error'), ev(1, 'switch')]);
-    const b = buildTimeline([ev(1, 'switch'), ev(1, 'stall'), ev(1, 'error')]);
+    const a = buildTimeline([ev(1, 'stall'), ev(1, 'error'), ev(1, 'ext-patch')]);
+    const b = buildTimeline([ev(1, 'ext-patch'), ev(1, 'stall'), ev(1, 'error')]);
     expect(a.events.map((e) => e.stage)).toEqual(b.events.map((e) => e.stage));
   });
 
@@ -181,6 +186,31 @@ describe('buildTimeline：绝不补造事件', () => {
 
   it('空输入 → 空时间轴', () => {
     expect(buildTimeline([])).toEqual({ events: [], truncated: false });
+  });
+});
+
+describe('currentSegment：此刻正在用的线路（P0-2）', () => {
+  it('取**最后一条** seg-req，而不是 argmax', () => {
+    const events = buildTimeline([
+      ev(10, 'seg-req', 'a.bilivideo.com'),
+      ev(20, 'seg-req', 'b.mcdn.bilivideo.com'),
+    ]).events;
+
+    expect(currentSegment(events)?.host).toBe('b.mcdn.bilivideo.com');
+  });
+
+  it('没有 host 的 seg-req 跳过（不把"不知道哪条线"当成一条线路）', () => {
+    const events = buildTimeline([
+      ev(10, 'seg-req', 'a.bilivideo.com'),
+      { t: 20, stage: 'seg-req' },
+    ]).events;
+
+    expect(currentSegment(events)?.host).toBe('a.bilivideo.com');
+  });
+
+  it('只有里程碑 / 空输入 → null（不编一条）', () => {
+    expect(currentSegment([])).toBeNull();
+    expect(currentSegment(buildTimeline([ev(10, 'playing')]).events)).toBeNull();
   });
 });
 

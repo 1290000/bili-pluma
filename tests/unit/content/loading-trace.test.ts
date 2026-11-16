@@ -104,9 +104,22 @@ describe('resolveMediaHost —— 媒体域判据只有 classifyCdn 一份', () 
     expect(resolveMediaHost('https://e1.akamaized.net/x.m4s')?.cls).toBe('third-party');
   });
 
-  it('没实测过的域 → null（不擅自当成媒体域）', () => {
+  it('★ 没实测过的域：**照常算媒体域**，`cls` 是 unknown（2026-11-20 P0-1）', () => {
+    /**
+     * 反例（旧行为，正是审计的 P0）：`cls === 'unknown'` 时 `return null` ——
+     * B站 新增一个 PCDN 供应商域时，`hosts` 里没有它，面板显示「0 条线路 /
+     * 没有 PCDN」，而流量确实在跑。
+     *
+     * 现在 unknown 照常返回（计数进 `hosts`），只是不参与"当前线路"的结论。
+     * 非媒体路径仍然返回 null（下一组用例守着）。
+     */
+    expect(resolveMediaHost('https://evil-mcdn.attacker.test/x.m4s')).toEqual({
+      host: 'evil-mcdn.attacker.test',
+      cls: 'unknown',
+      flavor: null,
+    });
+    // 不是媒体分片 → 仍然不收（`isMediaPath` 是前置门，一个字没改）
     expect(resolveMediaHost('https://api.bilibili.com/x/player/playurl')).toBeNull();
-    expect(resolveMediaHost('https://evil-mcdn.attacker.test/x.m4s')).toBeNull();
   });
 
   it('官方域 + query 里的 `os=mcdn` → pcdn（官方镜像代理 mcdn 资源）', () => {
@@ -693,6 +706,150 @@ describe('recordNavStart —— 时间轴的原点', () => {
     const events = buildTimeline(state.events, 200).events;
     expect(events.map((e) => e.stage)).toEqual(['nav', 'seg-req', 'seg-res']);
     expect(events[0]?.t).toBe(0);
+  });
+});
+
+describe('P0-1 · unknown 不再被丢弃', () => {
+  /** 一个**没实测过**的媒体域：`.m4s` 路径命中媒体判据，但 `classifyCdn` 认不出 */
+  const UNKNOWN_URL = 'https://xyz.example-cdn.com/video/abc.m4s?upsig=1';
+
+  it('★ 认不出源的媒体请求照常进 hosts、count 正确', () => {
+    const state = createTraceState();
+    recordResource(state, { name: UNKNOWN_URL, startTime: 100, responseEnd: 200 });
+    recordResource(state, { name: UNKNOWN_URL, startTime: 300, responseEnd: 400 });
+
+    const stat = state.hosts.get('xyz.example-cdn.com');
+    expect(stat).toEqual({ cls: 'unknown', flavor: null, count: 2 });
+  });
+
+  it('★ `actual` **不**取它（结论只在已知类别里挑）', () => {
+    const state = createTraceState();
+    // unknown 出现 3 次，官方只出现 1 次 —— argmax 会被 unknown 抢走
+    for (let i = 0; i < 3; i += 1) {
+      recordResource(state, { name: UNKNOWN_URL, startTime: 10 + i, responseEnd: 11 + i });
+    }
+    recordResource(state, {
+      name: 'https://cn-bj-ct-01-01.bilivideo.com/v.m4s',
+      startTime: 20,
+      responseEnd: 21,
+    });
+
+    const snapshot = snapshotOf(state, null);
+    expect(snapshot.actual?.host).toBe('cn-bj-ct-01-01.bilivideo.com');
+    // hosts 里仍然有那条认不出的（用户要能看见它）
+    expect(snapshot.hosts.map((h) => h.cls)).toContain('unknown');
+  });
+
+  it('★ 只有 unknown 时 actual=null，但 hosts 不空、present 仍为真', () => {
+    const state = createTraceState();
+    recordResource(state, { name: UNKNOWN_URL, startTime: 1, responseEnd: 2 });
+
+    const snapshot = snapshotOf(state, null);
+    expect(snapshot.actual).toBeNull();
+    expect(snapshot.hosts).toHaveLength(1);
+    // "什么都没看到" 与 "看到了但认不出" 是两件事：present 必须为真
+    expect(snapshot.present).toBe(true);
+  });
+
+  it('unknown 也走 `cls` 闸门（不会每条都产事件）', () => {
+    const state = createTraceState();
+    for (let i = 0; i < 5; i += 1) {
+      recordResource(state, { name: UNKNOWN_URL, startTime: 10 + i, responseEnd: 11 + i });
+    }
+    expect(state.events.filter((e) => e.stage === 'seg-req')).toHaveLength(1);
+    expect(state.events[0]?.kind).toBe('unknown');
+  });
+
+  it('⛔ 同域静态资源仍然进不来（`isMediaPath` 是前置门，没放宽）', () => {
+    const state = createTraceState();
+    recordResource(state, {
+      name: 'https://xyz.example-cdn.com/pbp/data',
+      startTime: 1,
+      responseEnd: 2,
+    });
+
+    expect(state.hosts.size).toBe(0);
+    expect(state.events).toEqual([]);
+  });
+});
+
+describe('P0-3 · 扩展介入的第二个触发点（接管取流）', () => {
+  const PLAYURL = 'https://api.bilibili.com/x/player/playurl?avid=1&cid=999&qn=80';
+
+  it('★ 本页由扩展代理 → playurl 命中时补一条 ext-patch（t 用同一个 startTime）', () => {
+    const state = createTraceState();
+    state.streamingProxied = true;
+
+    recordPlayurl(state, { name: PLAYURL, startTime: 210.5, responseEnd: 384.25 });
+
+    const patch = state.events.find((e) => e.stage === 'ext-patch');
+    expect(patch).toEqual({ t: 210.5, stage: 'ext-patch', note: '接管取流' });
+  });
+
+  it('⛔ 取流身份是 `page`（activated=false）→ **不出现**（这是正确的不出现）', () => {
+    const state = createTraceState();
+    state.streamingProxied = false;
+
+    recordPlayurl(state, { name: PLAYURL, startTime: 210.5, responseEnd: 384.25 });
+
+    expect(state.events.map((e) => e.stage)).toEqual(['playurl-req', 'playurl-res']);
+  });
+
+  it('同一次页面只留第一条：第二次 playurl 不再补', () => {
+    const state = createTraceState();
+    state.streamingProxied = true;
+
+    recordPlayurl(state, { name: PLAYURL, startTime: 100, responseEnd: 150 });
+    recordPlayurl(state, { name: PLAYURL, startTime: 9000, responseEnd: 9080 });
+
+    expect(state.events.filter((e) => e.stage === 'ext-patch')).toHaveLength(1);
+    expect(state.events.find((e) => e.stage === 'ext-patch')?.t).toBe(100);
+  });
+
+  it('★ 主世界那条上报仍然有效，但**不会**覆盖已经记下的第一条', () => {
+    /**
+     * 真实顺序：playurl 请求先发出（接管取流），响应回来后才可能被改写
+     * （主世界 `reportExtPatch()` → `noteExtPatch()` → `recordExtPatch()`）。
+     * 两者共用 `extPatchRecorded`，所以只留第一条。
+     */
+    const state = createTraceState();
+    state.streamingProxied = true;
+
+    recordPlayurl(state, { name: PLAYURL, startTime: 100, responseEnd: 150 });
+    // 等价于主世界那条上报（同一个 `recordExtPatch`，note 是「改写响应」）
+    expect(recordExtPatch(state, 160, '改写响应')).toBe(false);
+
+    expect(state.events.filter((e) => e.stage === 'ext-patch')).toHaveLength(1);
+    expect(state.events.find((e) => e.stage === 'ext-patch')).toEqual({
+      t: 100,
+      stage: 'ext-patch',
+      note: '接管取流',
+    });
+  });
+
+  it('没有代理时，主世界那条上报照样能记（note 是「改写响应」）', () => {
+    // 单例在测试之间是共享的：先清干净，断言才不看顺序
+    resetLoadingTrace();
+    expect(noteExtPatch(500)).toBe(true);
+    expect(getLoadingSnapshot().events).toEqual([{ t: 500, stage: 'ext-patch', note: '改写响应' }]);
+  });
+
+  it('代理标记是**读时判定**：先设置后取流才算（不回填历史）', () => {
+    /**
+     * `page/activate` 回包比第一批请求晚（~400ms）。如果实现改成"回包时回填"，
+     * 就会把回包之前的历史改写成"扩展介入过" —— 那是在补造事件。
+     * 这里钉住的是**顺序**：只有标记之后发生的取流才算。
+     */
+    const state = createTraceState();
+    recordPlayurl(state, { name: PLAYURL, startTime: 100, responseEnd: 150 });
+    expect(state.events.some((e) => e.stage === 'ext-patch')).toBe(false);
+
+    state.streamingProxied = true;
+    // 标记之后，历史那一条仍然是 playurl-req / playurl-res，没有被改写
+    expect(state.events.map((e) => e.stage)).toEqual(['playurl-req', 'playurl-res']);
+
+    recordPlayurl(state, { name: PLAYURL, startTime: 900, responseEnd: 950 });
+    expect(state.events.filter((e) => e.stage === 'ext-patch')).toHaveLength(1);
   });
 });
 
