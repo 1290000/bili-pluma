@@ -115,6 +115,45 @@ export function pill(text: string, tone: 'neutral' | 'good' | 'warn' | 'bad'): H
   return el('span', `pill pill-${tone}`, text);
 }
 
+/**
+ * 内联 SVG 图标。
+ *
+ * ## 为什么不用字符（`×` `▸` `‹`）
+ *
+ * 这三个字符在各平台的字形与基线都不一样：微软雅黑的 `×` 偏上、
+ * 苹方的 `▸` 比雅黑窄，同一个按钮在 Edge 和 macOS 上视觉高度能差 1~2px。
+ * 而它们是**控件**，不是标点 —— 用字形等于把控件尺寸交给字体。
+ *
+ * ## 为什么用 `currentColor`
+ *
+ * 图标要跟着按钮的 `color` 走（hover / 激活各自有颜色），
+ * 写死 stroke 就得为每个状态各配一份。
+ *
+ * ⚠️ **只用 `createElementNS`，不用 innerHTML** —— 与 `dom.ts` 文件头的纪律一致。
+ */
+export function iconClose(size = 14): SVGSVGElement {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 14 14');
+  svg.setAttribute('width', String(size));
+  svg.setAttribute('height', String(size));
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  // tokens.css 的 --pluma-icon-stroke 在 shadow 里可用；SVG 属性不吃变量，所以写常量
+  svg.setAttribute('stroke-width', '1.5');
+  svg.setAttribute('stroke-linecap', 'round');
+  // 读屏用户靠按钮的 aria-label，图标本身没有语义 —— 不加这行会被念成"图形"
+  svg.setAttribute('aria-hidden', 'true');
+  // 命中区交给按钮，图标不吃指针事件
+  svg.style.pointerEvents = 'none';
+
+  const path = document.createElementNS(NS, 'path');
+  path.setAttribute('d', 'M3.2 3.2 10.8 10.8M10.8 3.2 3.2 10.8');
+  svg.appendChild(path);
+
+  return svg;
+}
+
 /** 把容器的内容整个换掉（不用 innerHTML） */
 export function replaceChildren(container: HTMLElement, children: readonly Node[]): void {
   container.textContent = '';

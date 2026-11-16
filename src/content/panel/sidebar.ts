@@ -33,6 +33,8 @@
  * `stopPropagation()`，与 `badge.ts` 的做法一致。
  */
 
+import { iconClose } from './dom';
+
 /** 面板自己的样式。**全部用 `tokens.css` 的变量，不许硬编码颜色**（`02-ui-spec.md` §6） */
 export const PANEL_CSS = `
 .panel {
@@ -187,18 +189,26 @@ export const PANEL_CSS = `
 }
 
 .close {
+  /* 24×24（2026-11-16 改版，原 20×20）：图标按钮的命中区下限。
+     「×」字符换成内联 SVG —— 字形在不同中文字体里基线与宽度都不一样，
+     控件尺寸不该交给字体（见 dom.ts 的 iconClose）。 */
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: none;
   border-radius: var(--pluma-radius-control);
   background: transparent;
   color: var(--pluma-text-muted);
   font-family: inherit;
-  font-size: var(--pluma-font-body);
   line-height: 1;
   cursor: pointer;
+  transition:
+    background-color var(--pluma-duration) var(--pluma-ease),
+    color var(--pluma-duration) var(--pluma-ease);
 }
 
 .close:hover {
@@ -1072,7 +1082,8 @@ export function mountSidebar(shadow: ShadowRoot, opts: SidebarOptions = {}): Sid
   const close = document.createElement('button');
   close.className = 'close';
   close.type = 'button';
-  close.textContent = '×';
+  // `×` 换成内联 SVG：字形高度交给字体 = 控件尺寸不可控（见 dom.ts 的 iconClose）
+  close.appendChild(iconClose());
   close.setAttribute('aria-label', '收起面板');
   head.appendChild(close);
 

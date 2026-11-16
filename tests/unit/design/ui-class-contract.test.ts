@@ -157,6 +157,29 @@ describe('面板样式不许硬编码颜色', () => {
   });
 });
 
+describe('PANEL_CSS 源码卫生', () => {
+  /**
+   * ## 为什么这条值得一个测试
+   *
+   * `PANEL_CSS` 是一个**模板字符串**。在它内部写注释时只要出现一个反引号，
+   * 字符串就被提前截断 —— 后面的 CSS 变成 JS 语法错误，或者更糟：
+   * 编译过了，但样式被切成两段、后半段成了表达式。
+   *
+   * 2026-11-16 的 UI 改版里，同一个坑**一天踩了两次**（都是"给 CSS 加注释时
+   * 顺手用了 Markdown 反引号"）。人记不住，就让测试记。
+   */
+  it('模板字符串里除了开头那一个，不许再出现反引号', () => {
+    const src = readFileSync(join(process.cwd(), 'src/content/panel/sidebar.ts'), 'utf8');
+    const start = src.indexOf('export const PANEL_CSS = `');
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf('`;', start);
+    expect(end).toBeGreaterThan(start);
+
+    const body = src.slice(start, end);
+    expect((body.match(/`/g) ?? []).length).toBe(1);
+  });
+});
+
 describe('v2 令牌（Stage 0）', () => {
   const tokens = readFileSync(join(process.cwd(), 'src/design/tokens.css'), 'utf8');
 
