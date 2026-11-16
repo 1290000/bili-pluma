@@ -16,9 +16,10 @@
 
 import type { EncryptedBlob } from '@core/vault/crypto';
 import type { VaultStorage } from '@core/vault/vault';
-
-const BLOB_KEY = 'pluma:vault:blob';
-const KEY_KEY = 'pluma:vault:key';
+import {
+  VAULT_BLOB_KEY as BLOB_KEY,
+  VAULT_KEY_KEY as KEY_KEY,
+} from '@shared/constants/storage-keys';
 
 export function createVaultStorage(): VaultStorage {
   return {

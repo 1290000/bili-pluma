@@ -55,6 +55,7 @@ import {
 } from '@/src/content/panel/login-poller';
 import { resolvePrimaryCard } from '@shared/utils/primary-card';
 import type { StreamingIdentity } from '@shared/constants/streaming-identity';
+import { isVaultChange } from '@shared/constants/storage-keys';
 import { parsePlayPage } from '@shared/utils/video-page';
 import { readPrimaryProfile } from '@platform/storage/primary-profile-store';
 import { UPDATE_STATE_KEY } from '@platform/update/state-store';
@@ -951,12 +952,19 @@ export default defineContentScript({
            */
           onOpen: () => cycler.open(),
           /**
-           * 收起面板 → 停轮询（2026-11-10）。
+           * ## 收起面板**不再**停轮询（2026-11-16 改）
            *
-           * 面板都看不见了还在每 3 秒发一次 `account/summary` 毫无意义。
-           * ⚠️ 不要在这里提示用户"已取消" —— 收起面板是正常操作，不是失败。
+           * 原来这里接 `stopPolling()`，理由是"面板都看不见了，还每 3 秒发一次消息
+           * 毫无意义"。那个理由漏了唯一重要的场景：**用户点完「扫码登录」必然要把
+           * 鼠标移开**（去另一个窗口扫码），面板一收起轮询就被掐掉 ——
+           * 而轮询正是"登录成功"的信号源。于是登录完后界面停在旧状态。
+           *
+           * 现在不接了。回收还剩两道：轮询自己 3 分钟超时（`POLL_MAX`），
+           * 以及面板整体被卸掉时（`enabled === false` 分支）的 `stopPolling()`。
+           * 代价是收起后最多 60 次轻量消息 —— 换"扫码成功后自己刷新"，划算。
+           *
+           * ⚠️ 也不要在这里提示用户"已取消"：收起面板是正常操作，不是失败。
            */
-          onClose: () => stopPolling(),
         });
         /**
          * 「有新版本」→ 贴边条变强调色（2026-11-17，用户选方案 A）。
@@ -1040,6 +1048,24 @@ export default defineContentScript({
         // 存储里的东西一律不可信（可能是老版本写的 / 被手改过）→ 先归一化
         const state = normalizeUpdateState(updateChange.newValue);
         controller?.applyUpdateStatus(toStatusView(state, currentVersion()));
+      }
+
+      /**
+       * ## 取流凭据变了 → 重新取数（2026-11-16）
+       *
+       * 扫码窗口在**无痕分区**，没法给面板发消息；原来靠"窗口打开后轮询
+       * `account/summary`"等结果，而轮询会被"面板收起"掐掉 —— 用户点完
+       * 「扫码登录」**必然**要把鼠标移开去扫码，面板一收起轮询就停了。
+       * 结果就是登录成功后面板停在旧状态，得收起重开才刷新。
+       *
+       * 存储是两边唯一共享的东西：登录成功 = `pluma:vault:*` 被写入，
+       * 退出账号 = 被删除。监听它比轮询更直接，也不依赖面板是否展开。
+       *
+       * ⚠️ 面板收起时 `controller` 仍然存在（收起只是切 `.open` 类，不拆 DOM），
+       * 所以这里 `setModel()` 会照常执行 —— 用户再次展开看到的就是新数据。
+       */
+      if (isVaultChange(Object.keys(changes))) {
+        void loadOnce();
       }
 
       const change = changes[PANEL_ENTRY_ENABLED_KEY];
