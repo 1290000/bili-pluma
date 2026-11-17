@@ -1,0 +1,128 @@
+{
+  "target": "https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn",
+  "markMs": 137000,
+  "forceQ": 360,
+  "at": "2026-11-17T17:40:46.833Z",
+  "probe": {
+    "events": [
+      {
+        "t": 669,
+        "m": "createPlayer 已包装"
+      },
+      {
+        "t": 1248,
+        "m": "createPlayer #1 cid=42141027046"
+      },
+      {
+        "t": 1248,
+        "m": "已注入 requestConfig.reqHttpPlayUrlInfo"
+      },
+      {
+        "t": 1300,
+        "m": "★ reqHttpPlayUrlInfo 被调用 #1"
+      },
+      {
+        "t": 1300,
+        "m": "params keys=avid,bvid,cid,qn,fnver,fnval,fourk,gaia_source,from_client,is_main_page,need_fragment,season_id,isGaiaAvoided,cur_language,cur_production_type,client_attr,version_name,app_id,session"
+      },
+      {
+        "t": 1694,
+        "m": "自取流 code=0 timelength=732309"
+      },
+      {
+        "t": 1694,
+        "m": "已加标记 timelength+137000 → 869309 / dash.duration+137 → 870 / nested=undefined"
+      },
+      {
+        "t": 1694,
+        "m": "已裁 dash.video: 6 → 3 (<= 360)"
+      }
+    ],
+    "cbHits": 1,
+    "paramsKeys": [
+      "avid",
+      "bvid",
+      "cid",
+      "qn",
+      "fnver",
+      "fnval",
+      "fourk",
+      "gaia_source",
+      "from_client",
+      "is_main_page",
+      "need_fragment",
+      "season_id",
+      "isGaiaAvoided",
+      "cur_language",
+      "cur_production_type",
+      "client_attr",
+      "version_name",
+      "app_id",
+      "session"
+    ],
+    "fetchInfo": {
+      "http": 200,
+      "code": 0,
+      "ms": 394,
+      "dataKeys": [
+        "from",
+        "result",
+        "message",
+        "quality",
+        "format",
+        "timelength",
+        "accept_format",
+        "accept_description",
+        "accept_quality",
+        "video_codecid",
+        "seek_param",
+        "seek_type",
+        "dash",
+        "support_formats",
+        "high_format",
+        "last_play_time",
+        "last_play_cid",
+        "view_info",
+        "play_conf",
+        "cur_language",
+        "cur_production_type",
+        "auto_qn_resp"
+      ],
+      "resultKeys": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "resultDashDuration": null,
+      "resultHeights": [],
+      "heights": [
+        480,
+        480,
+        480,
+        360,
+        360,
+        360
+      ],
+      "dashDuration": 733,
+      "timelength": 732309,
+      "quality": 32
+    },
+    "errors": [],
+    "createCalls": 1
+  },
+  "state": {
+    "t": 21,
+    "dur": 732,
+    "h": 360,
+    "w": 640,
+    "ready": 4,
+    "paused": false,
+    "err": null
+  },
+  "net": {
+    "playurlXHR": 1,
+    "m4s": 38
+  },
+  "errors": []
+}

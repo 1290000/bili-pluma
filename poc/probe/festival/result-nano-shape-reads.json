@@ -1,0 +1,91 @@
+{
+  "probe": {
+    "events": [
+      {
+        "t": 660,
+        "m": "nano set #1 = obj{}"
+      },
+      {
+        "t": 660,
+        "m": "createPlayer 已包装 (trackReads=true)"
+      },
+      {
+        "t": 1134,
+        "m": "createPlayer #1 called (this=nano)"
+      },
+      {
+        "t": 1134,
+        "m": "config=obj{aid,cid,bvid,stats,revision,featureList,enableAV1,enableWMP,enableHEVC,hideBoxShadow,t,kind,element,auxiliary,iid}"
+      },
+      {
+        "t": 1134,
+        "m": "prefetch=undefined:undefined"
+      },
+      {
+        "t": 1134,
+        "m": "prefetch.playUrl=undefined:undefined"
+      },
+      {
+        "t": 1134,
+        "m": "requestConfig=undefined:undefined"
+      },
+      {
+        "t": 1134,
+        "m": "reqHttpPlayUrlInfo=undefined:undefined"
+      },
+      {
+        "t": 1134,
+        "m": "!! 没有 requestConfig.reqHttpPlayUrlInfo"
+      },
+      {
+        "t": 1134,
+        "m": "INITIAL_STATE.videoInfo.cid=42141027046 bvid=BV1ydeX65Edn"
+      }
+    ],
+    "nanoSets": 1,
+    "createCalls": 1,
+    "cbHits": 0,
+    "cbArgs": [],
+    "reads": [
+      "config.aid",
+      "config.cid",
+      "config.bvid",
+      "config.stats",
+      "config.revision",
+      "config.featureList",
+      "config.enableAV1",
+      "config.enableWMP",
+      "config.enableHEVC",
+      "config.hideBoxShadow",
+      "config.t",
+      "config.kind",
+      "config.element",
+      "config.auxiliary",
+      "config.iid"
+    ]
+  },
+  "nano": {
+    "type": "object",
+    "createPlayerType": "function",
+    "createPlayerWrapped": true,
+    "descriptor": true
+  },
+  "state": {
+    "cid": 42141027046,
+    "bvid": "BV1ydeX65Edn",
+    "hasPlayerGlobal": true,
+    "t": 20,
+    "dur": 733,
+    "h": 480,
+    "readyState": 4,
+    "paused": false,
+    "err": null
+  },
+  "net": {
+    "playurl": [
+      "api.bilibili.com/x/player/wbi/playurl?qn=0&fnval=4048&fnver=0&fourk=1&is_main_page=true"
+    ],
+    "m4s": 42
+  },
+  "errors": []
+}

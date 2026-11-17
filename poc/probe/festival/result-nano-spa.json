@@ -1,0 +1,70 @@
+{
+  "at": "2026-11-17T17:43:18.777Z",
+  "note": "SPA 切换用 pushState+popstate 合成（页面无可用 festival 链接，状态确实随之改变）",
+  "before": {
+    "createCalls": 1,
+    "cb1": 1,
+    "events": [
+      {
+        "t": 1278,
+        "m": "createPlayer #1 cid=42141027046"
+      },
+      {
+        "t": 1330,
+        "m": "★ cb1 被调用 #1"
+      },
+      {
+        "t": 1669,
+        "m": "cb1 自取流 code=0 cid=42141027046"
+      }
+    ],
+    "cid": 42141027046,
+    "playerTagged": null,
+    "dur": 733,
+    "h": 480
+  },
+  "arm": "ok",
+  "after": {
+    "createCalls": 1,
+    "cb1": 1,
+    "cb2": 1,
+    "nanoSets": 1,
+    "nanoStillWrapped": true,
+    "samePlayer": true,
+    "events": [
+      {
+        "t": 1278,
+        "m": "createPlayer #1 cid=42141027046"
+      },
+      {
+        "t": 1330,
+        "m": "★ cb1 被调用 #1"
+      },
+      {
+        "t": 1669,
+        "m": "cb1 自取流 code=0 cid=42141027046"
+      },
+      {
+        "t": 14126,
+        "m": "★ cb2 被调用 #1"
+      },
+      {
+        "t": 14227,
+        "m": "cb2 自取流 code=0 cid=36059286363"
+      }
+    ],
+    "errors": [],
+    "cid": 36059286363,
+    "bvid": "BV1eoZ7BnEGy",
+    "playerTagged": null,
+    "url": "https://www.bilibili.com/festival/bnj2026?bvid=BV1eoZ7BnEGy",
+    "dur": 248,
+    "h": 360,
+    "t": 12,
+    "ready": 4
+  },
+  "pageErrors": [
+    "undefined",
+    "Uncaught (in promise) undefined"
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "source": "bsk 0.5.0 evaluate --expect（登录态真实 Edge，只读；session 已关闭）",
+  "page": "https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn",
+  "note": "playUrl 值按脱敏要求未保留；nano.prefetch 是 promise 缓存函数，不是 SSR 流数据。",
+  "facts": {
+    "hasDedeUserID": true,
+    "login": true,
+    "vipStatus": 1,
+    "nanoType": "object",
+    "nanoCreatePlayer": "function",
+    "nanoPrefetch": "fn:Mn(2)",
+    "video": { "h": 2160, "w": 3840, "dur": 732, "ready": 4 },
+    "quality": { "newA": 0, "newQ": 120, "nowA": 0, "nowQ": 120, "oldA": null, "oldQ": null, "oldRQ": null, "realQ": 120 },
+    "supportedQuality": "array(6):number:120",
+    "manifest": {
+      "aid": "number:117294734775639",
+      "bvid": "string:BV1ydeX65Edn",
+      "channelKind": "number:0",
+      "cid": "number:42141027046",
+      "p": "number:1",
+      "pid": "number:2",
+      "kind": "number:0",
+      "quality": "number:120",
+      "hasPrev": "boolean:false",
+      "hasNext": "boolean:true"
+    },
+    "media": { "h": 2160, "w": 3840, "keys": ["playUrl", "absolutePlayTime", "relativePlayTime", "videoWidth", "videoHeight", "maxTime"], "playUrl": "<redacted>" }
+  },
+  "prefetch": {
+    "prefetchType": "fn:Mn(2)",
+    "prefetchCallResult": "err:Cannot read properties of undefined (reading 'cid')",
+    "prefetchOwnKeys": [],
+    "prefetchSource": "function Mn(e,t){var r=Nn.key(e.cid,e.ep_id);Nn.has(r)||xn.add((function(){if(Nn.has(r))return Promise.reject(new Error(\"Cached\"));var n=Ln.r(e,t);return Nn.set(r,{http:n.http,promise:n.promise,timeStamp:Date.now()}),n.promise}))}"
+  },
+  "limitations": "bsk 无法在 document_start 注入 init script；尝试复制 Edge Cookies 时文件被运行中的浏览器独占，故 4K 登录态下的回调注入未直接实测。"
+}

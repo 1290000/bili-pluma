@@ -1,0 +1,251 @@
+{
+  "target": "https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn",
+  "at": "2026-11-17T17:36:58.547Z",
+  "deep": {
+    "events": [
+      {
+        "t": 688,
+        "m": "createPlayer 已包装"
+      },
+      {
+        "t": 1269,
+        "m": "createPlayer called"
+      },
+      {
+        "t": 2147,
+        "m": "XHR playurl /x/player/wbi/playurl qn=0"
+      },
+      {
+        "t": 2359,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 2361,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 2686,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100022.m4s qn=null"
+      },
+      {
+        "t": 2690,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100022.m4s qn=null"
+      },
+      {
+        "t": 2694,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 2704,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 2859,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 2920,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100022.m4s qn=null"
+      },
+      {
+        "t": 3114,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100022.m4s qn=null"
+      },
+      {
+        "t": 3502,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100022.m4s qn=null"
+      },
+      {
+        "t": 4059,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100022.m4s qn=null"
+      },
+      {
+        "t": 4145,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100022.m4s qn=null"
+      },
+      {
+        "t": 4295,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 4295,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 4296,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 4310,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 4396,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 4481,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 4487,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 4488,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 4688,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 4689,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 4887,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 8487,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 8773,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100022.m4s qn=null"
+      },
+      {
+        "t": 9118,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 9168,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 9173,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 9201,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 9288,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 9388,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 9488,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 9593,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 9696,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 9894,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 9979,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 10062,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      },
+      {
+        "t": 11024,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 13487,
+        "m": "XHR playurl /log/web qn=null"
+      },
+      {
+        "t": 13565,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-100023.m4s qn=null"
+      },
+      {
+        "t": 13778,
+        "m": "XHR playurl /upgcxcode/46/70/42141027046/42141027046-1-30216.m4s qn=null"
+      }
+    ],
+    "config": {
+      "aid": "number:117294734775639",
+      "cid": "number:42141027046",
+      "bvid": "string:BV1ydeX65Edn",
+      "stats": {
+        "spmId": "string:333.941.0.0",
+        "spmIdFrom": "string:333.941.0.0"
+      },
+      "revision": "number:3",
+      "featureList": {
+        "__protoKeys": [
+          "has",
+          "add",
+          "delete",
+          "clear",
+          "entries",
+          "forEach",
+          "size",
+          "values",
+          "keys",
+          "addAll",
+          "deleteAll",
+          "difference",
+          "every",
+          "filter",
+          "find",
+          "intersection",
+          "isDisjointFrom",
+          "isSubsetOf",
+          "isSupersetOf",
+          "join",
+          "map",
+          "reduce",
+          "some",
+          "symmetricDifference",
+          "union"
+        ]
+      },
+      "enableAV1": "boolean:true",
+      "enableWMP": "boolean:true",
+      "enableHEVC": "boolean:true",
+      "hideBoxShadow": "boolean:true",
+      "t": "undefined:undefined",
+      "kind": "number:0",
+      "element": "DOM<DIV>",
+      "auxiliary": "DOM<DIV>",
+      "iid": "string:LargeEventsPlayer"
+    },
+    "reads": [],
+    "fetch": [],
+    "xhr": [
+      {
+        "t": 2147,
+        "method": "GET",
+        "host": "api.bilibili.com",
+        "path": "/x/player/wbi/playurl",
+        "qn": "0",
+        "fnval": "4048"
+      }
+    ]
+  },
+  "state": {
+    "t": 12,
+    "dur": 733,
+    "h": 480,
+    "ready": 4
+  },
+  "errors": []
+}
