@@ -115,7 +115,7 @@ export function qualityTab(
   if (q.line) box.appendChild(el('p', 'pane-line', q.line));
 
   /**
-   * ── 加载时间轴速览（T5，2026-11-20）──
+   * ── 加载时间轴速览（T5，2026-11-17）──
    *
    * ## 位置：胶囊与解锁卡**之间**
    *

@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 /**
- * `scripts/check-patch-scope.mjs` 的**判据自检**（2026-11-20）。
+ * `scripts/check-patch-scope.mjs` 的**判据自检**（2026-11-17）。
  *
  * ## 为什么这个文件必须存在
  *
@@ -97,7 +97,7 @@ function runIn(dir: string): RunResult {
   }
 }
 
-describe('check-patch-scope：PGC 换流与注入的写集判据（2026-11-20 补）', () => {
+describe('check-patch-scope：PGC 换流与注入的写集判据（2026-11-17 补）', () => {
   it('★ 现状：绿，且两条新判据在输出里**看得见**', () => {
     const { status, out } = runIn(sandbox());
 

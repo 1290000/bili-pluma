@@ -54,7 +54,7 @@ describe('rewriteGate 判据 —— 源码同形（防漂移）', () => {
    */
   it('源码里必须把 extensionEngaged 作为第三个参数传给 tellMainWorld', () => {
     /**
-     * ⚠️ 2026-11-20：参数来源从"就地表达式"变成"先记住再传"
+     * ⚠️ 2026-11-17：参数来源从"就地表达式"变成"先记住再传"
      * （`rewriteGateKnown = extensionEngaged`，然后传 `rewriteGateKnown`）——
      * 因为候选过滤开关热更新时要重发 `cfg`，那一刻拿不到 `res`。
      *

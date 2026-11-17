@@ -44,7 +44,7 @@ const SECRETS = [
 ];
 
 /**
- * 取流 URL 里那几个"看着不像凭据、其实是凭据"的参数名（2026-11-20，T8）。
+ * 取流 URL 里那几个"看着不像凭据、其实是凭据"的参数名（2026-11-17，T8）。
  *
  * ## 为什么它们必须进词表
  *
@@ -112,7 +112,7 @@ function payload(rows: DiagRow[], logs: DiagEntry[]): string {
       readAt: NOW.getTime(),
     },
     /**
-     * 第八个字段（2026-11-20，T8）：本次加载。
+     * 第八个字段（2026-11-17，T8）：本次加载。
      *
      * ⚠️ 默认给的是一份**真实形状**的快照（含一条带 `note` 的事件）——
      * 一份"干净的假数据"证明不了 `note` 被剥掉，而 `note` 正是本轮
@@ -203,7 +203,7 @@ describe('★ 形状守卫：顶层字段固定', () => {
      * 它的 `err` 必须走 `describeLogsError()` 的白名单，绝不能是 `String(e)` ——
      * 下面的「err 白名单」用例守着这一点。
      *
-     * ⚠️ `loading` 是 2026-11-20（T8，第八个），由 `buildLoadingExport()` 产出。
+     * ⚠️ `loading` 是 2026-11-17（T8，第八个），由 `buildLoadingExport()` 产出。
      * 它也是白名单式的（四个键 + 三个枚举），**不许**把快照整个摊平进来。
      */
     const obj = JSON.parse(payload(realRows(), realLogs())) as Record<string, unknown>;
@@ -495,7 +495,7 @@ describe('文件名', () => {
   });
 });
 
-// ─────────────────────── 第八个字段：本次加载（T8，2026-11-20）───────────────────────
+// ─────────────────────── 第八个字段：本次加载（T8，2026-11-17）───────────────────────
 
 /** 只取导出里那一块 —— 隔离检查，不受 `facts` 里既有路径串的干扰 */
 function loadingOf(outcome: LoadingOutcome): LoadingExport {
@@ -530,7 +530,7 @@ describe('★ loading：四条硬裁剪（每条一个用例）', () => {
      *
      * 反例：把 `buildLoadingExport` 里的逐个挑字段改成 `{ ...e }` → 本条必红。
      *
-     * ## 2026-11-20（T13，P1-6）：`code` 是**解析后的数字**，不是 `note` 透传
+     * ## 2026-11-17（T13，P1-6）：`code` 是**解析后的数字**，不是 `note` 透传
      *
      * `"code":3` 是白名单解析的产物（`parseErrorCode()` 只认 `code=数字`），
      * 所以 `code=3` 这个**文本**仍然不许出现 —— 出现了就说明有人把 note 透传了。
@@ -621,12 +621,12 @@ describe('★ loading：四条硬裁剪（每条一个用例）', () => {
       'events',
       'eventsTruncated',
       /**
-       * 2026-11-20（T13/P1-7）：`snapshot.truncated`（采集侧环形缓冲丢过东西）
+       * 2026-11-17（T13/P1-7）：`snapshot.truncated`（采集侧环形缓冲丢过东西）
        * 的出口。它**不是**时间戳字段，所以留在这里 —— 这一条守的是"没有
        * `capturedAt` 这类会说谎的时刻字段"。
        */
       'eventsLostBeforeWindow',
-      // 2026-11-20：候选过滤（ADR 0038）这一次做了什么
+      // 2026-11-17：候选过滤（ADR 0038）这一次做了什么
       'filter',
       'video',
     ]);
@@ -696,7 +696,7 @@ describe('★ loading：截断上限', () => {
   });
 });
 
-// ─────────────────────── 诊断页「本次加载」区块（T7，2026-11-20）───────────────────────
+// ─────────────────────── 诊断页「本次加载」区块（T7，2026-11-17）───────────────────────
 
 describe('★★ 诊断页「本次加载」（T7）', () => {
   const acts = { back: () => undefined, exportJson: () => undefined, refresh: () => undefined };
@@ -724,7 +724,7 @@ describe('★★ 诊断页「本次加载」（T7）', () => {
           readAt: NOW.getTime(),
         },
         /**
-         * 2026-11-20（审计收尾）：这个字段在 `diagnosticsPane()` 里改成**必填** ——
+         * 2026-11-17（审计收尾）：这个字段在 `diagnosticsPane()` 里改成**必填** ——
          * "还没读到"那条路（会渲染成「不是播放页」的因果断言）被类型去掉了。
          * 本组要测的是"本次加载"那一块，缺省给 `absent` 是**测试自己的形状要求**，
          * 与产品里 `buildPanelModel()` 恒填 `loading` 无关。
@@ -739,7 +739,7 @@ describe('★★ 诊断页「本次加载」（T7）', () => {
     const box = pane({ kind: 'ok', snapshot: loadingSnapshot() });
     const labels = [...box.querySelectorAll('.diag-label')].map((n) => n.textContent);
     /**
-     * 2026-11-20（T13）：
+     * 2026-11-17（T13）：
      * - 主要线路与当前线路是**同一条**时只显示一行「当前线路」（P0-2）
      * - 新增「采集窗口」（P1-7）
      */

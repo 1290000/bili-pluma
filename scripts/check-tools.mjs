@@ -54,7 +54,7 @@ const TOOLS_DOC = join(ROOT, 'AGENTS-TOOLS.md');
  * 判据是「它还会不会被再跑一次」。不会 → 豁免；会 → 必须登记。
  * 每条都要写理由，不许只写文件名。
  *
- * ⚠️ 2026-11-20 起优先用「目录级登记」（见 `listScripts()` 与文档 §4）：
+ * ⚠️ 2026-11-17 起优先用「目录级登记」（见 `listScripts()` 与文档 §4）：
  * 一个批次里几十个一次性探针，逐个写进本表就是本文件头顶警告的那种垃圾桶。
  */
 const WAIVED = new Map([
@@ -64,7 +64,7 @@ const WAIVED = new Map([
     'poc/verify/dnr-stamp.mjs',
     '被 run-q2-auto / dnr-disable-clears-tab-rules import 的凭据模块，不单独跑',
   ],
-  // 2026-11-20 加：源码遮蔽模块，被 check-secrets / check-workflow-logs import，
+  // 2026-11-17 加：源码遮蔽模块，被 check-secrets / check-workflow-logs import，
   // 不是可执行入口（没有 shebang、也没有 main）。
   ['scripts/lib/mask-source.ts', '被检查脚本 import 的纯函数模块，不单独跑'],
   // 2026-10-30 建档：这些是早期 Q3 / e2e 阶段的一次性脚本，结论已写进 docs/ 与 ADR。
@@ -96,7 +96,7 @@ const WAIVED = new Map([
 ]);
 
 /**
- * 扫描根。**递归**（2026-11-20 修）：只扫一层会漏掉 `poc/probe/<批次>/*.mjs`。
+ * 扫描根。**递归**（2026-11-17 修）：只扫一层会漏掉 `poc/probe/<批次>/*.mjs`。
  *
  * `poc` 整个递归（含 `poc/q2-dnr-concurrency/` 这类实验目录）—— 否则今天补了
  * `poc/probe` 的洞，明天 `poc/` 下别处又开一个。
@@ -120,7 +120,7 @@ const SKIP_DIRS = new Set(['node_modules', '.output', '.wxt', 'dist']);
 /**
  * 递归收集脚本。
  *
- * ## 为什么必须递归（2026-11-20，审计 P2）
+ * ## 为什么必须递归（2026-11-17，审计 P2）
  *
  * 旧实现只 `readdirSync` 一层，于是 `poc/probe/pcdn-diag/probe.mjs` 这种
  * **子目录里的脚本直接绕过闸门** —— 而 `check-tools` 仍然打印
@@ -154,7 +154,7 @@ function listScripts(dir) {
 /**
  * 一条候选脚本算不算"有登记处"。
  *
- * ## 三级判据（2026-11-20 递归后新增第 2 级）
+ * ## 三级判据（2026-11-17 递归后新增第 2 级）
  *
  * | 判据 | 粒度 | 适用 |
  * | --- | --- | --- |

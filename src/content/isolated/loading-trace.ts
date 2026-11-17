@@ -41,7 +41,7 @@
  * - host：只走 `classifyCdn()` 的结果，**不另写域名表**——
  *   「哪些 host 算媒体域」若抄一份清单，与 `core/cdn/classify.ts` 必然漂移：
  *   那边新增一个 PCDN 供应商域，这边就会安静地采不到。
- *   ⚠️ 2026-11-20（P0-1）修的就是这条漂移的后果：`unknown` 现在**照常计数**，
+ *   ⚠️ 2026-11-17（P0-1）修的就是这条漂移的后果：`unknown` 现在**照常计数**，
  *   只是不参与"当前线路"的结论（见 `resolveMediaHost()` 的表格）。
  * - path：必须是媒体分片（`isMediaPath()`）。同域下的静态资源
  *   （`bvc.bilivideo.com/pbp/data`、`upos-sz-staticcos-cmask/…/*.webmask`）
@@ -60,7 +60,7 @@ const EVENT_LIMIT = 200;
  * 能进 `actual`（结论大字 / 「当前线路」）的类别。
  *
  * ⚠️ **`hosts` 不受这个数组限制**：`unknown` 的 host 照样在里面计数
- * （2026-11-20，P0-1）。这里只回答"能不能拿来当结论" —— 认不出来源的线路
+ * （2026-11-17，P0-1）。这里只回答"能不能拿来当结论" —— 认不出来源的线路
  * 不能替用户下"你在用哪条线"的结论，但**必须**能被看见。
  */
 const REAL_KINDS: readonly CdnKind[] = ['official', 'pcdn', 'third-party'];
@@ -71,7 +71,7 @@ const REAL_KINDS: readonly CdnKind[] = ['official', 'pcdn', 'third-party'];
  * - `measured`：真的看到了 resource 条目（有 host 就有分片请求，是测出来的）
  * - `none`：什么都没看到（`hosts` 为空）
  *
- * ## 2026-11-20（T13）：删掉 `inferred`
+ * ## 2026-11-17（T13）：删掉 `inferred`
  *
  * 它从加进来到删掉**没有任何生产者**（导出层早已收窄成 `measured | none`）。
  * 类型里留着一个永远不出现的值，就是空承诺 —— 读代码的人会以为"只有 playurl
@@ -106,7 +106,7 @@ export interface LoadingSnapshotLite {
   /** `<video>` 的即时状态；页面上还没有 video 时为 `null` */
   video: { readyState: number; durationSec: number; height: number; errorCode: number } | null;
   /**
-   * 候选过滤（ADR 0038）这一次做了什么（2026-11-20 接线）。
+   * 候选过滤（ADR 0038）这一次做了什么（2026-11-17 接线）。
    *
    * ## 为什么是可选字段
    *
@@ -130,7 +130,7 @@ export interface PcdnFilterStats {
   /** 因为"剔完就没了"而原样保留的轨数（ADR 0038 边界 5） */
   keptIntact: number;
   /**
-   * 为什么**没**生效（2026-11-20，Lead 约束 ②）。
+   * 为什么**没**生效（2026-11-17，Lead 约束 ②）。
    *
    * | 值 | 含义 |
    * | --- | --- |
@@ -185,7 +185,7 @@ export interface LoadingTraceState {
    */
   lastSegReqCls: CdnKind | null;
   /**
-   * 这一次页面生命周期里**是否已经记过一条 `ext-patch`**（2026-11-20，T11）。
+   * 这一次页面生命周期里**是否已经记过一条 `ext-patch`**（2026-11-17，T11）。
    *
    * ## 为什么要记这个
    *
@@ -199,7 +199,7 @@ export interface LoadingTraceState {
    */
   extPatchRecorded: boolean;
   /**
-   * **本页的取流是否由扩展代理**（2026-11-20，T13，P0-3）。
+   * **本页的取流是否由扩展代理**（2026-11-17，T13，P0-3）。
    *
    * ## 值从哪来，为什么可信
    *
@@ -222,7 +222,7 @@ export interface LoadingTraceState {
    */
   streamingProxied: boolean;
   /**
-   * 候选过滤（ADR 0038）的**累计**结果（2026-11-20 接线）。
+   * 候选过滤（ADR 0038）的**累计**结果（2026-11-17 接线）。
    *
    * 主世界三个调用点各自上报一次（`playurl` / `playinfo` / `playview`），这里
    * **累加**而不是覆盖：一次播放可能先整页注入、再切一集，两个数都要算进去。
@@ -329,7 +329,7 @@ function isMediaPath(pathname: string): boolean {
 }
 
 /**
- * B站 取流接口的路径标识（2026-11-20，T12）。
+ * B站 取流接口的路径标识（2026-11-17，T12）。
  *
  * 覆盖三种已知形状，都靠同一个子串命中：
  * ```
@@ -421,7 +421,7 @@ export function recordPlayurl(state: LoadingTraceState, entry: ResourceEntryLike
  *   1. **路径**是媒体分片（`isMediaPath`）—— 挡掉同域下的静态资源（见那里的实测）
  *   2. **host** 能被 `classifyCdn` 解析出来（任何 `cls` 都收，含 `unknown`）
  *
- * ## 2026-11-20（T13，P0-1）：`unknown` **不再被丢弃**
+ * ## 2026-11-17（T13，P0-1）：`unknown` **不再被丢弃**
  *
  * 旧实现在 `cls === 'unknown'` 时 `return null`，后果是一整类失败方向：
  * B站 新增一个 PCDN 供应商域时，`hosts` 里没有它 → 面板显示「0 条线路 /
@@ -544,7 +544,7 @@ export function recordNavStart(state: LoadingTraceState): void {
  * 想从事件反推"到底用了哪几个 host、各发了多少请求"已经不可能。
  * 所以 `hosts[].count` **每条真实累加**，与事件是否发出完全解耦。
  *
- * ## 两条并列的通道（2026-11-20，T12）
+ * ## 两条并列的通道（2026-11-17，T12）
  *
  * 同一个 `PerformanceObserver` 交进来的条目走两条互不干扰的判据：
  *
@@ -619,7 +619,7 @@ export function recordVideoStage(
 /**
  * 记录一条「扩展介入」（扩展真的动了这一次取流）。
  *
- * ## 两个触发点（2026-11-20，T13/P0-3 补上第二个）
+ * ## 两个触发点（2026-11-17，T13/P0-3 补上第二个）
  *
  * | 触发点 | 语义 | `note` |
  * | --- | --- | --- |
@@ -662,7 +662,7 @@ export function recordExtPatch(state: LoadingTraceState, t: number, note?: strin
 }
 
 /**
- * 记录一次**候选过滤**的结果（ADR 0038，2026-11-20 接线）。
+ * 记录一次**候选过滤**的结果（ADR 0038，2026-11-17 接线）。
  *
  * ## 为什么是累加而不是覆盖
  *
@@ -693,7 +693,7 @@ export function recordPcdnFilter(
   if (payload.applied === true) {
     state.filter.applied = true;
     /**
-     * **真的过滤过之后，`reason` 必须消失**（2026-11-20）。
+     * **真的过滤过之后，`reason` 必须消失**（2026-11-17）。
      *
      * 现实时序是这样的：开关开着、规则还没下发 → 主世界报一条
      * `reason: 'rulesMissing'`；随后规则到了、真的剔掉了候选 → 再报一条

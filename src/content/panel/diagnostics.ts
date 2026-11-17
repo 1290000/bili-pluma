@@ -164,7 +164,7 @@ export interface ExportPayloadSource {
    */
   logsMeta: LogsMeta;
   /**
-   * 加载时间轴的**通道结局**（2026-11-20，T8 第八个字段）。
+   * 加载时间轴的**通道结局**（2026-11-17，T8 第八个字段）。
    *
    * 传的是面板模型里那一份原始结局，不是渲染后的文案 ——
    * 导出要的是数据，`buildLoadingExport()` 负责裁剪成可外传的形状。
@@ -172,7 +172,7 @@ export interface ExportPayloadSource {
   loading: LoadingOutcome;
 }
 
-// ─────────────────────── 第八个字段：本次加载（T8，2026-11-20）───────────────────────
+// ─────────────────────── 第八个字段：本次加载（T8，2026-11-17）───────────────────────
 
 /**
  * 导出里 host 的白名单。
@@ -205,12 +205,12 @@ const EXPORT_FLAVORS: readonly ('self-built' | 'partner')[] = ['self-built', 'pa
  *
  * 别去 `core/loading/timeline.ts` 找它 —— 那里没有，也不该加：`LoadStage` 是
  * "采集侧能产出什么"的枚举，而 `'unknown'` 是"**收到的不是那 10 个值之一**"。
- * 两者的主语不同（2026-11-20 Lead 裁决，留兜底值、但把这件事写在这里）。
+ * 两者的主语不同（2026-11-17 Lead 裁决，留兜底值、但把这件事写在这里）。
  *
  * 为什么保留而不是丢弃整条事件：丢了就没法解释"为什么条数对不上"；
  * 标成 `unknown` 至少让读的人知道**有一条事件我们没看懂**。
  *
- * ⚠️ 2026-11-20（T13）：`switch` / `blocked` 随 `LoadStage` 一起删了 ——
+ * ⚠️ 2026-11-17（T13）：`switch` / `blocked` 随 `LoadStage` 一起删了 ——
  * 它们从来没有生产者，列在这里等于告诉消费者"可能有这两种事件"。
  */
 const EXPORT_STAGES: readonly string[] = [
@@ -260,7 +260,7 @@ function nonNeg(value: unknown): number {
 /**
  * 一条事件在导出里的形状。
  *
- * ## 2026-11-20（T13，P1-6）：`error` 多一个 `code`
+ * ## 2026-11-17（T13，P1-6）：`error` 多一个 `code`
  *
  * `MediaError.code` 以前采了又扔（`recordVideoStage()` 写进 `note`，导出按白名单
  * 剥掉）。后果是排查时「播放出错」和「卡了一下」在导出里长得一样 ——
@@ -309,7 +309,7 @@ function parseErrorCode(note: string | undefined): number | null {
  * `status` 是真话，其余给 `null` / `[]` / `0`，并且**消费方必须先看 `status`**。
  * 这与 `logsMeta.ok` 同一条纪律：读失败不许伪装成空态。
  *
- * ## ⚠️ 这里**没有** `capturedAt`（2026-11-20 Lead 裁决）
+ * ## ⚠️ 这里**没有** `capturedAt`（2026-11-17 Lead 裁决）
  *
  * 第一版加过一个 `capturedAt`，值是"组装导出的时刻" —— 那个名字在说谎：
  * `LoadingSnapshotLite` 里**没有采集时间戳**（采集器只记每条事件相对
@@ -341,7 +341,7 @@ export interface LoadingExport {
    */
   eventsTruncated: boolean;
   /**
-   * 采集窗口是否已经截断（来自 `snapshot.truncated`，2026-11-20 T13/P1-7）。
+   * 采集窗口是否已经截断（来自 `snapshot.truncated`，2026-11-17 T13/P1-7）。
    *
    * 语义是"**时间轴的开头不是页面开始**"：环形缓冲只留最近 200 条，
    * 更早的被丢掉了。以前这个信息只活在 L2 浮层里，导出里没有出口 ——
@@ -349,7 +349,7 @@ export interface LoadingExport {
    */
   eventsLostBeforeWindow: boolean;
   /**
-   * 候选过滤（ADR 0038）这一次做了什么（2026-11-20 接线）。
+   * 候选过滤（ADR 0038）这一次做了什么（2026-11-17 接线）。
    *
    * | 字段 | 含义 |
    * | --- | --- |
@@ -546,7 +546,7 @@ export function buildExportPayload(src: ExportPayloadSource): string {
        */
       logsMeta: src.logsMeta,
       /**
-       * ⚠️ 第八个字段（2026-11-20，T8）：**本次加载**。
+       * ⚠️ 第八个字段（2026-11-17，T8）：**本次加载**。
        *
        * 它与前七个的区别：前七个都是"扩展自己的状态"，只有它描述
        * **页面自己在做什么**（分片从哪条线路来的）。形状见 `LoadingExport`。
@@ -641,7 +641,7 @@ function logRow(e: DiagEntry): HTMLElement {
   return row;
 }
 
-// ─────────────────────── 「本次加载」区块（T7，2026-11-20）───────────────────────
+// ─────────────────────── 「本次加载」区块（T7，2026-11-17）───────────────────────
 
 /**
  * 线路类别 → 中文短名。
@@ -691,7 +691,7 @@ const LOADING_EVENT_LIMIT = 40;
  * ⚠️ `unanswered` 画成"没有记录"就是 `logsMeta.ok` 那次事故的复发：
  * 读失败伪装成空态，用户和排查者都会去查错方向。
  *
- * ## 2026-11-20（审计收尾）：入参**必填**，`undefined` 那条分支删掉了
+ * ## 2026-11-17（审计收尾）：入参**必填**，`undefined` 那条分支删掉了
  *
  * 以前签名是 `LoadingOutcome | undefined`，`undefined` 走 `absent` 那一支，
  * 渲染出「本页没有加载记录（**不是播放页**）」—— 而"不是播放页"只对真正的
@@ -729,7 +729,7 @@ export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
 
   // ── 摘要行：技术层，允许完整 host ──
   /**
-   * `flavor === null` 显示成 `—`（2026-11-20，T13 文案）。
+   * `flavor === null` 显示成 `—`（2026-11-17，T13 文案）。
    *
    * 以前这里直接打印 `null` —— 那是 **JSON 字面量**，不是给用户看的文案。
    * 技术层的读者会以为是"字段缺失 / 解析失败"，而 `null` 的真实含义是
@@ -751,7 +751,7 @@ export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
   const hasPcdn = (byClass.get('pcdn') ?? 0) > 0;
 
   /**
-   * ## 两行线路，别二选一（2026-11-20，T13/P0-2）
+   * ## 两行线路，别二选一（2026-11-17，T13/P0-2）
    *
    * 旧实现只有一行「当前线路」，值取自 `hosts` 按 count 排序的第一条（argmax）。
    * 中途被切到 PCDN 之后，argmax 仍可能指着**已经不再用**的那条 ——
@@ -812,7 +812,7 @@ export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
   nodes.push(factRow({ label: '换线次数', value: String(detectSwitches(snapshot.events).length) }));
   nodes.push(factRow({ label: '快照状态', value: snapshot.confidence }));
   /**
-   * ## 采集窗口（2026-11-20，T13/P1-7）
+   * ## 采集窗口（2026-11-17，T13/P1-7）
    *
    * `snapshot.truncated` 以前只在 L2 浮层里说一句，诊断页没有出口 ——
    * 于是排查者看原始事件表时以为第一条就是页面开始。这里明确写出来，
@@ -948,9 +948,9 @@ export function diagnosticsPane(
      */
     logsMeta?: LogsMeta | undefined;
     /**
-     * 加载时间轴的通道结局（2026-11-20，T7）。
+     * 加载时间轴的通道结局（2026-11-17，T7）。
      *
-     * ## ⚠️ **必填**（2026-11-20 审计收尾改了）
+     * ## ⚠️ **必填**（2026-11-17 审计收尾改了）
      *
      * 以前这个字段是**可选**的（带 `?`），`undefined` 与 `absent` 同义 → 两者共用同一句文案「本页没有加载记录（**不是播放页**）」。
      * 而"不是播放页"是一句**因果断言**：它只对真正的 `absent`（页面判据说这页
@@ -1016,7 +1016,7 @@ export function diagnosticsPane(
   box.appendChild(el('p', 'pane-note', tipFor(data.rows)));
 
   /**
-   * ── 本次加载（T7，2026-11-20）──
+   * ── 本次加载（T7，2026-11-17）──
    *
    * 位置是**刻意的**：紧跟在 `tipFor()` 那句"该看哪"之后、自检信息之前。
    *

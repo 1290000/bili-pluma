@@ -96,7 +96,7 @@ describe('content.ts 特征测试（拆分安全网）', () => {
        * （`page-identity` / `self` 都是"开关开着、没装规则、没参与"）。
        */
       /**
-       * ## ⚠️ 2026-11-20：第 2/3 个参数改成"先记住再传"（候选过滤要能热更新）
+       * ## ⚠️ 2026-11-17：第 2/3 个参数改成"先记住再传"（候选过滤要能热更新）
        *
        * 形状变成 `tellMainWorld(switchOn, activatedKnown, rewriteGateKnown, …)` ——
        * 但**语义一个字没变**：第 2 个仍是 `res.activated === true`，第 3 个仍是

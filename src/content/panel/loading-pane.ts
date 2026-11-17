@@ -87,7 +87,7 @@ export type LoadingTone = 'ok' | 'warn' | 'muted' | 'bad' | 'accent';
  * | `diamond` | PCDN（空心菱形） |
  * | `triangle` | 第三方（空心三角） |
  * | `ring` | 扩展介入 / 与线路无关的阶段（空心圆） |
- * | `dashed` | **认不出来源的线路**（虚线空心圆，2026-11-20 P0-1） |
+ * | `dashed` | **认不出来源的线路**（虚线空心圆，2026-11-17 P0-1） |
  *
  * ⚠️ `dashed` 不是装饰：`unknown` 以前被整类丢弃，现在它会出现在时间轴上，
  * 而它**不能**与「扩展介入」共用实心/空心圆 —— 那两个圆在色盲眼里一模一样，
@@ -106,12 +106,12 @@ export interface LineDescription {
  * 阶段中文名。**固定映射**：阶段枚举只有 10 个值，逐个给中文，
  * 不做"把英文换成中文"的通用转换（那会拼出「开始下载分片」这种半成品）。
  *
- * ⚠️ 2026-11-20（T13）：`switch` / `blocked` 两档随枚举一起删了 ——
+ * ⚠️ 2026-11-17（T13）：`switch` / `blocked` 两档随枚举一起删了 ——
  * 它们从来没有生产者，留着就是让读代码的人以为面板能报这两件事。
  */
 const STAGE_LABEL: Record<LoadStage, string> = {
   /**
-   * `nav` 是时间轴的**原点**（`t = 0`），2026-11-20（T12）起真的会出现在第一行。
+   * `nav` 是时间轴的**原点**（`t = 0`），2026-11-17（T12）起真的会出现在第一行。
    *
    * 为什么从「页面开始」改成「页面开始加载」：尾注那句"时间从页面开始加载算起"
    * 需要一个看得见的对应物 —— 用户看到第一行是 `1.53s` 时会问"这之前干什么去了"，
@@ -144,7 +144,7 @@ export function stageLabel(stage: LoadStage): string {
 const TITLE_UNKNOWN = '还不知道走哪条线路';
 
 /**
- * 有流量、但**每一条**都认不出来源时说的那句话（2026-11-20，P0-1）。
+ * 有流量、但**每一条**都认不出来源时说的那句话（2026-11-17，P0-1）。
  *
  * 与 `TITLE_UNKNOWN` 是**两件事**，不许合并：前者是"什么都没看到"，
  * 后者是"看到了 N 条，但没有一条能认出属于哪类 CDN"。合并的后果是
@@ -213,7 +213,7 @@ export function describeLine(
 }
 
 /**
- * 快照 → 结论行（**三态**，2026-11-20 P0-1）。
+ * 快照 → 结论行（**三态**，2026-11-17 P0-1）。
  *
  * | 情形 | 文案 | 形状 |
  * | --- | --- | --- |
@@ -254,7 +254,7 @@ export function describeKindPill(
 /**
  * 秒（**统一 2 位小数**）。
  *
- * ## 为什么不是 1 位（2026-11-20 Lead 裁决 ⑤）
+ * ## 为什么不是 1 位（2026-11-17 Lead 裁决 ⑤）
  *
  * 真机截图里「开局 3.2s」与时间轴「3.18s」是同一个数字的两种精度 ——
  * 用户对照时会以为是两个不同的值。面板里所有时间现在只有一种精度：
@@ -274,7 +274,7 @@ export function playingEvent(events: readonly LoadEvent[]): LoadEvent | null {
 /**
  * 线路数文案：`4 条线路（1 条认不出）`。
  *
- * ## 为什么括号里必须写出来（2026-11-20，P0-1）
+ * ## 为什么括号里必须写出来（2026-11-17，P0-1）
  *
  * `unknown` 现在会进 `hosts`（不再被丢弃）。如果只显示总数，用户看到「4 条线路」
  * 而时间轴上只有 3 个认得出的形状，会以为是渲染 bug。括号把那 1 条的去向说清。
@@ -293,7 +293,7 @@ export function hostCountText(snapshot: LoadingSnapshotLite): string {
 /**
  * 速览行的副行：`开局 3.18s · 3 条线路`。
  *
- * ## 单位是 `s`，不是「秒」（2026-11-20 Lead 裁决）
+ * ## 单位是 `s`，不是「秒」（2026-11-17 Lead 裁决）
  *
  * 面板里 `s` 已经是既定单位：时间轴 `0.42s`、增量 `+0.40s`、尾注 `+x.xxs`。
  * 副行写「秒」会让**同一张卡里的同一个数字**出现两种写法（`开局 1.80s` 与
@@ -332,7 +332,7 @@ export function describeCounts(snapshot: LoadingSnapshotLite): string[] {
 }
 
 /**
- * 结论卡里那句"为什么官方线路上还有 P2P 节点"（2026-11-20 Lead 裁决 ②）。
+ * 结论卡里那句"为什么官方线路上还有 P2P 节点"（2026-11-17 Lead 裁决 ②）。
  *
  * ## 不解释会自相矛盾
  *
@@ -342,7 +342,7 @@ export function describeCounts(snapshot: LoadingSnapshotLite): string[] {
  * 技术上没错：`actual` 取的是**请求数最多**的那条线路（`snapshotOf` 的判据），
  * 竞速里另一条也会被用上一两次。所以这里要**把判据说出来**。
  *
- * ## 2026-11-20（T13，P0-2）：当前线路也是 P2P 时换一句更强的话
+ * ## 2026-11-17（T13，P0-2）：当前线路也是 P2P 时换一句更强的话
  *
  * 「其中 N 条是 P2P 线路，未占主导」在**当前正在用 P2P** 时是误导：
  * 用户刚被切走，界面却说"没占主导"。那时改成「现在正在用 P2P 线路」——
@@ -392,7 +392,7 @@ export interface TimelineRow {
   detail: string | null;
   /**
    * 线路形状。`null` = **里程碑**，左侧画一根短竖线而不是圆点
-   * （2026-11-20 Lead 裁决 ④：里程碑不是线路，不该共用形状）。
+   * （2026-11-17 Lead 裁决 ④：里程碑不是线路，不该共用形状）。
    *
    * 空档行也是 `null`，但它连短竖线都不画 —— `timelineRow()` 对
    * `kind === 'gap'` 走另一套骨架（一条细横线 + 一句话）。
@@ -423,7 +423,7 @@ const SEGMENT_LABEL = '下载视频片段';
 /**
  * 相邻两个节点间隔多大就插一条空档分隔行（毫秒）。
  *
- * ## 为什么需要它（2026-11-20 真机截图）
+ * ## 为什么需要它（2026-11-17 真机截图）
  *
  * 用户看到 `2.07s` 与 `8.28s` 之间一片空白，第一反应是"这 6 秒卡住了"。
  * 我们**能证实的只有一件事**：这段时间里没有可显示的事件（采集闸门按 `cls`
@@ -497,7 +497,7 @@ export function clockText(ms: number): string {
 /**
  * 时间轴的**锚点**：这一集是页面加载后多久开始的（`null` = 不用补这句）。
  *
- * ## 为什么需要它（2026-11-20，审计「已记录未修」）
+ * ## 为什么需要它（2026-11-17，审计「已记录未修」）
  *
  * `resetLoadingTrace()` 之后**有意不补** `nav`（补了会凭空多出一条几分钟的空档
  * 行，见 `loading-trace.ts` 的 `recordNavStart()`），于是番剧换集后时间轴第一行
@@ -557,7 +557,7 @@ export function timelineFootnote(snapshot: LoadingSnapshotLite): string {
  *
  * ⚠️ 里程碑（`canplay` / `playing` / …）**不再用这个函数的形状**：
  * 它们在 `buildTimelineRows` 里走 `marker: null`（短竖线），
- * 因为空心圆与图例里的线路形状撞形（2026-11-20 Lead 裁决 ④）。
+ * 因为空心圆与图例里的线路形状撞形（2026-11-17 Lead 裁决 ④）。
  * 本函数对它们仍返回一个值，但调用方不会拿它画圆点。
  *
  * `ext-patch` 是例外：它**保留**空心圆 + `accent` —— 它不是里程碑，是"扩展动了
@@ -575,7 +575,7 @@ export function describeEventMarker(event: LoadEvent): { tone: LoadingTone; mark
     case 'third-party':
       return { tone: 'muted', marker: 'triangle' };
     /**
-     * `unknown`（2026-11-20，P0-1）：认不出来源的线路**必须画出来**，
+     * `unknown`（2026-11-17，P0-1）：认不出来源的线路**必须画出来**，
      * 而且必须与「扩展介入」的空心圆区分开 —— 两者含义相反（一个是"我方动作"，
      * 一个是"来源不明的流量"），色盲用户只能靠形状分辨。
      */
@@ -604,7 +604,7 @@ function segKey(t: number, host: string | null): string {
  * `stall` / `error` / `nav` / `playurl-*`）与线路无关，用短竖线 —— 否则它们
  * 与图例里的空心圆撞形，看着像"未激活"。
  *
- * ⚠️ 2026-11-20（T13）：`switch` 从枚举里删了（它没有生产者），
+ * ⚠️ 2026-11-17（T13）：`switch` 从枚举里删了（它没有生产者），
  * 这里跟着只剩 `seg-req`。
  */
 function isLineRow(event: LoadEvent): boolean {
@@ -635,7 +635,7 @@ function eventDetail(event: LoadEvent): string | null {
 /**
  * 事件序列 → 时间轴行（**请求与返回合并成一行**）。
  *
- * ## 为什么合并（2026-11-20 真机截图，本轮最重要的一条）
+ * ## 为什么合并（2026-11-17 真机截图，本轮最重要的一条）
  *
  * B站 会同时向两条线路发分片请求，`seg-req` / `seg-res` 交错排列，平铺着看
  * 分不清哪个返回属于哪个请求。配对规则与理由写在 `core/loading/timeline.ts`
@@ -763,7 +763,7 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
          * 明细：有 host 给 host；没有就用 `note`（`error` 的 `code=3`、
          * `ext-patch` 的 `接管取流` / `改写响应`）。
          *
-         * 2026-11-20（P1-6）：`MediaError.code` 以前采了又扔 —— 时间轴上
+         * 2026-11-17（P1-6）：`MediaError.code` 以前采了又扔 —— 时间轴上
          * 「播放出错」和「卡了一下」长得一样，分不清"网慢"与"被拦"。
          */
         detail: eventDetail(event),
@@ -877,7 +877,7 @@ function markerSvg(shape: MarkerShape, size = 12): SVGSVGElement {
   }
 
   /**
-   * `dashed`：虚线空心圆 = **认不出来源的线路**（2026-11-20，P0-1）。
+   * `dashed`：虚线空心圆 = **认不出来源的线路**（2026-11-17，P0-1）。
    *
    * 与 `ring`（扩展介入）几何完全相同，只靠 `stroke-dasharray` 区分 ——
    * 这正是色盲第二条线索的用法：形状/线型不同，颜色相同也能分开。
@@ -966,14 +966,14 @@ export function loadingQuickRow(view: LoadingQuickView, onOpen?: () => void): HT
 /**
  * 图例的外观表：**只解释"画的形状是什么意思"**，不含任何数据。
  *
- * ## ⚠️ 图例按数据动态生成，不再写死四项（2026-11-20 Lead 裁决 ③）
+ * ## ⚠️ 图例按数据动态生成，不再写死四项（2026-11-17 Lead 裁决 ③）
  *
  * 旧实现固定列四项，其中「扩展介入」与「第三方」在真机上**永远不会出现**：
  * 我们所有打点都在 isolated 侧，没有任何事件能产出 `ext-patch`。
  * 图例承诺了不存在的类别 —— 那是在解释一个不会出现的形状。
  *
  * 现在只列**本次真的出现过**的东西（`legendEntries()`），一项都没有就整块不画。
- * `2026-11-20 T11` 起 `ext-patch` 有了数据源（主世界 `reportExtPatch()`），
+ * `2026-11-17 T11` 起 `ext-patch` 有了数据源（主世界 `reportExtPatch()`），
  * 所以「扩展介入」按需回到图例里 —— 仍然只在**本次真的出现过**时出现。
  */
 const LEGEND_LOOK: Record<
@@ -998,7 +998,7 @@ const LEGEND_EXT_PATCH: { text: string; shape: MarkerShape; tone: LoadingTone } 
 };
 
 /**
- * 「认不出来源」的图例外观（2026-11-20，P0-1）。
+ * 「认不出来源」的图例外观（2026-11-17，P0-1）。
  *
  * 虚线空心圆 + 次要色。**必须有这一项**：`unknown` 现在会真的出现在时间轴上，
  * 一个画出来却没人解释的形状，比不画更容易误导。
@@ -1057,7 +1057,7 @@ export function legendHasUnknown(snapshot: LoadingSnapshotLite): boolean {
  * 顺序：官方 → P2P → 第三方 → **认不出** → 扩展介入。
  *
  * - 前三个回答"这几条线是什么"；
- * - 「认不出」是线路层面的第四种情况（`unknown`，2026-11-20 P0-1 起会真的出现），
+ * - 「认不出」是线路层面的第四种情况（`unknown`，2026-11-17 P0-1 起会真的出现），
  *   它必须排在三个已知类别之后 —— 它是兜底，不是并列的一种 CDN；
  * - 「扩展介入」回答的是"扩展在这一刻动过手"，与线路无关，所以放最后。
  *

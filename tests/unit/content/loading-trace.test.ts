@@ -104,7 +104,7 @@ describe('resolveMediaHost —— 媒体域判据只有 classifyCdn 一份', () 
     expect(resolveMediaHost('https://e1.akamaized.net/x.m4s')?.cls).toBe('third-party');
   });
 
-  it('★ 没实测过的域：**照常算媒体域**，`cls` 是 unknown（2026-11-20 P0-1）', () => {
+  it('★ 没实测过的域：**照常算媒体域**，`cls` 是 unknown（2026-11-17 P0-1）', () => {
     /**
      * 反例（旧行为，正是审计的 P0）：`cls === 'unknown'` 时 `return null` ——
      * B站 新增一个 PCDN 供应商域时，`hosts` 里没有它，面板显示「0 条线路 /
@@ -504,7 +504,7 @@ describe('snapshotOf —— actual 取 count 最大的真实线路', () => {
       events: [],
       truncated: false,
       video: null,
-      // 2026-11-20 接线：候选过滤的累计结果（默认全 0）
+      // 2026-11-17 接线：候选过滤的累计结果（默认全 0）
       filter: { applied: false, removed: 0, keptIntact: 0 },
     });
   });

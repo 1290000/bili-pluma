@@ -1402,7 +1402,7 @@ export function mountPanelBody(actions: PanelActions): PanelController {
              * 重新取数：诊断页要说的是"这一次加载"，重取只会得到同一份内存状态，
              * 却多一次 2 秒空窗。
              *
-             * 2026-11-20（审计收尾）：`diagnosticsPane()` 里这个字段改成**必填**，
+             * 2026-11-17（审计收尾）：`diagnosticsPane()` 里这个字段改成**必填**，
              * "还没读到"那条路（渲染成「不是播放页」的因果断言）被类型去掉了。
              *
              * 这里的 `?? { kind: 'absent' }` **不是**在把两者混回去：生产路径的
