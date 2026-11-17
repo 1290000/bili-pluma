@@ -1,50 +1,55 @@
-# 屏蔽 PCDN 的 A/B 实测：**没跑出合格数据**（2026-11-17 21:05）
+# 屏蔽 PCDN 开关 A/B 实测（2026-11-17 22:21 停）
 
-脚本 `poc/probe/pcdn-diag/ab-filter.mjs`　反例数据 `ab-filter.json`（gitignored）
-**结论：这一轮没有可用数据。下面写清为什么、以及已经确证了什么，避免下次重新发现。**
+**结论：样本不合格，不下结论。** 唯一跑完的一条视频**本来就不走 PCDN**，两组没有可比性。
+本文同时记录三个汇总层缺陷的修法（已修，`--resummarize` 可验收）。
 
-## 1. 卡在哪（根因不是 bsk 观察不到 frame）
+## 1. 样本量声明
 
-| 观察 | 证据 |
+| 项 | 数 |
 | --- | --- |
-| 播放器**反复重开流**，`currentTime` 会倒退 | 同一页：`t=13.33, paused=true` → `v.play()` → 6 秒后 `t=5.98`（**Δ=-7.35**），期间 `paused=false` |
-| 不是标签页隐藏导致 | 同一次读里 `document.visibilityState="visible"`、`hidden=false`、`readyState=4`、`height=3840` |
-| 不是没网络 | 45 秒窗口里有 20 条分片请求，`cn-cq-gd-bcache-21/22` 各 10 条，全部 200 |
-| 120 秒窗口里只有 ~2 秒真播 | 加了"实播秒"闸门（`ctEnd-ctStart`）后判死：`played=null/1.x`，`playOk=false` |
+| 计划 | 6 个长视频（`duration ≥ 600`）× A/B |
+| 实际跑完 | **1 个视频 × 2 组**（`BV17osu6pEP9`，918s） |
+| 因片长被剔除 | 0（6 个样本全部通过片长校验：918 / 2128 / 712 / 3830 / 2623 / 2124） |
+| 作废 | 2（`gateState: no-sample`，见下） |
+| 阻塞 | **bsk daemon / 浏览器连接在 22:16 之后反复断开**，`bsk open` 返回 `no_browser_connected`，剩余 5 个视频没跑 |
 
-⇒ **在这样的窗口里 `stall=0` 是"没在播"的假象**，PCDN 占比也只是开头几秒的样本。
-按主理人的口径（stall 是主指标），这种数据不能用，所以**一条也没进汇总**。
+## 2. 唯一的表
 
-⚠️ 顺带一个**可能是产品 bug 的线索**（值得单独查）：`13.33 → 5.98` 是**往回 seek** 的特征，
-而 Pluma 主世界有"还原观看进度"的响应改写（`main-world.js` 的 `PROGRESS_PATCH_PATHS`）。
-是不是它每逢重开流就把进度拨回去，导致"永远播不过某几秒"，需要专门验一次。
+```
+bvid          组  片长  PCDN%  官方%  stall 起播s 换线  applied removed 闸门
+BV17osu6pEP9  A   918      0    100     0  2.16    0  false      0  no-sample
+BV17osu6pEP9  B   918      0    100     0  9.33   58  false      0  no-sample
+```
 
-## 2. 已经确证、可直接复用的三件事
+**中位数**：A = PCDN 0% / stall 0 / 起播 2.16s；B 无可比样本。
 
-1. **开关能拨、能读回**：面板 `显示 → 播放线路 → 屏蔽 PCDN 线路`，VOM 里是
-   `@eN checkbox "屏蔽 PCDN 线路 …" [checked]`；拨完复核读到 `false/true`，与 storage 一致。
-   ⚠️ 开关**不在「画质」页**（我前两轮都找错了页）。
-2. **采集链路是对的**：host 用 `new URL(name).host` 当场取、`search` 一起带上，
-   分类用生产函数 `classifyCdn(host, search)`；修好后 `unknown:0`。
-3. **闸门真的会作废**：A 组出现 `applied:true`、或实播秒不足窗口 80% 的 run，都被判作废。
+## 3. 这条视频为什么不进对比
 
-## 3. 这一轮踩掉的四个环境坑（都在脚本注释里留了原因）
+`A` 组 102 条分片请求 **全部落在 `cn-cq-gd-bcache-19/20`（官方自建 CDN）**，PCDN 请求数 **0**。
+既然基线里根本没有 PCDN 流量，开关就不可能"把流量换走"——它测的是同一件事的两次。
+`B` 组同样 0%，`removed: 0`，主世界连 `pcdn-filter-stats` 都没发（没东西可删）。
 
-| # | 坑 | 现在的做法 |
-| --- | --- | --- |
-| 1 | `data.bilibili.com` 埋点的 query 里嵌着 bilivideo 完整 URL ⇒ 25/47 条被当成"分片"，全是 unknown | 只认 pathname 以 `.m4s/.mp4/.flv/.ts` 结尾 |
-| 2 | 关掉最后一个 agent 标签页后 `tab create` 报 `No observable document` | 常驻控制页 + 用返回的 `tab_id` 显式绑定 |
-| 3 | 每次 `click` 用缓存 ctx 必失败（面板一开，控制状态就变） | 每次点击前强制 `sync` |
-| 4 | VOM 里别的控件的 `[ctx: …]` 会重复整页文案 ⇒ 按 `includes` 找控件会点错（我因此误关了用户的「页内角标」，已恢复） | 按 `role + "引号内文案"` 精确匹配 |
+⇒ 这**不能算"开关无效"**，只能算"**这条片子本来就没走 PCDN**"。两种说法在报告里必须分开。
 
-## 4. 建议换路子（二选一）
+## 4. 三个汇总层缺陷（已修）
 
-- **A · 面板导出（最快）**：用户手动播 2 分钟，开关开/关各一次；我们读面板
-  「本次线路 / 换线次数 / 开局耗时 / 采集窗口」+ 导出 JSON（含逐 host 请求数与 `filter.applied`）。
-  口径就是产品自己的，缺点是样本靠人。
-- **B · Playwright + 复制 profile（可自动化）**：`addInitScript` 能在 document_start 注入
-  （正好解决"首屏 playurl 早于探针"），`--autoplay-policy=no-user-gesture-required`
-  可避免自停，且能直接在 SW 里写 storage 翻开关、用 `page.on('request')` 抓逐条请求。
-  需要一次性搭建。
+| # | 缺陷 | 事实 | 修法 |
+| --- | --- | --- | --- |
+| ① | `officialShare: 1` 被读成 1% | 它是 **0..1 的分数**，1 = **100%**；`per` 本身是对的（102/102） | 新增 `pcdnPct` / `officialPct`（已 ×100 带一位小数），对外只用这两个字段 |
+| ② | `switches` 可疑 | 121 条请求、2 个 host、B=58 次 —— **这是对的**（音视频来自不同 host 会来回跳）；A=0 也对（同 host 连续） | 统一由 `countSwitches(media)` 从相邻 host 变化算；并加断言：`switches > media-1` 或 `> requests` **直接抛错**，不许静默写进报告 |
+| ③ | `stats: []` → `applied=false` 假阴性 | "开了但没东西可删" 与 "真的没开" 被混为一谈 | 闸门改**三态**：A 组 `applied:true` → `bad`；B 组有 `applied:true` → `ok`；B 组无 stats **且该视频 A 组 PCDN=0** → `no-sample`（不进均值、保留在表里）；B 组无 stats 但 A 组 PCDN>0 → `bad` |
 
-我倾向 **B**：8×2 的串联需要可重跑，而 bsk 这条链在标签页/帧/会话上的抖动今天已经出现 5 次。
+验收方式（不需要浏览器）：
+
+```bash
+npx tsx poc/probe/pcdn-diag/ab-filter.mjs --resummarize
+```
+
+## 5. 下次要跑对的三个前提
+
+1. **样本必须先过"有 PCDN"这一关**：A 组（开关关）跑完后 `per.pcdn > 0` 才算有效样本，
+   否则立刻换视频 —— 与片长校验同级，放在跑 B 组之前（省一半时间）。
+2. **daemon 必须活过整场**：本轮 daemon 被 Job Object 收掉 3 次、浏览器连接断 1 次。
+   建议把 `bsk daemon start --foreground` 放在**独立终端**里，不要挂在 agent 的后台任务上。
+3. **实播秒用 Node 侧首末读数**（页面 `setInterval` 在后台标签页会被节流到 ~1 次/分钟；
+   本轮两条 run 的 `实播` 都是 null，正是这个原因）。

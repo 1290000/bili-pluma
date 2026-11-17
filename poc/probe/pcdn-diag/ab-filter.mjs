@@ -63,16 +63,12 @@ import path from 'node:path';
 import { classifyCdn } from '../../../src/core/cdn/classify.ts';
 
 /** 实测样本（`REPORT-remaining.md` §2 那 8 个，全部确认有 2160p 轨） */
-const VIDEOS = [
-  'BV1oFsW6oEs5',
-  'BV1avsP6wE8H',
-  'BV1Z7sp6xEUn',
-  'BV1wZWX6mEr9',
-  'BV1PisN6nEF2',
-  'BV1UcsP6sEzD',
-  'BV1wasc6qEjc',
-  'BV1jisJ62ERd',
-];
+const VIDEOS = process.env.PL_VIDEOS
+  ? process.env.PL_VIDEOS.split(',').map((v) => v.trim()).filter(Boolean)
+  : ['BV1UcsP6sEzD'];
+
+/** 片长下限（秒）：`>= 600`。上一轮全废就是因为样本里有 14 秒的短片 */
+const MIN_DURATION = 600;
 
 const OUT = path.join(
   path.dirname(new URL(import.meta.url).pathname.replace(/^\//, '')),
@@ -467,6 +463,18 @@ const exprInstallProbe = `(() => {
       } catch (e) { P.keepAliveError = String(e); }
     }
     // 播放起点：页面内自己记，避免 Node 侧"起点读晚了/读错标签页"导致算不出实播秒
+    /**
+     * 实播秒 = **累计前进量**（每 tick 累加；单次增量为负或 >1.5s 视为 seek / 重开流，不计）。
+     *
+     * 为什么不用"末次 - 首次"：这条链上播放器会重开流、seek、并在结尾停在 0，
+     * 差值法会算出 0 甚至负数 —— 上一版就是这样把 A 组全判成 null。
+     */
+    const prevCt = P.prevCt;
+    if (prevCt !== undefined && prevCt !== null) {
+      const dct = v.currentTime - prevCt;
+      if (dct > 0 && dct <= 1.5) P.played = (P.played || 0) + dct;
+    }
+    P.prevCt = v.currentTime;
     if (P.ctStart === null && v.readyState >= 2 && v.currentTime > 0) P.ctStart = v.currentTime;
     P.ct = v.currentTime;
   }, 150);
@@ -481,6 +489,15 @@ const exprInstallProbe = `(() => {
   });
   return { installed: true };
 })()`;
+
+/** 取服务端片长（与 `video.duration` 对账用） */
+function exprViewDuration(bvid) {
+  return `(async () => {
+    const v = await fetch('https://api.bilibili.com/x/web-interface/view?bvid=${bvid}',
+      { credentials: 'include', headers: { Accept: 'application/json' } }).then((r) => r.json());
+    return { duration: v && v.data && v.data.duration, aid: v && v.data && v.data.aid, cid: v && v.data && v.data.cid };
+  })()`;
+}
 
 const exprEnv = `(() => {
   const v = document.querySelector('video');
@@ -520,6 +537,7 @@ const exprRead = `(() => {
     readyAt4: P.readyAt4,
     ctStart: P.ctStart,
     ct: P.ct === undefined ? null : P.ct,
+    played: P.played === undefined ? null : +P.played.toFixed(2),
     installAt: P.installAt,
     // 探针装得比 readyAt 还晚 ⇒ 这一 run 的起播时刻不可信，直接标出来
     canplayMissed: P.readyAt !== null && P.installAt > P.readyAt,
@@ -545,6 +563,14 @@ const exprRead = `(() => {
 })()`;
 
 /** run 末尾若一条 `pcdn-filter-stats` 都没抓到，逼播放器重发一次 playurl 补抓闸门 */
+/** 直接读 currentTime / duration（不依赖页面 sampler；后台标签页定时器会被节流） */
+const exprCt = `(() => {
+  const v = document.querySelector('video');
+  if (!v) return null;
+  return { t: +v.currentTime.toFixed(2), paused: v.paused, rs: v.readyState,
+    dur: Number.isFinite(v.duration) ? +v.duration.toFixed(2) : null };
+})()`;
+
 const exprForcePlayurl = `(async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   try { window.player.disconnect(); } catch (e) {}
@@ -564,7 +590,7 @@ const exprForcePlayurl = `(async () => {
  * @param group 'A'（开关关）| 'B'（开关开）
  * @returns run 结果
  */
-function runOne(bvid, group) {
+function runOne(bvid, group, viewDuration) {
   const tab = openPage(`https://www.bilibili.com/video/${bvid}/`);
   const startedAt = new Date().toISOString();
 
@@ -588,16 +614,21 @@ function runOne(bvid, group) {
   }
 
   // 播放窗口：先记下起点播放进度，末尾算"真的播了多少秒"
-  const pre = evaluate(exprRead);
-  const ctStart = pre && pre.video ? pre.video.currentTime : null;
+  const pre = evaluate(exprCt);
+  const ctStart = pre && typeof pre.t === 'number' ? pre.t : null;
   const playStart = Date.now();
   while (Date.now() - playStart < RUN_SECONDS * 1000) {
     bsk(['wait-ms', '4000']);
   }
 
   let snap = evaluate(exprRead);
-  const c0 = snap && snap.ctStart !== undefined && snap.ctStart !== null ? snap.ctStart : ctStart;
-  const c1 = snap && snap.ct !== undefined && snap.ct !== null ? snap.ct : null;
+  const post = evaluate(exprCt);
+  const c0 = ctStart;
+  const c1 = post && typeof post.t === 'number' ? post.t : null;
+  // 窗口内的"实播秒"：末次 - 首次（长视频窗口内不会重开流；出现负值即判异常）
+  snap.ctStart = c0;
+  snap.ctEnd = c1;
+  snap.videoDuration = post && post.dur !== undefined ? post.dur : snap.video && snap.video.duration;
   snap.playedSeconds = c0 === null || c1 === null ? null : Math.round((c1 - c0) * 10) / 10;
   let gate = { forced: false };
   const hasStats = (snap.stats || []).length > 0;
@@ -609,7 +640,7 @@ function runOne(bvid, group) {
   closeTab(tab.tab);
 
   return {
-    bvid, group, startedAt, seconds: RUN_SECONDS,
+    bvid, group, startedAt, seconds: RUN_SECONDS, viewDuration,
     env, q4k, forcedGate: gate.forced === true,
     ...snap,
   };
@@ -620,6 +651,29 @@ function runOne(bvid, group) {
 /** 把 `host|os` 判成线路（用生产函数，第二参数别漏） */
 function classify(host, os) {
   return classifyCdn(host, os ? `os=${os}` : undefined).cls;
+}
+
+/**
+ * 换线次数：媒体请求序列里"相邻两条 host 不同"的次数。
+ *
+ * ⚠️ 与 `detectSwitches`（面板用的那个口径）一致：比的是**相邻分片的 host**。
+ * 所以"2 个 host 却 58 次"是正常的（音频/视频来自不同 host 时会来回跳）。
+ * 唯一自相矛盾的情形是 `> requests - 1`（比相邻对还多），那种一定是算错了 ——
+ * 这里直接抛错，不许静默写进报告。
+ *
+ * @param media 分片请求序列
+ * @param total 该 run 的请求总数
+ */
+function countSwitches(media, total) {
+  let n = 0;
+  for (let i = 1; i < media.length; i += 1) if (media[i].host !== media[i - 1].host) n += 1;
+  if (media.length > 0 && n > media.length - 1) {
+    throw new Error(`switches=${n} > media-1=${media.length - 1}，换线计数自相矛盾`);
+  }
+  if (total !== undefined && n > total) {
+    throw new Error(`switches=${n} > requests=${total}，换线计数自相矛盾`);
+  }
+  return n;
 }
 
 /**
@@ -643,12 +697,55 @@ function summarize(run) {
   const hostsDetail = Object.values(byHost).sort((a, b) => b.n - a.n);
   const total = per.pcdn + per.official + per['third-party'] + per.unknown;
   const stats = run.stats || [];
+  const videoDuration =
+    run.videoDuration !== undefined && run.videoDuration !== null
+      ? run.videoDuration
+      : run.video && run.video.duration !== undefined
+        ? run.video.duration
+        : null;
+  const viewDuration = run.viewDuration === undefined ? null : run.viewDuration;
+  /** 对外的"片长"：优先实测 `video.duration`，读不到就退回服务端 `view.duration`（并标出来） */
+  const shownDuration = videoDuration !== null ? videoDuration : viewDuration;
+  /** 片长闸门：>= 600s，且与 `view.duration` 一致（差 < 1s） */
+  const durationOk =
+    typeof videoDuration === 'number' &&
+    videoDuration >= MIN_DURATION &&
+    (viewDuration === null || Math.abs(videoDuration - viewDuration) < 1);
+  const filterRemoved = stats.reduce((a, s) => a + (s.removed || 0), 0);
+  /**
+   * 过滤闸门**三态**（2026-11-17 主理人指出）：
+   *
+   * `applied` 有两种 false：真的没开、以及"开了但这条视频没有可删的候选"。
+   * 后者主世界可能压根不发 `pcdn-filter-stats`，把它当"没开"会冤枉一整组数据。
+   *
+   * | group | 观察到 | 结论 |
+   * | --- | --- | --- |
+   * | A | `applied:true` | `bad`（开关没关掉） |
+   * | A | `applied:false` | `ok` |
+   * | B | `applied:true` | `ok` |
+   * | B | 无 stats 且本视频**确实没有 PCDN 候选** | `no-sample`（不算失败，也不进对比） |
+   * | B | 无 stats 但该视频有 PCDN | `bad`（真没开） |
+   */
+  const hasPcdnCandidates = undefined; // 由 A 组观测在汇总层回填
+  const sawApplied = stats.some((s) => s.applied === true);
+  const gateState =
+    run.group === 'A' ? (sawApplied ? 'bad' : 'ok') : sawApplied ? 'ok' : 'unknown-pending';
+  /** A 组本视频的 PCDN 请求数 == 0 ⇒ 这条片子测不出开关差别（保留在表里，不进均值） */
+  const pcdnSampleOk = (per.pcdn || 0) > 0 || run.group === 'B';
   return {
     bvid: run.bvid,
+    duration: shownDuration,
+    durationMeasured: videoDuration,
+    viewDuration,
+    durationOk,
     group: run.group,
     requests: total,
+    /** ⚠️ 这些是 **0..1 的分数**，不是百分数。`officialShare: 1` 表示 100%。
+     *  对外展示统一用下面的 `*Pct`（已 ×100，带一位小数），别再让读者自己换算。 */
     pcdnShare: total ? per.pcdn / total : null,
     officialShare: total ? per.official / total : null,
+    pcdnPct: total ? +((per.pcdn / total) * 100).toFixed(1) : null,
+    officialPct: total ? +((per.official / total) * 100).toFixed(1) : null,
     per,
     hostsDetail,
     classifiedSample: detail,
@@ -667,7 +764,7 @@ function summarize(run) {
     canplayMissed: run.canplayMissed === true,
     canplayCount: run.canplayCount === undefined ? null : run.canplayCount,
     canplayT: run.canplayT,
-    switches: run.switches || 0,
+    switches: countSwitches(run.media || [], total),
     height: run.video ? run.video.height : null,
     readyState: run.video ? run.video.readyState : null,
     error: run.video ? run.video.error : null,
@@ -677,15 +774,18 @@ function summarize(run) {
      * 闸门判定。**A 组必须 `applied:false`，B 组必须 `applied:true`** ——
      * 不满足就说明开关没拨到位（或规则没下发），这一 run 直接作废，不许进汇总。
      */
+    gateState,
+    pcdnSampleOk,
     gateOk:
-      (run.group === 'A'
-        ? !stats.some((s) => s.applied === true)
-        : stats.some((s) => s.applied === true)) &&
-      // 没真的播起来 ⇒ stall / 占比都不可比，直接作废
+      // ① 片长闸门：< 600 秒的样本直接作废（上一轮的 14 秒短片就是这么毁掉整组的）
+      durationOk &&
+      // ② 实播闸门：没真的播够 80% 窗口 ⇒ stall / 占比都不可比
       (run.playedSeconds !== undefined && run.playedSeconds !== null
         ? run.playedSeconds >= RUN_SECONDS * 0.8
-        : false),
-    filterRemoved: stats.reduce((a, s) => a + (s.removed || 0), 0),
+        : false) &&
+      // ③ 过滤闸门（三态，见 gateState）
+      gateState === 'ok',
+    filterRemoved,
     filterKeptIntact: stats.reduce((a, s) => a + (s.keptIntact || 0), 0),
     filterReason: (stats.find((s) => s.reason) || {}).reason || null,
     statsCount: stats.length,
@@ -695,7 +795,99 @@ function summarize(run) {
   };
 }
 
+/**
+ * 重算汇总（`--resummarize`）：从 `runs[]` 原始数据重算一遍 summary + 三态闸门。
+ *
+ * 为什么需要它：跑批过程里 `summarize()` 改过好几版，而**已跑完的进程用的是旧代码**；
+ * 原始数据（media / stats / events）是全的，重算比重跑便宜得多，也保证"表里的数与代码一致"。
+ *
+ * ## B 组闸门的最终裁决（需要 A 组的信息，单 run 时判不了）
+ *
+ * | 该视频 A 组 PCDN 请求数 | B 组 stats | 裁决 |
+ * | --- | --- | --- |
+ * | 0 | 任意 | `no-sample` —— 这条片子本来就不走 PCDN，**不进均值**，但保留在表里 |
+ * | >0 | 有 `applied:true` | `ok` |
+ * | >0 | 没有 | `bad` —— 真没开，作废 |
+ *
+ * @returns 重算后的结果对象
+ */
+function resummarize() {
+  const file = JSON.parse(readFileSync(OUT, 'utf8'));
+  const sums = (file.runs || []).map(summarize);
+  const byVideo = {};
+  for (const s of sums) (byVideo[s.bvid] ||= {})[s.group] = s;
+  for (const [bvid, pair] of Object.entries(byVideo)) {
+    const a = pair.A;
+    const b = pair.B;
+    const aPcdn = a ? a.per.pcdn : null;
+    if (aPcdn === 0) {
+      if (a) a.gateState = 'no-sample';
+      if (b) {
+        b.gateState = 'no-sample';
+        b.gateOk = false;
+      }
+    } else if (b) {
+      b.gateState = b.filterApplied ? 'ok' : 'bad';
+    }
+    if (a) a.pcdnSampleOk = aPcdn > 0;
+    if (b) b.pcdnSampleOk = aPcdn > 0;
+  }
+  file.summary = sums;
+  file.resummarizedAt = new Date().toISOString();
+  writeFileSync(OUT, JSON.stringify(file, null, 2), 'utf8');
+  return { file, sums };
+}
+
+/** 打印表 + 中位数 + 反例清单（`--resummarize` 用） */
+function printTable(file, sums) {
+  const line = (x) => process.stdout.write(`${x}
+`);
+  const byVideo = {};
+  for (const s of sums) (byVideo[s.bvid] ||= {})[s.group] = s;
+  line('');
+  line('bvid          组  片长  PCDN%  官方%  stall 起播s 换线  applied removed 闸门');
+  for (const [bvid, pair] of Object.entries(byVideo)) {
+    for (const g of ['A', 'B']) {
+      const s = pair[g];
+      if (!s) continue;
+      line(
+        `${bvid.padEnd(13)} ${g}  ${String(s.duration || '?').padStart(4)}  ` +
+          `${String(s.pcdnPct).padStart(5)}  ${String(s.officialPct).padStart(5)}  ` +
+          `${String(s.stalls).padStart(4)}  ${String(s.readyAt === null ? '—' : (s.readyAt / 1000).toFixed(2)).padStart(4)}  ` +
+          `${String(s.switches).padStart(3)}  ${String(s.filterApplied).padStart(5)}  ${String(s.filterRemoved).padStart(5)}  ${s.gateState}`,
+      );
+    }
+  }
+  const med = (xs) => {
+    const v = xs.filter((x) => typeof x === 'number').sort((p, q) => p - q);
+    if (!v.length) return null;
+    const m = Math.floor(v.length / 2);
+    return v.length % 2 ? v[m] : +((v[m - 1] + v[m]) / 2).toFixed(2);
+  };
+  const usable = sums.filter((s) => s.gateState === 'ok' || (s.gateState === 'no-sample' && s.group === 'A'));
+  const A = usable.filter((s) => s.group === 'A');
+  const B = usable.filter((s) => s.group === 'B');
+  line('');
+  line(`中位数（可用样本 A=${A.length} / B=${B.length}）`);
+  line(`  PCDN%  A=${med(A.map((s) => s.pcdnPct))}  B=${med(B.map((s) => s.pcdnPct))}`);
+  line(`  stall  A=${med(A.map((s) => s.stalls))}  B=${med(B.map((s) => s.stalls))}`);
+  line(`  起播s  A=${med(A.map((s) => (s.readyAt === null ? null : s.readyAt / 1000)))}  B=${med(B.map((s) => (s.readyAt === null ? null : s.readyAt / 1000)))}`);
+  const noSample = Object.entries(byVideo).filter(([, p]) => p.A && p.A.per.pcdn === 0).map(([b]) => b);
+  line(`
+A 组 PCDN 请求数为 0（测不出差别，不进均值）：${noSample.length ? noSample.join(', ') : '无'}`);
+  const badB = sums.filter((s) => s.group === 'B' && s.gateState === 'bad').map((s) => s.bvid);
+  line(`B 组闸门失败（真没过滤）：${badB.length ? badB.join(', ') : '无'}`);
+  const notPlayed = sums.filter((s) => !s.playOk).map((s) => `${s.bvid}/${s.group}`);
+  line(`实播不足 80% 窗口的 run：${notPlayed.length ? notPlayed.join(', ') : '无'}`);
+}
+
 // ───────────────────────── 主流程 ─────────────────────────
+
+if (process.argv.includes('--resummarize')) {
+  const { file, sums } = resummarize();
+  printTable(file, sums);
+  process.exit(0);
+}
 
 ensureSession();
 const result = {
@@ -714,7 +906,31 @@ const opened = SKIP_SWITCH ? { ok: true, skipped: true } : setSwitch(false); // 
 result.switchInit = opened;
 process.stdout.write(`开关初始化：${JSON.stringify(opened)}\n`);
 
+/**
+ * 先对每个样本取一次服务端片长：`< 600s` 的直接从样本里剔除并记原因。
+ * 上一轮整组作废的根因就是"没查片长"，所以这一步必须在跑任何 run 之前。
+ */
+const videoMeta = {};
 for (const bvid of result.videos) {
+  try {
+    const v = evaluate(exprViewDuration(bvid));
+    videoMeta[bvid] = { duration: v.duration, aid: v.aid, cid: v.cid };
+    const ok = typeof v.duration === 'number' && v.duration >= MIN_DURATION;
+    process.stdout.write(`片长校验 ${bvid}: ${v.duration}s ${ok ? 'OK' : '**不足 600s，剔除**'}
+`);
+    if (!ok) {
+      result.order.push({ bvid, skipped: 'too-short', duration: v.duration });
+    }
+  } catch (e) {
+    videoMeta[bvid] = { duration: null, error: String(e.message || e).slice(0, 120) };
+    process.stdout.write(`片长校验 ${bvid}: 失败 ${String(e.message || e).slice(0, 80)}
+`);
+  }
+}
+result.videoMeta = videoMeta;
+
+for (const bvid of result.videos) {
+  if (videoMeta[bvid] && typeof videoMeta[bvid].duration === 'number' && videoMeta[bvid].duration < MIN_DURATION) continue;
   for (const group of ['A', 'B']) {
     if (!GROUPS.includes(group)) continue;
     const sw = SKIP_SWITCH ? { ok: true, skipped: true } : setSwitch(group === 'B');
@@ -737,7 +953,7 @@ for (const bvid of result.videos) {
     bsk(['wait-ms', '1000']);
     let run = null;
     try {
-      run = runOne(bvid, group);
+      run = runOne(bvid, group, videoMeta[bvid] ? videoMeta[bvid].duration : null);
     } catch (e) {
       process.stdout.write(`  ⚠️ run 失败：${String(e.message || e).slice(0, 160)}\n`);
       result.order.push({ bvid, group, error: String(e.message || e).slice(0, 200) });
