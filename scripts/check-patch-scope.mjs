@@ -21,27 +21,36 @@
  * 4. 两份 ADR 里的授权路径文本必须能被找到（ADR 被改坏了要能发现）
  * 5. `pgcSwapPlayviewBody()` 的**写集**必须落在 ADR 0023 的授权字段集内（2026-11-17 补）
  * 6. `pgcPatchPlayinfo()` 只能替换 `result.video_info`，不许碰同级键（2026-11-17 补）
- * 7. 候选过滤（ADR 0038）的**写集 / 造 URL / 画质字段 / 权益字段 / 授权字段派生 /
- *    三处调用点 / 写死域名**七条判据（2026-11-17 补）
+ * 7. 候选过滤/改写（ADR 0038 + **ADR 0039**）的**写集 / 造 URL / 画质字段 / 权益字段 /
+ *    授权字段派生 / 三处调用点 / 写死域名**七条判据（2026-11-17 补，2026-11-17 随 ADR 0039 升级）
  *
- * ## 第七类（本脚本编号；`AGENTS.md` §5.5 里它是第五类改写）：候选过滤（ADR 0038，2026-11-17 接线）
+ * ## 第七类（本脚本编号；`AGENTS.md` §5.5 里它是第五类改写）：候选改写（ADR 0038 → ADR 0039）
  *
  * `AGENTS.md` §5.5 现在列了**七行**改写，本脚本覆盖其中**七行**（2026-11-17 补齐）。
- * 最后一行是 ADR 0038 授权的「在取流数据上过滤 PCDN 候选」—— 它的写集与上面六类
- * **结构相反**：前六类一个字节都不许碰 URL，这一类**只**动 `base_url` / `backup_url`。
- * 所以它单独一组（见 `main()` 末尾「第七类」一节），不并进上面任何一条。
+ * 最后一行是 ADR 0038 授权的「在取流数据上过滤 PCDN 候选」，经 ADR 0039 升级为
+ * 「**只换 authority、不增删候选**」。它与上面六类**结构相反**：前六类一个字节都不许碰 URL，
+ * 这一类**只**动 `base_url` / `backup_url`。所以它单独一组（见 `main()` 末尾「第七类」一节），
+ * 不并进上面任何一条。
  *
- * 七条判据 = ADR 0038 的五条硬边界 + 两条工程约束：
+ * 七条判据 = ADR 0039 的硬边界 + 两条工程约束：
  *
  * | # | 断言 |
  * | --- | --- |
  * | ① | 写集只在 `base_url` / `baseUrl` / `backup_url` / `backupUrl` |
- * | ② | 函数体里没有造 URL 的痕迹（`http` / `//` / `location`） |
+ * | ② | 函数体里没有**非授权**的造 URL 痕迹（`http` / `//` / `location`）—— proxy 模板除外 |
  * | ③ | 写集里不许出现画质/带宽字段（`quality` / `height` / `codecid` / …）|
  * | ④ | 不许碰权益字段（`is_preview` / `play_check` / `user_status` / …）|
  * | ⑤ | 授权字段集从 `filter.ts` **派生**，不手抄第二份 |
  * | ⑥ | **三处调用点都调同一个函数**（少接一处 = 番剧切集整类漏过去）|
- * | ⑦ | 判据函数体里不许写死域名/标签字面量（防两处真相源漂移）|
+ * | ⑦ | 判据 / 改写函数体里不许写死域名/标签字面量（防两处真相源漂移）|
+ *
+ * ### ADR 0039 给"造 URL"开的唯一口子
+ *
+ * ADR 0038 下"造 URL"就是编数据，一律红。ADR 0039 **显式授权**了一种形状：
+ * `https://<cfg.proxyHost>?url=<encodeURIComponent(原 URL)>`（边界 7，仅限 path 命中
+ * `proxyPathPrefix` 的 PCDN 候选）。因此 `rewriteCandidateUrl()` 里允许出现
+ * **恰好** `https://` 与 `?url=` 两个字面量（`REWRITE_TEMPLATE_LITERALS`），
+ * 其它函数、其它字面量照红；镜像 / proxy 域名仍必须来自 `cfg`，写死就红。
  *
  * 判据自身会退化（正则写歪、函数改名、有人放宽 `AUTHORIZED_*`），而退化的表现是
  * **静默**（脚本照打 ✅）。所以每一条的"红"都固化在
@@ -161,6 +170,14 @@ const ADR_0023 = 'docs/decisions/0023-intercept-playview-durl-swap.md';
 /** 授权的唯一来源（候选过滤，2026-11-17 接线） */
 const ADR_0038 = 'docs/decisions/0038-filter-pcdn-candidates.md';
 
+/**
+ * 授权的唯一来源（**换 authority**，ADR 0038 的升级版）。
+ *
+ * 两要同时存在：0038 给出"这一类改写"的授权，0039 给出"换而不是删"的边界。
+ * 删掉任何一份都说明有人在绕过决策流程。
+ */
+const ADR_0039 = 'docs/decisions/0039-rewrite-pcdn-authority.md';
+
 /** 候选过滤的**实现**（授权字段名从这里派生，不手抄） */
 const FILTER_TS = 'src/core/cdn/filter.ts';
 
@@ -203,7 +220,16 @@ const FORBIDDEN_FILTER_TARGETS = ['is_preview', 'play_check', 'user_status', 'ha
  * 不查标识符 —— `isPcdnUrl` / `pcdnFilterOn` 这些名字含 `pcdn` 是合法的。
  */
 const FORBIDDEN_RULE_LITERALS =
-  /(bilivideo|biliapi|mcdn|bcdn|mountaintoys|szbdyd|zhenidc|qrstuvwxyzab|gotcha|pcdn)/i;
+  /(bilivideo|biliapi|mcdn|bcdn|mountaintoys|szbdyd|zhenidc|qrstuvwxyzab|gotcha|pcdn|upos-sz-|proxy-tf-)/i;
+
+/**
+ * ADR 0039 边界 7 授权的 proxy 包装模板，**只**在 `rewriteCandidateUrl()` 里放行。
+ *
+ * 这两个字面量拼出来的是 `https://<cfg.proxyHost>?url=<encodeURIComponent(原 URL)>` ——
+ * host 来自运行时 `cfg`，扩展不自带任何镜像域名。放行是**按函数 + 按字面量全集**的：
+ * 换个函数写 `https://` 仍红，在函数里写 `http://` / `https://evil` 也红。
+ */
+const REWRITE_TEMPLATE_LITERALS = new Set(['https://', '?url=']);
 
 /**
  * ADR 0023 授权 `pgcSwapPlayviewBody()` 在 **`data.video_info` 上**写的字段。
@@ -1058,6 +1084,8 @@ async function main() {
 
   const filterFns = {
     isPcdnUrl: extractFunctionBody(src, 'isPcdnUrl'),
+    // ADR 0039：改写函数也必须参与抽取，否则它的字面量根本查不到（等于漏检）
+    rewriteCandidateUrl: extractFunctionBody(src, 'rewriteCandidateUrl'),
     filterOneTrack: extractFunctionBody(src, 'filterOneTrack'),
     filterDashOf: extractFunctionBody(src, 'filterDashOf'),
   };
@@ -1114,28 +1142,38 @@ async function main() {
       }
     }
 
-    const urlMaking = filterLiterals.filter((x) =>
-      /https?:|\/\/|location\.|origin|hostname\s*\+/i.test(x.literal),
+    /**
+     * ADR 0039 边界 7：只有 `rewriteCandidateUrl()` 里的两个模板字面量放行。
+     *
+     * 若不按函数 + 字面量全集放行，改写在主世界就寸步难行（proxy 包装必须拼串）；
+     * 若放行太宽（例如按正则 `/https/`），任何人都能在过滤函数里造任意 URL。
+     */
+    const urlMaking = filterLiterals.filter(
+      (x) =>
+        !(x.name === 'rewriteCandidateUrl' && REWRITE_TEMPLATE_LITERALS.has(x.literal)) &&
+        /https?:|\/\/|location\.|origin|hostname\s*\+/i.test(x.literal),
     );
     const driftLiterals = filterLiterals.filter((x) => FORBIDDEN_RULE_LITERALS.test(x.literal));
 
     if (urlMaking.length > 0) {
       problems.push({
-        what: `${MAIN_WORLD} 的候选过滤里出现了**造 URL 的痕迹**`,
+        what: `${MAIN_WORLD} 的候选改写里出现了**非授权的造 URL 痕迹**`,
         why: [
           urlMaking.map((x) => `${x.name}: ${JSON.stringify(x.literal)}`).join('、'),
-          '→ ADR 0038 边界 2：只许删除或重排候选，**不许新增任何 URL**（拼出来的签名多半也不对）',
+          '→ ADR 0039 边界 1/2：只许改 authority、不增删候选；唯一例外是',
+          '   rewriteCandidateUrl() 里 `https://` + `?url=` 的 proxy 包装模板（边界 7）',
         ].join('\n    '),
       });
     }
 
     if (driftLiterals.length > 0) {
       problems.push({
-        what: `${MAIN_WORLD} 的候选过滤里写死了域名/标签字面量`,
+        what: `${MAIN_WORLD} 的候选改写里写死了域名/标签字面量`,
         why: [
           driftLiterals.map((x) => `${x.name}: ${JSON.stringify(x.literal)}`).join('、'),
-          `→ 判据只许来自 ${RULES_TS} 的 PCDN_RULES（经 cfg 下发）。写死一份 = 两处真相源，`,
-          '   漂移的表现是"开关开着却在走 PCDN"（静默失败）。',
+          `→ 判据只许来自 ${RULES_TS} 的 PCDN_RULES、镜像只许来自 filter.ts 的 DEFAULT_REWRITE_RULES`,
+          '   （两者都经 cfg 下发）。写死一份 = 两处真相源，',
+          '   漂移的表现是"开关开着却在走 PCDN / 换到过期镜像"（静默失败）。',
         ].join('\n    '),
       });
     }
@@ -1239,6 +1277,28 @@ async function main() {
     }
   }
 
+  // ADR 0039（换 authority 的授权）必须还在，且仍写着那两条硬边界
+  let adr0039Text = '';
+  try {
+    adr0039Text = await readFile(join(ROOT, ADR_0039), 'utf8');
+  } catch {
+    problems.push({
+      what: `找不到 ${ADR_0039}`,
+      why: '换 authority 这件事必须有 ADR 兜着，不能只剩代码 —— ADR 0038 只授权了删除。',
+    });
+  }
+  if (adr0039Text) {
+    const missingInAdr = ['encodeURIComponent', '不新增、不删候选', 'cfg'].filter(
+      (f) => !adr0039Text.includes(f),
+    );
+    if (missingInAdr.length > 0) {
+      problems.push({
+        what: `ADR 0039 里没有这些授权要点：${missingInAdr.join(', ')}`,
+        why: 'ADR 被改动过。若是有意收紧授权，请同步本脚本；否则请恢复 ADR。',
+      });
+    }
+  }
+
   console.log(`[patch] 检查 ${MAIN_WORLD} 的响应体改写范围`);
   console.log(`[patch] 授权来源：${ADR_0013}（会员字段）`);
   console.log(`[patch] 授权来源：${ADR_0017}（观看进度）`);
@@ -1264,6 +1324,9 @@ async function main() {
     console.log(
       `[patch] ✅ 候选过滤（ADR 0038）：写集 ⊆ ${String(authorizedFilterFields?.length ?? 0)} 个候选字段（从 filter.ts 派生）· 三处调用点全接 · 判据无写死域名`,
     );
+    console.log(
+      `[patch] ✅ 候选改写（ADR 0039）：只换 authority、条数不变 · proxy 模板仅 ${REWRITE_TEMPLATE_LITERALS.size} 条字面量放行 · 镜像/proxy host 只来自 cfg`,
+    );
     return;
   }
 
@@ -1287,19 +1350,27 @@ main().catch((err) => {
  * ## 写集的方向相反
  *
  * 前六类**一个字节都不许碰 URL**；第七类恰恰**只**动 URL（`dash[].base_url` /
- * `backup_url` 的删除与重排）。并进任何一条都会让"这条是为了什么被授权"查不出来。
+ * `backup_url` 的 authority 替换 —— ADR 0039 起不再删除）。并进任何一条都会让
+ * "这条是为了什么被授权"查不出来。
  *
  * ## 七条判据的落地位置与反例（2026-11-17 接线，已全部实现）
  *
  * | # | 断言 | 写在 `main()` 的哪一段 | 反例 |
  * | --- | --- | --- | --- |
  * | ① | 写集**只在**四个候选字段上 | 「① 写集只在四个候选字段」 | 顺手把 write 扩到 `dash.duration` |
- * | ② | 函数体里**不许有造 URL 的痕迹** | 「② / ⑦ 不许造 URL、不许写死域名」 | 凭空造一条签名不对的 URL |
+ * | ② | 函数体里**不许有非授权的造 URL 痕迹** | 「② / ⑦ 不许造 URL、不许写死域名」 | 在非改写函数里凭空造 URL |
  * | ③ | 写集里**不许出现**画质/带宽字段 | 同 ①（`FORBIDDEN_FILTER_WRITES`） | 顺手改画质档位（边界 3） |
  * | ④ | **不许碰**权益字段 | 「④ 不许碰权益字段」 | 借过滤之名伪造权益（边界 4） |
  * | ⑤ | 授权字段集从 `filter.ts` **派生** | `authorizedFilterFields` | 手抄第二份 → 加第五种命名形态时漂移 |
  * | ⑥ | **三处调用点都调同一个函数** | 「⑥ 三处调用点都接了同一个函数」 | 只在 playurl 上过滤 → 番剧切集整类漏过去 |
- * | ⑦ | 判据函数体里**不许写死域名/标签** | 同 ②（`FORBIDDEN_RULE_LITERALS`） | 主世界自带一份域名表 → 开关开着却在走 PCDN |
+ * | ⑦ | 判据 / 改写函数体里**不许写死域名/标签** | 同 ②（`FORBIDDEN_RULE_LITERALS`） | 主世界自带一份域名表 → 开关开着却在走 PCDN |
+ *
+ * ## ② 为什么不再"一律不许造 URL"
+ *
+ * ADR 0038 下这是对的（只删不增）；ADR 0039 授权了 proxy 包装这**唯一**例外。
+ * 所以现在按"函数 + 字面量全集"放行：`rewriteCandidateUrl()` 里恰好允许
+ * `https://` 与 `?url=`，host 必须来自 `cfg`；其余任何函数、任何字面量仍红。
+ * 这比放宽正则安全 —— 拼错协议、写死域名、把模板抄到别处都会被拦。
  *
  * ## ⑥ 为什么是这一整类里最容易漏的一条
  *

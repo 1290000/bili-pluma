@@ -102,6 +102,7 @@
 | [0036](./decisions/0036-auto-update.md) | **允许远程「版本查询」，仍然不做远程「配置」**：面板第 5 个 Tab「关于」可检查/安装更新。代价写明：一次目录授权、权限可能每次要再确认、**无签名校验** |
 | [0037](./decisions/0037-panel-material.md) | **界面底板改用半透明材质**：照搬 DSH 的 70% 填充 + `blur(40px) saturate(150%)`，0.5px 描边藏进 box-shadow 第一层；代价写明（每帧重采样、播放页帧率未测、白底上不可见） |
 | [0038](./decisions/0038-filter-pcdn-candidates.md) | **允许在取流数据上「只减不增」地过滤 PCDN 候选**（第五类响应体改写）：禁改 `quality`/`support_formats`/轨数、禁新增 URL、全 PCDN 的轨原样保留；同时追认 ADR 0020/0023 那两类此前漏登的流数据改写 |
+| [0039](./decisions/0039-rewrite-pcdn-authority.md) | **把 PCDN 候选的 authority 换成官方镜像**（升级 ADR 0038 的删除路线）：只换 host、不增删候选、path/query 一字不动；`/v1/resource/upgcxcode/` 走 proxy 包装，清单经 `cfg` 下发；验证门通过前保持默认关闭 |
 
 > ⚠️ **这张表必须与实际 `docs/decisions/` 对账** —— 2026-10-30 发现它漏了 0029/0030
 > （新增 ADR 时忘了登记）。现在由 `check-adr-index` 自动断言，漏登记会红。

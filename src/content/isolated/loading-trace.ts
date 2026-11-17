@@ -112,9 +112,9 @@ export interface LoadingSnapshotLite {
    *
    * 这份快照的形状被几十个测试当作 fixture 手工构造；做成必填会让它们**全部**
    * 因为一个与各自断言无关的字段而变红。所以是可选的，**消费方必须自己兜底**
-   * （导出侧 `buildLoadingExport()` 会补 `{applied:false, removed:0, keptIntact:0}`）。
+   * （导出侧 `buildLoadingExport()` 会补 `{applied:false, rewritten:0, proxied:0, fallbackKept:0}`）。
    *
-   * ⚠️ `applied` 回答的是"**这一次页面里过滤真的生效过**"（真的删过候选），
+   * ⚠️ `applied` 回答的是"**这一次页面里改写真的生效过**"（真的换过至少一条候选），
    * 不是"开关开着"。开关开着但没有 PCDN 候选时，它仍然是 `false` ——
    * 那正是"未生效"，与"剔了 0 条"是两件事（后者不需要报告）。
    */
@@ -123,12 +123,14 @@ export interface LoadingSnapshotLite {
 
 /** 候选过滤的累计结果（主世界每处调用点各报一条，采集侧累加） */
 export interface PcdnFilterStats {
-  /** 是否**真的**改动过响应体（删过至少一条候选） */
+  /** 是否**真的**改动过响应体（换过至少一条候选的 authority） */
   applied: boolean;
-  /** 被剔掉的候选 URL 条数 */
-  removed: number;
-  /** 因为"剔完就没了"而原样保留的轨数（ADR 0038 边界 5） */
-  keptIntact: number;
+  /** 真正换了 authority 的候选条数（含走 proxy 的） */
+  rewritten: number;
+  /** 其中走 proxy 包装的条数（ADR 0039 边界 7） */
+  proxied: number;
+  /** 想换但换不了、原样保留的条数（解析失败 / 规则缺项） */
+  fallbackKept: number;
   /**
    * 为什么**没**生效（2026-11-17，Lead 约束 ②）。
    *
@@ -222,10 +224,10 @@ export interface LoadingTraceState {
    */
   streamingProxied: boolean;
   /**
-   * 候选过滤（ADR 0038）的**累计**结果（2026-11-17 接线）。
+   * 候选改写（ADR 0039）的**累计**结果（2026-11-17 接线）。
    *
    * 主世界三个调用点各自上报一次（`playurl` / `playinfo` / `playview`），这里
-   * **累加**而不是覆盖：一次播放可能先整页注入、再切一集，两个数都要算进去。
+   * **累加**而不是覆盖：一次播放可能先整页注入、再切一集，三个数都要算进去。
    */
   filter: PcdnFilterStats;
 }
@@ -239,7 +241,7 @@ export function createTraceState(): LoadingTraceState {
     lastSegReqCls: null,
     extPatchRecorded: false,
     streamingProxied: false,
-    filter: { applied: false, removed: 0, keptIntact: 0 },
+    filter: { applied: false, rewritten: 0, proxied: 0, fallbackKept: 0 },
   };
 }
 
@@ -662,12 +664,12 @@ export function recordExtPatch(state: LoadingTraceState, t: number, note?: strin
 }
 
 /**
- * 记录一次**候选过滤**的结果（ADR 0038，2026-11-17 接线）。
+ * 记录一次**候选改写**的结果（ADR 0039，2026-11-17 接线）。
  *
  * ## 为什么是累加而不是覆盖
  *
- * 一次播放里三处取流点都可能过滤：普通视频的 playurl、PGC 整页注入、PGC 切集换流。
- * 每个数都要算进去 —— 覆盖会让"整页注入删了 3 条、切集又删了 2 条"只剩最后那条。
+ * 一次播放里三处取流点都可能改写：普通视频的 playurl、PGC 整页注入、PGC 切集换流。
+ * 每个数都要算进去 —— 覆盖会让"整页注入换了 3 条、切集又换了 2 条"只剩最后那条。
  *
  * 参数直接来自主世界的 `pcdn-filter-stats` 消息（见 `main-world.js` 的
  * `reportPcdnFilter()`）。
@@ -679,24 +681,23 @@ export function recordPcdnFilter(
   state: LoadingTraceState,
   payload: {
     applied: boolean;
-    removed: number;
-    keptIntact: number;
+    rewritten: number;
+    proxied: number;
+    fallbackKept: number;
     reason?: FilterSkipReason;
   },
 ): void {
-  const removed = Number.isFinite(payload.removed) && payload.removed > 0 ? payload.removed : 0;
-  const keptIntact =
-    Number.isFinite(payload.keptIntact) && payload.keptIntact > 0 ? payload.keptIntact : 0;
-
-  state.filter.removed += removed;
-  state.filter.keptIntact += keptIntact;
+  const count = (v: number): number => (Number.isFinite(v) && v > 0 ? v : 0);
+  state.filter.rewritten += count(payload.rewritten);
+  state.filter.proxied += count(payload.proxied);
+  state.filter.fallbackKept += count(payload.fallbackKept);
   if (payload.applied === true) {
     state.filter.applied = true;
     /**
      * **真的过滤过之后，`reason` 必须消失**（2026-11-17）。
      *
      * 现实时序是这样的：开关开着、规则还没下发 → 主世界报一条
-     * `reason: 'rulesMissing'`；随后规则到了、真的剔掉了候选 → 再报一条
+     * `reason: 'rulesMissing'`；随后规则到了、真的换掉了候选 → 再报一条
      * `applied: true`。若不清掉 reason，导出里就会出现
      * 「`applied: true` + `reason: 'rulesMissing'`」这种自相矛盾的一行，
      * 而读的人会去查一个已经不存在的问题。
@@ -712,8 +713,9 @@ export function recordPcdnFilter(
  */
 export function notePcdnFilter(payload: {
   applied: boolean;
-  removed: number;
-  keptIntact: number;
+  rewritten: number;
+  proxied: number;
+  fallbackKept: number;
   reason?: FilterSkipReason;
 }): void {
   recordPcdnFilter(state, payload);

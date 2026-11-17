@@ -1,21 +1,25 @@
 // @vitest-environment jsdom
 
 /**
- * 候选过滤接线（ADR 0038）—— 主世界侧的判据与三个变换点。
+ * 候选改写接线（ADR 0038 → **ADR 0039**）—— 主世界侧的判据与三个变换点。
  *
  * ## 这个文件守什么
  *
- * 过滤代码在主世界（裸 JS），`filter.ts` 在 `core/`。两份实现**必须逐条结论一致**，
- * 否则"开关开着却在走 PCDN"或"官方候选被误删"都会静默发生 —— 前者的表现是
+ * 改写代码在主世界（裸 JS），`filter.ts` 在 `core/`。两份实现**必须逐条结论一致**，
+ * 否则"开关开着却在走 PCDN"或"官方候选被误改"都会静默发生 —— 前者的表现是
  * 功能不生效，后者只有真出故障那天才发现。
  *
  * 所以这里有两条主线：
  *
  * 1. **对账**：`isPcdnUrl()` vs `classifyCdn()`（跑 84 条实测 host 全集）、
- *    `filterOneTrack()` vs `filterPcdnCandidates()`（同一批 fixture）；
- * 2. **接线语义**：开关关闭时**一个字节都不改**、规则缺失时不过滤且报
- *    `reason: 'rulesMissing'`、进度 + 过滤**一次解析一次序列化**、幂等、
- *    `dash` 缺失不报错。
+ *    `filterOneTrack()` vs `rewritePcdnCandidates()`（同一批 fixture，含 host/path/条数）；
+ * 2. **接线语义**：开关关闭时**一个字节都不改**、任一份规则缺失时不动响应体并报
+ *    `reason: 'rulesMissing'`、进度 + 改写**一次解析一次序列化**、幂等、三处调用点。
+ *
+ * ## ADR 0039 的新不变量
+ *
+ * 输出**条数恒等于输入**，PCDN 的 host 换成下发的 mirrorHost、path/query/hash 不变，
+ * 命中 `/v1/resource/upgcxcode/` 的走 proxy 包装。"删到只剩 1 条"的旧断言全部退休。
  *
  * ## 为什么用 `spliceTestExports` 而不是驱动 XHR
  *
@@ -31,13 +35,18 @@ import { JSDOM } from 'jsdom';
 import { describe, expect, it } from 'vitest';
 
 import { classifyCdn, PCDN_RULES } from '@core/cdn/classify';
-import { filterPcdnCandidates, type CandidateTrack } from '@core/cdn/filter';
+import {
+  DEFAULT_REWRITE_RULES,
+  rewritePcdnCandidates,
+  type CandidateTrack,
+} from '@core/cdn/filter';
 import { assertTestExports, spliceTestExports } from './helpers/main-world-exports';
 
 const SOURCE = readFileSync(resolve(process.cwd(), 'src/content/main-world.js'), 'utf8');
 
 const EXPOSED = [
   'isPcdnUrl',
+  'rewriteCandidateUrl',
   'filterOneTrack',
   'filterDashOf',
   'patchPlayurlBody',
@@ -72,11 +81,16 @@ interface Sandbox {
 /**
  * 起一个主世界沙盒并下发 `cfg`。
  *
- * @param filterOn 候选过滤开关
+ * @param filterOn 候选改写开关
  * @param withRules 是否带判据规则（`false` 用来构造"规则缺失"）
+ * @param withRewriteRules 是否带镜像/proxy 规则（ADR 0039 的第二道门）
  */
-async function boot(filterOn: boolean, withRules = true): Promise<Sandbox> {
-  return bootAt(VIDEO_URL, filterOn, withRules);
+async function boot(
+  filterOn: boolean,
+  withRules = true,
+  withRewriteRules = true,
+): Promise<Sandbox> {
+  return bootAt(VIDEO_URL, filterOn, withRules, withRewriteRules);
 }
 
 /**
@@ -85,7 +99,12 @@ async function boot(filterOn: boolean, withRules = true): Promise<Sandbox> {
  * `cfg` 的字段按真实链路发：`enabled` / `rewriteGate` 都是 `true`（否则 PGC 注入与
  * 响应体改写会被更早的门控拦下，这批用例会**因为错误的原因**变红）。
  */
-async function bootAt(url: string, filterOn: boolean, withRules = true): Promise<Sandbox> {
+async function bootAt(
+  url: string,
+  filterOn: boolean,
+  withRules = true,
+  withRewriteRules = true,
+): Promise<Sandbox> {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
     runScripts: 'outside-only',
     url,
@@ -112,6 +131,7 @@ async function bootAt(url: string, filterOn: boolean, withRules = true): Promise
       rewriteGate: true,
       filterCandidates: filterOn,
       ...(withRules ? { pcdnRules: PCDN_RULES } : {}),
+      ...(withRewriteRules ? { pcdnRewriteRules: DEFAULT_REWRITE_RULES } : {}),
     },
     '*',
   );
@@ -121,7 +141,21 @@ async function bootAt(url: string, filterOn: boolean, withRules = true): Promise
   return { win, page, sent };
 }
 
-/** 一条最小可用的 playurl 响应（dash 里两条轨，各带 1 base + 2 backup） */
+/** 按默认规则换 host 后的期望串（URL.host= 会保留原 port，须显式清掉） */
+function mirrorOf(url: string): string {
+  const parsed = new URL(url);
+  const target = new URL(`https://${DEFAULT_REWRITE_RULES.mirrorHost}/`);
+  parsed.hostname = target.hostname;
+  parsed.port = target.port;
+  return parsed.href;
+}
+
+/** 按默认规则走 proxy 包装后的期望串 */
+function proxyOf(url: string): string {
+  return `https://${DEFAULT_REWRITE_RULES.proxyHost}?url=${encodeURIComponent(url)}`;
+}
+
+/** 一条最小可用的 playurl 响应（dash 里两条轨，各带 1 base + 2/1 backup） */
 function playurlJson(): string {
   return JSON.stringify({
     code: 0,
@@ -151,6 +185,14 @@ function playurlJson(): string {
       },
     },
   });
+}
+
+/** 主世界 stats 的类型（与 core 的 FilterStats 对齐，额外带 changed） */
+interface MwStats {
+  changed: boolean;
+  rewritten: number;
+  proxied: number;
+  fallbackKept: number;
 }
 
 describe('主世界判据 vs `classifyCdn`（对账）', () => {
@@ -183,13 +225,13 @@ describe('主世界判据 vs `classifyCdn`（对账）', () => {
       ['https://XY116X196X140X25XY.MCDN.BILIVIDEO.CN/v.m4s', true],
       // 裸 IP：PCDN 节点多是 IP 直连
       ['http://123.45.67.89:8082/v.m4s', true],
-      // 认不出 / 第三方 → **都不该删**
+      // 认不出 / 第三方 → **都不该换**
       ['https://xyz.example-cdn.com/v.m4s', false],
       ['https://e1.akamaized.net/v.m4s', false],
       // 官方自建 / 服务商镜像 → 保留
       ['https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s', false],
       ['https://upos-sz-mirrorcoso1.bilivideo.com/v.m4s', false],
-      // 非法 URL → 判不了就别删
+      // 非法 URL → 判不了就别改
       ['not a url', false],
     ];
 
@@ -205,10 +247,62 @@ describe('主世界判据 vs `classifyCdn`（对账）', () => {
   });
 });
 
-describe('`filterOneTrack()` vs `filterPcdnCandidates()`（对账）', () => {
+describe('主世界 `rewriteCandidateUrl()` vs core 的两条规则', () => {
+  const PCDN = 'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/v.m4s?upsig=cc';
+  const PROXY_PATH =
+    'https://xy116x196x140x25xy.mcdn.bilivideo.cn/v1/resource/upgcxcode/x.m4s?upsig=dd';
+
+  it('★ 普通 PCDN → mirrorHost，path/query 原样；port 一并换掉', async () => {
+    const { page } = await boot(true);
+    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (u: string, stats?: MwStats) => string;
+    const stats: MwStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
+
+    const out = rewrite(PCDN, stats);
+    expect(out).toBe(mirrorOf(PCDN));
+    expect(new URL(out).host).toBe(DEFAULT_REWRITE_RULES.mirrorHost);
+    expect(new URL(out).pathname + new URL(out).search).toBe('/v.m4s?upsig=cc');
+    expect(stats).toEqual({ changed: false, rewritten: 1, proxied: 0, fallbackKept: 0 });
+  });
+
+  it('★ `/v1/resource/upgcxcode/` → proxy 包装（原 URL 完整编码）', async () => {
+    const { page } = await boot(true);
+    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (u: string, stats?: MwStats) => string;
+    const stats: MwStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
+
+    expect(rewrite(PROXY_PATH, stats)).toBe(proxyOf(PROXY_PATH));
+    expect(stats).toEqual({ changed: false, rewritten: 1, proxied: 1, fallbackKept: 0 });
+  });
+
+  it('规则没到 / 非法 URL → 返回原串（判不了就别改）', async () => {
+    const noRules = await boot(true, true, false);
+    const rewriteNoRules = noRules.page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (
+      u: string,
+    ) => string;
+    expect(rewriteNoRules(PCDN)).toBe(PCDN);
+
+    const { page } = await boot(true);
+    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (u: string, stats?: MwStats) => string;
+    const stats: MwStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
+    expect(rewrite('not a url', stats)).toBe('not a url');
+    expect(stats.fallbackKept).toBe(1);
+    // 官方候选一字不动，且不计数
+    expect(rewrite('https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s', stats)).toBe(
+      'https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s',
+    );
+    expect(stats.rewritten).toBe(0);
+    expect(stats.fallbackKept).toBe(1);
+    // 对照：真的 PCDN 仍会计数（确认上面的 0 不是"函数走空"）
+    expect(rewrite(PCDN, stats)).toBe(mirrorOf(PCDN));
+    expect(stats.rewritten).toBe(1);
+  });
+});
+
+describe('`filterOneTrack()` vs `rewritePcdnCandidates()`（对账）', () => {
   const OFFICIAL = 'https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s';
   const OFFICIAL_2 = 'https://cn-jsnt-ct-01-08.bilivideo.com/v.m4s';
   const PCDN = 'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/v.m4s';
+  const PROXY_PATH =
+    'https://xy116x196x140x25xy.mcdn.bilivideo.cn/v1/resource/upgcxcode/x.m4s';
 
   const TRACKS: Array<CandidateTrack & Record<string, unknown>> = [
     { base_url: OFFICIAL, backup_url: [OFFICIAL_2, PCDN] },
@@ -216,24 +310,31 @@ describe('`filterOneTrack()` vs `filterPcdnCandidates()`（对账）', () => {
     { baseUrl: PCDN, backupUrl: [OFFICIAL] },
     { base_url: 'https://e1.akamaized.net/v.m4s', backup_url: [] },
     { base_url: 'not a url', backup_url: [PCDN, OFFICIAL] },
+    { base_url: PROXY_PATH, backup_url: [] },
     // 没有候选字段、只有元信息 → 两个实现都该原样返回
     { quality: 120 },
   ];
 
-  it('★ 六条轨逐条一致（含全 PCDN、驼峰、非法 URL、无候选字段）', async () => {
+  it('★ 七条轨逐条一致（含全 PCDN、驼峰、非法 URL、proxy、无候选字段）', async () => {
     const { page } = await boot(true);
     const filterOneTrack = page.__PLUMA_TEST__.filterOneTrack as unknown as (
       t: unknown,
-      stats: { changed: boolean; removed: number; keptIntact: number },
+      stats: MwStats,
     ) => unknown;
 
-    const core = filterPcdnCandidates(TRACKS);
+    const core = rewritePcdnCandidates(TRACKS, DEFAULT_REWRITE_RULES);
+    const mwStats: MwStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
 
     for (const [i, track] of TRACKS.entries()) {
-      const stats = { changed: false, removed: 0, keptIntact: 0 };
-      const got = filterOneTrack(track, stats);
+      const got = filterOneTrack(track, mwStats);
       expect(got, `track #${String(i)}`).toEqual(core.tracks[i]);
     }
+    expect(mwStats).toEqual({
+      changed: true,
+      rewritten: core.stats.rewritten,
+      proxied: core.stats.proxied,
+      fallbackKept: core.stats.fallbackKept,
+    });
   });
 });
 
@@ -241,11 +342,6 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
   const RAW = playurlJson();
 
   it('★ 开关关闭 → 输出与输入**逐字节相同**（返回 null，调用方保持原响应）', async () => {
-    /**
-     * 这条是"对所有没打开功能的用户零风险"的机器证明：`patchPlayurlBody()`
-     * 只有在 `changed` 时才 `JSON.stringify`，否则返回 `null` ——
-     * 调用方拿到 null 就**连访问器都不装**，页面读到的还是原始 `responseText`。
-     */
     const { page } = await boot(false);
     const patchPlayurlBody = page.__PLUMA_TEST__.patchPlayurlBody as unknown as (
       raw: string,
@@ -258,7 +354,7 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
     expect(patchPlayurlBody(RAW, { time: 0, cid: 0 }, false)).toBeNull();
   });
 
-  it('★ 组合：进度 + 过滤**一次解析一次序列化**，两者同时生效', async () => {
+  it('★ 组合：进度 + 改写**一次解析一次序列化**，两者同时生效', async () => {
     const { page, sent } = await boot(true);
     const patchPlayurlBody = page.__PLUMA_TEST__.patchPlayurlBody as unknown as (
       raw: string,
@@ -273,23 +369,32 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
       data: {
         last_play_time: number;
         last_play_cid: number;
-        dash: { duration: number; video: Array<Record<string, unknown>> };
+        dash: {
+          duration: number;
+          video: Array<Record<string, unknown>>;
+          audio: Array<Record<string, unknown>>;
+        };
       };
     };
     // ① 进度生效
     expect(parsed.data.last_play_time).toBe(42);
     expect(parsed.data.last_play_cid).toBe(99);
-    // ② 过滤生效：官方 base 保留，PCDN backup 被剔除，顺序不变
-    expect(parsed.data.dash.video[0]?.base_url).toBe(
-      'https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s',
-    );
-    expect(parsed.data.dash.video[0]?.backup_url).toEqual([
+    // ② 改写生效：官方 base 不动，PCDN backup 换 host 但**条数不变**
+    const video = parsed.data.dash.video[0];
+    expect(video?.base_url).toBe('https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s');
+    expect(video?.backup_url).toEqual([
+      mirrorOf('https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/v.m4s'),
       'https://cn-jsnt-ct-01-08.bilivideo.com/v.m4s',
     ]);
+    expect((video?.backup_url as string[]).length).toBe(2);
+    const audio = parsed.data.dash.audio[0];
+    expect(audio?.base_url).toBe(
+      mirrorOf('https://xy220x180x77x45xy.mcdn.bilivideo.cn:8082/a.m4s'),
+    );
+    expect(audio?.backup_url).toEqual(['https://cn-jsnt-ct-01-07.bilivideo.com/a.m4s']);
     // ③ `dash` 的其它键一个字节没动
     expect(parsed.data.dash.duration).toBe(1166);
-    // ④ 上报了一条过滤统计（导出 `filter` 字段的来源）
-    // jsdom 的 postMessage 是**异步排队**的：不等一轮宏任务，消息还没派发
+    // ④ 上报了一条改写统计
     await new Promise((r) => setTimeout(r, 0));
     const stat = sent.find((m) => m.type === 'pcdn-filter-stats');
     expect(stat).toMatchObject({ applied: true, where: 'playurl' });
@@ -309,19 +414,8 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
     expect(patchPlayurlBody(once ?? '', null, true)).toBeNull();
   });
 
-  it('★ 规则缺失 → 不过滤 + `applied:false` + `reason:rulesMissing`（每页只报一次）', async () => {
-    /**
-     * ## 这条以前是**空转**的（2026-11-17 查出来的）
-     *
-     * 旧写法是"遍历 `sent` 里的 stats 消息，逐条断言 `reason === 'rulesMissing'`"——
-     * 而那时**一条都不会有**（没人调 `pcdnFilterReady()`），循环跑 0 次，
-     * `for` 空转 → 测试绿。这正是本项目最怕的"覆盖了但测的是空气"。
-     *
-     * 现在直接调那个唯一判定点：开关开着、规则没到 → 返回 `false`（不过滤），
-     * 并且**必须**发出一条 `applied:false` + `reason:'rulesMissing'` 的上报，
-     * 让诊断侧看得出"开关开着却什么都没做"。
-     */
-    const { page, sent } = await boot(true, false);
+  it('★ 规则缺失 → 不改 + `applied:false` + `reason:rulesMissing`（每页只报一次）', async () => {
+    const { page, sent } = await boot(true, false, false);
     const pcdnFilterReady = page.__PLUMA_TEST__.pcdnFilterReady as unknown as () => boolean;
     const patchPlayurlBody = page.__PLUMA_TEST__.patchPlayurlBody as unknown as (
       raw: string,
@@ -329,30 +423,43 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
       wantFilter: boolean,
     ) => string | null;
 
-    // ① 判不了就不过滤 —— `wantFilter` 永远是 false，响应体一个字节都不动
     const ready = pcdnFilterReady();
     expect(ready).toBe(false);
     expect(patchPlayurlBody(RAW, null, ready)).toBeNull();
 
-    // ② 必须有一条上报，且计数为 0（"什么都没做"不许写成"剔了 0 条"以外的任何东西）
     await flush();
     const stats = statsOf(sent);
     expect(stats).toHaveLength(1);
     expect(stats[0]).toMatchObject({
       applied: false,
-      removed: 0,
-      keptIntact: 0,
+      rewritten: 0,
+      proxied: 0,
+      fallbackKept: 0,
       reason: 'rulesMissing',
     });
 
-    // ③ 每页只报一次：再问一次不再发（否则每个响应一条会把消息通道打满）
     expect(pcdnFilterReady()).toBe(false);
     await flush();
     expect(statsOf(sent)).toHaveLength(1);
   });
 
+  it('★ ADR 0039 第二道门：判据到了但镜像规则没到 → 不动响应体', async () => {
+    const sb = await boot(true, true, false);
+    const pcdnFilterReady = sb.page.__PLUMA_TEST__.pcdnFilterReady as unknown as () => boolean;
+    const patchPlayurlBody = sb.page.__PLUMA_TEST__.patchPlayurlBody as unknown as (
+      raw: string,
+      prog: unknown,
+      wantFilter: boolean,
+    ) => string | null;
+
+    expect(pcdnFilterReady()).toBe(false);
+    expect(patchPlayurlBody(RAW, null, false)).toBeNull();
+    await flush();
+    expect(statsOf(sb.sent)[0]).toMatchObject({ applied: false, reason: 'rulesMissing' });
+  });
+
   it('规则到了之后同一个判定点返回 true（缺失不等于永久关闭）', async () => {
-    const { page } = await boot(true, true);
+    const { page } = await boot(true, true, true);
     const pcdnFilterReady = page.__PLUMA_TEST__.pcdnFilterReady as unknown as () => boolean;
     expect(pcdnFilterReady()).toBe(true);
   });
@@ -380,9 +487,7 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
 
   it('⛔ 不碰 `durl` / `durls`（FLV 那条路本轮不做）', async () => {
     const { page } = await boot(true);
-    const filterDashOf = page.__PLUMA_TEST__.filterDashOf as unknown as (h: unknown) => {
-      changed: boolean;
-    };
+    const filterDashOf = page.__PLUMA_TEST__.filterDashOf as unknown as (h: unknown) => MwStats;
 
     const holder = {
       dash: {
@@ -396,7 +501,7 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
       durl: [{ url: 'keep-me' }],
       durls: [{ durl: [{ url: 'keep-me-too' }] }],
     };
-    expect(filterDashOf(holder).changed).toBe(true);
+    expect(filterDashOf(holder).rewritten).toBe(1);
     expect(holder.durl).toEqual([{ url: 'keep-me' }]);
     expect(holder.durls).toEqual([{ durl: [{ url: 'keep-me-too' }] }]);
   });
@@ -414,10 +519,8 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
  * | PGC SPA 切集 | `GET /ogv/player/playview` 的响应 | 播放器（此时 `__playinfo__` 完全不动） |
  *
  * 第三行是**番剧切集唯一走的那条**，也正是"只接 playurl"会整类漏掉的地方。
- * 所以三个用例各守一处，并且都断言 `where` —— 只断言"过滤生效"的话，
- * 一处接错、另一处顶上也照样绿。
  */
-describe('三处调用点各自真的过滤（只接一处 = 一整类场景漏过去）', () => {
+describe('三处调用点各自真的改写（只接一处 = 一整类场景漏过去）', () => {
   const OFFICIAL = 'https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s';
   const OFFICIAL_2 = 'https://cn-jsnt-ct-01-08.bilivideo.com/v.m4s';
   /** 标签判据（`mcdn` 子域挂在官方域下） */
@@ -425,7 +528,7 @@ describe('三处调用点各自真的过滤（只接一处 = 一整类场景漏�
   /** 供应商自有域判据 */
   const PCDN_DOMAIN = 'https://a1.szbdyd.com/x.m4s';
 
-  it('① 普通视频 playurl → where=playurl，且删的条数精确', async () => {
+  it('① 普通视频 playurl → where=playurl，换的条数精确', async () => {
     const { page, sent } = await boot(true);
     const patchPlayurlBody = page.__PLUMA_TEST__.patchPlayurlBody as unknown as (
       raw: string,
@@ -441,29 +544,28 @@ describe('三处调用点各自真的过滤（只接一处 = 一整类场景漏�
         dash: { video: Array<Record<string, unknown>>; audio: Array<Record<string, unknown>> };
       };
     };
-    // video：base 官方、backup [PCDN, 官方] → 删 1 条
-    expect(parsed.data.dash.video[0]?.backup_url).toEqual([OFFICIAL_2]);
-    // audio：base 是 PCDN、backup 官方 → 官方补位成 base，backup 空了
+    // video：base 官方、backup [PCDN, 官方] → 换 1 条，backup 仍 2 条
+    expect(parsed.data.dash.video[0]?.base_url).toBe(OFFICIAL);
+    expect(parsed.data.dash.video[0]?.backup_url).toEqual([mirrorOf(PCDN), OFFICIAL_2]);
+    // audio：base 是 PCDN → 换 host（不是被官方补位），backup 官方不动
     expect(parsed.data.dash.audio[0]?.base_url).toBe(
-      'https://cn-jsnt-ct-01-07.bilivideo.com/a.m4s',
+      mirrorOf('https://xy220x180x77x45xy.mcdn.bilivideo.cn:8082/a.m4s'),
     );
-    expect(parsed.data.dash.audio[0]?.backup_url).toEqual([]);
+    expect(parsed.data.dash.audio[0]?.backup_url).toEqual([
+      'https://cn-jsnt-ct-01-07.bilivideo.com/a.m4s',
+    ]);
 
     await flush();
     expect(statsOf(sent).pop()).toMatchObject({
       where: 'playurl',
       applied: true,
-      removed: 2,
-      keptIntact: 0,
+      rewritten: 2,
+      proxied: 0,
+      fallbackKept: 0,
     });
   });
 
-  it('② PGC 整页注入 → where=playinfo，注入的 dash 里 PCDN 已剔除', async () => {
-    /**
-     * 走**真链路**：`__playinfo__` 的 setter（ADR 0020 的注入点），不直接调内部函数。
-     * 这样才验证到"过滤发生在 `r.video_info = next` **之前**"这个位置约束 ——
-     * 位置错了，页面拿到的仍是带 PCDN 的流，而内部函数单测会照样绿。
-     */
+  it('② PGC 整页注入 → where=playinfo，注入的 dash 里 PCDN 已换 host', async () => {
     const CID = 281989571;
     const sb = await bootAt(PGC_URL, true);
 
@@ -481,27 +583,25 @@ describe('三处调用点各自真的过滤（只接一处 = 一整类场景漏�
     ).result.video_info;
     const dash = vi.dash as { video: Array<Record<string, unknown>>; duration: number };
 
-    // 注入发生了（否则下面的断言是空转）
     expect(dash).toBeDefined();
-    // PCDN 的 base 被剔掉，官方备份补位成 base（不删轨、不降级）
-    expect(dash.video[0]?.base_url).toBe(OFFICIAL);
-    expect(dash.video[0]?.backup_url).toEqual([]);
+    // base 换 host、backup 官方不动、条数不变
+    expect(dash.video[0]?.base_url).toBe(mirrorOf(PCDN));
+    expect(dash.video[0]?.backup_url).toEqual([OFFICIAL]);
+    expect((dash.video[0]?.backup_url as string[]).length).toBe(1);
     // 边界 3：`height` / `codecid` 一个字节没动
     expect(dash.video[0]?.height).toBe(2160);
     expect(dash.video[0]?.codecid).toBe(12);
-    // `dash` 的其它键也一样
     expect(dash.duration).toBe(1441);
 
     await flush();
-    expect(statsOf(sb.sent).pop()).toMatchObject({ where: 'playinfo', applied: true, removed: 1 });
+    expect(statsOf(sb.sent).pop()).toMatchObject({
+      where: 'playinfo',
+      applied: true,
+      rewritten: 1,
+    });
   });
 
-  it('③ PGC SPA 切集换流 → where=playview，换进去的 dash 已是过滤过的', async () => {
-    /**
-     * 这一条覆盖的是**番剧切集唯一走的那条路**：`playview` 响应 → 换流。
-     * 直接调 `pgcSwapPlayviewBody(body, fetchImpl)` —— 它是纯函数（`fetchImpl` 注入），
-     * 能精确断言"换进去的 `dash` 到底长什么样"。
-     */
+  it('③ PGC SPA 切集换流 → where=playview，换进去的 dash 已改写', async () => {
     const sb = await bootAt(PGC_URL, true);
     const swap = sb.page.__PLUMA_TEST__.pgcSwapPlayviewBody as unknown as (
       body: unknown,
@@ -541,8 +641,10 @@ describe('三处调用点各自真的过滤（只接一处 = 一整类场景漏�
     };
     const track = body.data.video_info.dash.video[0];
 
-    expect(track?.base_url).toBe(OFFICIAL); // 官方备份补位
-    expect(track?.backup_url).toEqual([]); // 两条 PCDN 全被剔掉
+    // 两条 PCDN 都换 host，官方 backup 不动，条数不变
+    expect(track?.base_url).toBe(mirrorOf(PCDN));
+    expect(track?.backup_url).toEqual([OFFICIAL, mirrorOf(PCDN_DOMAIN)]);
+    expect((track?.backup_url as string[]).length).toBe(2);
     // 边界 3：元信息不动
     expect(track?.height).toBe(2160);
     expect(track?.bandwidth).toBe(9_000_000);
@@ -552,15 +654,11 @@ describe('三处调用点各自真的过滤（只接一处 = 一整类场景漏�
     expect(statsOf(sb.sent).pop()).toMatchObject({
       where: 'playview',
       applied: true,
-      removed: 2,
+      rewritten: 2,
     });
   });
 
   it('②③ 开关关闭时，PGC 两条路都**一个字节都不改**', async () => {
-    /**
-     * 对没打开功能的用户零风险 —— PGC 那两条路同样要证明，
-     * 不能只在 playurl 上证明（那正是"只接了一处"的错觉来源）。
-     */
     const CID = 281989571;
     const sb = await bootAt(PGC_URL, false);
 
@@ -577,7 +675,6 @@ describe('三处调用点各自真的过滤（只接一处 = 一整类场景漏�
     ).result.video_info;
     const track = (vi.dash as { video: Array<Record<string, unknown>> }).video[0];
 
-    // 注入照旧发生（那是 ADR 0020 的事），但候选一条都没删
     expect(track?.base_url).toBe(PCDN);
     expect(track?.backup_url).toEqual([OFFICIAL]);
 
@@ -605,7 +702,6 @@ describe('三处调用点各自真的过滤（只接一处 = 一整类场景漏�
     expect(body.data.video_info.dash.video[0]?.base_url).toBe(PCDN);
     expect(body.data.video_info.dash.video[0]?.backup_url).toEqual([OFFICIAL]);
 
-    // 一条过滤上报都不该有（开关关着 = 连"未生效"都不用报）
     await flush();
     expect(statsOf(sb.sent)).toHaveLength(0);
   });

@@ -55,6 +55,8 @@ const NEEDED = [
   'docs/decisions/0023-intercept-playview-durl-swap.md',
   // 候选过滤（ADR 0038）的授权来源
   'docs/decisions/0038-filter-pcdn-candidates.md',
+  // ADR 0039：换 authority 的授权（脚本会检查它还在）
+  'docs/decisions/0039-rewrite-pcdn-authority.md',
 ];
 
 let box = '';
@@ -107,6 +109,7 @@ describe('check-patch-scope：PGC 换流与注入的写集判据（2026-11-17 �
     expect(out).toContain('✅ PGC 整页注入：pgcPatchPlayinfo 只写 result.video_info');
     // 还没被守住的第五类也要明说（否则"全绿"会被读成"七行都守住了"）
     expect(out).toContain('✅ 候选过滤（ADR 0038）：写集 ⊆ 4 个候选字段');
+    expect(out).toContain('✅ 候选改写（ADR 0039）：只换 authority、条数不变');
   });
 
   it('⛔ 换流函数往 `data` 上多写一个键 → 红，并点名那个键', () => {
@@ -193,6 +196,7 @@ describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => 
 
     expect(status).toBe(0);
     expect(out).toContain('✅ 候选过滤（ADR 0038）：写集 ⊆ 4 个候选字段');
+    expect(out).toContain('✅ 候选改写（ADR 0039）：只换 authority、条数不变');
     expect(out).toContain('三处调用点全接');
     expect(out).toContain('判据无写死域名');
   });
@@ -204,8 +208,8 @@ describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => 
      */
     const dir = sandbox((src) =>
       src.replace(
-        '      out.backup_url = kept.slice(1);',
-        '      out.backup_url = kept.slice(1);\n      out.quality = 120;',
+        '      out.backup_url = rewritten.slice(1);',
+        '      out.backup_url = rewritten.slice(1);\n      out.quality = 120;',
       ),
     );
     const { status, out } = runIn(dir);
@@ -224,7 +228,7 @@ describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => 
     const PLAYVIEW_CALL = [
       '          if (pcdnFilterReady()) {',
       '            var playviewFilterStats = filterDashOf(full);',
-      '            if (playviewFilterStats.changed || playviewFilterStats.keptIntact > 0) {',
+      '            if (playviewFilterStats.changed || playviewFilterStats.fallbackKept > 0) {',
       "              reportPcdnFilter(playviewFilterStats, 'playview');",
       '            }',
       '          }',
@@ -266,7 +270,7 @@ describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => 
     const PLAYINFO_CALL = [
       '    if (pcdnFilterReady()) {',
       '      var playinfoFilterStats = filterDashOf(next);',
-      '      if (playinfoFilterStats.changed || playinfoFilterStats.keptIntact > 0) {',
+      '      if (playinfoFilterStats.changed || playinfoFilterStats.fallbackKept > 0) {',
       "        reportPcdnFilter(playinfoFilterStats, 'playinfo');",
       '      }',
       '    }',
@@ -302,28 +306,28 @@ describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => 
     const { status, out } = runIn(dir);
 
     expect(status).toBe(1);
-    expect(out).toContain('候选过滤里写死了域名/标签字面量');
+    expect(out).toContain('候选改写里写死了域名/标签字面量');
     expect(out).toContain('mcdn');
   });
 
   it('⛔ 造 URL 的痕迹（拼接 `https://`）→ 红（边界 2：不许新增候选）', () => {
     const dir = sandbox((src) =>
       src.replace(
-        '      out.backup_url = kept.slice(1);',
-        "      out.backup_url = kept.slice(1).concat('https://evil/' + kept[0]);",
+        '      out.backup_url = rewritten.slice(1);',
+        "      out.backup_url = rewritten.slice(1).concat('https://evil/' + rewritten[0]);",
       ),
     );
     const { status, out } = runIn(dir);
 
     expect(status).toBe(1);
-    expect(out).toContain('造 URL 的痕迹');
+    expect(out).toContain('非授权的造 URL 痕迹');
   });
 
   it('⛔ 碰权益字段（`user_status`）→ 红（边界 4：不伪造任何权益）', () => {
     const dir = sandbox((src) =>
       src.replace(
-        '    var kept = [];',
-        '    if (typeof track.user_status === "object") return track; // 变异\n    var kept = [];',
+        '    var rewritten = [];',
+        '    if (typeof track.user_status === "object") return track; // 变异\n    var rewritten = [];',
       ),
     );
     const { status, out } = runIn(dir);
@@ -354,5 +358,58 @@ describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => 
     expect(status).toBe(1);
     expect(out).toContain('找不到候选过滤的实现函数');
     expect(out).toContain('filterOneTrack');
+  });
+
+  it('⛔ ADR 0039 升级后：`rewriteCandidateUrl()` 里写死镜像前缀 → 红（边界 6）', () => {
+    /**
+     * 镜像清单必须来自 `cfg`。写死 `upos-sz-` 这样的前缀同样是第二处真相源 ——
+     * 域名漂移时主世界不会跟着变，表现为"开关开着仍走 PCDN / 换到过期镜像"。
+     */
+    const dir = sandbox((src) => {
+      if (!src.includes('    var rules = pcdnRewriteRules;')) {
+        throw new Error('夹具失效：rewriteCandidateUrl 里找不到规则读取（判据会假绿）');
+      }
+      return src.replace(
+        '    var rules = pcdnRewriteRules;',
+        "    if (urlText.indexOf('upos-sz-') >= 0) return urlText;\n    var rules = pcdnRewriteRules;",
+      );
+    });
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('候选改写里写死了域名/标签字面量');
+    expect(out).toContain('upos-sz-');
+  });
+
+  it('⛔ proxy 模板白名单是**按函数**的：在 filterOneTrack 写 https:// 仍红', () => {
+    const dir = sandbox((src) =>
+      src.replace(
+        '      out.backup_url = rewritten.slice(1);',
+        "      out.backup_url = rewritten.slice(1).concat('https://');",
+      ),
+    );
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('非授权的造 URL 痕迹');
+    expect(out).toContain('filterOneTrack');
+  });
+
+  it('判据自身不许退化：改写函数被改名 → 红（它的字面量就没人查了）', () => {
+    const dir = sandbox((src) => src.replace('function rewriteCandidateUrl(', 'function renamed('));
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('找不到候选过滤的实现函数');
+    expect(out).toContain('rewriteCandidateUrl');
+  });
+
+  it('⛔ 删掉 ADR 0039 → 红（换 authority 的授权不能只剩代码）', () => {
+    const dir = sandbox();
+    rmSync(join(dir, 'docs/decisions/0039-rewrite-pcdn-authority.md'), { force: true });
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('找不到 docs/decisions/0039-rewrite-pcdn-authority.md');
   });
 });

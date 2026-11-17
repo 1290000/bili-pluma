@@ -246,9 +246,9 @@ function finite(value: unknown): number {
 /**
  * 同 `finite()`，但**负数也收敛成 0**。
  *
- * 用在"计件数"字段上（候选过滤的 `removed` / `keptIntact`）：那些数只可能是
- * 非负整数，出现负数说明上游数据被改坏了 —— 而 `-3` 交给用户比 `0` 更误导
- * （会被读成"剔了负数条"，看起来像统计口径问题）。
+ * 用在"计件数"字段上（候选改写的 `rewritten` / `proxied` / `fallbackKept`）：
+ * 那些数只可能是非负整数，出现负数说明上游数据被改坏了 —— 而 `-3` 交给用户
+ * 比 `0` 更误导（会被读成"换了负数字条"，看起来像统计口径问题）。
  *
  * ⚠️ 故意**不**把它并回 `finite()`：`durationSec` 这类字段的负值语义不同
  * （`-1` 有时是"未知"的既有约定），一刀切会改变那些字段的现有行为。
@@ -349,22 +349,23 @@ export interface LoadingExport {
    */
   eventsLostBeforeWindow: boolean;
   /**
-   * 候选过滤（ADR 0038）这一次做了什么（2026-11-17 接线）。
+   * 候选改写（ADR 0039）这一次做了什么（2026-11-17 接线）。
    *
    * | 字段 | 含义 |
    * | --- | --- |
-   * | `applied` | **真的**删过候选（不是"开关开着"） |
-   * | `removed` / `keptIntact` | 删掉的候选条数 / 因"剔完就没了"而原样保留的轨数 |
-   * | `reason` | **为什么没生效**：`off`（用户没开）/ `rulesMissing`（判据规则没下发） |
+   * | `applied` | **真的**换过候选 authority（不是"开关开着"） |
+   * | `rewritten` / `proxied` / `fallbackKept` | 换了的条数 / 其中走 proxy 的条数 / 换不了原样保留的条数 |
+   * | `reason` | **为什么没生效**：`off`（用户没开）/ `rulesMissing`（判据或镜像清单没下发） |
    *
-   * ⚠️ `applied: false` 时两个计数**保持 0**，且**不许**把"未生效"写成 `null`
-   * —— `null` 会被读成"这个字段不存在（旧版本）"，而 0 是"确实剔了 0 条"，
+   * ⚠️ `applied: false` 时三个计数**保持 0**，且**不许**把"未生效"写成 `null`
+   * —— `null` 会被读成"这个字段不存在（旧版本）"，而 0 是"确实换了 0 条"，
    * 两者含义不同，`reason` 负责说清是哪一种。
    */
   filter: {
     applied: boolean;
-    removed: number;
-    keptIntact: number;
+    rewritten: number;
+    proxied: number;
+    fallbackKept: number;
     reason?: FilterSkipReason;
   };
   video: { readyState: number; durationSec: number; height: number; errorCode: number } | null;
@@ -400,8 +401,8 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
       events: [],
       eventsTruncated: false,
       eventsLostBeforeWindow: false,
-      // 没有快照 = 无从知道过滤状态；给"全 0 且不解释"，不编一个 reason
-      filter: { applied: false, removed: 0, keptIntact: 0 },
+      // 没有快照 = 无从知道改写状态；给"全 0 且不解释"，不编一个 reason
+      filter: { applied: false, rewritten: 0, proxied: 0, fallbackKept: 0 },
       video: null,
     };
   }
@@ -469,25 +470,26 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
     // ⚠️ 来自采集器（环形缓冲），与上一行的"导出层只装 40 条"是两件事
     eventsLostBeforeWindow: snapshot.truncated === true,
     /**
-     * 候选过滤：来自快照（主世界那几条 `pcdn-filter-stats` 上报累加而成）。
+     * 候选改写：来自快照（主世界那几条 `pcdn-filter-stats` 上报累加而成）。
      *
      * `snapshot.filter` 缺失（老版本采集器 / 手工 fixture）时给"全 0 且不解释" ——
      * **不写 `reason: 'off'`**：那是"用户关了开关"这一具体事实，没有观测就不能断言。
      */
     filter:
       snapshot.filter === undefined
-        ? { applied: false, removed: 0, keptIntact: 0 }
+        ? { applied: false, rewritten: 0, proxied: 0, fallbackKept: 0 }
         : {
             applied: snapshot.filter.applied === true,
             /**
              * 两个计数用 `nonNeg` 而不是 `finite`：这条边界上**负数不是"未知"，是错**。
              *
-             * `removed: -3` 在导出里会被读成"剔了负数条"，比缺字段更误导；而它唯一
+             * `rewritten: -3` 在导出里会被读成"换了负数条"，比缺字段更误导；而它唯一
              * 可能的来源是一份被改坏的快照（消息侧 `content.ts` 已经把非正整数收敛成 0）。
              * `finite()` 只挡 `NaN` / `Infinity`，负数会原样通过，所以这里单独收一道。
              */
-            removed: nonNeg(snapshot.filter.removed),
-            keptIntact: nonNeg(snapshot.filter.keptIntact),
+            rewritten: nonNeg(snapshot.filter.rewritten),
+            proxied: nonNeg(snapshot.filter.proxied),
+            fallbackKept: nonNeg(snapshot.filter.fallbackKept),
             ...(snapshot.filter.reason !== undefined ? { reason: snapshot.filter.reason } : {}),
           },
     video:

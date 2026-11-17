@@ -109,6 +109,7 @@ import {
   readPcdnFilterEnabled,
 } from '@platform/storage/ui-prefs-store';
 import { PCDN_RULES } from '@core/cdn/classify';
+import { DEFAULT_REWRITE_RULES } from '@core/cdn/filter';
 import type { ProxyActivateReason } from '@shared/types/messages';
 import { buildPageSnapshot } from '@core/ui/page-snapshot';
 import {
@@ -462,6 +463,14 @@ function tellMainWorld(
        * 更难排查。宁可每次都带。
        */
       pcdnRules: PCDN_RULES,
+      /**
+       * ADR 0039 边界 6：镜像 / proxy 模板与判据同通道下发。
+       *
+       * 主世界是裸 JS（8 个测试直接 eval 真源码），不能 `import` 这条常量；
+       * 抄一份域名表 = 两处真相源，漂移的表现是"开关开着仍走 PCDN"（静默失败）。
+       * 唯一的默认值在 `core/cdn/filter.ts`（纯数据），这里只负责转发。
+       */
+      pcdnRewriteRules: DEFAULT_REWRITE_RULES,
     },
     '*',
   );
@@ -2959,27 +2968,28 @@ export default defineContentScript({
     /**
      * **主世界报告"候选过滤做了什么"**（ADR 0038，2026-11-20 接线）。
      *
-     * 这条上报只服务**诊断导出的 `filter` 字段**（`applied` / `removed` /
-     * `keptIntact` / `reason`）—— 过滤本身已经在主世界同步完成了，这条消息
-     * **不参与任何判定**，晚到 / 丢了都只影响导出，不影响播放。
+     * 这条上报只服务**诊断导出的 `filter` 字段**（`applied` / `rewritten` /
+     * `proxied` / `fallbackKept` / `reason`）—— 改写本身已经在主世界同步完成了，
+     * 这条消息**不参与任何判定**，晚到 / 丢了都只影响导出，不影响播放。
      *
      * ## 判据是"形状对"而不是"值可信"
      *
-     * 页面脚本伪造它，最坏效果是让导出的数字变难看（多报几百条 removed）。
+     * 页面脚本伪造它，最坏效果是让导出的数字变难看（多报几百条 rewritten）。
      * 它不驱动任何行为：没有开关、没有网络请求、没有写 storage。
      * 所以这里只做**类型收敛**（布尔 / 非负整数），不做来源校验 —— 与
      * `ext-patch` 那条同一条安全边界。
      *
-     * `removed` / `keptIntact` 收成"非负整数"：负数和 `NaN` 一旦进到快照，
-     * 导出里就会出现 `-3` 这种**看起来像统计口径问题**的数字，比缺字段更误导。
+     * `rewritten` / `proxied` / `fallbackKept` 收成"非负整数"：负数和 `NaN`
+     * 一旦进到快照，导出里就会出现 `-3` 这种**看起来像统计口径问题**的数字。
      */
     window.addEventListener('message', (ev) => {
       const d = ev.data as {
         __ns?: string;
         type?: string;
         applied?: unknown;
-        removed?: unknown;
-        keptIntact?: unknown;
+        rewritten?: unknown;
+        proxied?: unknown;
+        fallbackKept?: unknown;
         reason?: unknown;
       } | null;
       if (!d || d.__ns !== NS || d.type !== 'pcdn-filter-stats') return;
@@ -2993,8 +3003,9 @@ export default defineContentScript({
 
       notePcdnFilter({
         applied: d.applied === true,
-        removed: toCount(d.removed),
-        keptIntact: toCount(d.keptIntact),
+        rewritten: toCount(d.rewritten),
+        proxied: toCount(d.proxied),
+        fallbackKept: toCount(d.fallbackKept),
         ...(reason !== undefined ? { reason } : {}),
       });
     });

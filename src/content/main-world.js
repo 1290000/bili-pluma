@@ -167,38 +167,36 @@
   }
 
   /**
-   * ## 候选过滤（ADR 0038）—— 从 `dash` 的每条轨里剔除 PCDN 候选
+   * ## 候选改写（ADR 0039）—— 把 `dash` 每条轨里的 PCDN 候选**换成官方镜像**
    *
    * ### 为什么这段代码在主世界，而不是调 `core/cdn/filter.ts`
    *
    * 主世界是**裸 JS**（8 个测试文件直接 `eval` 它的真源码，不能加 `import`），
-   * 所以 `filterPcdnCandidates()` 物理上进不来。算法这里有一份，**域名表没有**：
-   * 判据用的 `PCDN_LABELS` / `PCDN_DOMAINS` 由 ISOLATED 侧从 `classify.ts`
-   * 读出来后经 `cfg` 下发（`pcdnRules`）。`classify.ts` 的第 2 条纪律是
-   * "不另写域名表，否则必然漂移"，而漂移的表现是**开关开着却在走 PCDN**。
+   * 所以 `rewritePcdnCandidates()` 物理上进不来。算法这里有一份，**域名表一个都没有**：
+   * 判据用的 `PCDN_LABELS` / `PCDN_DOMAINS`（`pcdnRules`）和镜像 / proxy 模板
+   *（`pcdnRewriteRules`）都由 ISOLATED 侧从 `core/` 读出后经 `cfg` 下发。
+   * `classify.ts` 的第 2 条纪律是"不另写域名表，否则必然漂移"，而漂移的表现是
+   * **开关开着却在走 PCDN**。
    *
    * 两份实现的一致性由 `tests/unit/content/pcdn-filter-wiring.test.ts` 对账
-   * （主世界那份判据 vs `classifyCdn()` / `filterPcdnCandidates()`，含 84 条实测 host）。
-   * ⚠️ 文件名叫 "wiring" 而不是 "reconcile"：对账与接线语义（开关关闭不改字节、
-   * 规则缺失不生效、幂等、三处调用点）都在同一份里，拆开会让"漏接一处"没人守。
+   * （主世界那份判据 vs `classifyCdn()` / `rewritePcdnCandidates()`，含 84 条实测 host）。
    *
-   * ### 五条边界（ADR 0038，一条都不许省）
+   * ### 八条边界里在本段落地的几条
    *
-   * 1. **只剔除 PCDN**：`official` / `third-party` / **`unknown` 全保留**。
-   *    认不出的域删掉等于拿未知换更少的备份。
-   * 2. **剔完一条不剩 → 整条轨原样返回**（原对象，不删轨、不降级）。
-   *    删轨 = 用户点了 4K 却没有 4K。
-   * 3. **不许新增 URL**：只做减法，条数只能不变或减少。
-   * 4. **`new URL()` 抛错 → 保留**（判不了就别删）。
-   * 5. **命名风格跟输入**：`base_url`/`backup_url` 与 `baseUrl`/`backupUrl` 不许混用。
+   * 1. **只换 PCDN 的 authority**：`official` / `third-party` / **`unknown` 全原样**。
+   * 2. **只换 host（含 port）**：`pathname` / `search` / `hash` 一字不动。
+   * 3. **唯一例外**：path 命中 `proxyPathPrefix` 的 PCDN 改走
+   *    `https://<proxyHost>?url=<encodeURIComponent(原 URL)>`。
+   * 4. **条数恒不变**：不删、不排、不增；`unknown` 和解析失败的都原位保留。
+   * 5. **判不了就别改**：`new URL()` 抛错 / 规则没到 → 原串，`fallbackKept++`。
+   * 6. **命名风格跟输入**：`base_url`/`backup_url` 与 `baseUrl`/`backupUrl` 不许混用。
    *
    * ### 保守规则（不制造无谓 diff）
    *
-   * 一条都没删的轨返回**原对象**；整个 `dash` 没变化时**不动** `holder.dash`。
-   * 这样"过滤前后逐字节比对"的改动面恰好等于 `removed`。
+   * 一条都没改的轨返回**原对象**；整个 `dash` 没变化时**不动** `holder.dash`。
    */
   /**
-   * 候选过滤开关。**默认 `false`**（fail-closed）：新增能力，用户不打开就不改行为。
+   * 候选改写开关。**默认 `false`**（fail-closed）：新增能力，用户不打开就不改行为。
    *
    * 由 `cfg.filterCandidates` 赋值 —— 缺失时**保持当前值**（老版本 ISOLATED
    * 不带这个字段，不能把已打开的开关误关掉；它的初值 false 已经保证"缺失 = 不过滤"）。
@@ -213,6 +211,14 @@
    */
   var pcdnRules = null;
 
+  /**
+   * 换 authority 的三条规则，由 `cfg.pcdnRewriteRules` 下发（ADR 0039 边界 6）。
+   *
+   * 形状 `{ mirrorHost, proxyHost, proxyPathPrefix }`。`null` = 还没收到 →
+   * **一条都不改**：镜像域名漂移时不必发版，但主世界绝不自带一份域名表。
+   */
+  var pcdnRewriteRules = null;
+
   /** 是否已经从 `cfg` 收到过规则（只用于埋点，不参与判断） */
   var pcdnRulesSeen = false;
 
@@ -226,7 +232,7 @@
    * IP 字面量 → 标签相等 → 供应商域后缀（按**标签边界**）→ query 里的 `os=mcdn`。
    *
    * @param {string} urlText 候选 URL 原文
-   * @returns {boolean} true = 该候选是 PCDN（可以被剔掉）
+   * @returns {boolean} true = 该候选是 PCDN（它的 authority 需要换掉）
    */
   function isPcdnUrl(urlText) {
     if (typeof urlText !== 'string' || urlText.length === 0) return false;
@@ -275,11 +281,81 @@
   }
 
   /**
-   * 过滤一条轨的候选。
+   * 把一条候选的 authority 换成下发的官方镜像（ADR 0039）。
+   *
+   * 顺序与 `core/cdn/filter.ts` 的 `rewriteOne()` 一一对应：
+   *
+   * 1. 解析失败 → `fallbackKept++`，返回原串（判不了就别改）；
+   * 2. 非 PCDN（用 `isPcdnUrl()`，判据来自 `cfg.pcdnRules`）→ 原串，不计数；
+   * 3. 改写规则没到 / 三项有缺 → `fallbackKept++`，返回原串；
+   * 4. path 含 `proxyPathPrefix` → `https://<proxyHost>?url=<encodeURIComponent(原串)>`，
+   *    `proxied++` + `rewritten++`（唯一允许改变 URL 结构的例外）；
+   * 5. 其余 → 只改 `host`（含 port 一并换），`href` 保留 path/search/hash。
+   *
+   * ⚠️ 镜像 / proxy 域名**只从 `pcdnRewriteRules` 读**，这里一个都不许写死；
+   * 唯一允许出现的字面量是 proxy 模板的 `https://` 与 `?url=`
+   * （`scripts/check-patch-scope.mjs` 对这个函数单独开了这两条白名单，其余仍红）。
+   *
+   * @param {string} urlText 候选 URL 原文
+   * @param {{rewritten:number,proxied:number,fallbackKept:number}} [stats] 就地累加
+   * @returns {string} 改写后的 URL；换不了时返回**原串**
+   */
+  function rewriteCandidateUrl(urlText, stats) {
+    var rules = pcdnRewriteRules;
+
+    var parsed;
+    try {
+      parsed = new URL(urlText);
+    } catch (e) {
+      if (stats) stats.fallbackKept += 1;
+      return urlText;
+    }
+
+    // 只换 PCDN；非 PCDN（含 unknown / third-party）一字不动
+    if (!isPcdnUrl(urlText)) return urlText;
+
+    if (
+      !rules ||
+      typeof rules.mirrorHost !== 'string' ||
+      rules.mirrorHost.length === 0 ||
+      typeof rules.proxyHost !== 'string' ||
+      rules.proxyHost.length === 0 ||
+      typeof rules.proxyPathPrefix !== 'string' ||
+      rules.proxyPathPrefix.length === 0
+    ) {
+      if (stats) stats.fallbackKept += 1;
+      return urlText;
+    }
+
+    try {
+      if (parsed.pathname.indexOf(rules.proxyPathPrefix) >= 0) {
+        var wrapped = 'https://' + rules.proxyHost + '?url=' + encodeURIComponent(urlText);
+        if (stats) {
+          stats.proxied += 1;
+          stats.rewritten += 1;
+        }
+        return wrapped;
+      }
+      // authority 整体换成 mirrorHost。⚠️ 只赋 `host` 会**保留原 port**，
+      // 所以先解析 mirrorHost 自身的 hostname/port，再分别赋值（无 port 时清掉）。
+      // pathname / search / hash 不动。
+      var target = new URL('https://' + rules.mirrorHost + '/');
+      parsed.hostname = target.hostname;
+      parsed.port = target.port;
+      if (stats) stats.rewritten += 1;
+      return parsed.href;
+    } catch (e) {
+      if (stats) stats.fallbackKept += 1;
+      return urlText;
+    }
+  }
+
+  /**
+   * 改写一条轨的候选（条数恒不变）。
    *
    * @param {object} track 一条 `dash.video[]` / `dash.audio[]`
-   * @param {{changed:boolean,removed:number,keptIntact:number}} stats 就地累加
-   * @returns {object} 过滤后的轨；**没改动时返回原对象**
+   * @param {{changed:boolean,rewritten:number,proxied:number,fallbackKept:number}} stats 就地累加
+   * @returns {object} 改写后的轨；**没改动时返回原对象**
    */
   function filterOneTrack(track, stats) {
     if (!track || typeof track !== 'object') return track;
@@ -301,20 +377,18 @@
     }
     if (candidates.length === 0) return track;
 
-    var kept = [];
+    // 条数恒等于 candidates.length：只换 authority，不删、不排、不增（ADR 0039 边界 2）
+    var rewritten = [];
+    var changedTrack = false;
     for (var j = 0; j < candidates.length; j += 1) {
-      if (!isPcdnUrl(candidates[j])) kept.push(candidates[j]);
+      var next = rewriteCandidateUrl(candidates[j], stats);
+      if (next !== candidates[j]) changedTrack = true;
+      rewritten.push(next);
     }
 
-    // 边界 2：剔完就没了 → 整条轨原样保留
-    if (kept.length === 0) {
-      stats.keptIntact += 1;
-      return track;
-    }
-    // 一条都没删 → 原对象（不制造无谓 diff）
-    if (kept.length === candidates.length) return track;
+    // 一条都没改 → 原对象（不制造无谓 diff；二次执行幂等也靠它）
+    if (!changedTrack) return track;
 
-    stats.removed += candidates.length - kept.length;
     stats.changed = true;
 
     var out = {};
@@ -322,11 +396,11 @@
       if (Object.prototype.hasOwnProperty.call(track, key)) out[key] = track[key];
     }
     if (snake) {
-      out.base_url = kept[0];
-      out.backup_url = kept.slice(1);
+      out.base_url = rewritten[0];
+      out.backup_url = rewritten.slice(1);
     } else {
-      out.baseUrl = kept[0];
-      out.backupUrl = kept.slice(1);
+      out.baseUrl = rewritten[0];
+      out.backupUrl = rewritten.slice(1);
     }
     return out;
   }
@@ -340,10 +414,10 @@
    * **`durl` / `durls` 一个字节都不碰**（FLV 那条路本轮不做）。
    *
    * @param {object} holder 形如 `{ dash: {...} }` 的对象（就地替换 `holder.dash`）
-   * @returns {{changed:boolean,removed:number,keptIntact:number}}
+   * @returns {{changed:boolean,rewritten:number,proxied:number,fallbackKept:number}}
    */
   function filterDashOf(holder) {
-    var none = { changed: false, removed: 0, keptIntact: 0 };
+    var none = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
     if (!holder || typeof holder !== 'object') return none;
 
     var dash = holder.dash;
@@ -353,7 +427,7 @@
     var audio = Array.isArray(dash.audio) ? dash.audio : null;
     if (video === null && audio === null) return none;
 
-    var stats = { changed: false, removed: 0, keptIntact: 0 };
+    var stats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
 
     var nextVideo = null;
     if (video !== null) {
@@ -384,7 +458,7 @@
    * 只在**真的改了**时发，且每处调用点各自发一条 —— 一次播放最多几条，
    * 不会把 30 条环形日志挤掉（对比：分片事件有几百条）。
    *
-   * @param {{removed:number,keptIntact:number}} stats
+   * @param {{rewritten:number,proxied:number,fallbackKept:number}} stats
    * @param {string} where 调用点标识（`playurl` / `playinfo` / `playview`）
    */
   function reportPcdnFilter(stats, where, reason) {
@@ -393,8 +467,9 @@
       type: 'pcdn-filter-stats',
       where: where,
       applied: stats.changed === true,
-      removed: stats.removed,
-      keptIntact: stats.keptIntact,
+      rewritten: stats.rewritten,
+      proxied: stats.proxied,
+      fallbackKept: stats.fallbackKept,
     };
     if (reason) payload.reason = reason;
     safePost(payload);
@@ -404,22 +479,29 @@
    * 现在能不能过滤？**兼做"规则缺失"的一次性上报**。
    *
    * 三处调用点都先问它 —— 这样"开没开 / 规则到没到"只有一个判定点；
-   * 三处各写一遍 `pcdnFilterOn && pcdnRules !== null` 迟早会漏一处
-   * （`check-patch-scope.mjs` 也靠"三处都调同一个函数"来断言）。
+   * 三处各写一遍 `pcdnFilterOn && pcdnRules !== null && pcdnRewriteRules !== null`
+   * 迟早会漏一处（`check-patch-scope.mjs` 也靠"三处都调同一个函数"来断言）。
    *
-   * 开关开着、规则却没到时（只可能出现在"老版本 ISOLATED 只发了开关"的错配下）
+   * 开关开着、任一份规则没到时（只可能出现在"老版本 ISOLATED 只发了开关"的错配下）
    * 报一条 `reason: 'rulesMissing'`，**每页只报一次** —— 否则每个响应都发一条，
    * 会把 ISOLATED 侧的消息处理打满。
    *
-   * @returns {boolean} true = 可以过滤
+   * ⚠️ ADR 0039 边界 6：只判 `pcdnRules !== null` 是不够的 —— 判据到了但镜像清单没到，
+   * 会让"开关开着却一条都不换"，且界面上一切正常。
+   *
+   * @returns {boolean} true = 可以改写
    */
   function pcdnFilterReady() {
     if (!pcdnFilterOn) return false;
-    if (pcdnRules !== null) return true;
+    if (pcdnRules !== null && pcdnRewriteRules !== null) return true;
 
     if (!pcdnRulesMissingReported) {
       pcdnRulesMissingReported = true;
-      reportPcdnFilter({ changed: false, removed: 0, keptIntact: 0 }, 'none', 'rulesMissing');
+      reportPcdnFilter(
+        { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 },
+        'none',
+        'rulesMissing',
+      );
     }
     return false;
   }
@@ -1626,7 +1708,7 @@
      */
     if (pcdnFilterReady()) {
       var playinfoFilterStats = filterDashOf(next);
-      if (playinfoFilterStats.changed || playinfoFilterStats.keptIntact > 0) {
+      if (playinfoFilterStats.changed || playinfoFilterStats.fallbackKept > 0) {
         reportPcdnFilter(playinfoFilterStats, 'playinfo');
       }
     }
@@ -3535,7 +3617,7 @@
            */
           if (pcdnFilterReady()) {
             var playviewFilterStats = filterDashOf(full);
-            if (playviewFilterStats.changed || playviewFilterStats.keptIntact > 0) {
+            if (playviewFilterStats.changed || playviewFilterStats.fallbackKept > 0) {
               reportPcdnFilter(playviewFilterStats, 'playview');
             }
           }
@@ -4374,6 +4456,29 @@
     ) {
       pcdnRules = { labels: d.pcdnRules.labels, domains: d.pcdnRules.domains };
       pcdnRulesSeen = true;
+    }
+    /**
+     * ADR 0039 边界 6：镜像 / proxy 模板只认 `cfg` 下发的这一份。
+     *
+     * 三项必须都是非空字符串，否则**保持 null**（= 一条都不改）——
+     * 半套规则比没有规则更危险：只拿到 mirrorHost 时会把 mcdn 候选换到错的地方。
+     */
+    var rr = d.pcdnRewriteRules;
+    if (
+      rr &&
+      typeof rr === 'object' &&
+      typeof rr.mirrorHost === 'string' &&
+      rr.mirrorHost.length > 0 &&
+      typeof rr.proxyHost === 'string' &&
+      rr.proxyHost.length > 0 &&
+      typeof rr.proxyPathPrefix === 'string' &&
+      rr.proxyPathPrefix.length > 0
+    ) {
+      pcdnRewriteRules = {
+        mirrorHost: rr.mirrorHost,
+        proxyHost: rr.proxyHost,
+        proxyPathPrefix: rr.proxyPathPrefix,
+      };
     }
 
     /**

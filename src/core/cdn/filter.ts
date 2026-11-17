@@ -1,5 +1,5 @@
 /**
- * 候选过滤：从每一条轨的候选 URL 里**剔除 PCDN**（只减不增）。
+ * 候选改写：把每一条轨里**属于 PCDN 的候选 authority 换成官方镜像**（ADR 0039）。
  *
  * 分层：`core/` 纯函数，零 IO、零浏览器 API，可在 Node 里全覆盖
  * （`chrome` / `window` / `document` / `fetch(` 一律不许出现，
@@ -7,50 +7,47 @@
  *
  * ## 这个模块守的是什么
  *
- * 守的是 **ADR 0038 的五条硬边界**。那一类改写与项目里前六类都不同：
- * 前六类**一个字节都不许碰 URL**，这一类**只**动 URL。所以它的失败方向是新的：
+ * 守的是 **ADR 0039 的八条硬边界**。它升级了 ADR 0038 的"删除"路线：
+ * 那一类只做减法，这一类**换 authority 但一条候选都不增删**。所以失败方向变了：
  *
- * - 少删一条 PCDN → 用户照旧走 PCDN，**界面上一切正常**（静默失败，与 classify 同源）；
- * - **多删**一条官方 / 认不出的候选 → 用户少一条备份线路，真出故障时无处可退，
- *   而且这个损失**只在故障那天**才被发现。
+ * - 该换没换 → 用户照旧走 PCDN，**界面上一切正常**（静默失败，与 classify 同源）；
+ * - 换错（动了 path / 凭空拼签名 / 改了条数）→ 403 或"少一条备份"，
+ *   后者**只在故障那天**才被发现。
  *
- * 第二种比第一种更贵，因为它是"为了优化反而变差"。所以本模块的每一条判据都偏向
- * **保留**：判不了就留（见下面第 4 条）。
+ * 第二种仍更贵，所以本模块的每一条判据都偏向**保守**：判不了就别改。
  *
- * ## 五条不许商量的写法
+ * ## 不许商量的写法（对应 ADR 0039「决定」与八条边界）
  *
- * 1. **只剔除 `cls === 'pcdn'`。** `official` / `third-party` / **`unknown` 全保留**。
- *    `unknown` 的含义是"我们认不出这个域" —— 把它删掉等于**拿未知换更少的备份**，
- *    而 ADR 0038 的立法目的是"少走 PCDN"，不是"只留白名单里的域"。
- * 2. **剔除后一条不剩 → 整条轨原样返回**（ADR 0038 硬边界第 5 条）。
- *    删掉那条轨 = 用户点了 4K 却没有 4K，会直接黑屏/切换失败 —— 宁可照旧走 PCDN。
- * 3. **不许新增任何 URL。** 只做减法：`removed` 只减不增，候选条数只能不变或减少。
- *    凭空拼 URL 等于编数据，而且签名（`upsig` / `deadline`）多半不对。
- * 4. **`new URL()` 抛错的候选一律保留。** 判不了就别删 —— 与 `classify.ts` 第 3 条
- *    "认不出就不猜"同一条纪律，只是这里连"猜"的后果都是删东西。
- * 5. **分类必须传两个参数**：`classifyCdn(host, search)`。`search` 是 `os=mcdn` 那条
- *    判据的唯一输入（官方镜像也会代理 mcdn 资源）。本次实测的 PCDN 域名没依赖它，
- *    但那是**判据没被触发**，不是"不用传"。
+ * 1. **只换 `cls === 'pcdn'`。** `official` / `third-party` / **`unknown` 全原样**
+ *    （边界 3）。ADR 0039 的立法目的是"让流量不走 PCDN"，不是"只留白名单"。
+ * 2. **只换 authority**（`host` 含 port，`protocol` 保持）；`pathname` / `search` /
+ *    `hash` **一字不动**（边界 1）。同路径可互换是换 host 成立的全部前提。
+ * 3. **唯一允许改变 URL 结构的例外**：path 命中 `proxyPathPrefix` 的 PCDN 候选，
+ *    改成 `https://<proxyHost>?url=<encodeURIComponent(原 URL)>`（边界 7）。
+ *    扩大这个前缀就等于"任意 URL 重写"。
+ * 4. **候选条数严格不变**（边界 2）：`base` + `backups` 展开后逐条原位写回，
+ *    不删、不排、不增。这正是相对"删除"路线的核心收益（备份全留）。
+ * 5. **换不了的候选原样保留**（边界 5）：`new URL()` 抛错、规则缺项，
+ *    一律 `fallbackKept++` 并返回原串。制造坏 URL 比静默不换更糟。
+ * 6. **镜像清单与 proxy 模板经 `cfg` 下发**（边界 6）：本文件只提供默认值供 ISOLATED
+ *    下发，主世界裸 JS 里一个域名都不许写死。漂移的表现是"开关开着仍走 PCDN"。
+ * 7. **分类必须传两个参数**：`classifyCdn(host, search)`。`search` 是 `os=mcdn`
+ *    那条判据的唯一输入（官方镜像也会代理 mcdn 资源）。
+ * 8. **其余字段一字不动**（边界 3/4）：`quality` / `height` / `codecid` / 带宽 /
+ *    轨数 / 权益字段全部透传；本模块只写四个候选字段。
  *
  * ## 字段命名风格必须跟着输入走
  *
  * B站 两种形态都出现过：`base_url` / `backup_url`（下划线）与 `baseUrl` / `backupUrl`
- * （驼峰）。**输出必须与输入同风格** —— 混用的后果是播放器按另一个名字读，
- * 读到 `undefined`，表现为"某条轨没有流"。
+ * （驼峰）。**输出必须与输入同风格** —— 混用会让播放器按另一个名字读到 `undefined`，
+ * 表现为"某条轨没有流"。
  *
- * ## ⚠️ 一个未验证的前提，接线前必须知道
+ * ## 默认值的性质
  *
- * 过滤之后 `backup_url` 很可能是 **`[]`**：实测 24 条 2160p 轨里，剔完 PCDN 有
- * **15 条只剩 1 条官方候选**（62%）。而**"播放器接不接受 `backup_url: []`"没有测过** ——
- * ADR 0038「未定」表第 2 项写的就是它：「若播放器索引 `backupUrl[0]`，会不播」。
+ * `DEFAULT_REWRITE_RULES` 只是**下发用的种子值**，不是主世界的判据来源；
+ * 主世界只认 `cfg` 带来的运行时值（`pcdnRewriteRules === null` 时一条都不改）。
  *
- * 已实测的只有两件相邻的事：① 播放器**确实**有 backupUrl 自动回退且生效
- * （计划 F1：两条 PCDN 全 `ERR_TIMED_OUT`，视频仍流畅播完）；② `backupUrl` 在
- * 本项目类型里就是 `string[]`（`src/shared/types/playinfo.ts`），空数组是合法值。
- * 这两条都**不构成**"空数组一定没事"的证据。接线那轮必须先在真机上验：
- * 构造一条只剩 `base_url` 的轨，看 `readyState` / `error` / 是否仍发起请求。
- *
- * @see docs/decisions/0038-filter-pcdn-candidates.md
+ * @see docs/decisions/0039-rewrite-pcdn-authority.md
  */
 
 import { classifyCdn } from './classify';
@@ -59,7 +56,7 @@ import { classifyCdn } from './classify';
  * 一条轨里与本模块有关的四个字段。
  *
  * 其余字段（`quality` / `height` / `codecid` / `bandwidth` / `duration` / …）
- * **一律透传、一个都不改** —— 那是 ADR 0038 硬边界第 3 条的原文。
+ * **一律透传、一个都不改** —— 那是 ADR 0039 边界 3/4 的原文。
  */
 export interface CandidateTrack {
   /** 首选候选（下划线风格） */
@@ -72,15 +69,44 @@ export interface CandidateTrack {
   backupUrl?: string[];
 }
 
-/** 本次过滤做了什么（诊断与测试都靠它，别省） */
-export interface FilterStats {
-  /** 被剔掉的候选 URL 条数（**只减不增**） */
-  removed: number;
-  /** 因为"剔完就没了"而**原样保留**的轨数（ADR 0038 边界 5 触发了几次） */
-  keptIntact: number;
+/**
+ * 换 authority 需要的三条规则（与 `PCDN_RULES` 一样经 `cfg` 下发到主世界）。
+ *
+ * 三个字段都是非空字符串才生效；缺任何一项 → 该条原样保留（`fallbackKept`）。
+ */
+export interface RewriteRules {
+  /** PCDN 候选换到的官方镜像 host（含 port 时一并替换原 host） */
+  mirrorHost: string;
+  /** 命中 `proxyPathPrefix` 的候选改走这个官方代理 */
+  proxyHost: string;
+  /** 只有 path 含此前缀的 PCDN 才走 proxy 包装（ADR 0039 边界 7） */
+  proxyPathPrefix: string;
 }
 
-/** 过滤结果：轨列表 + 统计 */
+/**
+ * 默认规则 —— ADR 0039「决定」节实测过的那一组。
+ *
+ * ⚠️ 这是**唯一**允许出现镜像 / proxy 域名的地方（`core/cdn`，纯数据）；
+ * 主世界不得复制，只经 `cfg` 收到它。`verifier-rewrite` 的命中率验证若改了
+ * 默认镜像选择，改这里 + ADR，不要在主世界加第二份。
+ */
+export const DEFAULT_REWRITE_RULES: RewriteRules = {
+  mirrorHost: 'upos-sz-mirrorhw.bilivideo.com',
+  proxyHost: 'proxy-tf-all-ws.bilivideo.com',
+  proxyPathPrefix: '/v1/resource/upgcxcode/',
+};
+
+/** 本次改写做了什么（诊断与测试都靠它，别省） */
+export interface FilterStats {
+  /** 真正换了 authority 的候选条数（`proxied` 的也计在这里） */
+  rewritten: number;
+  /** 其中走 proxy 包装的条数（ADR 0039 边界 7 的唯一例外） */
+  proxied: number;
+  /** 想换但换不了、原样保留的条数（解析失败 / 规则缺项） */
+  fallbackKept: number;
+}
+
+/** 改写结果：轨列表 + 统计 */
 export interface FilterResult<T extends CandidateTrack> {
   tracks: T[];
   stats: FilterStats;
@@ -142,52 +168,106 @@ function candidatesOf(track: CandidateTrack, naming: Naming): string[] {
 }
 
 /**
- * 这条 URL 是不是 PCDN。
+ * 规则是否完整可用（三个字段都是非空字符串）。
  *
- * ## 三条边界（每一条都对应一个真实失败方向）
+ * `proxyPathPrefix` 也要求非空：空前缀会让**每一条** PCDN 都命中 proxy 分支，
+ * 那就把"唯一例外"放大成了"默认行为"（ADR 0039 边界 7）。
+ */
+function rulesUsable(rules: RewriteRules | null | undefined): rules is RewriteRules {
+  return (
+    rules !== null &&
+    rules !== undefined &&
+    typeof rules.mirrorHost === 'string' &&
+    rules.mirrorHost.length > 0 &&
+    typeof rules.proxyHost === 'string' &&
+    rules.proxyHost.length > 0 &&
+    typeof rules.proxyPathPrefix === 'string' &&
+    rules.proxyPathPrefix.length > 0
+  );
+}
+
+/**
+ * 改写一条候选 URL 的 authority。
  *
- * - **解析不出 host → 返回 `false`（保留）**：`new URL()` 抛错说明这个串不是我们能
- *   判断的东西（相对路径、被截断的串）。删掉它等于把"未知"当成"坏"。
- * - **必须传 `search`**：`os=mcdn` 是官方镜像代理 mcdn 时唯一的信号。
- * - **只看 `cls`**：`flavor` 不参与 —— 屏蔽逻辑从不问"官方是哪一种"。
+ * 顺序与主世界 `rewriteCandidateUrl()` 一一对应（接线测试逐条对账）：
+ *
+ * 1. `new URL()` 抛错 → `fallbackKept++`，原串返回；
+ * 2. 非 PCDN（**必须传 `search`**）→ 原串返回，不计数；
+ * 3. 规则缺项 → `fallbackKept++`，原串返回；
+ * 4. path 含 `proxyPathPrefix` → proxy 包装（`proxied++` / `rewritten++`）；
+ * 5. 其余 → 只改 `host`（含 port 一起换），`href` 序列化保留 path/search/hash。
  *
  * @param url 候选 URL 原文
+ * @param rules 已下发的规则
+ * @param stats 就地累加的统计
+ * @returns 改写后的 URL；换不了时返回**原串**
  */
-function isPcdnCandidate(url: string): boolean {
+function rewriteOne(
+  url: string,
+  rules: RewriteRules | null | undefined,
+  stats: FilterStats,
+): string {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    // 判不了就别删（ADR 0038 边界 1 的保守方向；见文件头第 4 条）
-    return false;
+    // 边界 5：判不了就别改
+    stats.fallbackKept += 1;
+    return url;
   }
-  const { cls } = classifyCdn(parsed.host, parsed.search);
-  return cls === 'pcdn';
+
+  // 只换 PCDN；search 必须传（os=mcdn 是官方镜像代理 mcdn 的唯一信号）
+  if (classifyCdn(parsed.host, parsed.search).cls !== 'pcdn') return url;
+
+  if (!rulesUsable(rules)) {
+    stats.fallbackKept += 1;
+    return url;
+  }
+
+  try {
+    if (parsed.pathname.indexOf(rules.proxyPathPrefix) >= 0) {
+      // 边界 7：唯一允许改变 URL 结构的例外
+      stats.proxied += 1;
+      stats.rewritten += 1;
+      return `https://${rules.proxyHost}?url=${encodeURIComponent(url)}`;
+    }
+    // 边界 1：authority 整体换成 mirrorHost。⚠️ 只赋 `host` 会**保留原 port**
+    // （`https://a:8082/x` → `.host='b'` 得到 `https://b:8082/x`），所以先用
+    // mirrorHost 自身解析出目标 hostname/port，再分别赋值，port 为空时一并清掉。
+    const target = new URL(`https://${rules.mirrorHost}/`);
+    parsed.hostname = target.hostname;
+    parsed.port = target.port;
+    stats.rewritten += 1;
+    return parsed.href;
+  } catch {
+    stats.fallbackKept += 1;
+    return url;
+  }
 }
 
 /**
- * 把过滤后的候选写回一条**新**轨。
+ * 把改写后的候选写回一条**新**轨。
  *
- * ## 为什么是"展开 + 显式覆盖"而不是 `delete` + 赋值
+ * ## 为什么是"展开 + 显式覆盖"而不是原地改
  *
- * - `delete` 会改变键顺序，而这份数据会被 `JSON.stringify` 回响应体 ——
- *   键顺序变了虽不影响解析，但会让真机 diff 变成一片红，掩盖真正的改动；
- * - 显式写这四个键，下一轮接线时静态检查（`check-patch-scope.mjs` 的写集断言）
- *   看得见"到底改了哪几个字段"。
+ * - 入参不可变：调用前后 `deepEqual` 有测试钉着；
+ * - 显式写这四个键，接线时静态检查（`check-patch-scope.mjs` 的写集断言）
+ *   看得见"到底改了哪几个字段"；
+ * - 条数由 `[first, ...rest]` 保证恒等于输入，不会删候选。
  *
  * 其它键由展开原样带过来，**一个都不动**。
  *
  * @param track 原轨（**不会被修改**）
  * @param naming 命名风格
- * @param kept 过滤后剩下的候选（至少 1 条）
+ * @param candidates 改写后的候选（长度恒等于输入）
  */
 function withCandidates<T extends CandidateTrack>(
   track: T,
   naming: Naming,
-  kept: readonly string[],
+  candidates: readonly string[],
 ): T {
-  const first = kept[0] ?? '';
-  const rest = kept.slice(1);
+  const first = candidates[0] ?? '';
+  const rest = candidates.slice(1);
 
   if (naming === 'snake') {
     return { ...track, base_url: first, backup_url: rest };
@@ -196,57 +276,60 @@ function withCandidates<T extends CandidateTrack>(
 }
 
 /**
- * 剔除每一条轨里**属于 PCDN** 的候选 URL。
+ * 把每一条轨里**属于 PCDN** 的候选 authority 换成官方镜像（ADR 0039）。
  *
- * ## 算法（与 ADR 0038「决定」一节逐步对应）
+ * ## 算法（与 ADR 0039「决定」一节逐步对应）
  *
- * 1. 把该轨的 `[baseUrl, ...backupUrl]` 展开；
- * 2. 逐条分类（**必须传 `search`**）；
- * 3. 若剩余 ≥ 1 条：`base = 第一条`、`backup = 其余`，**官方之间不重排**；
- * 4. 若剩余 0 条：**整条轨原样保留**，一个字段都不动。
- *
- * ## 两个额外的保守规则（都不是 ADR 原文，是为了"不制造无谓 diff"）
- *
- * - **一条都没删的轨返回原对象**（引用相等）：接线那轮可以把"过滤后"的响应与
- *   原始响应逐字节比对，改动面等于 `stats.removed`，不会出现一堆"值没变但对象是新的"。
- * - **顺序完全不动**：第 1 条是播放器最初选中的那条，重排会改变首选。
- *   所以"剩下 2 条官方"时，第 1 条仍是原来的第 1 条官方（如果它没被删）。
+ * 1. 展开 `[baseUrl, ...backupUrl]`；
+ * 2. 逐条分类（**必须传 `search`**），只有 `cls === 'pcdn'` 的才改写；
+ * 3. path 命中 `proxyPathPrefix` → proxy 包装；否则只改 `host`；
+ * 4. 解析失败 / 规则缺项 → 原样保留（`fallbackKept++`），**条数恒不变**；
+ * 5. 其余字段原样透传；一条都没改写的轨返回**原对象**（引用相等，避免无谓 diff）。
  *
  * ## 纯函数
  *
- * 入参**不被修改**（不 `delete`、不 `push`、不排序）。测试里有一条就专门断言这件事：
- * 调用前后 `deepEqual` 原对象。
+ * 入参**不被修改**。统计在同一个 `stats` 对象上累加后一并返回。
  *
  * @param tracks 一批轨（`dash.video` 或 `dash.audio`）
- * @returns 过滤后的轨（未改动的轨是**原对象**）+ 统计
+ * @param rules 经 `cfg` 下发的规则
+ * @returns 改写后的轨（未改动的轨是**原对象**）+ 统计
  */
-export function filterPcdnCandidates<T extends CandidateTrack>(
+export function rewritePcdnCandidates<T extends CandidateTrack>(
   tracks: readonly T[],
+  rules: RewriteRules | null | undefined,
 ): FilterResult<T> {
-  let removed = 0;
-  let keptIntact = 0;
+  const stats: FilterStats = { rewritten: 0, proxied: 0, fallbackKept: 0 };
 
-  const out: T[] = tracks.map((track) => {
+  const out = tracks.map((track) => {
     const naming = detectNaming(track);
     if (naming === null) return track;
 
     const candidates = candidatesOf(track, naming);
     if (candidates.length === 0) return track;
 
-    const kept = candidates.filter((url) => !isPcdnCandidate(url));
+    const rewrittenCandidates = candidates.map((url) => rewriteOne(url, rules, stats));
 
-    // 边界 5：剔完就没了 → 整条轨原样保留（不删轨、不换 host、不降级）
-    if (kept.length === 0) {
-      keptIntact += 1;
-      return track;
+    // 一条都没改 → 原对象（不制造无谓 diff；幂等性也靠它）
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (rewrittenCandidates[i] !== candidates[i]) {
+        return withCandidates(track, naming, rewrittenCandidates);
+      }
     }
-
-    // 一条都没删 → 原对象（不制造无谓 diff）
-    if (kept.length === candidates.length) return track;
-
-    removed += candidates.length - kept.length;
-    return withCandidates(track, naming, kept);
+    return track;
   });
 
-  return { tracks: out, stats: { removed, keptIntact } };
+  return { tracks: out, stats };
+}
+
+/**
+ * 旧名字的薄封装 —— **语义已按 ADR 0039 升级为"替换 authority"**，不再是删除。
+ *
+ * 保留它是为了避免接线处大改；默认规则用 `DEFAULT_REWRITE_RULES`（真实链路仍由
+ * ISOLATED 经 `cfg` 下发运行时值）。新代码请直接用 `rewritePcdnCandidates()`。
+ */
+export function filterPcdnCandidates<T extends CandidateTrack>(
+  tracks: readonly T[],
+  rules: RewriteRules | null | undefined = DEFAULT_REWRITE_RULES,
+): FilterResult<T> {
+  return rewritePcdnCandidates(tracks, rules);
 }
