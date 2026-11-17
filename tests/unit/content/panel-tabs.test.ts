@@ -290,7 +290,9 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
     const cb = checkboxFor(box, '屏蔽 PCDN 线路');
     expect(cb, '开关必须在').not.toBeNull();
     expect(cb?.disabled, '已读到设置 → 可点').toBe(false);
-    expect(box.textContent, 'hint 必须说明候选条数不变（换 authority 不是删）').toContain('候选条数不变');
+    expect(box.textContent, 'hint 必须说明候选条数不变（换 authority 不是删）').toContain(
+      '候选条数不变',
+    );
     expect(box.textContent, 'hint 必须提到新代价：代理导致首块略慢').toContain('首块可能略慢');
     expect(box.textContent, '旧代价（弱网更容易卡）已随 ADR 0039 作废，不许再出现').not.toContain(
       '更容易卡',

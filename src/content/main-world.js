@@ -74,7 +74,7 @@
    * ## 📋 全部副作用入口清单（2026-11-11 逐处核过，**改这里时逐条复查**）
    *
    * 本文件里凡是"**会改写响应体 / 发起额外请求**"的地方，判据必须用 `rewriteGate`。
-   * 下面是全部 10 处（按出现顺序）。**这份清单是 `main-world.js` 唯一的守护** ——
+   * 下面是全部 11 处（按出现顺序）。**这份清单是 `main-world.js` 唯一的守护** ——
    * 它不被 `tsc` / `eslint` / `prettier` 检查（`docs/04-project-structure.md` §6 明写），
    * 所以注释就是防线。
    *
@@ -90,6 +90,7 @@
    * | 8 | fetch playurl 分支 | 预取主账号进度 | `isPlayurl && rewriteGate` |
    * | 9 | XHR playurl 分支 | 预取主账号进度 | `if (rewriteGate)` |
    * | 10 | `patchPlayurlXhrProgress` | 还原观看进度 | `!rewriteGate` → return false |
+   * | 11 | `festivalRequestInfo` 回调 | 活动页 nano 取流 | `cfgEnabled && rewriteGate`（安装时 + 每次调用时） |
    *
    * **剩余 `enabled` 只有赋值与诊断用途**（`cfgEnabled` / `lastCfgEnabled` /
    * `ready` 上报 / `hello` 回执），**没有漏的副作用入口**。
@@ -408,7 +409,8 @@
   /**
    * 对一个**带 `dash` 的对象**做候选过滤（`/video` 的 `data`、PGC 的 `video_info`）。
    *
-   * 三处调用点都调这一个函数（`check-patch-scope.mjs` 会断言"三处都接了"）。
+   * 四处调用点都调这一个函数（`check-patch-scope.mjs` 会断言原先三处都接了；
+   * 第四处是活动页 nano 回调，见 `festivalRequestInfo`）。
    *
    * ⚠️ 只碰 `dash.video` / `dash.audio` 两个数组，`dash.duration` 等其余键原样带过；
    * **`durl` / `durls` 一个字节都不碰**（FLV 那条路本轮不做）。
@@ -516,6 +518,18 @@
    */
   var nativeFetch = window.fetch;
 
+  /**
+   * 原生 XHR 的 `open` / `send`，给活动页 nano 回调的**最后一道降级**用。
+   *
+   * 与 `nativeFetch` 同一个理由：文件后面会替换 `XMLHttpRequest.prototype`
+   * 做响应改写（`patchPlayurlXhrProgress` 那条路），若降级请求走被 hook 的原型，
+   * 一次网络失败会同时叠上我们的改写逻辑，真机上分不清是哪一层坏的。
+   * 这里在**任何 hook 之前**留一份原始方法；`document_start` 执行到此处时
+   * 原型还是干净的。
+   */
+  var nativeXhrOpen = window.XMLHttpRequest ? window.XMLHttpRequest.prototype.open : null;
+  var nativeXhrSend = window.XMLHttpRequest ? window.XMLHttpRequest.prototype.send : null;
+
   // ── 1. 藏起 SSR 的 __playinfo__ ──
   // 关键：defineProperty 必须早于 SSR 内联脚本执行。
   // content script 在 document_start 执行 → 早于页面任何脚本，满足条件。
@@ -598,7 +612,424 @@
   var IS_PGC = location.pathname.indexOf('/bangumi/play/') === 0;
 
   /**
-   * ## 观测 `createPlayer` 的调用时刻 —— **只记时间，不改行为**（2026-10-29 加）
+   * 活动页判据 —— **主世界的轻量镜像，不是第二处真相源**。
+   *
+   * ## 为什么这里还要写一次路径
+   *
+   * 判据的唯一真相源是 `src/shared/utils/video-page.ts::parsePlayPage()`（ADR 0040），
+   * 面板 / tab 查询 / 规则撤销全都走它。但本文件是 `document_start` 注入的 MAIN world
+   * **裸 JS**：不能 `import` TS 模块，也等不到 ISOLATED 通过 postMessage 把判据送过来
+   * （探针实测：`nano` 赋值 660ms、`createPlayer` 调用 1134ms，setter 必须在这之前挂好）。
+   *
+   * 所以这里只保留一个最小判据："path 是否以 /festival/ 开头"，**只用来决定要不要装
+   * nano 钩子**，不参与任何"这个页面算不算播放页"的判定。漏判的后果仅仅是活动页钩子
+   * 没装（回退到播放器默认取流），不会把普通页误判成活动页往里塞回调。
+   * 写法与上面的 `IS_PGC` 完全一致，故意不写完整 URL 正则。
+   */
+  var IS_FESTIVAL = location.pathname.indexOf('/festival/') === 0;
+
+  /**
+   * 活动页 nano 接流的埋点对象 —— **真机是唯一验收场，单测只钉结构**。
+   *
+   * `main-world.js` 是静态守卫盲区（`check-page-gate` 只扫 .ts，`check-patch-scope`
+   * 只查写集）：测试全绿证明不了钩子真的在页面里跑过。所以每个关键分支都要在这里
+   * 留一个可观测计数，真机打开 `window.__PLUMA_FESTIVAL__` 就能一眼看出卡在哪一步。
+   *
+   * 字段读法（按链路顺序）：
+   * - `isFestival` / `hookInstalled`：判据命中、setter 是否真的包住了 createPlayer
+   * - `nanoSets` / `createCalls` / `cbHits`：`nano` 赋值 → createPlayer 调用 → 回调被调用
+   *   （探针实测这三步的先后是稳定的，任何一步为 0 就等于后面全没发生）
+   * - `lastCid` / `cidMismatch` / `spaSwaps` / `remounts`：SPA 换片有没有重挂、有没有串场
+   * - `rewritten` / `lastStatus` / `fallbacks` / `errors`：PCDN 是否换到官方线路、取流成败
+   * - `lastStage` / `lastSkip`：最后停在哪一步；`lastSkip` 记异常原文，便于真机抄回来
+   */
+  var festivalTrace = {
+    isFestival: IS_FESTIVAL,
+    hookInstalled: false,
+    nanoSets: 0,
+    createCalls: 0,
+    cbHits: 0,
+    lastCid: '',
+    cidMismatch: 0,
+    spaSwaps: 0,
+    remounts: 0,
+    rewritten: 0,
+    lastStatus: -1,
+    fallbacks: 0,
+    errors: 0,
+    lastBvid: '',
+    lastStage: 'boot',
+    lastSkip: '',
+  };
+
+  if (IS_FESTIVAL) {
+    try {
+      window.__PLUMA_FESTIVAL__ = festivalTrace;
+    } catch (e) {}
+    try {
+      festivalTrace.lastBvid = festivalCurrentBvid();
+    } catch (e) {}
+  }
+
+  /** 活动页取流链路上的可变状态，全部收在这里，避免散落成隐式全局。 */
+  var festivalPlayer = null;
+  var festivalConfig = null;
+  var festivalOrigReq = null;
+  var festivalCb = null;
+  var festivalHooked = false;
+  var festivalGeneration = 0;
+  var festivalWatchStarted = false;
+
+  /**
+   * 活动页能不能接管：与 PGC 同一套**双门控**，缺一不可。
+   *
+   * - `cfgEnabled`：用户总开关（`hello` 的 cfg 就可能带上）
+   * - `rewriteGate`：扩展这次**有没有参与取流**（要等 `page/activate` 往返）
+   *
+   * ⚠️ 两者初值分别是 `null` / `false`，即 **fail-closed**：门控没到之前一律不注入。
+   * 这正是"多做一个动作要用 rewriteGate"的纪律（见文件头 11 处清单）。
+   * 回调内部还会再判一次，覆盖"注入后用户热关闭"的情况。
+   */
+  function festivalGateOpen() {
+    return cfgEnabled === true && rewriteGate === true;
+  }
+
+  /**
+   * 当前 bvid：活动页在 **query** 里（`/festival/<key>?bvid=BV…`），
+   * SSR 的 `videoInfo.bvid` 作为兜底。两者都取不到就返回空串（不触发换片重挂）。
+   */
+  function festivalCurrentBvid() {
+    try {
+      var fromQuery = new URLSearchParams(location.search).get('bvid');
+      if (fromQuery) return fromQuery;
+    } catch (e) {}
+    try {
+      var state = window.__INITIAL_STATE__;
+      var video = state && state.videoInfo;
+      if (video && typeof video.bvid === 'string') return video.bvid;
+    } catch (e) {}
+    return '';
+  }
+
+  /**
+   * SSR 里的 cid，仅用于**交叉核对 / 埋点**，不作为请求参数的来源。
+   *
+   * ⚠️ 绝不能拿它覆盖播放器给的 `params.cid`：SPA 换片时 SSR 可能还是上一集，
+   * 用它拼 URL 才是真正的串场。参数始终以播放器本次回调传进来的为准。
+   */
+  function festivalExpectedCid() {
+    try {
+      var state = window.__INITIAL_STATE__;
+      if (state && state.videoInfo && state.videoInfo.cid != null) {
+        return String(state.videoInfo.cid);
+      }
+    } catch (e) {}
+    if (festivalConfig && festivalConfig.cid != null) return String(festivalConfig.cid);
+    return '';
+  }
+
+  /**
+   * 用播放器交过来的**含签名 params** 拼 playurl。
+   *
+   * 主机与路径直接复用已授权的两份常量（ADR 0013 / ADR 0017），
+   * 不新造一份主机白名单；两个字面量只是常量尚未赋值时的兜底，
+   * 永远不会在正常的 `document_start` 流程里走到。
+   * `w_rid` / `wts` 等签名由播放器算好放在 params 里，**扩展不自己算签**。
+   */
+  function festivalPlayUrl(params) {
+    var host = PATCH_HOSTS && PATCH_HOSTS[0] ? PATCH_HOSTS[0] : 'api.bilibili.com';
+    var path = PROGRESS_PATCH_PATHS && PROGRESS_PATCH_PATHS[0]
+      ? PROGRESS_PATCH_PATHS[0]
+      : '/x/player/wbi/playurl';
+    var query = '';
+    try {
+      query = new URLSearchParams(params).toString();
+    } catch (e) {
+      // params 形状异常时逐项拼，至少不把这次取流直接弄断
+      var parts = [];
+      for (var key in params) {
+        if (Object.prototype.hasOwnProperty.call(params, key) && params[key] != null) {
+          parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(params[key])));
+        }
+      }
+      query = parts.join('&');
+    }
+    return 'https://' + host + path + '?' + query;
+  }
+
+  /**
+   * 最后一道降级：原生 XHR 重发同一个已签名 URL。
+   *
+   * 为什么需要它：原生活动页根本没有 `reqHttpPlayUrlInfo`，我们一旦挂上回调，
+   * 播放器的默认 XHR 就被**完全替换**（探针 Q3：`net.playurlXHR` 只有回调那一次）。
+   * 也就是说回调里 fetch 失败时，不存在"让播放器自己再试一次"这回事——
+   * 只能由我们把等价于默认路径的那次请求发出去，否则就是黑屏。
+   * 用上面备份的原生 `open` / `send`，绕开本文件的 XHR 改写 hook。
+   */
+  function festivalNativeXhr(url) {
+    return new Promise(function (resolve, reject) {
+      try {
+        if (!nativeXhrOpen || !nativeXhrSend) {
+          reject(new Error('native XHR unavailable'));
+          return;
+        }
+        var xhr = new XMLHttpRequest();
+        xhr.onload = function () {
+          try {
+            resolve({
+              data: JSON.parse(xhr.responseText),
+              headers: {},
+              status: xhr.status,
+            });
+          } catch (e) {
+            reject(e);
+          }
+        };
+        xhr.onerror = function () {
+          reject(new Error('native XHR failed'));
+        };
+        nativeXhrOpen.call(xhr, 'GET', url, true);
+        xhr.withCredentials = true;
+        nativeXhrSend.call(xhr);
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  /**
+   * 统一降级出口：先交回页面自己的回调（如果真有），否则走原生 XHR。
+   *
+   * 顺序很重要：页面回调是"最像原本行为"的那条路，只有当它不存在时
+   * 才由我们补发 XHR。两条都失败时返回一个**结构合法但 code=-1** 的壳，
+   * 让播放器走它自己的错误提示，而不是因为 rejected promise 悄悄黑屏。
+   */
+  function festivalFallback(params, config) {
+    festivalTrace.fallbacks += 1;
+    if (typeof festivalOrigReq === 'function') {
+      try {
+        return festivalOrigReq(params, config);
+      } catch (e) {
+        festivalTrace.errors += 1;
+        festivalTrace.lastSkip = 'orig callback threw: ' + String(e && e.message ? e.message : e);
+      }
+    }
+    var url = '';
+    try {
+      url = festivalPlayUrl(params);
+    } catch (e) {
+      festivalTrace.errors += 1;
+      return Promise.resolve({ data: { code: -1 }, headers: {}, status: 0 });
+    }
+    return festivalNativeXhr(url).catch(function () {
+      festivalTrace.errors += 1;
+      return { data: { code: -1 }, headers: {}, status: 0 };
+    });
+  }
+
+  /**
+   * 造一枚新回调。**每次重挂都换函数身份**：真机上能靠 `cbHits` 之外的
+   * generation 区分"旧回调还在被调"与"新回调已接管"（探针 Q5 的坑）。
+   */
+  function festivalNewCallback() {
+    festivalGeneration += 1;
+    var generation = festivalGeneration;
+    return function festivalRequestInfo(params, config) {
+      festivalTrace.cbHits += 1;
+      festivalTrace.lastStage = 'cb';
+
+      var cid = params && params.cid != null ? String(params.cid) : '';
+      if (cid) festivalTrace.lastCid = cid;
+      var expected = festivalExpectedCid();
+      if (expected && cid && expected !== cid) {
+        // 只记，不拦：SSR 在 SPA 切换后可能滞后，params 才是本轮请求的真值
+        festivalTrace.cidMismatch += 1;
+      }
+
+      // 热关闭也要挡住：门控不仅管"装不装"，还管"每一次调用发不发请求"
+      if (!festivalGateOpen()) {
+        festivalTrace.lastStage = 'skip-gate-at-cb';
+        return festivalFallback(params, config);
+      }
+
+      var url;
+      try {
+        url = festivalPlayUrl(params);
+      } catch (e) {
+        festivalTrace.errors += 1;
+        festivalTrace.lastSkip = 'build url: ' + String(e && e.message ? e.message : e);
+        return festivalFallback(params, config);
+      }
+
+      // 必须是 `nativeFetch`：本文件后面 hook 了 window.fetch，
+      // 走它自己的 hook 会把这次取流又喂进响应改写链，出问题分不清是哪一层。
+      // DNR 换 Cookie 在网络层生效，用 nativeFetch 不影响身份代理。
+      return nativeFetch(url, { credentials: 'include' })
+        .then(function (r) {
+          festivalTrace.lastStatus = r.status;
+          return r.json().then(function (json) {
+            if (!r.ok || !json || json.code !== 0 || !json.data || typeof json.data !== 'object') {
+              throw new Error('bad playurl payload');
+            }
+
+            /**
+             * PCDN 换 authority（ADR 0039）—— 与 `/video` 的 playurl 同一套函数、
+             * 同一道闸门。活动页返回体同样是 `{code, data:{dash}}`，
+             * 所以 holder 就是 `json.data`（与 `patchPlayurlBody` 里的 `d` 同层）。
+             * 这里不碰 quality / timelength / duration：画质由服务端决定，
+             * 而探针实测 activity 页的 duration 由 SSR 分 P 锁定，改了也不会变。
+             */
+            if (pcdnFilterReady()) {
+              var stats = filterDashOf(json.data);
+              if (stats.changed) {
+                festivalTrace.rewritten += stats.rewritten;
+                reportPcdnFilter(stats, 'festival');
+              }
+            }
+
+            /**
+             * ⚠️ `data` 这一层不能少（探针 Q4）：内核 `requestDefault` 返回的是
+             * `{data: <完整 json>, headers, status}`，只返回 json 本身播放器解析不出流。
+             * 探针用 "裁 dash.video 6→3 后 videoHeight 480→360" 证明它吃的就是这份数据。
+             */
+            return { data: json, headers: {}, status: r.status };
+          });
+        })
+        .catch(function (err) {
+          festivalTrace.errors += 1;
+          festivalTrace.lastStage = 'fallback';
+          festivalTrace.lastSkip = 'fetch/json: ' + String(err && err.message ? err.message : err);
+          return festivalFallback(params, config);
+        });
+    };
+  }
+
+  /** 在 config 上新建 requestConfig 并挂回调（活动页原生**两者都没有**）。 */
+  function festivalAttach(config) {
+    if (!config || typeof config !== 'object') return false;
+    festivalConfig = config;
+
+    /**
+     * 空对象也要建：正常路径下它马上就会装上回调；
+     * 门控晚到的路径下，它是后面 `player.updateRequestConfig()` 不抛错的前提
+     * （探针 Q5：原生页 requestConfig 为 undefined，内核 Object.assign 会抛）。
+     * 空 requestConfig 不改变播放器行为（内核只读 `?.reqHttpPlayUrlInfo`）。
+     */
+    if (!config.requestConfig || typeof config.requestConfig !== 'object') {
+      config.requestConfig = {};
+    }
+    if (!festivalGateOpen()) return false;
+
+    if (typeof config.requestConfig.reqHttpPlayUrlInfo === 'function' && !festivalOrigReq) {
+      festivalOrigReq = config.requestConfig.reqHttpPlayUrlInfo;
+    }
+    if (config.requestConfig.reqHttpPlayUrlInfo === festivalCb) return true;
+
+    /**
+     * 防御性清预取字段：活动页当前**没有** prefetch（探针 Q2 / Q3），
+     * 这不是删除 ADR 0019 那条的 `prefetch.playUrl`——那条路在这里根本不存在。
+     * 清的是"站点将来改版加上预取"这种变体：预取会短路掉我们的回调。
+     * ⚠️ 只在门控已开、确认接管时才清；门控关时一个键都不动。
+     * 绝不在 `element` / `auxiliary` 这类 DOM 键上套 Proxy（探针实测栈溢出）。
+     */
+    try {
+      delete config.prefetch;
+    } catch (e) {}
+    try {
+      delete config.playUrl;
+    } catch (e) {}
+
+    festivalCb = festivalNewCallback();
+    config.requestConfig.reqHttpPlayUrlInfo = festivalCb;
+    festivalHooked = true;
+    festivalTrace.hookInstalled = true;
+    festivalTrace.lastStage = 'hooked';
+    return true;
+  }
+
+  /**
+   * SPA 换片重挂：`createPlayer` 不会再调（探针 Q5），只能靠 updateRequestConfig。
+   *
+   * ⚠️ 这个方法在"原生未注入"的页面上会抛（内核 `Object.assign(undefined, …)`）。
+   * 我们在 `createPlayer` 里已经保证 requestConfig 存在，所以正常路径安全；
+   * 仍然 try/catch 兜底——重挂失败时旧回调留在原地，但它的 params 来自播放器
+   * 本轮请求，cid 不会串场，最多是这一集没有被改写（不黑屏）。
+   */
+  function festivalRemount(reason) {
+    if (!IS_FESTIVAL || !festivalGateOpen() || !festivalPlayer) return false;
+    if (typeof festivalPlayer.updateRequestConfig !== 'function') {
+      festivalTrace.lastSkip = 'no updateRequestConfig';
+      return false;
+    }
+    var cb = festivalNewCallback();
+    try {
+      festivalPlayer.updateRequestConfig({ reqHttpPlayUrlInfo: cb });
+      if (festivalConfig && festivalConfig.requestConfig) {
+        festivalConfig.requestConfig.reqHttpPlayUrlInfo = cb;
+      }
+      festivalTrace.remounts += 1;
+      festivalTrace.lastStage = 'remounted-' + reason;
+      return true;
+    } catch (e) {
+      festivalTrace.errors += 1;
+      festivalTrace.lastSkip =
+        'updateRequestConfig: ' + String(e && e.message ? e.message : e);
+      return false;
+    }
+  }
+
+  /**
+   * bvid 监听：SPA 用 `pushState` 把 `?bvid=` 换掉，多数情况下没有 popstate。
+   * 所以事件 + 定时轮询双保险；计时器只在 player 建好之后启动（此前无可重挂对象）。
+   * 对比的是 bvid 而不是 cid：活动页 bvid 在 query，SSR 的 cid 可能滞后一拍。
+   */
+  function festivalStartBvidWatch() {
+    if (festivalWatchStarted) return;
+    festivalWatchStarted = true;
+    var check = function () {
+      try {
+        var bvid = festivalCurrentBvid();
+        if (!bvid) return;
+        if (festivalTrace.lastBvid && bvid !== festivalTrace.lastBvid) {
+          festivalTrace.spaSwaps += 1;
+          festivalRemount('bvid');
+        }
+        festivalTrace.lastBvid = bvid;
+      } catch (e) {
+        festivalTrace.errors += 1;
+        festivalTrace.lastSkip = 'bvid watch: ' + String(e && e.message ? e.message : e);
+      }
+    };
+    try {
+      window.addEventListener('popstate', check);
+    } catch (e) {}
+    setInterval(check, 700);
+  }
+
+  /**
+   * cfg 晚到的补齐路径：`createPlayer` 可能早于 `page/activate` 回包。
+   * 此时 player 已经建好但回调没挂；我们靠已创建的空 requestConfig 走
+   * `updateRequestConfig`（或直接在同一个 config 对象上补）把回调装上去。
+   */
+  function festivalMaybeActivate() {
+    if (!IS_FESTIVAL || !festivalGateOpen()) return;
+    if (!festivalPlayer) return; // createPlayer 还没来 -> 由包装函数负责
+    if (!festivalHooked) {
+      if (festivalAttach(festivalConfig)) {
+        try {
+          festivalPlayer.updateRequestConfig({ reqHttpPlayUrlInfo: festivalCb });
+          festivalTrace.remounts += 1;
+        } catch (e) {
+          festivalTrace.errors += 1;
+          festivalTrace.lastSkip =
+            'late activate: ' + String(e && e.message ? e.message : e);
+        }
+      }
+    }
+  }
+
+  /**
+   * ## 观测 `createPlayer` 的调用时刻（PGC 只记时间）+ 活动页真接管（2026-11-18）
    *
    * ## 为什么需要它
    *
@@ -612,10 +1043,18 @@
    *   若 `duration` 仍 180，说明播放器读的**不是** `__playinfo__`（或读的是被缓存的副本）。
    * - `createPlayerAt < patchedAt` → 播放器先读了旧数据，注入再成功也没用，**必须 reload**。
    *
-   * ## ⚠️ 只用 `apply` 透传，绝不替换逻辑（ADR 0019 的教训）
+   * ## ⚠️ 活动页这一段**不是**观测，是真注入（方案 B）
    *
-   * ADR 0019 曾经想「hook `createPlayer` 换回调」，真机三条证据把它否掉了。
-   * 那个否掉的结论是「**不要靠改 createPlayer 来注入流**」，
+   * ADR 0019 否掉的是「靠改 `createPlayer` 给 PGC 换回调」，原因是 PGC 的
+   * `prefetch.playUrl` 短路（`cbCalled:0`）。活动页探针 Q2 实测**根本没有 prefetch、
+   * 也没有 requestConfig**，Q3 实测新建回调后 cbHits=1 且原生 XHR 被完全替换。
+   * 前提不同，否定结论不适用；但也不能照搬 PGC 的"删 prefetch"实现——那里没得删。
+   * 两条分支共用同一个 setter 钩子点（都必须在 `nano` 赋值瞬间同步完成），
+   * 但各自只走各的路径，互不改变对方行为。
+   *
+   * ## ⚠️ PGC 路径只用 `apply` 透传，绝不替换逻辑（ADR 0019 的教训）
+   *
+   * 那个否掉的结论是「**不要靠改 createPlayer 来注入流**」（仅 PGC），
    * 不是「不能观察它」。这里只在调用**之前**记一个时间戳，然后原样 `apply` ——
    * 参数不碰、返回值不碰、`this` 不碰。
    *
@@ -625,10 +1064,11 @@
    * （`poc/probe/probe-pgc-timing.cjs` 实测验证过这条路可行）。
    * 在 `document_start` 抢在页面脚本之前挂 setter，才能在 `nano` 一赋值就包住它。
    *
-   * 失败（页面没有 `nano` / `defineProperty` 被拒）只影响观测，不影响功能。
+   * 失败（页面没有 `nano` / `defineProperty` 被拒）只影响观测与接管，不会让播放器
+   * 拿不到资源：活动页注入失败时原生取流路径仍在（回调没挂上就走默认 XHR）。
    */
   function installCreatePlayerProbe() {
-    if (!IS_PGC) return;
+    if (!IS_PGC && !IS_FESTIVAL) return;
     var nanoRef;
     try {
       Object.defineProperty(window, 'nano', {
@@ -639,28 +1079,63 @@
         },
         set: function (v) {
           nanoRef = v;
+          // 计数放在类型检查之前：探针 Q1 的"nano 赋值了但没包住"要能被看见
+          if (IS_FESTIVAL) {
+            festivalTrace.nanoSets += 1;
+            festivalTrace.lastStage = 'nano-set';
+          }
           if (!v || typeof v.createPlayer !== 'function') return;
           // 已经包过就不再包（防止重复注入叠罗汉）
           if (v.createPlayer.__plumaProbed) return;
           var orig = v.createPlayer;
           var wrapped = function () {
-            try {
-              pgcTrace.createPlayerCalls += 1;
-              if (pgcTrace.createPlayerAt < 0) {
-                pgcTrace.createPlayerAt = performance.now
-                  ? Math.round(performance.now())
-                  : -1;
+            if (IS_PGC) {
+              try {
+                pgcTrace.createPlayerCalls += 1;
+                if (pgcTrace.createPlayerAt < 0) {
+                  pgcTrace.createPlayerAt = performance.now
+                    ? Math.round(performance.now())
+                    : -1;
+                }
+              } catch (e) {}
+            }
+            if (IS_FESTIVAL) {
+              try {
+                festivalTrace.createCalls += 1;
+                // 必须在 orig.apply 之前：内核在 createPlayer 里就把 config 收进 configStore
+                festivalAttach(arguments[0]);
+              } catch (e) {
+                festivalTrace.errors += 1;
+                festivalTrace.lastSkip =
+                  'attach: ' + String(e && e.message ? e.message : e);
               }
-            } catch (e) {}
-            // 原样透传：参数、this、返回值全不动
-            return orig.apply(this, arguments);
+            }
+
+            // PGC：原样透传：参数、this、返回值全不动
+            var ret = orig.apply(this, arguments);
+
+            if (IS_FESTIVAL) {
+              try {
+                if (ret && typeof ret === 'object') {
+                  festivalPlayer = ret;
+                  festivalStartBvidWatch();
+                }
+                // cfg 早于 createPlayer 但门控当时还没开时，这里是最后的补齐点
+                if (!festivalHooked) festivalMaybeActivate();
+              } catch (e) {
+                festivalTrace.errors += 1;
+                festivalTrace.lastSkip =
+                  'after createPlayer: ' + String(e && e.message ? e.message : e);
+              }
+            }
+            return ret;
           };
           wrapped.__plumaProbed = true;
           v.createPlayer = wrapped;
         },
       });
     } catch (e) {
-      /* 观测装不上就算了，不影响播放 */
+      /* 钩子装不上就算了，不影响播放（埋点会停在 nano-set 之前的 boot） */
     }
   }
 
@@ -1112,9 +1587,9 @@
   // DNR 改的是请求头 → 没有可改的对象（ADR 0007）。
   // 所以 `/video` 那套"藏起 `__playinfo__` 逼播放器发请求"在这里**必须反过来**：数据要保留。
   //
-  // ## 为什么不是"hook createPlayer 换回调"（ADR 0019 已被推翻）
+  // ## 为什么不是"hook createPlayer 换回调"（ADR 0019 —— 只对 PGC 成立）
   //
-  // 2026-10-28 真机实测三条，把那条路彻底否掉了：
+  // 2026-10-28 真机实测三条，把**PGC 那条**路彻底否掉了：
   //
   //   1. 用页面自己的容器 + 完整集数据建播放器，`reqHttpPlayUrlInfo` **一次都没被调用**
   //      （`cbCalled: 0`），`duration` 仍是 360。
@@ -1125,8 +1600,14 @@
   //      是纯 durl 流水线，那个回调只是装饰（返回 SSR 常量）。
   //
   // 而 `createPlayer` 在 `__playinfo__` 赋值后 0~2ms 就调用了（实测 407/409/409ms），
-  // 接口来不及返回。所以唯一能让播放器拿到完整流的办法是：
+  // 接口来不及返回。所以 PGC 唯一能让播放器拿到完整流的办法是：
   // **下一次加载时它已经在手边** → 缓存 + 二次加载。
+  //
+  // ⚠️ **这条否定不能照搬到活动页**（2026-11-18 探针 Q2/Q3）：活动页没有
+  // `prefetch.playUrl` 可短路，也没有 `requestConfig`；在 createPlayer 里新建
+  // `requestConfig.reqHttpPlayUrlInfo` 后回调被调用 1 次、原生 XHR 被完全替换。
+  // 因此活动页走的是本文件前面那套 nano 真接管（`festivalAttach`），
+  // 与这里的 PGC 缓存注入并存，互不替代。
   //
   // ## 现在的链路
   //
@@ -1299,6 +1780,14 @@
      * 装 `createPlayer` 观测（只记时刻，不改行为 —— 见函数头注释）。
      *
      * 必须在这里调：越早越好，要抢在页面内联脚本给 `window.nano` 赋值之前。
+     */
+    installCreatePlayerProbe();
+  }
+
+  if (IS_FESTIVAL) {
+    /**
+     * 必须在 `document_start` 就装 setter —— 探针实测 nano 赋值后约 0.5–1.2s
+     * 就会调用 createPlayer，异步等消息必然错过。
      */
     installCreatePlayerProbe();
   }
@@ -4501,6 +4990,14 @@
     // 埋点：每收到一条 cfg 都记，用来区分"没收到 false"与"收到了但没触发"
     pgcTrace.cfgCount += 1;
     pgcTrace.lastCfgEnabled = cfgEnabled;
+
+    /**
+     * 活动页（方案 B）的**晚到 cfg 补齐**：`createPlayer` 可能早于 `page/activate`
+     * 回包，那时门控还没开、回调没挂。门控这次到齐了就立刻重挂；
+     * 门控关着时这里什么都不做，播放器继续走默认 XHR（fail-closed）。
+     * ⚠️ 必须在 token / 门控判断之后，否则页面伪造的 cfg 也能触发接管。
+     */
+    festivalMaybeActivate();
 
     /**
      * PGC 完整流缓存（ADR 0020）—— ISOLATED 侧从 `storage.local` 预读后下发给这里。

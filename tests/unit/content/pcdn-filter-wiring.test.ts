@@ -254,7 +254,10 @@ describe('主世界 `rewriteCandidateUrl()` vs core 的两条规则', () => {
 
   it('★ 普通 PCDN → mirrorHost，path/query 原样；port 一并换掉', async () => {
     const { page } = await boot(true);
-    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (u: string, stats?: MwStats) => string;
+    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (
+      u: string,
+      stats?: MwStats,
+    ) => string;
     const stats: MwStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
 
     const out = rewrite(PCDN, stats);
@@ -266,7 +269,10 @@ describe('主世界 `rewriteCandidateUrl()` vs core 的两条规则', () => {
 
   it('★ `/v1/resource/upgcxcode/` → proxy 包装（原 URL 完整编码）', async () => {
     const { page } = await boot(true);
-    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (u: string, stats?: MwStats) => string;
+    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (
+      u: string,
+      stats?: MwStats,
+    ) => string;
     const stats: MwStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
 
     expect(rewrite(PROXY_PATH, stats)).toBe(proxyOf(PROXY_PATH));
@@ -281,7 +287,10 @@ describe('主世界 `rewriteCandidateUrl()` vs core 的两条规则', () => {
     expect(rewriteNoRules(PCDN)).toBe(PCDN);
 
     const { page } = await boot(true);
-    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (u: string, stats?: MwStats) => string;
+    const rewrite = page.__PLUMA_TEST__.rewriteCandidateUrl as unknown as (
+      u: string,
+      stats?: MwStats,
+    ) => string;
     const stats: MwStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
     expect(rewrite('not a url', stats)).toBe('not a url');
     expect(stats.fallbackKept).toBe(1);
@@ -301,8 +310,7 @@ describe('`filterOneTrack()` vs `rewritePcdnCandidates()`（对账）', () => {
   const OFFICIAL = 'https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s';
   const OFFICIAL_2 = 'https://cn-jsnt-ct-01-08.bilivideo.com/v.m4s';
   const PCDN = 'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/v.m4s';
-  const PROXY_PATH =
-    'https://xy116x196x140x25xy.mcdn.bilivideo.cn/v1/resource/upgcxcode/x.m4s';
+  const PROXY_PATH = 'https://xy116x196x140x25xy.mcdn.bilivideo.cn/v1/resource/upgcxcode/x.m4s';
 
   const TRACKS: Array<CandidateTrack & Record<string, unknown>> = [
     { base_url: OFFICIAL, backup_url: [OFFICIAL_2, PCDN] },

@@ -78,6 +78,15 @@ ADR 0031 确立了「视觉清理按能力划边界」，但它没有授权"在�
 background（`tabs.handler.ts` / `background.ts` 的 `isVideoPageUrl`）、`page-state-client.ts`
 都自动跟随统一判据，不需要各自加分支。`scripts/check-page-gate.mjs` 规则 3 会拦越界字面量。
 
+> **唯一例外（第 3 步流接管，2026-11-18 补）：`src/content/main-world.js` 的 `IS_FESTIVAL`。**
+> 主世界是裸 JS、被 `win.eval(SOURCE)` 直接执行，**不能 import** TS 的 `parsePlayPage()`；
+> 且它必须在 `document_start` 就决定要不要挂 nano 钩子，等不到 ISOLATED 侧经 `cfg` 下发判据。
+> 因此允许在这一个 `.js` 文件里保留一份**最小镜像**（`location.pathname.indexOf('/festival/') === 0`），
+> 用途**严格限定**为"要不要装 createPlayer 钩子"，不得用于页面分类、面板状态、DNR 或 tab 查询——
+> 那些仍一律走 `video-page.ts` 的唯一真相源。
+> 这不是禁令松动而是审计对齐：`check-page-gate.mjs` 规则 3 本来就只扫 `.ts`（main-world 是 `.js`），
+> 此处写明例外，免得后来的审计把这份必要镜像当成越权。
+
 ### 六条硬边界（缺一条就超出本授权）
 
 | # | 边界 | 为什么 |

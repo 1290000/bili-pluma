@@ -86,10 +86,7 @@ export interface FestivalPageInfo {
 }
 
 /** 播放页的三种形态。`parsePlayPage` 的返回值 */
-export type PlayPageInfo =
-  | (VideoPageInfo & { kind: 'video' })
-  | PgcPageInfo
-  | FestivalPageInfo;
+export type PlayPageInfo = (VideoPageInfo & { kind: 'video' }) | PgcPageInfo | FestivalPageInfo;
 
 /**
  * 从 URL 解析视频页信息。非视频页返回 null。

@@ -294,10 +294,7 @@ describe('rewritePcdnCandidates', () => {
   });
 
   it('判据8 · 没有 `backup_url` 字段也不崩（单候选轨）', () => {
-    const { tracks, stats } = rewritePcdnCandidates(
-      [{ base_url: PCDN }],
-      DEFAULT_REWRITE_RULES,
-    );
+    const { tracks, stats } = rewritePcdnCandidates([{ base_url: PCDN }], DEFAULT_REWRITE_RULES);
 
     expect(stats).toEqual({ rewritten: 1, proxied: 0, fallbackKept: 0 });
     expect(tracks[0]?.base_url).toBe(mirrorOf(PCDN));
@@ -323,11 +320,7 @@ describe('rewritePcdnCandidates', () => {
 
     expect(stats.rewritten).toBe(2);
     expect(tracks[0]?.base_url).toBe(OFFICIAL);
-    expect(tracks[0]?.backup_url).toEqual([
-      mirrorOf(PCDN),
-      mirrorOf(PCDN_2),
-      OFFICIAL_2,
-    ]);
+    expect(tracks[0]?.backup_url).toEqual([mirrorOf(PCDN), mirrorOf(PCDN_2), OFFICIAL_2]);
   });
 
   it('多轨累计：rewritten / proxied / fallbackKept 各自累加', () => {

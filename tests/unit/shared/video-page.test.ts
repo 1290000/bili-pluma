@@ -127,7 +127,9 @@ describe('parsePgcPage（番剧 / 国创 / 电影，ADR 0019）', () => {
 
 describe('parseFestivalPage（活动专区页，ADR 0040）', () => {
   it('真实形态：活动 key 在路径，bvid 在 query', () => {
-    expect(parseFestivalPage('https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn')).toEqual({
+    expect(
+      parseFestivalPage('https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn'),
+    ).toEqual({
       kind: 'festival',
       pageKey: 'COLMO2026',
       bvid: 'BV1ydeX65Edn',
@@ -136,7 +138,9 @@ describe('parseFestivalPage（活动专区页，ADR 0040）', () => {
   });
 
   it('拜年纪活动页也能解析', () => {
-    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=BV1eoZ7BnEGy')).toEqual({
+    expect(
+      parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=BV1eoZ7BnEGy'),
+    ).toEqual({
       kind: 'festival',
       pageKey: 'bnj2026',
       bvid: 'BV1eoZ7BnEGy',
@@ -145,7 +149,9 @@ describe('parseFestivalPage（活动专区页，ADR 0040）', () => {
   });
 
   it('带尾斜杠也能解析', () => {
-    expect(parseFestivalPage('https://www.bilibili.com/festival/COLMO2026/?bvid=BV1ydeX65Edn')).toEqual({
+    expect(
+      parseFestivalPage('https://www.bilibili.com/festival/COLMO2026/?bvid=BV1ydeX65Edn'),
+    ).toEqual({
       kind: 'festival',
       pageKey: 'COLMO2026',
       bvid: 'BV1ydeX65Edn',
@@ -183,7 +189,9 @@ describe('parseFestivalPage（活动专区页，ADR 0040）', () => {
   });
 
   it('bvid 必须是完整参数值：带后缀或前缀都不认（不许裸 includes）', () => {
-    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=BV1x.evil')).toBeNull();
+    expect(
+      parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=BV1x.evil'),
+    ).toBeNull();
     expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=xxBV1x')).toBeNull();
     expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=BV1x%20')).toBeNull();
   });
@@ -199,9 +207,7 @@ describe('parseFestivalPage（活动专区页，ADR 0040）', () => {
   });
 
   it('仿冒域名不解析', () => {
-    expect(
-      parseFestivalPage('https://www.bilibili.com.evil.com/festival/x?bvid=BV1x'),
-    ).toBeNull();
+    expect(parseFestivalPage('https://www.bilibili.com.evil.com/festival/x?bvid=BV1x')).toBeNull();
     expect(parseFestivalPage('https://evil.com/festival/x?bvid=BV1x')).toBeNull();
   });
 

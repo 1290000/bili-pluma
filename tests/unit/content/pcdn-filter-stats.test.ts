@@ -145,12 +145,7 @@ describe('导出侧：`filter` 字段的四种读法', () => {
     expect(off.filter.reason).toBe('off');
 
     const none = exportOf(snapshotWith({ applied: false, ...ZERO }));
-    expect(Object.keys(none.filter)).toEqual([
-      'applied',
-      'rewritten',
-      'proxied',
-      'fallbackKept',
-    ]);
+    expect(Object.keys(none.filter)).toEqual(['applied', 'rewritten', 'proxied', 'fallbackKept']);
   });
 
   it('★ 快照里**没有** `filter`（老采集器 / 手工 fixture）→ 全 0，且不编 reason', () => {
