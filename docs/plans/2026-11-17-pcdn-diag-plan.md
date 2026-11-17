@@ -73,7 +73,7 @@ a host**"*。`block` 属于"action on a host"，**同样受此约束**。
 | --- | --- |
 | A | CDN 分类纯函数（`core/`，可单测） |
 | B | 只读诊断：显示**实际在用**哪条线路 |
-| C | 「屏蔽 PCDN」开关（DNR block，**默认关**） |
+| C | 「屏蔽 PCDN」：**DNR block 已废弃（见 §7）**，改为**取流数据上的候选过滤**（§12，授权见 [ADR 0038](../../docs/decisions/0038-filter-pcdn-candidates.md)） |
 | D | 加载时间轴面板（普通用户主视图） |
 | E | 诊断页降级 + 导出 JSON 扩字段 |
 
@@ -83,7 +83,7 @@ a host**"*。`block` 属于"action on a host"，**同样受此约束**。
 | --- | --- |
 | 测速选线（挑最快的一条） | 必须阻塞起播；换来的只是省掉一次注定失败的尝试，而播放器本来就会退（F1）。**净收益 ≤ 0** |
 | 改 host / URL 重定向 | 路径前缀与 CDN 类型绑定（F4），正则替换脆；且要碰请求改造 |
-| 改 playurl 响应体 | **ADR 0017 明文禁止改 `dash`**。本方案全程不碰响应体 |
+| ~~改 playurl 响应体~~ | ~~**ADR 0017 明文禁止改 `dash`**。本方案全程不碰响应体~~ —— ⚠️ **已被 §12 推翻**：v3 改走候选过滤，并由 [ADR 0038](../../docs/decisions/0038-filter-pcdn-candidates.md) 授权"只减不增"地动 `dash[].base_url` / `backup_url`（其余字段仍禁改）。这一行保留只为说明 v2 当时的边界 |
 | 显示下载速度 / 实测码率 | 跨域计时拿不到字节数（F7） |
 | 按历史自动开关 | 不做自动决策，只给手动开关 |
 | 远程规则下发 | 违反 §3 决策 6 |
@@ -617,9 +617,10 @@ interface LoadEvent {
 
 ---
 
-## 12. v3 修订：屏蔽改走「playurl 候选过滤」（用户已授权解除 ADR 0017 约束）
+## 12. v3 修订：屏蔽改走「playurl 候选过滤」（用户已授权解除 ADR 0017 约束；授权已落成 [ADR 0038](../../docs/decisions/0038-filter-pcdn-candidates.md)）
 
 **触发**：2026-11-17 用户明确指示「以我目前的需求优先，ADR 0017 明文禁止改 dash 不用管」。
+该授权的**可审计边界**（只减不增、禁改 quality/轨数、全 PCDN 轨原样保留）写在 ADR 0038，不写在本文件。
 
 ### 12.1 为什么这句话让方案变好，而不是变危险
 
@@ -686,11 +687,17 @@ ADR 0017 已授权的 `last_play_time` / `last_play_cid` 是**另一套独立 pa
 播放器切到的那条 PCDN，**只能来自它手里已有的候选**（首次 playurl 或 SSR 下发的那份）。
 所以把 PCDN 从候选里删掉之后，它就没有这条 URL 可切 —— **覆盖成立**。
 
-⚠️ **但由此引出一个必须处理的新点**：既然之后不再请求 playurl，播放器手里的候选也可能来自
-**SSR 的 `__playinfo__`**（整页加载时写进 HTML 的那份，ADR 0014 已确认它存在且被 Pluma 处理过）。
+⚠️ **但由此引出一个必须处理的新点**（2026-11-17 按真机证据修正过）：候选到底从哪来，**两种页面不一样**。
 
-⇒ **候选过滤必须同时作用于两条来源：`__playinfo__` 与 playurl 响应。**
-只改 XHR 响应，可能只覆盖一半。这一条已并入 §12.7 的 T9′。
+| 页面 / 时机 | 播放器读的那份数据 | 过滤要改哪一处 |
+| --- | --- | --- |
+| `/video` | **playurl 响应**（XHR，fetch 兜底） | playurl 响应。⚠️ **不需要**再改 `__playinfo__`：扩展 `enabled` 时它已被藏成 `undefined`（`main-world.js:1558`、`:627`），播放器读不到，候选只可能来自它自己发的那次请求 |
+| PGC 整页加载 | `__playinfo__.result.video_info`（我们注入的） | `pgcPatchPlayinfo` 注入点（`main-world.js:1053-1060`） |
+| **PGC SPA 切集** | **`playview` 响应**（此时 `__playinfo__` 完全不动，见 [ADR 0023](../../docs/decisions/0023-intercept-playview-durl-swap.md)） | `pgcSwapPlayviewBody` 换流点（`main-world.js:3076-3110`） |
+
+⇒ **候选过滤必须覆盖三处**（`/video` 的 playurl、PGC 的 `__playinfo__` 注入、PGC 的 `playview` 换流）。
+**只改 playurl 会漏掉整个番剧切集；只改前两处会漏掉同一个场景。** 三条边的字段边界见
+[ADR 0038](../../docs/decisions/0038-filter-pcdn-candidates.md)。这一条已并入 §12.7 的 T9′。
 
 **局限**：本次是匿名 360p。高码率下 PCDN 分配比例更高，所以"只发 1 次 playurl"这个
 **次数结论在 4K 场景仍需真机复核**（登录态 + 4K）。但"中途会切 PCDN"这个事实已确认。
@@ -708,7 +715,7 @@ ADR 0017 已授权的 `last_play_time` / `last_play_cid` 是**另一套独立 pa
 | ~~T9 DNR block 规则~~ | **取消**。`src/platform/http/dnr.ts` **零改动** |
 | ~~T10 `dnr-disable-clears-tab-rules.cjs` 扩三类~~ | **取消**（该脚本断言仍是"两类"，不用动） |
 | ~~T4 零 main-world 改动~~ | **改成有改动**：新增 `PATCH_PATHS` 之外的第三条授权集（建议命名 `CDN_FILTER_PATHS`） |
-| **新增 T9′** | `src/content/main-world.js` 加候选过滤，**同时作用于 `__playinfo__` 与 playurl 响应两条来源**（§12.5）+ `check-patch-scope.mjs` 扩校验 + 新 ADR 0038 |
+| **新增 T9′** | `src/content/main-world.js` 加候选过滤，**覆盖三处**（`/video` 的 playurl、PGC 的 `__playinfo__` 注入、PGC SPA 切集的 `playview`，见 §12.5）+ `check-patch-scope.mjs` 扩校验 + 新 [ADR 0038](../../docs/decisions/0038-filter-pcdn-candidates.md) |
 | **新增 T10′** | 全 PCDN 场景真机验证：确认"原样保留 + 照常播"，且面板提示正确 |
 
 **验证闸门相应变化**：因为不动 `dnr.ts`，`run-q2-auto.cjs` 与 `dnr-disable-clears-tab-rules.cjs`
