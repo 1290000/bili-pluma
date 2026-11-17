@@ -29,6 +29,7 @@
 import type { DiagEntry, DiagRow } from '@platform/diagnostics/collect';
 import { tipFor } from '@platform/diagnostics/collect';
 import type { CdnKind } from '@core/cdn/classify';
+import type { FilterSkipReason } from '@core/cdn/filter';
 import { currentSegment, detectSwitches } from '@core/loading/timeline';
 import { el, iconChevron } from './dom';
 import { playingEvent, type LoadingOutcome } from './loading-pane';
@@ -243,6 +244,20 @@ function finite(value: unknown): number {
 }
 
 /**
+ * 同 `finite()`，但**负数也收敛成 0**。
+ *
+ * 用在"计件数"字段上（候选过滤的 `removed` / `keptIntact`）：那些数只可能是
+ * 非负整数，出现负数说明上游数据被改坏了 —— 而 `-3` 交给用户比 `0` 更误导
+ * （会被读成"剔了负数条"，看起来像统计口径问题）。
+ *
+ * ⚠️ 故意**不**把它并回 `finite()`：`durationSec` 这类字段的负值语义不同
+ * （`-1` 有时是"未知"的既有约定），一刀切会改变那些字段的现有行为。
+ */
+function nonNeg(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+/**
  * 一条事件在导出里的形状。
  *
  * ## 2026-11-20（T13，P1-6）：`error` 多一个 `code`
@@ -333,6 +348,25 @@ export interface LoadingExport {
    * 消费者看到 `eventsTruncated: false` 会以为一条都没丢过。
    */
   eventsLostBeforeWindow: boolean;
+  /**
+   * 候选过滤（ADR 0038）这一次做了什么（2026-11-20 接线）。
+   *
+   * | 字段 | 含义 |
+   * | --- | --- |
+   * | `applied` | **真的**删过候选（不是"开关开着"） |
+   * | `removed` / `keptIntact` | 删掉的候选条数 / 因"剔完就没了"而原样保留的轨数 |
+   * | `reason` | **为什么没生效**：`off`（用户没开）/ `rulesMissing`（判据规则没下发） |
+   *
+   * ⚠️ `applied: false` 时两个计数**保持 0**，且**不许**把"未生效"写成 `null`
+   * —— `null` 会被读成"这个字段不存在（旧版本）"，而 0 是"确实剔了 0 条"，
+   * 两者含义不同，`reason` 负责说清是哪一种。
+   */
+  filter: {
+    applied: boolean;
+    removed: number;
+    keptIntact: number;
+    reason?: FilterSkipReason;
+  };
   video: { readyState: number; durationSec: number; height: number; errorCode: number } | null;
 }
 
@@ -366,6 +400,8 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
       events: [],
       eventsTruncated: false,
       eventsLostBeforeWindow: false,
+      // 没有快照 = 无从知道过滤状态；给"全 0 且不解释"，不编一个 reason
+      filter: { applied: false, removed: 0, keptIntact: 0 },
       video: null,
     };
   }
@@ -432,6 +468,28 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
     eventsTruncated: allEvents.length > LOADING_EVENT_LIMIT,
     // ⚠️ 来自采集器（环形缓冲），与上一行的"导出层只装 40 条"是两件事
     eventsLostBeforeWindow: snapshot.truncated === true,
+    /**
+     * 候选过滤：来自快照（主世界那几条 `pcdn-filter-stats` 上报累加而成）。
+     *
+     * `snapshot.filter` 缺失（老版本采集器 / 手工 fixture）时给"全 0 且不解释" ——
+     * **不写 `reason: 'off'`**：那是"用户关了开关"这一具体事实，没有观测就不能断言。
+     */
+    filter:
+      snapshot.filter === undefined
+        ? { applied: false, removed: 0, keptIntact: 0 }
+        : {
+            applied: snapshot.filter.applied === true,
+            /**
+             * 两个计数用 `nonNeg` 而不是 `finite`：这条边界上**负数不是"未知"，是错**。
+             *
+             * `removed: -3` 在导出里会被读成"剔了负数条"，比缺字段更误导；而它唯一
+             * 可能的来源是一份被改坏的快照（消息侧 `content.ts` 已经把非正整数收敛成 0）。
+             * `finite()` 只挡 `NaN` / `Infinity`，负数会原样通过，所以这里单独收一道。
+             */
+            removed: nonNeg(snapshot.filter.removed),
+            keptIntact: nonNeg(snapshot.filter.keptIntact),
+            ...(snapshot.filter.reason !== undefined ? { reason: snapshot.filter.reason } : {}),
+          },
     video:
       video === null
         ? null

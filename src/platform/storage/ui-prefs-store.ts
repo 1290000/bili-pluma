@@ -129,6 +129,44 @@ export async function writeFeedAccountEnabled(enabled: boolean): Promise<void> {
 }
 
 /**
+ * 候选过滤开关（ADR 0038）—— 从取流的候选 URL 里剔除 PCDN。
+ *
+ * ## 为什么放在本文件（它其实不是"界面偏好"）
+ *
+ * 形态与 `FEED_ACCOUNT_ENABLED_KEY` 完全相同：布尔、**默认 `false`**、
+ * content 侧读 + 设置页写、content 侧监听变化。为它单开一个 store 文件只是
+ * 把同一套五行代码换个地方放。⚠️ 但它改的是**取流行为**（会改写响应体的
+ * `dash[].base_url` / `backup_url`），不是"页面长什么样" —— 所以：
+ *
+ * - **默认必须是 `false`**（`=== true` 语义），fail-closed。这是新增能力，
+ *   用户不主动打开就保持原样；打开后改的是服务端下发的候选，属于"只减不增"
+ *   的减法（ADR 0038）。
+ * - 它的判据在 `core/cdn/filter.ts`，**不在本文件**：这里只存"用户想不想开"。
+ *
+ * ## 为什么要能被 `storage.onChanged` 热更新
+ *
+ * 关掉开关后刷新页面，主世界若还按旧值过滤，用户会看到"开关关了 PCDN 还在变少"
+ * 或者反过来 —— 与 ADR 0028 那次「关开关后画质不回落」同类。所以
+ * `content.ts` 监听本键并**重发一次 `cfg`**（不是靠"刷新生效"）。
+ */
+const PCDN_FILTER_KEY = 'pluma:pcdn-filter-enabled';
+
+/** 供 content script 监听 `storage.onChanged` 时比对键名 */
+export const PCDN_FILTER_ENABLED_KEY = PCDN_FILTER_KEY;
+
+/** 是否剔除 PCDN 候选。默认 `false`（新增能力，用户不打开就不改行为） */
+export async function readPcdnFilterEnabled(): Promise<boolean> {
+  const bag = await chrome.storage.local
+    .get(PCDN_FILTER_KEY)
+    .catch(() => ({}) as Record<string, unknown>);
+  return bag[PCDN_FILTER_KEY] === true;
+}
+
+export async function writePcdnFilterEnabled(enabled: boolean): Promise<void> {
+  await chrome.storage.local.set({ [PCDN_FILTER_KEY]: enabled });
+}
+
+/**
  * 视觉清理选项（ADR 0031 / 0032）。
  *
  * ## 为什么这里只做"存取"，不做校验

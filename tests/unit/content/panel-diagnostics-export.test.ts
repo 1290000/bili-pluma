@@ -626,6 +626,8 @@ describe('★ loading：四条硬裁剪（每条一个用例）', () => {
        * `capturedAt` 这类会说谎的时刻字段"。
        */
       'eventsLostBeforeWindow',
+      // 2026-11-20：候选过滤（ADR 0038）这一次做了什么
+      'filter',
       'video',
     ]);
     expect(JSON.stringify(out)).not.toContain('capturedAt');

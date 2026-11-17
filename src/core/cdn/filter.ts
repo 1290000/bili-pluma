@@ -86,6 +86,19 @@ export interface FilterResult<T extends CandidateTrack> {
   stats: FilterStats;
 }
 
+/**
+ * 过滤**没有生效**的原因（唯一一处定义，别处一律 `import type` 引用）。
+ *
+ * | 值 | 含义 |
+ * | --- | --- |
+ * | `'off'` | 用户没打开开关（默认状态） |
+ * | `'rulesMissing'` | 开关开着，但判据规则没下发到主世界 —— 判定不了就不动响应体 |
+ *
+ * 定义在这里而不是各自内联：加新值时靠 tsc 找得到所有需要更新的地方，
+ * 而三处手抄的联合类型加值时不会报错（`check-messages` 会红，但那只是兜底）。
+ */
+export type FilterSkipReason = 'rulesMissing' | 'off';
+
 /** 候选字段用的是哪一套命名 */
 type Naming = 'snake' | 'camel';
 

@@ -50,6 +50,7 @@
  */
 
 import { classifyCdn, type CdnKind, type OfficialFlavor } from '@core/cdn/classify';
+import type { FilterSkipReason } from '@core/cdn/filter';
 import { buildTimeline, type LoadEvent } from '@core/loading/timeline';
 
 /** 采集侧环形缓冲上限：与 `buildTimeline()` 的默认 `limit` 一致（200） */
@@ -104,6 +105,41 @@ export interface LoadingSnapshotLite {
   truncated: boolean;
   /** `<video>` 的即时状态；页面上还没有 video 时为 `null` */
   video: { readyState: number; durationSec: number; height: number; errorCode: number } | null;
+  /**
+   * 候选过滤（ADR 0038）这一次做了什么（2026-11-20 接线）。
+   *
+   * ## 为什么是可选字段
+   *
+   * 这份快照的形状被几十个测试当作 fixture 手工构造；做成必填会让它们**全部**
+   * 因为一个与各自断言无关的字段而变红。所以是可选的，**消费方必须自己兜底**
+   * （导出侧 `buildLoadingExport()` 会补 `{applied:false, removed:0, keptIntact:0}`）。
+   *
+   * ⚠️ `applied` 回答的是"**这一次页面里过滤真的生效过**"（真的删过候选），
+   * 不是"开关开着"。开关开着但没有 PCDN 候选时，它仍然是 `false` ——
+   * 那正是"未生效"，与"剔了 0 条"是两件事（后者不需要报告）。
+   */
+  filter?: PcdnFilterStats;
+}
+
+/** 候选过滤的累计结果（主世界每处调用点各报一条，采集侧累加） */
+export interface PcdnFilterStats {
+  /** 是否**真的**改动过响应体（删过至少一条候选） */
+  applied: boolean;
+  /** 被剔掉的候选 URL 条数 */
+  removed: number;
+  /** 因为"剔完就没了"而原样保留的轨数（ADR 0038 边界 5） */
+  keptIntact: number;
+  /**
+   * 为什么**没**生效（2026-11-20，Lead 约束 ②）。
+   *
+   * | 值 | 含义 |
+   * | --- | --- |
+   * | `'off'` | 用户没打开开关（默认状态） |
+   * | `'rulesMissing'` | 开关开着，但 ISOLATED 侧没把判据规则下发过来 —— 主世界判定不了就不动响应体 |
+   *
+   * 有 `applied: true` 时不应带 reason。
+   */
+  reason?: FilterSkipReason;
 }
 
 /**
@@ -185,6 +221,13 @@ export interface LoadingTraceState {
    * 用户自己就是大会员，扩展确实没有参与取流。
    */
   streamingProxied: boolean;
+  /**
+   * 候选过滤（ADR 0038）的**累计**结果（2026-11-20 接线）。
+   *
+   * 主世界三个调用点各自上报一次（`playurl` / `playinfo` / `playview`），这里
+   * **累加**而不是覆盖：一次播放可能先整页注入、再切一集，两个数都要算进去。
+   */
+  filter: PcdnFilterStats;
 }
 
 /** 造一份空状态 */
@@ -196,6 +239,7 @@ export function createTraceState(): LoadingTraceState {
     lastSegReqCls: null,
     extPatchRecorded: false,
     streamingProxied: false,
+    filter: { applied: false, removed: 0, keptIntact: 0 },
   };
 }
 
@@ -618,6 +662,75 @@ export function recordExtPatch(state: LoadingTraceState, t: number, note?: strin
 }
 
 /**
+ * 记录一次**候选过滤**的结果（ADR 0038，2026-11-20 接线）。
+ *
+ * ## 为什么是累加而不是覆盖
+ *
+ * 一次播放里三处取流点都可能过滤：普通视频的 playurl、PGC 整页注入、PGC 切集换流。
+ * 每个数都要算进去 —— 覆盖会让"整页注入删了 3 条、切集又删了 2 条"只剩最后那条。
+ *
+ * 参数直接来自主世界的 `pcdn-filter-stats` 消息（见 `main-world.js` 的
+ * `reportPcdnFilter()`）。
+ *
+ * @param state 采集器状态（就地修改）
+ * @param payload 主世界报来的这一条
+ */
+export function recordPcdnFilter(
+  state: LoadingTraceState,
+  payload: {
+    applied: boolean;
+    removed: number;
+    keptIntact: number;
+    reason?: FilterSkipReason;
+  },
+): void {
+  const removed = Number.isFinite(payload.removed) && payload.removed > 0 ? payload.removed : 0;
+  const keptIntact =
+    Number.isFinite(payload.keptIntact) && payload.keptIntact > 0 ? payload.keptIntact : 0;
+
+  state.filter.removed += removed;
+  state.filter.keptIntact += keptIntact;
+  if (payload.applied === true) {
+    state.filter.applied = true;
+    /**
+     * **真的过滤过之后，`reason` 必须消失**（2026-11-20）。
+     *
+     * 现实时序是这样的：开关开着、规则还没下发 → 主世界报一条
+     * `reason: 'rulesMissing'`；随后规则到了、真的剔掉了候选 → 再报一条
+     * `applied: true`。若不清掉 reason，导出里就会出现
+     * 「`applied: true` + `reason: 'rulesMissing'`」这种自相矛盾的一行，
+     * 而读的人会去查一个已经不存在的问题。
+     */
+    delete state.filter.reason;
+  }
+
+  if (payload.reason !== undefined) state.filter.reason = payload.reason;
+}
+
+/**
+ * 模块级入口：`content.ts` 收到主世界的 `pcdn-filter-stats` 时调用。
+ */
+export function notePcdnFilter(payload: {
+  applied: boolean;
+  removed: number;
+  keptIntact: number;
+  reason?: FilterSkipReason;
+}): void {
+  recordPcdnFilter(state, payload);
+}
+
+/**
+ * 模块级入口：`content.ts` 在**开关关着**时调一次，让导出能说清"没生效是因为关着"。
+ *
+ * 不覆盖已经记下的 `applied`：先开了开关过滤过、后来用户关掉，
+ * 这一次页面仍然"真的过滤过"。
+ */
+export function notePcdnFilterOff(): void {
+  if (state.filter.applied) return;
+  state.filter.reason = 'off';
+}
+
+/**
  * 模块级入口：`content.ts` 收到主世界上报时调用。
  *
  * 与 `recordExtPatch(state, t)` 的分工和 `resetLoadingTrace()` 一样 ——
@@ -656,6 +769,8 @@ export function snapshotOf(
     hosts,
     events: timeline.events,
     truncated: state.truncated || timeline.truncated,
+    // 候选过滤的累计值（永远是对象，消费方不必判空）
+    filter: { ...state.filter },
     video,
   };
 }

@@ -70,6 +70,29 @@ const PCDN_DOMAINS: readonly string[] = [
   'zhenidc.cn',
 ];
 
+/**
+ * **判 PCDN 需要的两份规则**，供跨世界下发（2026-11-20，候选过滤接线）。
+ *
+ * ## 为什么要把规则导出成数据
+ *
+ * 候选过滤要在**主世界**改写响应体，而 `main-world.js` 是裸 JS、不能 `import`
+ * （8 个测试文件直接 `eval` 它的源码）。若让主世界自己写一份域名表，就违反了
+ * 本文件第 2 条纪律 —— "不另写域名表，否则与 `classify.ts` 必然漂移"，
+ * 而漂移的表现是**开关开着却在走 PCDN**（静默失败）。
+ *
+ * 所以规则**不复制代码，只下发数据**：ISOLATED 侧把这两份数组塞进 `cfg`，
+ * 主世界用十几行通用匹配（标签相等 / 域后缀 / `os=mcdn` / IP 字面量）去判。
+ * 判据仍然只有本文件一份。
+ *
+ * ⚠️ 只导出 PCDN 需要的两份。`OFFICIAL_DOMAINS` / `THIRD_PARTY_DOMAINS`
+ * **不导出**：主世界只问"是不是 PCDN"，非 PCDN 一律保留（ADR 0038 边界 1），
+ * 多下发一份就让"哪些域算官方"也出现了第二处读者。
+ */
+export const PCDN_RULES: { labels: readonly string[]; domains: readonly string[] } = {
+  labels: PCDN_LABELS,
+  domains: PCDN_DOMAINS,
+};
+
 /** B站官方取流域（后缀匹配，按标签边界）。`flavor` 一律 `null` —— 认不出机型 */
 const OFFICIAL_DOMAINS: readonly string[] = ['bilivideo.com', 'bilivideo.cn'];
 

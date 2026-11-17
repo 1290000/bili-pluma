@@ -83,6 +83,8 @@ import {
   getLoadingSnapshot,
   installLoadingTrace,
   noteExtPatch,
+  notePcdnFilter,
+  notePcdnFilterOff,
   resetLoadingTrace,
   setLoadingTraceProxied,
 } from '@/src/content/isolated/loading-trace';
@@ -100,7 +102,13 @@ import { clearPgcCache, writePgcCache } from '@platform/storage/pgc-cache-store'
 import { readPrimaryProfile, savePrimaryProfile } from '@platform/storage/primary-profile-store';
 import { readStreamingIdentity } from '@platform/storage/streaming-identity-store';
 import { needsProxy, type StreamingIdentity } from '@shared/constants/streaming-identity';
-import { BADGE_ENABLED_KEY, readBadgeEnabled } from '@platform/storage/ui-prefs-store';
+import {
+  BADGE_ENABLED_KEY,
+  PCDN_FILTER_ENABLED_KEY,
+  readBadgeEnabled,
+  readPcdnFilterEnabled,
+} from '@platform/storage/ui-prefs-store';
+import { PCDN_RULES } from '@core/cdn/classify';
 import type { ProxyActivateReason } from '@shared/types/messages';
 import { buildPageSnapshot } from '@core/ui/page-snapshot';
 import {
@@ -312,6 +320,33 @@ let hasEverActivated = false;
 let proxyEnabledKnown: boolean | null = null;
 
 /**
+ * 最近一次 `page/activate` 回包里的两个布尔 —— **只为了让 `cfg` 能被重发**。
+ *
+ * ## 为什么要把它们记下来（2026-11-20，候选过滤开关热更新）
+ *
+ * 候选过滤开关变化时要**立刻**给主世界重发一条 `cfg`（否则用户拨了开关得刷新才
+ * 生效 —— 正是 ADR 0028 那类"开关拨了没反应"的 bug）。而 `tellMainWorld()`
+ * 每次都把 `enabled` / `pgcActive` / `rewriteGate` 一起发，其中后两个只在
+ * `page/activate` 回包里出现过。
+ *
+ * ⚠️ 尤其 `rewriteGate`：`tellMainWorld()` 的形参默认值是 `false`，
+ * 重发时若不传，主世界会**把改写闸关掉**（所有响应体改写立刻停摆）。
+ * 所以必须记住真值再原样带上，不能靠默认值。
+ *
+ * 初值：`activatedKnown = null`（回包前不知道）、`rewriteGateKnown = false`
+ * （与 `tellMainWorld()` 的默认一致，fail-closed）。
+ */
+let activatedKnown: boolean | null = null;
+let rewriteGateKnown = false;
+
+/**
+ * 候选过滤开关的**最近已知值**（默认 `false`，fail-closed）。
+ *
+ * 只用于"重发 cfg 时带什么"，不是判据 —— 判据在 `ui-prefs-store` 的读取函数里。
+ */
+let pcdnFilterKnown = false;
+
+/**
  * ## ⚠️ 这里**曾经**有一个模块级的 `extensionEngagedKnown`（2026-11-11 删除）
  *
  * 它原本的用途：让 PGC 缓存写入点知道「扩展这次有没有真的参与取流」，
@@ -393,10 +428,41 @@ function paintBadge(): void {
  * 再让 `summary-view` 说出「基线不可用（数据来源是取流账号）」这种**不存在的归因**。
  *
  * 详见 `poc/probe/verify-report/PROXYENABLED-DESIGN.md`。
+ *
+ * @param filterCandidates 候选过滤开关（ADR 0038）。默认 `false` —— **fail-closed**：
+ *   它会改写响应体的 `dash[].base_url` / `backup_url`，属于有副作用的动作。
+ *   只有用户在设置里明确打开（`storage.local` 里那个键为 `true`）才允许。
  */
-function tellMainWorld(enabled: boolean, pgcActive?: boolean, rewriteGate = false): void {
+function tellMainWorld(
+  enabled: boolean,
+  pgcActive?: boolean,
+  rewriteGate = false,
+  filterCandidates = false,
+): void {
   window.postMessage(
-    { __ns: NS, type: 'cfg', token: CHANNEL_TOKEN, enabled, pgcActive, rewriteGate },
+    {
+      __ns: NS,
+      type: 'cfg',
+      token: CHANNEL_TOKEN,
+      enabled,
+      pgcActive,
+      rewriteGate,
+      filterCandidates,
+      /**
+       * 判 PCDN 的**唯一真源**（`classify.ts` 的 `PCDN_RULES`）。
+       *
+       * ## 为什么把规则当数据下发，而不是让主世界自己写一份域名表
+       *
+       * 主世界是裸 JS（8 个测试直接 eval 它的源码），不能 `import`。
+       * 抄一份域名表 = 两处真相源，必然漂移，而漂移的表现是
+       * **开关开着却在走 PCDN**（静默失败）。发十几条短串的成本可以忽略。
+       *
+       * 每条 `cfg` 都带：它很小，而且"带与不带"会让主世界在
+       * `pcdnRules === null` 时退化成"不过滤"——那种状态下开关打开也不生效，
+       * 更难排查。宁可每次都带。
+       */
+      pcdnRules: PCDN_RULES,
+    },
     '*',
   );
 }
@@ -2147,7 +2213,25 @@ function report(): void {
       const switchOn = res.reason !== 'disabled';
       const extensionEngaged = res.reason === 'ok';
       proxyEnabledKnown = switchOn;
-      tellMainWorld(switchOn, res.activated === true, extensionEngaged);
+      /**
+       * 记住这两个布尔 —— 开关热更新时要重发 `cfg`（见 `activatedKnown` 的注释）。
+       */
+      activatedKnown = res.activated === true;
+      rewriteGateKnown = extensionEngaged;
+
+      /**
+       * 候选过滤开关（ADR 0038）：**每次页面加载读一次**，随 `cfg` 下发。
+       *
+       * 默认 `false`（`readPcdnFilterEnabled()` 是 `=== true` 语义），
+       * 所以"没配过 / 存储被清 / 读失败"三种情况都是不过滤 —— 保守方向正确。
+       */
+      pcdnFilterKnown = await readPcdnFilterEnabled();
+      /**
+       * 开关关着 → 让快照/导出能说清"没生效是因为关着"（而不是"剔了 0 条"）。
+       * 开着时**不改** reason：真正的判定结果由主世界那几条上报决定。
+       */
+      if (!pcdnFilterKnown) notePcdnFilterOff();
+      tellMainWorld(switchOn, activatedKnown, rewriteGateKnown, pcdnFilterKnown);
 
       /**
        * ## 总开关状态的本地落地（ADR 0028 第一层 + 第二层）
@@ -2873,6 +2957,49 @@ export default defineContentScript({
     });
 
     /**
+     * **主世界报告"候选过滤做了什么"**（ADR 0038，2026-11-20 接线）。
+     *
+     * 这条上报只服务**诊断导出的 `filter` 字段**（`applied` / `removed` /
+     * `keptIntact` / `reason`）—— 过滤本身已经在主世界同步完成了，这条消息
+     * **不参与任何判定**，晚到 / 丢了都只影响导出，不影响播放。
+     *
+     * ## 判据是"形状对"而不是"值可信"
+     *
+     * 页面脚本伪造它，最坏效果是让导出的数字变难看（多报几百条 removed）。
+     * 它不驱动任何行为：没有开关、没有网络请求、没有写 storage。
+     * 所以这里只做**类型收敛**（布尔 / 非负整数），不做来源校验 —— 与
+     * `ext-patch` 那条同一条安全边界。
+     *
+     * `removed` / `keptIntact` 收成"非负整数"：负数和 `NaN` 一旦进到快照，
+     * 导出里就会出现 `-3` 这种**看起来像统计口径问题**的数字，比缺字段更误导。
+     */
+    window.addEventListener('message', (ev) => {
+      const d = ev.data as {
+        __ns?: string;
+        type?: string;
+        applied?: unknown;
+        removed?: unknown;
+        keptIntact?: unknown;
+        reason?: unknown;
+      } | null;
+      if (!d || d.__ns !== NS || d.type !== 'pcdn-filter-stats') return;
+
+      const toCount = (v: unknown): number =>
+        typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0;
+      const reason =
+        d.reason === 'rulesMissing' || d.reason === 'off'
+          ? (d.reason as 'rulesMissing' | 'off')
+          : undefined;
+
+      notePcdnFilter({
+        applied: d.applied === true,
+        removed: toCount(d.removed),
+        keptIntact: toCount(d.keptIntact),
+        ...(reason !== undefined ? { reason } : {}),
+      });
+    });
+
+    /**
      * 角标开关（设置页「显示」分区）。
      *
      * 读一次 + 监听变化：设置页保存后**不用刷新页面**角标就消失/出现，
@@ -2946,12 +3073,43 @@ export default defineContentScript({
         }
       }
 
+      /**
+       * ## 候选过滤开关变化 → **立刻重发 `cfg`**（ADR 0038，2026-11-20）
+       *
+       * 不重发的后果是"拨了开关要刷新才生效"—— 与 ADR 0028 那次
+       * 「关开关后画质不回落」同一类：开关的动作在另一个方向不生效，用户以为功能坏了。
+       *
+       * ⚠️ 三个值全部按**已记住的真值**重发，绝不能靠 `tellMainWorld()` 的默认值：
+       * `rewriteGate` 的默认是 `false`，一旦漏传，主世界会把**改写闸关掉** ——
+       * 会员字段伪装、PGC 注入、候选过滤会一起停摆。
+       *
+       * ⚠️ `proxyEnabledKnown === null` 时**不发**：说明 `page/activate` 还没回包，
+       * 那时 `enabled` 该报什么我们并不知道，硬发一条只会在真机日志里留下一个假状态。
+       * 而 `page/activate` 是 `document_start` 就发的，这条 guard 只覆盖几百毫秒的窗口。
+       */
+      const filterChange = changes[PCDN_FILTER_ENABLED_KEY];
+      if (filterChange && proxyEnabledKnown !== null) {
+        const nextOn = filterChange.newValue === true;
+        if (nextOn !== pcdnFilterKnown) {
+          pcdnFilterKnown = nextOn;
+          tellMainWorld(
+            proxyEnabledKnown,
+            activatedKnown ?? undefined,
+            rewriteGateKnown,
+            pcdnFilterKnown,
+          );
+          reportQuality({
+            height: 0,
+            note: `[PCDN] 候选过滤已${nextOn ? '打开' : '关闭'}（已重发 cfg，无需刷新）`,
+          });
+        }
+      }
+
       const change = changes[BADGE_ENABLED_KEY];
       if (!change) return;
       badgeEnabled = change.newValue !== false;
       paintBadge();
     });
-
     listenMainWorld();
 
     /**

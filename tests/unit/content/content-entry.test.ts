@@ -95,10 +95,18 @@ describe('content.ts 特征测试（拆分安全网）', () => {
        * 三者不能合并：总开关开着 ≠ 装了规则 ≠ 参与了取流
        * （`page-identity` / `self` 都是"开关开着、没装规则、没参与"）。
        */
-      expect(CONTENT).toContain(
-        'tellMainWorld(switchOn, res.activated === true, extensionEngaged)',
-      );
-      expect(CONTENT).not.toContain('tellMainWorld(true, res.activated === true)');
+      /**
+       * ## ⚠️ 2026-11-20：第 2/3 个参数改成"先记住再传"（候选过滤要能热更新）
+       *
+       * 形状变成 `tellMainWorld(switchOn, activatedKnown, rewriteGateKnown, …)` ——
+       * 但**语义一个字没变**：第 2 个仍是 `res.activated === true`，第 3 个仍是
+       * `extensionEngaged`，只是赋值挪到了两行之前（开关热更新时要重发 cfg，
+       * 那时拿不到 `res`）。所以这条判据改成"两个来源仍在、且被原样传进去"。
+       */
+      expect(CONTENT).toContain('activatedKnown = res.activated === true;');
+      expect(CONTENT).toContain('rewriteGateKnown = extensionEngaged;');
+      expect(CONTENT).toContain('tellMainWorld(switchOn, activatedKnown, rewriteGateKnown,');
+      expect(CONTENT).not.toContain('tellMainWorld(true, activatedKnown');
     });
 
     it('失败分支不清缓存、不无脑撤角标（防"角标乱跳"）', () => {

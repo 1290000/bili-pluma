@@ -167,8 +167,265 @@
   }
 
   /**
-   * **原生 fetch 的备份，必须在任何 hook 之前取**。
+   * ## 候选过滤（ADR 0038）—— 从 `dash` 的每条轨里剔除 PCDN 候选
    *
+   * ### 为什么这段代码在主世界，而不是调 `core/cdn/filter.ts`
+   *
+   * 主世界是**裸 JS**（8 个测试文件直接 `eval` 它的真源码，不能加 `import`），
+   * 所以 `filterPcdnCandidates()` 物理上进不来。算法这里有一份，**域名表没有**：
+   * 判据用的 `PCDN_LABELS` / `PCDN_DOMAINS` 由 ISOLATED 侧从 `classify.ts`
+   * 读出来后经 `cfg` 下发（`pcdnRules`）。`classify.ts` 的第 2 条纪律是
+   * "不另写域名表，否则必然漂移"，而漂移的表现是**开关开着却在走 PCDN**。
+   *
+   * 两份实现的一致性由 `tests/unit/content/pcdn-filter-wiring.test.ts` 对账
+   * （主世界那份判据 vs `classifyCdn()` / `filterPcdnCandidates()`，含 84 条实测 host）。
+   * ⚠️ 文件名叫 "wiring" 而不是 "reconcile"：对账与接线语义（开关关闭不改字节、
+   * 规则缺失不生效、幂等、三处调用点）都在同一份里，拆开会让"漏接一处"没人守。
+   *
+   * ### 五条边界（ADR 0038，一条都不许省）
+   *
+   * 1. **只剔除 PCDN**：`official` / `third-party` / **`unknown` 全保留**。
+   *    认不出的域删掉等于拿未知换更少的备份。
+   * 2. **剔完一条不剩 → 整条轨原样返回**（原对象，不删轨、不降级）。
+   *    删轨 = 用户点了 4K 却没有 4K。
+   * 3. **不许新增 URL**：只做减法，条数只能不变或减少。
+   * 4. **`new URL()` 抛错 → 保留**（判不了就别删）。
+   * 5. **命名风格跟输入**：`base_url`/`backup_url` 与 `baseUrl`/`backupUrl` 不许混用。
+   *
+   * ### 保守规则（不制造无谓 diff）
+   *
+   * 一条都没删的轨返回**原对象**；整个 `dash` 没变化时**不动** `holder.dash`。
+   * 这样"过滤前后逐字节比对"的改动面恰好等于 `removed`。
+   */
+  /**
+   * 候选过滤开关。**默认 `false`**（fail-closed）：新增能力，用户不打开就不改行为。
+   *
+   * 由 `cfg.filterCandidates` 赋值 —— 缺失时**保持当前值**（老版本 ISOLATED
+   * 不带这个字段，不能把已打开的开关误关掉；它的初值 false 已经保证"缺失 = 不过滤"）。
+   */
+  var pcdnFilterOn = false;
+
+  /**
+   * 判 PCDN 的规则（`{ labels: string[], domains: string[] }`），由 `cfg.pcdnRules` 下发。
+   *
+   * `null` = 还没收到 → **一条都不删**（判定不了就别动响应体）。这一点很重要：
+   * 规则没到就当作"过滤未启用"，比"用一份猜的域名表"安全得多。
+   */
+  var pcdnRules = null;
+
+  /** 是否已经从 `cfg` 收到过规则（只用于埋点，不参与判断） */
+  var pcdnRulesSeen = false;
+
+  /** "规则缺失"这条上报是否已经发过（每页只发一次，见 `pcdnFilterReady()`） */
+  var pcdnRulesMissingReported = false;
+
+  /**
+   * 这条 URL 是不是 PCDN 候选。
+   *
+   * 判据顺序与 `core/cdn/classify.ts` 的 1/2/3/4/5 条一致（只保留判 PCDN 需要的部分）：
+   * IP 字面量 → 标签相等 → 供应商域后缀（按**标签边界**）→ query 里的 `os=mcdn`。
+   *
+   * @param {string} urlText 候选 URL 原文
+   * @returns {boolean} true = 该候选是 PCDN（可以被剔掉）
+   */
+  function isPcdnUrl(urlText) {
+    if (typeof urlText !== 'string' || urlText.length === 0) return false;
+
+    var rules = pcdnRules;
+    if (!rules || !Array.isArray(rules.labels) || !Array.isArray(rules.domains)) return false;
+
+    var parsed;
+    try {
+      parsed = new URL(urlText);
+    } catch (e) {
+      return false; // 边界 4：判不了就别删
+    }
+
+    var host = String(parsed.hostname || '').toLowerCase().replace(/\.+$/, '');
+    if (host.length === 0) return false;
+
+    // ① 裸 IPv4 / IPv6：PCDN 节点多是 IP 直连，域名层面没有任何特征
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.indexOf(':') >= 0) return true;
+
+    // ② 任一标签等于 PCDN 关键词（`xy116….mcdn.bilivideo.cn`）
+    var labels = host.split('.');
+    for (var i = 0; i < labels.length; i += 1) {
+      if (rules.labels.indexOf(labels[i]) >= 0) return true;
+    }
+
+    // ③ 供应商自有域：按**标签边界**后缀匹配，绝不用裸 endsWith / includes
+    //    （否则 `evil-szbdyd.com` 会被当成 `szbdyd.com`）
+    for (var j = 0; j < rules.domains.length; j += 1) {
+      var domain = String(rules.domains[j]);
+      if (domain.length === 0) continue;
+      if (host === domain) return true;
+      if (host.slice(-(domain.length + 1)) === '.' + domain) return true;
+    }
+
+    // ④ query 里的 `os=mcdn`：官方镜像代理 mcdn 资源时**唯一**的信号
+    var query = typeof parsed.search === 'string' ? parsed.search : '';
+    if (query.length > 0) {
+      var segs = (query.charAt(0) === '?' ? query.slice(1) : query).toLowerCase().split('&');
+      for (var k = 0; k < segs.length; k += 1) {
+        if (segs[k].trim() === 'os=mcdn') return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * 过滤一条轨的候选。
+   *
+   * @param {object} track 一条 `dash.video[]` / `dash.audio[]`
+   * @param {{changed:boolean,removed:number,keptIntact:number}} stats 就地累加
+   * @returns {object} 过滤后的轨；**没改动时返回原对象**
+   */
+  function filterOneTrack(track, stats) {
+    if (!track || typeof track !== 'object') return track;
+
+    var snake = typeof track.base_url === 'string' || Array.isArray(track.backup_url);
+    var camel =
+      !snake && (typeof track.baseUrl === 'string' || Array.isArray(track.backupUrl));
+    if (!snake && !camel) return track;
+
+    var base = snake ? track.base_url : track.baseUrl;
+    var backups = snake ? track.backup_url : track.backupUrl;
+
+    var candidates = [];
+    if (typeof base === 'string' && base.length > 0) candidates.push(base);
+    if (Array.isArray(backups)) {
+      for (var i = 0; i < backups.length; i += 1) {
+        if (typeof backups[i] === 'string' && backups[i].length > 0) candidates.push(backups[i]);
+      }
+    }
+    if (candidates.length === 0) return track;
+
+    var kept = [];
+    for (var j = 0; j < candidates.length; j += 1) {
+      if (!isPcdnUrl(candidates[j])) kept.push(candidates[j]);
+    }
+
+    // 边界 2：剔完就没了 → 整条轨原样保留
+    if (kept.length === 0) {
+      stats.keptIntact += 1;
+      return track;
+    }
+    // 一条都没删 → 原对象（不制造无谓 diff）
+    if (kept.length === candidates.length) return track;
+
+    stats.removed += candidates.length - kept.length;
+    stats.changed = true;
+
+    var out = {};
+    for (var key in track) {
+      if (Object.prototype.hasOwnProperty.call(track, key)) out[key] = track[key];
+    }
+    if (snake) {
+      out.base_url = kept[0];
+      out.backup_url = kept.slice(1);
+    } else {
+      out.baseUrl = kept[0];
+      out.backupUrl = kept.slice(1);
+    }
+    return out;
+  }
+
+  /**
+   * 对一个**带 `dash` 的对象**做候选过滤（`/video` 的 `data`、PGC 的 `video_info`）。
+   *
+   * 三处调用点都调这一个函数（`check-patch-scope.mjs` 会断言"三处都接了"）。
+   *
+   * ⚠️ 只碰 `dash.video` / `dash.audio` 两个数组，`dash.duration` 等其余键原样带过；
+   * **`durl` / `durls` 一个字节都不碰**（FLV 那条路本轮不做）。
+   *
+   * @param {object} holder 形如 `{ dash: {...} }` 的对象（就地替换 `holder.dash`）
+   * @returns {{changed:boolean,removed:number,keptIntact:number}}
+   */
+  function filterDashOf(holder) {
+    var none = { changed: false, removed: 0, keptIntact: 0 };
+    if (!holder || typeof holder !== 'object') return none;
+
+    var dash = holder.dash;
+    if (!dash || typeof dash !== 'object') return none; // 没有 dash（如纯 durl 响应）→ 原样
+
+    var video = Array.isArray(dash.video) ? dash.video : null;
+    var audio = Array.isArray(dash.audio) ? dash.audio : null;
+    if (video === null && audio === null) return none;
+
+    var stats = { changed: false, removed: 0, keptIntact: 0 };
+
+    var nextVideo = null;
+    if (video !== null) {
+      nextVideo = [];
+      for (var i = 0; i < video.length; i += 1) nextVideo.push(filterOneTrack(video[i], stats));
+    }
+    var nextAudio = null;
+    if (audio !== null) {
+      nextAudio = [];
+      for (var j = 0; j < audio.length; j += 1) nextAudio.push(filterOneTrack(audio[j], stats));
+    }
+
+    if (!stats.changed) return stats;
+
+    var nextDash = {};
+    for (var key in dash) {
+      if (Object.prototype.hasOwnProperty.call(dash, key)) nextDash[key] = dash[key];
+    }
+    if (nextVideo !== null) nextDash.video = nextVideo;
+    if (nextAudio !== null) nextDash.audio = nextAudio;
+    holder.dash = nextDash;
+    return stats;
+  }
+
+  /**
+   * 把过滤统计告诉 ISOLATED 侧（诊断页导出的 `filter` 字段就取这几个数）。
+   *
+   * 只在**真的改了**时发，且每处调用点各自发一条 —— 一次播放最多几条，
+   * 不会把 30 条环形日志挤掉（对比：分片事件有几百条）。
+   *
+   * @param {{removed:number,keptIntact:number}} stats
+   * @param {string} where 调用点标识（`playurl` / `playinfo` / `playview`）
+   */
+  function reportPcdnFilter(stats, where, reason) {
+    var payload = {
+      __ns: NS,
+      type: 'pcdn-filter-stats',
+      where: where,
+      applied: stats.changed === true,
+      removed: stats.removed,
+      keptIntact: stats.keptIntact,
+    };
+    if (reason) payload.reason = reason;
+    safePost(payload);
+  }
+
+  /**
+   * 现在能不能过滤？**兼做"规则缺失"的一次性上报**。
+   *
+   * 三处调用点都先问它 —— 这样"开没开 / 规则到没到"只有一个判定点；
+   * 三处各写一遍 `pcdnFilterOn && pcdnRules !== null` 迟早会漏一处
+   * （`check-patch-scope.mjs` 也靠"三处都调同一个函数"来断言）。
+   *
+   * 开关开着、规则却没到时（只可能出现在"老版本 ISOLATED 只发了开关"的错配下）
+   * 报一条 `reason: 'rulesMissing'`，**每页只报一次** —— 否则每个响应都发一条，
+   * 会把 ISOLATED 侧的消息处理打满。
+   *
+   * @returns {boolean} true = 可以过滤
+   */
+  function pcdnFilterReady() {
+    if (!pcdnFilterOn) return false;
+    if (pcdnRules !== null) return true;
+
+    if (!pcdnRulesMissingReported) {
+      pcdnRulesMissingReported = true;
+      reportPcdnFilter({ changed: false, removed: 0, keptIntact: 0 }, 'none', 'rulesMissing');
+    }
+    return false;
+  }
+
+  /**
+   * **原生 fetch 的备份，必须在任何 hook 之前取**。
    * XHR 的「接管式改写」要用它重发请求。如果等到 fetch hook 那一段再取，
    * 拿到的可能是已经被我们替换过的版本 —— 于是 XHR → 自定义 fetch →
    * 自定义 fetch 又看到同一个 URL → 死循环，或者直接栈溢出。
@@ -1354,6 +1611,24 @@
     if (nextHasDash) {
       delete next.durl;
       delete next.durls;
+    }
+
+    /**
+     * **候选过滤（ADR 0038）—— 调用点 ②：PGC 整页注入**
+     *
+     * 位置很关键：必须在 `r.video_info = next` **之前**。这份 `next` 是**我们自己
+     * 从缓存拼出来的** `video_info`（`pgcCachedVideoInfo` 的白名单拷贝），所以过滤
+     * 它不会碰到页面原有的任何对象。
+     *
+     * ⚠️ `next.dash` 与缓存里那份是**同一个引用**（`next[k] = pgcCachedVideoInfo[k]`）；
+     * `filterDashOf()` 只在真的删了候选时才写回一个新 `dash`，所以缓存对象不会被就地改掉
+     * （否则第二次注入会拿着过滤过的缓存去比对 `timelength`/`cacheBytes` 埋点）。
+     */
+    if (pcdnFilterReady()) {
+      var playinfoFilterStats = filterDashOf(next);
+      if (playinfoFilterStats.changed || playinfoFilterStats.keptIntact > 0) {
+        reportPcdnFilter(playinfoFilterStats, 'playinfo');
+      }
     }
 
     /**
@@ -2855,6 +3130,24 @@
                 try {
                   capturePlayurlJson(url, t);
                 } catch (e) {}
+                /**
+                 * ## ⚠️ 候选过滤（ADR 0038）**不走 fetch 分支** —— 有意为之
+                 *
+                 * 三个理由：
+                 *
+                 * 1. **实测主路径是 XHR**：2026-10-26 与 2026-11-20 两次真机取证都
+                 *    只见到 `initiatorType=xmlhttprequest` 的 playurl，`responseType`
+                 *    是默认文本；fetch 版一条都没出现过（`poc/probe/pcdn-diag/REPORT.md`）。
+                 * 2. **代价不对等**：过滤 fetch 要 `resp.text()` 之后**重建 `Response`**
+                 *    （headers / body / url 都得对齐），而 `rebuildResponse()` 那段注释
+                 *    列了 5 条已知崩溃原因（body 已消费、CSP、opaque 响应…）。为一个
+                 *    没观测到的路径付这个风险，不划算。
+                 * 3. **漏了也不静默**：真出现 fetch 版 playurl 时，候选不会被过滤，
+                 *    但 PCDN 照旧会被诊断页看见（`classify` 那条链是另一套，不受影响）。
+                 *
+                 * 将来若真机上抓到 fetch 版 playurl，**先补一次取证**再在这里接
+                 * `patchPlayurlBody(t, entry.value, pcdnFilterOn)` —— 不要顺手接了就算。
+                 */
                 var patched = applyProgressToJson(t, entry.value);
                 if (patched === null) return resp;
                 return rebuildResponse(resp, patched);
@@ -3228,6 +3521,23 @@
            * ⚠️ 必须 `delete vi.durl` / `delete vi.durls` —— 有 durl 时播放器
            * **优先走 durl**（ADR 0020 实测），那样又回到 720P 了。
            */
+          /**
+           * **候选过滤（ADR 0038）—— 调用点 ③：PGC SPA 切集换流**
+           *
+           * 位置：`vi.dash = full.dash` **之前**。`full` 是这一趟
+           * `/pgc/player/web/playurl` 的返回值，是局部对象，怎么改都不会外溢。
+           *
+           * ⚠️ 上面的 `isBetterSwap` 画质比较已经跑完了 —— 过滤只删候选 URL、
+           * 不删轨也不改 `height`，所以不会把"画质更高"判成"不高"（ADR 0038 边界 3）。
+           * 顺序上放在比较之后只是为了不让人误以为过滤会影响那个判据。
+           */
+          if (pcdnFilterReady()) {
+            var playviewFilterStats = filterDashOf(full);
+            if (playviewFilterStats.changed || playviewFilterStats.keptIntact > 0) {
+              reportPcdnFilter(playviewFilterStats, 'playview');
+            }
+          }
+
           vi.dash = full.dash;
           delete vi.durl;
           delete vi.durls;
@@ -3458,18 +3768,75 @@
   /**
    * 把进度写进已解析的 playurl JSON。改动了返回新的文本，没改动返回 null。
    */
-  function applyProgressToJson(raw, prog) {
+  /**
+   * playurl 响应体的**两个变换，一次序列化**（ADR 0017 + ADR 0038）。
+   *
+   * ## 为什么必须合成一次 parse / stringify
+   *
+   * 同一个响应上现在有两件事要做：**恢复播放进度**（ADR 0017）与**剔除 PCDN 候选**
+   * （ADR 0038）。各做一遍 `JSON.parse` + `JSON.stringify` 的后果有两层：
+   *
+   * 1. 第二次序列化会把第一次的结果重新排布，出问题时**没法判断是谁改坏的**；
+   * 2. "开关关闭时输出与输入逐字节相同"这条就测不了（多一次 stringify 会改变空白）。
+   *
+   * 所以：**一次 parse → 两个变换 → 一次 stringify**；什么都没改就返回 `null`，
+   * 调用方保持原响应（连访问器都不装）。
+   *
+   * 顺序是进度在前、过滤在后：过滤只看 `dash[].base_url / backup_url`，不依赖
+   * 进度字段；但反过来没有好处，先做进度可以省一次对 `dash` 的遍历判断。
+   *
+   * @param {string} raw 原始响应文本
+   * @param {{time:number,cid:number}|null} prog 主账号进度；`null` = 没有可还原的
+   * @param {boolean} wantFilter 本次是否要过滤候选（开关 + 规则都就绪时为 true）
+   * @returns {string|null} 新文本；`null` = 一个字节都没改
+   */
+  function patchPlayurlBody(raw, prog, wantFilter) {
+    var o;
     try {
-      var o = JSON.parse(raw);
-      var d = o && o.data;
-      if (!d || typeof d.last_play_time !== 'number') return null;
-      if (d.last_play_time === prog.time && d.last_play_cid === prog.cid) return null;
-      d.last_play_time = prog.time;
-      d.last_play_cid = prog.cid;
-      return JSON.stringify(o);
+      o = JSON.parse(raw);
     } catch (e) {
       return null;
     }
+    if (!o || typeof o !== 'object') return null;
+
+    var d = o.data;
+    if (!d || typeof d !== 'object') return null;
+
+    var changed = false;
+
+    // ① 观看进度还原（ADR 0017）—— 值本来就相等时不动（与旧实现同一判据）
+    if (prog && typeof d.last_play_time === 'number') {
+      if (d.last_play_time !== prog.time || d.last_play_cid !== prog.cid) {
+        d.last_play_time = prog.time;
+        d.last_play_cid = prog.cid;
+        changed = true;
+      }
+    }
+
+    // ② 候选过滤（ADR 0038）—— `/video` 的 dash 挂在 `data` 上
+    if (wantFilter) {
+      var stats = filterDashOf(d);
+      if (stats.changed) {
+        changed = true;
+        reportPcdnFilter(stats, 'playurl');
+      }
+    }
+
+    return changed ? JSON.stringify(o) : null;
+  }
+
+  /**
+   * 只做**观看进度还原**的旧入口（保留给测试出口与既有调用者）。
+   *
+   * 实现已并入 `patchPlayurlBody(raw, prog, false)` —— 一个实现、两种用法，
+   * 避免"进度那段在两个地方各写一遍"。
+   *
+   * @param {string} raw
+   * @param {{time:number,cid:number}} prog
+   * @returns {string|null}
+   */
+  function applyProgressToJson(raw, prog) {
+    return patchPlayurlBody(raw, prog, false);
   }
 
   /**
@@ -3486,21 +3853,39 @@
     // 进度改写是**有副作用**的动作（会改页面读到的 last_play_time），所以看 `rewriteGate`
     if (!rewriteGate) return false;
 
-    // 已经播起来了就不再改写。切清晰度 / 换轨会重新拉一次 playurl，
-    // 那时缓存里的进度是**页面打开时**的旧值，再写回去可能把播放位置拽回过去。
-    // 播放器自己也有 `currentTime < 3` 的闸门，这里再加一道，双保险。
-    try {
-      var v = document.querySelector('video');
-      if (v && v.currentTime > 3) return false;
-    } catch (e) {}
-
+    /**
+     * ## 候选过滤与"播放位置还原"是两件独立的事（2026-11-20 接线）
+     *
+     * 旧实现一进门就要求"有可还原的进度 + `currentTime <= 3`"，两者都是
+     * **进度还原**的判据。而候选过滤（ADR 0038）:
+     *
+     * - 不依赖进度缓存（首次观看、切画质都该过滤）；
+     * - 不该看 `currentTime`（播放中切画质拿到的 playurl 响应同样含 PCDN 候选）。
+     *
+     * 所以先把 `prog` 收窄成"可能为 null"，再让两条路各自判断。
+     */
+    var prog = null;
     var ids = playurlIds(xhr.__plumaUrl || '');
-    if (!ids) return false;
+    if (ids) {
+      var entry = progressCache[ids.aid + '|' + ids.cid];
+      if (entry && entry.value && entry.value.cid) prog = entry.value;
+    }
 
-    var entry = progressCache[ids.aid + '|' + ids.cid];
-    if (!entry || !entry.value || !entry.value.cid) return false; // 没有可还原的进度
+    if (prog !== null) {
+      // 已经播起来了就不再改写进度。切清晰度 / 换轨会重新拉一次 playurl，
+      // 那时缓存里的进度是**页面打开时**的旧值，再写回去可能把播放位置拽回过去。
+      // 播放器自己也有 `currentTime < 3` 的闸门，这里再加一道，双保险。
+      try {
+        var v = document.querySelector('video');
+        if (v && v.currentTime > 3) prog = null;
+      } catch (e) {}
+    }
 
-    var prog = entry.value;
+    // 规则没下发 → 等同于"过滤未启用"（判不了就别动响应体），并上报一次 rulesMissing
+    var wantFilter = pcdnFilterReady();
+
+    if (prog === null && !wantFilter) return false;
+
     var type = '';
     try {
       type = xhr.responseType;
@@ -3511,20 +3896,34 @@
       try {
         var live = xhr.response;
         var ld = live && live.data;
-        if (ld && typeof ld.last_play_time === 'number') {
-          /**
-           * ⚠️ 这一段是**无条件赋值**（与下面文本路径的 `applyProgressToJson` 不同：
-           * 那边"值本来就相等"会返回 null，走不到改写）。所以"要不要报「扩展介入」"
-           * 不能只看"走到了这里"，必须看**字段值是不是真的变了** ——
-           * 值本来就对的时候这两行赋值什么都没改，报出去就是一条
-           * "扩展介入了却什么都没改"的假事件（时间轴上会多一个没有依据的节点）。
-           */
-          var wrote = ld.last_play_time !== prog.time || ld.last_play_cid !== prog.cid;
-          ld.last_play_time = prog.time;
-          ld.last_play_cid = prog.cid;
+        if (ld && typeof ld === 'object') {
+          var changed = false;
+          var wroteProgress = false;
+
+          if (prog !== null && typeof ld.last_play_time === 'number') {
+            /**
+             * ⚠️ 这一段是**无条件赋值**（与文本路径不同：那边"值本来就相等"会返回
+             * null，走不到改写）。所以"要不要报「扩展介入」"不能只看"走到了这里"，
+             * 必须看**字段值是不是真的变了** —— 值本来就对的时候这两行赋值什么都没改，
+             * 报出去就是一条"扩展介入了却什么都没改"的假事件。
+             */
+            wroteProgress = ld.last_play_time !== prog.time || ld.last_play_cid !== prog.cid;
+            ld.last_play_time = prog.time;
+            ld.last_play_cid = prog.cid;
+            if (wroteProgress) changed = true;
+          }
+
+          if (wantFilter) {
+            var jsonStats = filterDashOf(ld);
+            if (jsonStats.changed) {
+              changed = true;
+              reportPcdnFilter(jsonStats, 'playurl');
+            }
+          }
+
           // 真改了 → 报一条「扩展介入」（见 reportExtPatch 的函数头）
-          if (wrote) reportExtPatch();
-          return true;
+          if (changed) reportExtPatch();
+          return changed;
         }
       } catch (e) {}
       return false;
@@ -3532,7 +3931,7 @@
 
     if (type !== '' && type !== 'text') return false; // arraybuffer / blob 一律不碰
 
-    var patched = applyProgressToJson(raw, prog);
+    var patched = patchPlayurlBody(raw, prog, wantFilter);
     if (patched === null) return false;
 
     try {
@@ -3895,6 +4294,27 @@
         rewriteGate = d.rewriteGate;
         syncHooks();
       }
+    }
+
+    /**
+     * **候选过滤开关 + 规则表**（ADR 0038，2026-11-20）。
+     *
+     * - 开关缺失 → **保持当前值**（老版本 ISOLATED 不带这个字段；初值 `false`
+     *   已经保证"缺失 = 不过滤"，所以这里不做 `=== true` 推断，免得把已打开的开关关掉）。
+     * - 规则表只在"确实带了合法形状"时覆盖：`null` 视为"还没收到"，
+     *   `isPcdnUrl()` 会因此一条都不删（判不了就别动响应体）。
+     */
+    if (typeof d.filterCandidates === 'boolean' && d.filterCandidates !== pcdnFilterOn) {
+      pcdnFilterOn = d.filterCandidates;
+    }
+    if (
+      d.pcdnRules &&
+      typeof d.pcdnRules === 'object' &&
+      Array.isArray(d.pcdnRules.labels) &&
+      Array.isArray(d.pcdnRules.domains)
+    ) {
+      pcdnRules = { labels: d.pcdnRules.labels, domains: d.pcdnRules.domains };
+      pcdnRulesSeen = true;
     }
 
     /**

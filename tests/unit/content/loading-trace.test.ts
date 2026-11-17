@@ -504,6 +504,8 @@ describe('snapshotOf —— actual 取 count 最大的真实线路', () => {
       events: [],
       truncated: false,
       video: null,
+      // 2026-11-20 接线：候选过滤的累计结果（默认全 0）
+      filter: { applied: false, removed: 0, keptIntact: 0 },
     });
   });
 

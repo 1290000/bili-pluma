@@ -46,11 +46,15 @@ const SCRIPT = join(REPO, 'scripts/check-patch-scope.mjs');
 const NEEDED = [
   'src/content/main-world.js',
   'src/shared/constants/routes.ts',
+  // 候选过滤的授权字段名从这份实现派生（判据 ⑤ 读它）
+  'src/core/cdn/filter.ts',
   'docs/decisions/0013-patch-player-info-response.md',
   'docs/decisions/0017-restore-primary-progress-in-playurl.md',
   'docs/decisions/0021-patch-pgc-preview-flags.md',
   'docs/decisions/0022-hide-pgc-preview-toast.md',
   'docs/decisions/0023-intercept-playview-durl-swap.md',
+  // 候选过滤（ADR 0038）的授权来源
+  'docs/decisions/0038-filter-pcdn-candidates.md',
 ];
 
 let box = '';
@@ -102,7 +106,7 @@ describe('check-patch-scope：PGC 换流与注入的写集判据（2026-11-20 �
     expect(out).toContain('✅ PGC 切集换流：pgcSwapPlayviewBody 写集 ⊆ ADR 0023 授权');
     expect(out).toContain('✅ PGC 整页注入：pgcPatchPlayinfo 只写 result.video_info');
     // 还没被守住的第五类也要明说（否则"全绿"会被读成"七行都守住了"）
-    expect(out).toContain('候选过滤（ADR 0038）**尚未纳入校验**');
+    expect(out).toContain('✅ 候选过滤（ADR 0038）：写集 ⊆ 4 个候选字段');
   });
 
   it('⛔ 换流函数往 `data` 上多写一个键 → 红，并点名那个键', () => {
@@ -162,5 +166,193 @@ describe('check-patch-scope：PGC 换流与注入的写集判据（2026-11-20 �
 
     expect(status).toBe(1);
     expect(out).toContain('找不到 `function pgcSwapPlayviewBody(...)`');
+  });
+});
+
+/**
+ * 第七类：**候选过滤（ADR 0038）**的七条判据。
+ *
+ * ## 为什么这一组必须单独存在
+ *
+ * 前六类**一个字节都不许碰 URL**，这一类**只**动 URL —— 它的失败方向是新的：
+ * 多删一条官方候选只在真出故障那天才被发现，而"写死一份域名表"的表现是
+ * **开关开着却在走 PCDN**（静默失败，界面上一切正常）。所以每条判据都要
+ * 证明"它真的会红"，而不是"它看起来在检查"。
+ *
+ * ## 三条最关键的反例（对应 ADR 0038 边界 2/3 与工程约束 6/7）
+ *
+ * | 变异 | 该红在哪 |
+ * | --- | --- |
+ * | 写集里多一个 `quality` | 边界 1/3：那不是"选线路"，是改画质档位 |
+ * | 删掉 `pgcSwapPlayviewBody` 里的调用 | 约束 6：番剧切集整类漏过去 |
+ * | 判据里写死 `mcdn` | 约束 7：两处真相源必然漂移 |
+ */
+describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => {
+  it('★ 现状：第七类的 ✅ 行在输出里，且写明"三处调用点全接 / 判据无写死域名"', () => {
+    const { status, out } = runIn(sandbox());
+
+    expect(status).toBe(0);
+    expect(out).toContain('✅ 候选过滤（ADR 0038）：写集 ⊆ 4 个候选字段');
+    expect(out).toContain('三处调用点全接');
+    expect(out).toContain('判据无写死域名');
+  });
+
+  it('⛔ 写集里多一个 `quality` → 红，并点名"那是改画质档位不是选线路"', () => {
+    /**
+     * 反例形状很真实：有人为了"顺手把画质档位改对"在过滤函数里写一行。
+     * 前六类的判据**看不见它** —— 它们不查 `filterOneTrack`。
+     */
+    const dir = sandbox((src) =>
+      src.replace(
+        '      out.backup_url = kept.slice(1);',
+        '      out.backup_url = kept.slice(1);\n      out.quality = 120;',
+      ),
+    );
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('filterOneTrack() 写了越权字段');
+    expect(out).toContain('多写：quality');
+    expect(out).toContain('写了 ADR 0038 明令禁止的字段：quality');
+  });
+
+  it('⛔ 删掉 `pgcSwapPlayviewBody` 里的过滤调用 → 红，并点名"番剧切集那条路"', () => {
+    /**
+     * 本类里**最容易漏**的一条（ADR 0038 背景 §二的核心事实）：
+     * 只接一处的话普通视频能过滤、番剧切集照旧走 PCDN，而界面上一切正常。
+     */
+    const PLAYVIEW_CALL = [
+      '          if (pcdnFilterReady()) {',
+      '            var playviewFilterStats = filterDashOf(full);',
+      '            if (playviewFilterStats.changed || playviewFilterStats.keptIntact > 0) {',
+      "              reportPcdnFilter(playviewFilterStats, 'playview');",
+      '            }',
+      '          }',
+    ].join('\n');
+
+    const dir = sandbox((src) => {
+      if (!src.includes(PLAYVIEW_CALL)) {
+        throw new Error('夹具失效：main-world.js 里找不到 playview 的过滤调用块（判据会假绿）');
+      }
+      return src.replace(PLAYVIEW_CALL, '          // 变异：整段删掉（"只接了两处"）');
+    });
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('有取流点没接候选过滤');
+    expect(out).toContain('PGC 切集换流（pgcSwapPlayviewBody 没接）');
+  });
+
+  it('⛔ 删掉 playurl 那一处的过滤闸门 → 红（"只接了两处"同样漏）', () => {
+    /**
+     * 三处里 playurl 是最容易被接上的那一处，所以它反而最该有一条反例：
+     * 少了 `pcdnFilterReady()`，普通视频的响应体就不过滤 ——
+     * 而**其它两处照旧工作**，测试看起来"功能正常"。
+     */
+    const dir = sandbox((src) => {
+      if (!src.includes('    var wantFilter = pcdnFilterReady();')) {
+        throw new Error('夹具失效：patchPlayurlXhrProgress 里找不到过滤闸门（判据会假绿）');
+      }
+      return src.replace('    var wantFilter = pcdnFilterReady();', '    var wantFilter = false;');
+    });
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('有取流点没接候选过滤');
+    expect(out).toContain('普通视频 playurl（patchPlayurlXhrProgress 没接）');
+  });
+
+  it('⛔ 删掉 `pgcPatchPlayinfo` 里的过滤调用 → 红（另一处也不能少）', () => {
+    const PLAYINFO_CALL = [
+      '    if (pcdnFilterReady()) {',
+      '      var playinfoFilterStats = filterDashOf(next);',
+      '      if (playinfoFilterStats.changed || playinfoFilterStats.keptIntact > 0) {',
+      "        reportPcdnFilter(playinfoFilterStats, 'playinfo');",
+      '      }',
+      '    }',
+    ].join('\n');
+
+    const dir = sandbox((src) => {
+      if (!src.includes(PLAYINFO_CALL)) {
+        throw new Error('夹具失效：main-world.js 里找不到 playinfo 的过滤调用块（判据会假绿）');
+      }
+      return src.replace(PLAYINFO_CALL, '    // 变异：整段删掉（"只接了两处"）');
+    });
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('有取流点没接候选过滤');
+    expect(out).toContain('PGC 整页注入（pgcPatchPlayinfo 没接）');
+  });
+
+  it('⛔ 判据里写死 `mcdn` → 红，并说清"两处真相源必然漂移"', () => {
+    /**
+     * 约束 7 是本类**唯一一条"今天绿、明天坏"的判据**：写死域名表的代码
+     * 能跑、能过滤、看起来完全正常，只有在 `classify.ts` 加新域时才静默失效。
+     */
+    const dir = sandbox((src) => {
+      if (!src.includes('    var rules = pcdnRules;')) {
+        throw new Error('夹具失效：isPcdnUrl() 里找不到 `var rules = pcdnRules;`（判据会假绿）');
+      }
+      return src.replace(
+        '    var rules = pcdnRules;',
+        "    if (urlText.indexOf('mcdn') >= 0) return true;\n    var rules = pcdnRules;",
+      );
+    });
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('候选过滤里写死了域名/标签字面量');
+    expect(out).toContain('mcdn');
+  });
+
+  it('⛔ 造 URL 的痕迹（拼接 `https://`）→ 红（边界 2：不许新增候选）', () => {
+    const dir = sandbox((src) =>
+      src.replace(
+        '      out.backup_url = kept.slice(1);',
+        "      out.backup_url = kept.slice(1).concat('https://evil/' + kept[0]);",
+      ),
+    );
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('造 URL 的痕迹');
+  });
+
+  it('⛔ 碰权益字段（`user_status`）→ 红（边界 4：不伪造任何权益）', () => {
+    const dir = sandbox((src) =>
+      src.replace(
+        '    var kept = [];',
+        '    if (typeof track.user_status === "object") return track; // 变异\n    var kept = [];',
+      ),
+    );
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('候选过滤碰了权益字段');
+    expect(out).toContain('user_status');
+  });
+
+  it('⛔ 授权字段集不许手抄第二份：`filter.ts` 缺失 → 红（不是静默跳过）', () => {
+    /**
+     * 判据 ⑤ 的口径是"从 `filter.ts` **派生**"。派生失败的退化方向是
+     * `authorizedFilterFields === null`，那时若宽容地跳过检查，
+     * "写集里多一个 `duration`"就变得合法 —— 所以必须红。
+     */
+    const dir = sandbox();
+    rmSync(join(dir, 'src/core/cdn/filter.ts'), { force: true });
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('解析不出 CandidateTrack 的四个候选字段');
+  });
+
+  it('判据自身不许退化成恒真：过滤函数改名 → 红（不是静默跳过）', () => {
+    const dir = sandbox((src) => src.replace('function filterOneTrack(', 'function renamed('));
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('找不到候选过滤的实现函数');
+    expect(out).toContain('filterOneTrack');
   });
 });

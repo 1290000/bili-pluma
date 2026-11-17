@@ -21,26 +21,42 @@
  * 4. 两份 ADR 里的授权路径文本必须能被找到（ADR 被改坏了要能发现）
  * 5. `pgcSwapPlayviewBody()` 的**写集**必须落在 ADR 0023 的授权字段集内（2026-11-17 补）
  * 6. `pgcPatchPlayinfo()` 只能替换 `result.video_info`，不许碰同级键（2026-11-17 补）
+ * 7. 候选过滤（ADR 0038）的**写集 / 造 URL / 画质字段 / 权益字段 / 授权字段派生 /
+ *    三处调用点 / 写死域名**七条判据（2026-11-20 补）
  *
- * ## ⚠️ 还没被守住的第五类：候选过滤（ADR 0038）
+ * ## 第七类（本脚本编号；`AGENTS.md` §5.5 里它是第五类改写）：候选过滤（ADR 0038，2026-11-20 接线）
  *
- * `AGENTS.md` §5.5 现在列了**七行**改写，本脚本覆盖其中**六行**。唯一漏的是
- * ADR 0038 授权的「在取流数据上过滤 PCDN 候选」—— **因为实现常量还没落地**
- * （计划里是两个独立常量 + 独立函数，代码里一行都还没有）。
+ * `AGENTS.md` §5.5 现在列了**七行**改写，本脚本覆盖其中**七行**（2026-11-20 补齐）。
+ * 最后一行是 ADR 0038 授权的「在取流数据上过滤 PCDN 候选」—— 它的写集与上面六类
+ * **结构相反**：前六类一个字节都不许碰 URL，这一类**只**动 `base_url` / `backup_url`。
+ * 所以它单独一组（见 `main()` 末尾「第七类」一节），不并进上面任何一条。
  *
- * **落地时必须同时补这条判据**，否则那道闸门对第五类不成立：本脚本会把一个
- * "看起来全绿"的仓库交出去，而第五类是**唯一**会动 `dash[].base_url` 的那一类
- * （前六类一个字节都不许碰 URL）。将来该断言什么，见文件末尾
- * 「候选过滤（ADR 0038）落地时要补什么」一节。
+ * 七条判据 = ADR 0038 的五条硬边界 + 两条工程约束：
+ *
+ * | # | 断言 |
+ * | --- | --- |
+ * | ① | 写集只在 `base_url` / `baseUrl` / `backup_url` / `backupUrl` |
+ * | ② | 函数体里没有造 URL 的痕迹（`http` / `//` / `location`） |
+ * | ③ | 写集里不许出现画质/带宽字段（`quality` / `height` / `codecid` / …）|
+ * | ④ | 不许碰权益字段（`is_preview` / `play_check` / `user_status` / …）|
+ * | ⑤ | 授权字段集从 `filter.ts` **派生**，不手抄第二份 |
+ * | ⑥ | **三处调用点都调同一个函数**（少接一处 = 番剧切集整类漏过去）|
+ * | ⑦ | 判据函数体里不许写死域名/标签字面量（防两处真相源漂移）|
+ *
+ * 判据自身会退化（正则写歪、函数改名、有人放宽 `AUTHORIZED_*`），而退化的表现是
+ * **静默**（脚本照打 ✅）。所以每一条的"红"都固化在
+ * `tests/unit/scripts/check-patch-scope.test.ts` 里。
  *
  * ## 为什么是两份清单而不是一份
  *
- * 响应体改写有**六类**，性质各不相同，**合并检查就失去意义**：
+ * 响应体改写有**七类**，性质各不相同，**合并检查就失去意义**：
  *   - 会员字段（ADR 0013）：改的是"权益外观"，边界要卡死在 vip.*
  *   - 观看进度（ADR 0017）：改的是"用户本来就有的数据"，边界是 last_play_*
  *   - PGC 试看标记（ADR 0021）/ 提示条（ADR 0022）：改的是"试看这件事看起来怎样"
  *   - PGC 整页注入（ADR 0020）/ 切集换流（ADR 0023）：换的是**整条流**，
  *     字段边界是"播放器能不能正常吃下这条流"，与上面四类的性质都不同
+ *   - PCDN 候选过滤（ADR 0038）：**唯一**只动 URL 的一类（只减不增、不换流、
+ *     不删轨），与前六类"URL 一个字节都不许碰"正好相反
  * 合成一个清单，"这条路径是为了什么被授权"就查不出来了。
  *
  * 比对方式刻意选成"**两份清单在代码里对比**"，不做跨文件的模糊正则匹配：
@@ -141,6 +157,53 @@ const ADR_0022 = 'docs/decisions/0022-hide-pgc-preview-toast.md';
  * 那一类改写的性质是**换掉整条流**，比前四类都重。
  */
 const ADR_0023 = 'docs/decisions/0023-intercept-playview-durl-swap.md';
+
+/** 授权的唯一来源（候选过滤，2026-11-20 接线） */
+const ADR_0038 = 'docs/decisions/0038-filter-pcdn-candidates.md';
+
+/** 候选过滤的**实现**（授权字段名从这里派生，不手抄） */
+const FILTER_TS = 'src/core/cdn/filter.ts';
+
+/** 判 PCDN 的规则真源（TS 常量；主世界经 `cfg` 拿到同一份数据） */
+const RULES_TS = 'src/core/cdn/classify.ts';
+
+/**
+ * ADR 0038 边界 3 明令**禁改**的字段 —— 出现在候选过滤的写集里就红。
+ *
+ * 为什么这份是"黑名单"而不是从别处派生：它本来就是一个**否定清单**，
+ * 来源是 ADR 的一句话（"改画质档位 = 冒充权益"），没有别的代码实体可派生。
+ * 加成员就是在收紧边界，不需要跨文件同步。
+ */
+const FORBIDDEN_FILTER_WRITES = [
+  'quality',
+  'support_formats',
+  'accept_quality',
+  'accept_description',
+  'height',
+  'codecid',
+  'bandwidth',
+  'duration',
+  'timelength',
+  'is_preview',
+];
+
+/**
+ * ADR 0038 边界 4：候选过滤**不许碰**的权益字段（出现 `.key` 访问即红）。
+ *
+ * 与上一条的区别：上一条查"写集里的键名"，这一条查"函数体里有没有碰过这些字段"
+ * （**读也不行** —— 读 `user_status` 说明它在拿权益当判据，那已经越界了）。
+ */
+const FORBIDDEN_FILTER_TARGETS = ['is_preview', 'play_check', 'user_status', 'has_paid', 'vip'];
+
+/**
+ * 主世界的候选判据里**不许写死**的域名 / 标签 / 供应商词
+ * （ADR 0038 + `classify.ts` 第 2 条"不另写域名表"）。
+ *
+ * 判据只许来自 `PCDN_RULES`（`cfg` 下发）。这里查的是**字符串字面量**，
+ * 不查标识符 —— `isPcdnUrl` / `pcdnFilterOn` 这些名字含 `pcdn` 是合法的。
+ */
+const FORBIDDEN_RULE_LITERALS =
+  /(bilivideo|biliapi|mcdn|bcdn|mountaintoys|szbdyd|zhenidc|qrstuvwxyzab|gotcha|pcdn)/i;
 
 /**
  * ADR 0023 授权 `pgcSwapPlayviewBody()` 在 **`data.video_info` 上**写的字段。
@@ -370,14 +433,19 @@ function maskCommentsAndStrings(src) {
 }
 
 /**
- * 取一个 `function NAME(...) { … }` 的**函数体**（大括号配对，返回遮蔽文本）。
+ * 取一个 `function NAME(...) { … }` 的**函数体**。
  *
- * 返回遮蔽文本而不是原文：下面抽写集只需要标识符，注释/字符串已被抹掉，
- * 就不会把 `'vi.dash'` 这种**字符串里**的内容当成真的写入。
+ * 返回两份：
+ * - `masked`：注释与字符串已被抹成空格 —— 抽写集用它（否则 `'vi.dash'` 这种
+ *   字符串里的内容会被当成真的写入）；
+ * - `raw`：原文 —— 查"不许出现造 URL 的痕迹 / 不许写死域名"用它（那些东西
+ *   恰恰在字符串里，遮蔽后就看不见了）。
+ *
+ * 两份**等长**、偏移一致。
  *
  * @param {string} src
  * @param {string} name
- * @returns {string | null} null = 找不到这个函数（改名/删了 → 检查应当红）
+ * @returns {{ masked: string, raw: string } | null} null = 找不到这个函数（改名/删了 → 检查应当红）
  */
 function extractFunctionBody(src, name) {
   const masked = maskCommentsAndStrings(src);
@@ -396,7 +464,9 @@ function extractFunctionBody(src, name) {
     if (masked[i] === '{') depth += 1;
     else if (masked[i] === '}') {
       depth -= 1;
-      if (depth === 0) return masked.slice(open + 1, i);
+      if (depth === 0) {
+        return { masked: masked.slice(open + 1, i), raw: src.slice(open + 1, i) };
+      }
     }
   }
   // 大括号不平衡 → 源码被改坏了，判失败（不猜）
@@ -813,9 +883,9 @@ async function main() {
         '两种情况都要人工确认（用户会重新报"切集后画质锁 720P / 灰屏"）。',
     });
   } else {
-    const viWrites = extractWrittenKeys(playviewBody, 'vi');
-    const viDeletes = extractDeletedKeys(playviewBody, 'vi');
-    const dataWrites = extractWrittenKeys(playviewBody, 'data');
+    const viWrites = extractWrittenKeys(playviewBody.masked, 'vi');
+    const viDeletes = extractDeletedKeys(playviewBody.masked, 'vi');
+    const dataWrites = extractWrittenKeys(playviewBody.masked, 'data');
 
     const allowedViWrites = [...AUTHORIZED_PLAYVIEW_WRITES, ...playviewFlagWrites];
     const extraViWrites = viWrites.filter((k) => !allowedViWrites.includes(k));
@@ -886,7 +956,7 @@ async function main() {
         '两种情况都要人工确认（用户会重新报"番剧整页加载只有试看"）。',
     });
   } else {
-    const resultWrites = extractWrittenKeys(playinfoBody, 'r');
+    const resultWrites = extractWrittenKeys(playinfoBody.masked, 'r');
     const extraResultWrites = resultWrites.filter(
       (k) => !AUTHORIZED_PLAYINFO_RESULT_WRITES.includes(k),
     );
@@ -953,6 +1023,222 @@ async function main() {
     }
   }
 
+  // ── 第七类：候选过滤（ADR 0038，2026-11-20 接线） ──
+  //
+  // 这一类的写集与上面六类**结构相反**：前六类一个字节都不许碰 URL，这一类**只**动
+  // `base_url` / `backup_url`。所以它单独一组，不能并进上面任何一条。
+  //
+  // 七条判据对应 ADR 0038 的五条硬边界 + 两条工程约束（见文件末尾那一节）。
+  // 全部靠"从源码抽函数体 + 抽写集/字符串字面量"，不做跨文件的模糊正则。
+  const filterSrc = await readFile(join(ROOT, FILTER_TS), 'utf8').catch(() => null);
+
+  /**
+   * 授权字段名**从 `filter.ts` 派生**（不手抄）。
+   *
+   * 口径：`CandidateTrack` 接口里声明的四个字段。抄一份到本脚本的后果是
+   * 加第五种命名形态时两处漂移 —— 而漂移的表现是"主世界写了过滤不认识的键"。
+   */
+  const authorizedFilterFields =
+    filterSrc === null
+      ? null
+      : [...filterSrc.matchAll(/^\s{2}(base_url|baseUrl|backup_url|backupUrl)\??:/gm)].map(
+          (m) => m[1],
+        );
+
+  if (
+    filterSrc === null ||
+    authorizedFilterFields === null ||
+    authorizedFilterFields.length !== 4
+  ) {
+    problems.push({
+      what: `在 ${FILTER_TS} 里解析不出 CandidateTrack 的四个候选字段`,
+      why: '候选过滤的授权字段集从这份实现派生。解析失败说明接口被改名/换形态 —— 请同步本脚本，不要猜。',
+    });
+  }
+
+  const filterFns = {
+    isPcdnUrl: extractFunctionBody(src, 'isPcdnUrl'),
+    filterOneTrack: extractFunctionBody(src, 'filterOneTrack'),
+    filterDashOf: extractFunctionBody(src, 'filterDashOf'),
+  };
+
+  const missingFns = Object.entries(filterFns)
+    .filter(([, body]) => body === null)
+    .map(([name]) => name);
+
+  if (missingFns.length > 0) {
+    problems.push({
+      what: `${MAIN_WORLD} 里找不到候选过滤的实现函数：${missingFns.join(', ')}`,
+      why:
+        '判据就查不出来了。要么它们被改名/合并，要么过滤被整体移除 —— 两种情况都要人工确认' +
+        '（用户会重新报"开关开了 PCDN 照跑"）。',
+    });
+  } else {
+    // ① 写集只在四个候选字段（`filterOneTrack` 是唯一写候选的地方）
+    const filterWrites = extractWrittenKeys(filterFns.filterOneTrack.masked, 'out');
+    const extraFilterWrites =
+      authorizedFilterFields === null
+        ? []
+        : filterWrites.filter((k) => !authorizedFilterFields.includes(k));
+
+    // ③ 禁止字段（ADR 0038 边界 3）：写集里出现任何一个就红
+    const forbiddenWrites = filterWrites.filter((k) => FORBIDDEN_FILTER_WRITES.includes(k));
+
+    if (extraFilterWrites.length > 0 || forbiddenWrites.length > 0) {
+      problems.push({
+        what: `${MAIN_WORLD} 的 filterOneTrack() 写了越权字段`,
+        why: [
+          extraFilterWrites.length > 0
+            ? `多写：${extraFilterWrites.join(', ')} —— 过滤只许动候选 URL（ADR 0038 边界 1/2）`
+            : '',
+          forbiddenWrites.length > 0
+            ? `写了 ADR 0038 明令禁止的字段：${forbiddenWrites.join(', ')} —— 那是"改画质档位"，不是"选线路"（边界 3）`
+            : '',
+          `实际写：${JSON.stringify(filterWrites)}｜授权：${JSON.stringify(authorizedFilterFields)}`,
+        ]
+          .filter(Boolean)
+          .join('\n    '),
+      });
+    }
+
+    // ② / ⑦ 不许造 URL、不许写死域名（查**字符串字面量**，不查标识符 ——
+    //    `pcdnFilterOn` / `isPcdnUrl` 这些名字里含 pcdn 是合法的）
+    const filterLiterals = [];
+    for (const [name, body] of Object.entries(filterFns)) {
+      for (const m of body.raw.matchAll(/'([^'\\]*)'|"([^"\\]*)"/g)) {
+        const literal = m[1] ?? m[2] ?? '';
+        // `os=mcdn` 是 `classify.ts` 第 5 条判据的**规则本身**（官方镜像代理 mcdn 的
+        // 唯一信号），不是域名/标签清单 —— 唯一允许出现的包含式字面量。
+        if (literal === 'os=mcdn') continue;
+        filterLiterals.push({ name, literal });
+      }
+    }
+
+    const urlMaking = filterLiterals.filter((x) =>
+      /https?:|\/\/|location\.|origin|hostname\s*\+/i.test(x.literal),
+    );
+    const driftLiterals = filterLiterals.filter((x) => FORBIDDEN_RULE_LITERALS.test(x.literal));
+
+    if (urlMaking.length > 0) {
+      problems.push({
+        what: `${MAIN_WORLD} 的候选过滤里出现了**造 URL 的痕迹**`,
+        why: [
+          urlMaking.map((x) => `${x.name}: ${JSON.stringify(x.literal)}`).join('、'),
+          '→ ADR 0038 边界 2：只许删除或重排候选，**不许新增任何 URL**（拼出来的签名多半也不对）',
+        ].join('\n    '),
+      });
+    }
+
+    if (driftLiterals.length > 0) {
+      problems.push({
+        what: `${MAIN_WORLD} 的候选过滤里写死了域名/标签字面量`,
+        why: [
+          driftLiterals.map((x) => `${x.name}: ${JSON.stringify(x.literal)}`).join('、'),
+          `→ 判据只许来自 ${RULES_TS} 的 PCDN_RULES（经 cfg 下发）。写死一份 = 两处真相源，`,
+          '   漂移的表现是"开关开着却在走 PCDN"（静默失败）。',
+        ].join('\n    '),
+      });
+    }
+
+    // ④ 不许碰权益字段（边界 4）：三个函数里出现即红
+    const equityTouch = [];
+    for (const [name, body] of Object.entries(filterFns)) {
+      for (const key of FORBIDDEN_FILTER_TARGETS) {
+        if (new RegExp(`\\.${key}\\b`).test(body.masked)) equityTouch.push(`${name} → ${key}`);
+      }
+    }
+    if (equityTouch.length > 0) {
+      problems.push({
+        what: `${MAIN_WORLD} 的候选过滤碰了权益字段`,
+        why: `${equityTouch.join('、')}\n    → ADR 0038 边界 4：不伪造任何权益，这条与决策 5 的分界线不许松动`,
+      });
+    }
+
+    /**
+     * † 调用点自己不许写禁止字段。
+     *
+     * 为什么不能对三处一刀切：`pgcSwapPlayviewBody` 里的 `vi.quality` / `vi.support_formats`
+     * 是 **ADR 0023 明文授权**的同步字段（不同步会灰屏），在那里报红就是假红。
+     * 而 `pgcPatchPlayinfo` 的 `next` 与 playurl 路径的 `d` / `ld` 没有任何 ADR 授权写这些字段。
+     *
+     * 反例（真实风险）：为了“顺手把画质档位改对”而在调用点写 `next.quality = 120` —— 那是伪造权益。
+     */
+    const callSiteFieldWrites = [
+      ['pgcPatchPlayinfo', ['next']],
+      ['patchPlayurlBody', ['d']],
+      ['patchPlayurlXhrProgress', ['ld']],
+    ];
+    const fieldLeaks = [];
+    for (const [fn, objs] of callSiteFieldWrites) {
+      const body = extractFunctionBody(src, fn);
+      if (body === null) continue;
+      for (const obj of objs) {
+        for (const key of extractWrittenKeys(body.masked, obj)) {
+          if (FORBIDDEN_FILTER_WRITES.includes(key)) fieldLeaks.push(fn + ' → ' + obj + '.' + key);
+        }
+      }
+    }
+    if (fieldLeaks.length > 0) {
+      problems.push({
+        what: MAIN_WORLD + ' 的取流点直接写了画质/权益字段',
+        why: [
+          fieldLeaks.join('、'),
+          '→ ADR 0038 边界 3/决策 5：画质档位必须由服务端决定，不许在取流点手写',
+          '→ 过滤只许删候选 URL，字段一律透传',
+        ].join('\n    '),
+      });
+    }
+
+    // ⑥ 三处调用点都接了**同一个函数**
+    const callSites = [
+      ['patchPlayurlXhrProgress', '普通视频 playurl'],
+      ['pgcPatchPlayinfo', 'PGC 整页注入'],
+      ['pgcSwapPlayviewBody', 'PGC 切集换流'],
+    ];
+    const unwired = [];
+    for (const [fn, label] of callSites) {
+      const body = extractFunctionBody(src, fn);
+      if (body === null) {
+        unwired.push(`${label}（找不到函数 ${fn}）`);
+        continue;
+      }
+      // 两个标识符都要在：`pcdnFilterReady(` = 走统一闸门，`filterDashOf(` = 真的过滤
+      if (!body.masked.includes('pcdnFilterReady(') || !body.masked.includes('filterDashOf(')) {
+        unwired.push(`${label}（${fn} 没接）`);
+      }
+    }
+    if (unwired.length > 0) {
+      problems.push({
+        what: `${MAIN_WORLD} 有取流点没接候选过滤`,
+        why: [
+          unwired.join('、'),
+          '→ 缺一处就有一整类场景漏过去：少接 playview = 番剧切集那条路整个漏掉（ADR 0038 背景 §二）',
+          '→ 三处都必须调 `pcdnFilterReady()` + `filterDashOf()`，不许在调用点自己写过滤',
+        ].join('\n    '),
+      });
+    }
+  }
+
+  // ADR 0038 本身必须还在（授权来源不能只剩代码）
+  let adr0038Text = '';
+  try {
+    adr0038Text = await readFile(join(ROOT, ADR_0038), 'utf8');
+  } catch {
+    problems.push({
+      what: `找不到 ${ADR_0038}`,
+      why: '授权来源缺失。候选过滤这件事必须有 ADR 兜着，不能只剩代码。',
+    });
+  }
+  if (adr0038Text) {
+    const missingInAdr = ['base_url', 'backup_url'].filter((f) => !adr0038Text.includes(f));
+    if (missingInAdr.length > 0) {
+      problems.push({
+        what: `ADR 0038 里没有提到这些被授权的字段：${missingInAdr.join(', ')}`,
+        why: 'ADR 被改动过。若是有意收紧授权，请同步本脚本；否则请恢复 ADR。',
+      });
+    }
+  }
+
   console.log(`[patch] 检查 ${MAIN_WORLD} 的响应体改写范围`);
   console.log(`[patch] 授权来源：${ADR_0013}（会员字段）`);
   console.log(`[patch] 授权来源：${ADR_0017}（观看进度）`);
@@ -976,7 +1262,7 @@ async function main() {
       `[patch] ✅ PGC 整页注入：pgcPatchPlayinfo 只写 result.${AUTHORIZED_PLAYINFO_RESULT_WRITES.join(' / result.')}`,
     );
     console.log(
-      '[patch] ⚠️  候选过滤（ADR 0038）**尚未纳入校验** —— 实现常量未落地；落地时必须补，见文件末尾',
+      `[patch] ✅ 候选过滤（ADR 0038）：写集 ⊆ ${String(authorizedFilterFields?.length ?? 0)} 个候选字段（从 filter.ts 派生）· 三处调用点全接 · 判据无写死域名`,
     );
     return;
   }
@@ -996,28 +1282,42 @@ main().catch((err) => {
 });
 
 /**
- * 候选过滤（ADR 0038）落地时要补什么 —— 这一节是**留给实现者的单子**，
- * 现在一条判据都还没有，因为代码里一个常量都还没有。
+ * 候选过滤（ADR 0038）为什么必须单独一组、而不是并进上面任何一条。
  *
- * ## 为什么它必须单独补，不能并进上面任何一条
+ * ## 写集的方向相反
  *
- * 前六类**一个字节都不许碰 URL**；第五类恰恰**只**动 URL（`dash[].base_url` /
- * `backup_url` 的删除与重排）。两者的写集在结构上相反，并进任何一条都会让
- * "这条是为了什么被授权"查不出来。
+ * 前六类**一个字节都不许碰 URL**；第七类恰恰**只**动 URL（`dash[].base_url` /
+ * `backup_url` 的删除与重排）。并进任何一条都会让"这条是为了什么被授权"查不出来。
  *
- * ## 到时候该断言什么（建议，按 ADR 0038 的五条硬边界逐条落地）
+ * ## 七条判据的落地位置与反例（2026-11-20 接线，已全部实现）
  *
- * | # | 断言 | 反例 |
- * | --- | --- | --- |
- * | 1 | 候选过滤**只在** `dash.video[]` / `dash.audio[]` 的 `base_url`、`baseUrl`、`backup_url`、`backupUrl` 上写 | 有人顺手把 `write` 扩到 `dash.duration` |
- * | 2 | 那个函数里**不许出现字符串拼接 URL** 的痕迹（`+ '://'`、`'http'`、`location` 之类） | 凭空造一条签名不对的 URL |
- * | 3 | 写集里**不许出现** `quality` / `support_formats` / `accept_quality` / `height` / `codecid` / `bandwidth` / `accept_description` | 顺手改了画质档位（ADR 0038 边界 3） |
- * | 4 | 过滤函数**不许**调用 `pgcPatchPreviewFlags` / 碰 `is_preview` / `play_check` / `user_status` | 借过滤之名伪造权益（边界 4） |
- * | 5 | 常量的**字符串字面量清单**（授权字段名）必须与本脚本里的 `AUTHORIZED_CANDIDATE_WRITES` 集合相等 | 悄悄把 `dash.duration` 加进白名单 |
- * | 6 | 三处调用点**都必须**走到同一个函数：`playurl`（XHR + fetch 兜底）、`__playinfo__` 注入点、`playview` 换流点 | 只在 playurl 上过滤 → 番剧切集那条路漏过去（ADR 0038 背景 §二 的核心事实） |
+ * | # | 断言 | 写在 `main()` 的哪一段 | 反例 |
+ * | --- | --- | --- | --- |
+ * | ① | 写集**只在**四个候选字段上 | 「① 写集只在四个候选字段」 | 顺手把 write 扩到 `dash.duration` |
+ * | ② | 函数体里**不许有造 URL 的痕迹** | 「② / ⑦ 不许造 URL、不许写死域名」 | 凭空造一条签名不对的 URL |
+ * | ③ | 写集里**不许出现**画质/带宽字段 | 同 ①（`FORBIDDEN_FILTER_WRITES`） | 顺手改画质档位（边界 3） |
+ * | ④ | **不许碰**权益字段 | 「④ 不许碰权益字段」 | 借过滤之名伪造权益（边界 4） |
+ * | ⑤ | 授权字段集从 `filter.ts` **派生** | `authorizedFilterFields` | 手抄第二份 → 加第五种命名形态时漂移 |
+ * | ⑥ | **三处调用点都调同一个函数** | 「⑥ 三处调用点都接了同一个函数」 | 只在 playurl 上过滤 → 番剧切集整类漏过去 |
+ * | ⑦ | 判据函数体里**不许写死域名/标签** | 同 ②（`FORBIDDEN_RULE_LITERALS`） | 主世界自带一份域名表 → 开关开着却在走 PCDN |
  *
- * 第 6 条是这一整类里最容易漏的：ADR 0038 明确写了"候选过滤必须覆盖三处"，
- * 而三处调用点里有两处在上面已经守着的函数里 —— 所以落地时**还要回头改**
- * `pgcSwapPlayviewBody` / `pgcPatchPlayinfo` 的写集断言（过滤函数会多写
- * `dash.video[].base_url`，那是**新的**授权键，不是越权）。
+ * ## ⑥ 为什么是这一整类里最容易漏的一条
+ *
+ * ADR 0038 背景 §二的核心事实：候选来源有**三条消费路径**，而其中两条
+ * （`__playinfo__` 注入、`playview` 换流）落在本脚本**已经守着的**函数里 ——
+ * 于是"我给 playurl 接上了、测试也绿了"很容易漏掉另外两处，
+ * 而漏掉 `playview` 等于**番剧切集整条路照旧走 PCDN**，界面上一切正常。
+ *
+ * ## ⑥ 的判据为什么查两个标识符而不是一个
+ *
+ * 只看 `filterDashOf(` 会被"调用点自己写了一段过滤"骗过去（那正是 ADR 0038 禁止的
+ * 「在调用点自己写过滤」）；只看 `pcdnFilterReady(` 则查不出"问了但没过滤"。
+ * 两个都在，才等于"走了统一闸门并真的过滤"。
+ *
+ * ## 铁律
+ *
+ * 往 `authorizedFilterFields` 里放宽、往 `FORBIDDEN_FILTER_WRITES` 里删成员，
+ * 都等于**扩大越权范围** —— 先改 ADR 0038，再改这里。
+ * 每一条的"红"都固化在 `tests/unit/scripts/check-patch-scope.test.ts` 里，
+ * 因为判据退化的表现是**静默**（脚本照打 ✅）。
  */

@@ -53,8 +53,17 @@ describe('rewriteGate 判据 —— 源码同形（防漂移）', () => {
    * 删掉后本断言就是唯一提醒）。
    */
   it('源码里必须把 extensionEngaged 作为第三个参数传给 tellMainWorld', () => {
+    /**
+     * ⚠️ 2026-11-20：参数来源从"就地表达式"变成"先记住再传"
+     * （`rewriteGateKnown = extensionEngaged`，然后传 `rewriteGateKnown`）——
+     * 因为候选过滤开关热更新时要重发 `cfg`，那一刻拿不到 `res`。
+     *
+     * 判据不变：**第三个实参必须是 `extensionEngaged` 那条链**，
+     * 不许换成 `enabled`、不许吃默认值 `false`。
+     */
+    expect(CONTENT_SRC).toContain('rewriteGateKnown = extensionEngaged;');
     expect(CONTENT_SRC).toMatch(
-      /tellMainWorld\(\s*switchOn,\s*res\.activated === true,\s*extensionEngaged\s*\)/,
+      /tellMainWorld\(\s*switchOn,\s*activatedKnown,\s*rewriteGateKnown\s*,/,
     );
   });
 
