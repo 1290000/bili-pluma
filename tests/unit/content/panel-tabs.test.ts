@@ -277,6 +277,41 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
   });
 
   /**
+   * ## 屏蔽 PCDN 开关（ADR 0038，2026-11-17）
+   *
+   * 三条：**在**、**读不到时不画成关**、**hint 必须说代价**。
+   *
+   * 第三条不是文案洁癖：实测 2160p 的 24 条轨里有 15 条剔除后只剩 1 条候选，
+   * 代价是"没有备份可切"而不是"不能播"。只写"屏蔽 PCDN"会让用户
+   * 以为白得一个优化，卡了也不知道是这里换来的。
+   */
+  it('★ 屏蔽 PCDN 开关在「显示」Tab 里，且 hint 说明了代价', () => {
+    const box = display();
+    const cb = checkboxFor(box, '屏蔽 PCDN 线路');
+    expect(cb, '开关必须在').not.toBeNull();
+    expect(cb?.disabled, '已读到设置 → 可点').toBe(false);
+    expect(box.textContent, 'hint 必须提到"更容易卡"这个代价').toContain('弱网时更容易卡');
+  });
+
+  it('★ 还没读到设置 → 开关禁用（不猜成"用户关了"）', () => {
+    const box = displayTab(null, { ...DISPLAY_ACTS, pcdnFilterEnabled: null });
+    const cb = checkboxFor(box, '屏蔽 PCDN 线路');
+    expect(cb?.disabled, '读不到设置时不可点').toBe(true);
+    // ⚠️ 不断言 checked === false：禁用态的 checkbox 天然是 false，
+    // 断它等于断言"禁用"本身，看不出"有没有被当成用户关的"。
+    // "读不到"与"用户关了"的区分由 `pcdnFilterReadFailed` 那条提示负责 —— 见下一条用例。
+  });
+
+  it('★ 读不到设置 → 说明原因（不许只留一个灰开关）', () => {
+    const box = displayTab(true, {
+      ...DISPLAY_ACTS,
+      pcdnFilterEnabled: null,
+      pcdnFilterReadFailed: true,
+    });
+    expect(box.textContent).toContain('读不到这个开关的当前设置');
+  });
+
+  /**
    * ## 「开关打开了却没有角标」（2026-11-16，用户报）
    *
    * 这不是 bug：`buildBadge()` 第一条判据就是「没在代理 → 不显示」，
@@ -485,6 +520,13 @@ const DISPLAY_ACTS = {
   hasCredential: false,
   /** 默认不是"读失败"态（大多数用例不关心角标读取结局） */
   badgeReadFailed: false,
+  /**
+   * 屏蔽 PCDN 开关：默认给"已读到、关着"—— 让不关心它的用例拿到可点控件。
+   * 「还没读到」与「读失败」两个态各有专门用例。
+   */
+  pcdnFilterEnabled: false,
+  pcdnFilterReadFailed: false,
+  togglePcdnFilter: () => undefined,
 } as const;
 
 describe('账号 Tab', () => {

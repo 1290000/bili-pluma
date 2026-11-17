@@ -45,6 +45,8 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   readBadgeEnabled: vi.fn(),
   writeBadgeEnabled: vi.fn(),
+  readPcdnFilterEnabled: vi.fn(),
+  writePcdnFilterEnabled: vi.fn(),
   readRawCleanOptions: vi.fn(),
   writeCleanOptionFlags: vi.fn(),
   writeCleanHideCategories: vi.fn(),
@@ -55,6 +57,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@platform/storage/ui-prefs-store', () => ({
   readBadgeEnabled: (...a: unknown[]) => mocks.readBadgeEnabled(...a),
   writeBadgeEnabled: (...a: unknown[]) => mocks.writeBadgeEnabled(...a),
+  readPcdnFilterEnabled: (...a: unknown[]) => mocks.readPcdnFilterEnabled(...a),
+  writePcdnFilterEnabled: (...a: unknown[]) => mocks.writePcdnFilterEnabled(...a),
   readRawCleanOptions: (...a: unknown[]) => mocks.readRawCleanOptions(...a),
   writeCleanOptionFlags: (...a: unknown[]) => mocks.writeCleanOptionFlags(...a),
   writeCleanHideCategories: (...a: unknown[]) => mocks.writeCleanHideCategories(...a),
@@ -160,6 +164,7 @@ beforeEach(() => {
   // 默认：一切正常
   mocks.sendMessage.mockResolvedValue({ type: 'proxy/set:ok' });
   mocks.readBadgeEnabled.mockResolvedValue(true);
+  mocks.readPcdnFilterEnabled.mockResolvedValue(false);
   mocks.writeBadgeEnabled.mockResolvedValue(undefined);
   mocks.readRawCleanOptions.mockResolvedValue({
     options: { adEnabled: true, adPreserveEventBanner: false, adDebug: false },

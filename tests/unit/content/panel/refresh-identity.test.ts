@@ -63,6 +63,8 @@ vi.mock('@platform/storage/ui-prefs-store', () => ({
   writeCleanHideCategories: async () => undefined,
   readBadgeEnabled: async () => true,
   writeBadgeEnabled: async () => undefined,
+  readPcdnFilterEnabled: async () => false,
+  writePcdnFilterEnabled: async () => undefined,
 }));
 
 vi.mock('@platform/diagnostics/collect', () => ({

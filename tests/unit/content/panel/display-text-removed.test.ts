@@ -44,6 +44,10 @@ function acts(overrides: Record<string, unknown> = {}) {
     toggleFeedAccount: () => undefined,
     hasCredential: false,
     badgeReadFailed: false,
+    /** 屏蔽 PCDN 开关（ADR 0038）：本组不关心它，给"已读到、关着" */
+    pcdnFilterEnabled: false,
+    pcdnFilterReadFailed: false,
+    togglePcdnFilter: () => undefined,
     ...overrides,
   };
 }

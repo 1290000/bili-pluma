@@ -29,6 +29,8 @@ const mocks = vi.hoisted(() => ({
   tipFor: vi.fn(),
   readBadgeEnabled: vi.fn(),
   writeBadgeEnabled: vi.fn(),
+  readPcdnFilterEnabled: vi.fn(),
+  writePcdnFilterEnabled: vi.fn(),
   readRawCleanOptions: vi.fn(),
 }));
 
@@ -61,6 +63,8 @@ vi.mock('@platform/storage/ui-prefs-store', () => ({
   writeCleanHideCategories: async () => undefined,
   readBadgeEnabled: (...a: unknown[]) => mocks.readBadgeEnabled(...a),
   writeBadgeEnabled: (...a: unknown[]) => mocks.writeBadgeEnabled(...a),
+  readPcdnFilterEnabled: (...a: unknown[]) => mocks.readPcdnFilterEnabled(...a),
+  writePcdnFilterEnabled: (...a: unknown[]) => mocks.writePcdnFilterEnabled(...a),
 }));
 
 vi.mock('../../../src/content/site-clean/ads', () => ({ applyAdClean: () => undefined }));
@@ -136,6 +140,15 @@ beforeEach(() => {
   mocks.readDiag.mockResolvedValue([{ at: 1, step: 'panel/page-state', detail: 'kind=ok' }]);
   mocks.tipFor.mockReturnValue('规则齐全。');
   mocks.readBadgeEnabled.mockResolvedValue(true);
+  /**
+   * 屏蔽 PCDN 开关也走懒读，**必须给它一个 resolved Promise**。
+   *
+   * 漏了这条：`vi.fn()` 默认返回 `undefined`，`ensurePcdnFilterRead()` 里
+   * `void readPcdnFilterEnabled().then(...)` 会抛 `Cannot read properties of
+   * undefined (reading 'then')` —— 而这 14 条用例**全部**会因为进入「显示」Tab
+   * 那一步连带红掉，看起来像是诊断接线坏了（实际是我们少给了一个 mock）。
+   */
+  mocks.readPcdnFilterEnabled.mockResolvedValue(false);
   mocks.readRawCleanOptions.mockResolvedValue({});
   vi.stubGlobal('chrome', {
     runtime: { getManifest: () => ({ version: '0.0.0-test' }), sendMessage: async () => null },

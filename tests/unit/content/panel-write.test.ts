@@ -67,6 +67,8 @@ vi.mock('@platform/storage/ui-prefs-store', () => ({
   // 阶段 3 新增：角标开关迁入净化 Tab
   readBadgeEnabled: async () => true,
   writeBadgeEnabled: async () => undefined,
+  readPcdnFilterEnabled: async () => false,
+  writePcdnFilterEnabled: async () => undefined,
   /**
    * ## ❌ 这里曾有 `readFeedBoundaryEnabled` / `writeFeedBoundaryEnabled`（2026-11-11 删除）
    *

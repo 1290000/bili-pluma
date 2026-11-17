@@ -418,6 +418,15 @@ export function displayTab(
      * （那正是 task-5 卡里提醒的"很容易写成永远为真的断言"）。
      */
     badgeReadFailed: boolean;
+    /**
+     * ── 屏蔽 PCDN（ADR 0038，2026-11-17 接线）──
+     *
+     * `null` = 还没读出来 → 禁用，**不画成"关"**（与角标同一纪律）。
+     * 读失败单独走 `pcdnFilterReadFailed`，理由同 `badgeReadFailed`。
+     */
+    pcdnFilterEnabled: boolean | null;
+    pcdnFilterReadFailed: boolean;
+    togglePcdnFilter: (next: boolean) => void;
   },
 ): HTMLElement {
   const box = el('div', 'tab-pane');
@@ -530,6 +539,39 @@ export function displayTab(
       onToggle: actions.toggleFeedAccount,
     }),
   );
+
+  /**
+   * ## 播放线路：屏蔽 PCDN（ADR 0038）
+   *
+   * ### 为什么 hint 必须写"代价"，不能只写"屏蔽 PCDN"
+   *
+   * 2026-11-17 真机实测（`poc/probe/pcdn-diag/REPORT-remaining.md`）：
+   * 2160p 的 24 条轨里，剔除 PCDN 后 **15 条只剩 1 条官方候选**（62.5%）。
+   * 播放器接受这种轨（同日实测 `readyState=4`、无降级），但**它没有备份可切了** ——
+   * 而毒化对照证明了备份是真起作用的（假 host 失败后正是靠 backup 回落）。
+   *
+   * 所以这个开关的代价不是"不能播"，是"弱网更容易卡"。只说前半句等于撒谎：
+   * 用户会以为白得一个优化，卡了也不知道是这里换来的。
+   *
+   * ### 可点性
+   *
+   * 只判"读没读到"（`null` → 禁用）。它与账号、身份都无关 ——
+   * 过滤发生在取流数据上，没登录扩展账号时这个开关没有意义，但也不会因此变灰：
+   * 判据越多，越容易写出"用户不知道为什么点不动"的开关。
+   */
+  box.appendChild(el('p', 'diag-section', '播放线路'));
+  box.appendChild(
+    switchRow({
+      label: '屏蔽 PCDN 线路',
+      hint: '优先走官方线路。部分画质剔除后只剩一条线路，弱网时更容易卡',
+      checked: actions.pcdnFilterEnabled === true,
+      disabled: actions.pcdnFilterEnabled === null,
+      onToggle: actions.togglePcdnFilter,
+    }),
+  );
+  if (actions.pcdnFilterReadFailed) {
+    box.appendChild(el('p', 'pane-note', '读不到这个开关的当前设置 —— 收起重开面板可重试'));
+  }
 
   /**
    * 诊断入口。

@@ -33,10 +33,12 @@ import { applyAdClean } from '@/src/content/site-clean/ads';
 import { applyHomeClean } from '@/src/content/site-clean/home-clean';
 import {
   readBadgeEnabled,
+  readPcdnFilterEnabled,
   readRawCleanOptions,
   writeBadgeEnabled,
   writeCleanHideCategories,
   writeCleanOptionFlags,
+  writePcdnFilterEnabled,
 } from '@platform/storage/ui-prefs-store';
 import { collectFacts, readLastDiagEcho, type DiagRow } from '@platform/diagnostics/collect';
 import {
@@ -377,6 +379,25 @@ export function mountPanelBody(actions: PanelActions): PanelController {
   let badgeEnabled: boolean | null = null;
 
   /**
+   * 屏蔽 PCDN 开关（ADR 0038）。
+   *
+   * 与角标开关同一套纪律：`null` = 还没读出来 → 禁用，**不画成"关"**。
+   * 单独一份状态、单独的读失败闸 —— 两个开关的读取互相独立，
+   * 一个读不到不该把另一个也拖成灰的。
+   */
+  let pcdnFilterEnabled: boolean | null = null;
+  /** 有一次读取在飞（挡住并发） */
+  let pcdnFilterReading = false;
+  /**
+   * 读失败过（挡住自动重试）。
+   *
+   * 与 `badgeReadFailed` 同一理由：失败时 `pcdnFilterEnabled` 仍是 `null`，
+   * 若没有这条闸，`render()` 会再触发读 → 再失败 → 再 `render()`，无限递归。
+   * 重试口同样由用户动作提供（进一次「显示」Tab）。
+   */
+  let pcdnFilterReadFailed = false;
+
+  /**
    * 诊断数据（阶段 3）。**懒加载**：只有进入诊断浮层时才去 `collectFacts()`。
    *
    * 理由：`collectFacts()` 要发多次 chrome API 调用（窗口 / cookie / DNR / manifest…），
@@ -567,6 +588,46 @@ export function mountPanelBody(actions: PanelActions): PanelController {
        * 回滚 + 说明才是完整的：回滚保证界面不撒谎，说明让用户知道发生了什么。
        */
       showNotice('页内角标没保存成功 —— 稍后再拨一次', false);
+    }
+  };
+
+  /**
+   * 屏蔽 PCDN：懒读 + 三重早退（与 `ensureBadgeRead` 同构，理由不再复述一遍）。
+   *
+   * ⚠️ **必须是独立的一组状态**，不能复用角标那三个变量：
+   * 两个开关的读取是两次独立的 storage 往返，共用闸会出现"角标读成功
+   * 顺手把 PCDN 的失败标记清掉"这种串味，排查时极难看出来。
+   */
+  const ensurePcdnFilterRead = (): void => {
+    if (pcdnFilterEnabled !== null || pcdnFilterReading || pcdnFilterReadFailed) return;
+    pcdnFilterReading = true;
+    void readPcdnFilterEnabled()
+      .then((v) => {
+        pcdnFilterEnabled = v;
+        pcdnFilterReadFailed = false;
+      })
+      .catch(() => {
+        // 读不到**不猜成 false** —— 那会让用户以为自己把这个开关关了
+        pcdnFilterReadFailed = true;
+      })
+      .finally(() => {
+        pcdnFilterReading = false;
+        render();
+      });
+  };
+
+  /** 屏蔽 PCDN：写入（乐观更新 + 失败回滚 + 说明，同 `writeBadge`） */
+  const writePcdnFilter = async (next: boolean): Promise<void> => {
+    const prev = pcdnFilterEnabled;
+    pcdnFilterEnabled = next;
+    render();
+    try {
+      await writePcdnFilterEnabled(next);
+      render();
+    } catch {
+      pcdnFilterEnabled = prev;
+      render();
+      showNotice('屏蔽 PCDN 没保存成功 —— 稍后再拨一次', false);
     }
   };
 
@@ -1579,6 +1640,7 @@ export function mountPanelBody(actions: PanelActions): PanelController {
        */
       case 'display': {
         ensureBadgeRead();
+        ensurePcdnFilterRead();
         /**
          * ## 角标能不能出现（2026-11-16）
          *
@@ -1615,6 +1677,9 @@ export function mountPanelBody(actions: PanelActions): PanelController {
             toggleFeedAccount: (next) => void toggleFeedAccount(next),
             hasCredential: model?.account.hasCredential ?? false,
             badgeReadFailed,
+            pcdnFilterEnabled,
+            pcdnFilterReadFailed,
+            togglePcdnFilter: (n) => void writePcdnFilter(n),
             openDiag: () => {
               /**
                * ## 进入诊断浮层 = 重新采集（2026-11-10 第七轮）
@@ -1677,6 +1742,7 @@ export function mountPanelBody(actions: PanelActions): PanelController {
      * 复位后 `render()` → `ensureBadgeRead()` 会重新发一次请求。
      */
     if (t === 'display') badgeReadFailed = false;
+    if (t === 'display') pcdnFilterReadFailed = false;
     /**
      * 进「关于」Tab 同理 —— **同一纪律，不是新发明**（2026-11-17 三轮）。
      *
