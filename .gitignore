@@ -100,6 +100,12 @@ poc/probe/pcdn-diag/remaining-candidates.json
 poc/probe/pcdn-diag/backup-empty-acceptance.json
 poc/probe/pcdn-diag/ab-filter.json
 poc/probe/pcdn-diag/progress-fix-check.json
+poc/probe/pcdn-diag/pcdn-4k-ab.json
+
+# 2026-11-17 ADR 0039 验证门 #1：4K 换 authority 实测的原始带签名 URL
+# 与结果明细（结果只记 host/path 形态，仍属本地排查产物，不入库）。
+poc/probe/pcdn-diag/rewrite-4k-candidates.json
+poc/probe/pcdn-diag/rewrite-4k-results.json
 
 # 例外：这些是**结论**不是原始数据，必须入库
 !poc/verify/result-q2-summary.json
