@@ -185,7 +185,7 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 | `pgcSwapPlayviewBody` | PGC 切集：换掉 `data.video_info`，含 `dash`/`quality`/`support_formats`/`accept_quality`，删 `durl`/`durls` | [ADR 0023](./docs/decisions/0023-intercept-playview-durl-swap.md) |
 | 候选过滤（独立常量，待新增） | **只减不增**：删/重排 `dash[].base_url`/`backup_url`；**禁改** `quality`/`support_formats`/轨数/`height`/`codecid`/带宽；**禁新增 URL**；**全 PCDN 的轨原样保留** | [ADR 0038](./docs/decisions/0038-filter-pcdn-candidates.md) |
 
-⚠️ 本节曾写"两类"，ADR 0021/0022 之后没同步；**ADR 0020/0023 落地后仍未补登**（两者都在改 `dash`/`quality`/`support_formats`）——2026-11-17 由 ADR 0038 一次性纠正。加改写时先看 `check-patch-scope.mjs` 认了哪些常量：⚠️ **它目前只覆盖前四行**，`playview` 换流与候选过滤尚未纳入校验集（配套任务，别以为机器已经拦住了）。
+⚠️ 本节曾写"两类"，ADR 0021/0022 之后没同步；**ADR 0020/0023 落地后仍未补登**（两者都在改 `dash`/`quality`/`support_formats`）——2026-11-17 由 ADR 0038 一次性纠正。加改写时先看 `check-patch-scope.mjs` 认了哪些常量：它**覆盖前六行**（2026-11-17 补上 `pgcSwapPlayviewBody` 的写集断言与 `pgcPatchPlayinfo` 的"只写 `result.video_info`"断言）；⚠️ **候选过滤（ADR 0038）尚未纳入校验集** —— 实现常量还没落地，落地时必须补，否则那道闸门对第五类不成立（该补什么写在脚本末尾）。
 ⚠️ 本节曾把最后一行的常量写成 `PGC_TOAST_SELECTOR`——**代码里从没有这个名字**（2026-10-29 更正，B-10）。实际是 `PGC_TOAST_ITEM`（容器 `.bpx-player-toast-item`）与 `PGC_TOAST_MARK`（筛选标记 `[class*="PromptBar"]`），**两个都要有**，只有容器会把跳过片头/续播一起藏掉。
 `PATCH_HOSTS`（裸 JS）与 `routes.ts` 的 `BILI_API_HOSTS` 是**手写两份**，已由 `check-patch-scope.mjs` 断言"集合完全一致"（B-06，2026-10-29 加）。
 
