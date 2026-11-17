@@ -3094,7 +3094,7 @@
               var ids = playurlIds(url);
               entry = ids ? progressCache[ids.aid + '|' + ids.cid] : null;
             } catch (e) {}
-            var hasProgress = !!(entry && entry.value && entry.value.cid);
+            var hasProgress = !!(entry && entry.value && entry.value.cid && !entry.used);
             if (hasProgress) {
               // 同 XHR 版：已经播起来就不再改写
               try {
@@ -3148,6 +3148,8 @@
                  * 将来若真机上抓到 fetch 版 playurl，**先补一次取证**再在这里接
                  * `patchPlayurlBody(t, entry.value, pcdnFilterOn)` —— 不要顺手接了就算。
                  */
+                // 走到这里说明这是本页第一次带着进度来改写 → 机会用掉
+                markProgressUsed(entry);
                 var patched = applyProgressToJson(t, entry.value);
                 if (patched === null) return resp;
                 return rebuildResponse(resp, patched);
@@ -3716,7 +3718,7 @@
   // 等 playurl 下完（4K 响应通常比这个小 JSON 慢）时，值一般已经在手上了。
   // 拿不到就**什么都不做** —— 退化成"这次不续播"，绝不阻断视频。
 
-  /** key = `aid|cid` → { done, value: { time, cid } | null } */
+  /** key = `aid|cid` → { done, value: { time, cid } | null, used } */
   var progressCache = {};
 
   function playurlIds(url) {
@@ -3734,7 +3736,7 @@
   function prefetchProgress(aid, cid) {
     var key = aid + '|' + cid;
     if (progressCache[key]) return;
-    var entry = { done: false, value: null };
+    var entry = { done: false, value: null, used: false };
     progressCache[key] = entry;
 
     try {
@@ -3835,6 +3837,40 @@
    * @param {{time:number,cid:number}} prog
    * @returns {string|null}
    */
+  /**
+   * 进度还原**只用一次**（2026-11-17 真机定位的闭环）。
+   *
+   * ## 为什么必须"用过就作废"
+   *
+   * `prefetchProgress()` 对同一个 `aid|cid` 只发一次 v2 请求，所以缓存里的
+   * `last_play_time` 是**页面打开那一刻**主账号看到的位置，之后永不更新。
+   *
+   * 而旧实现每次 playurl 响应都可能把它写回去，唯一的闸是
+   * `video.currentTime > 3`。那道闸挡不住真正的问题场景：
+   *
+   * ```
+   * 播放器重开流（切清晰度、码率自适应、错误恢复）→ MediaSource 重建
+   *   → currentTime 先归 0 → 闸放行 → 写回冻结的 5.98s
+   *   → 播放器 seek 到 5.98 → 播到 13.33 → 再次重开 → 归 0 → ……
+   * ```
+   *
+   * 真机实测到的正是 `13.33 → 5.98` 这种**往回跳**，而且数值与账户的
+   * 历史进度一致。表现是"视频反复从头几秒开始"，用户会以为是 B站 抽了。
+   *
+   * ## 为什么是"作废"而不是"更新成当前时间"
+   *
+   * 播放器**自己知道**当前位置（它刚才是从 13.33 切过来的）。切清晰度时
+   * 不需要我们喂 `last_play_time`，它按自己的时间轴续播。
+   * 我们唯一该负责的是"**这次打开页面**从上次看到的地方开始"——
+   * 这件事只发生一次。
+   *
+   * 反向验证：把 `entry.used = true` 删掉 → `main-world-progress` 里
+   * "第二次 playurl 不许再改写"那条必须变红。
+   */
+  function markProgressUsed(entry) {
+    if (entry) entry.used = true;
+  }
+
   function applyProgressToJson(raw, prog) {
     return patchPlayurlBody(raw, prog, false);
   }
@@ -3868,7 +3904,8 @@
     var ids = playurlIds(xhr.__plumaUrl || '');
     if (ids) {
       var entry = progressCache[ids.aid + '|' + ids.cid];
-      if (entry && entry.value && entry.value.cid) prog = entry.value;
+      // `!entry.used`：进度只用一次，见 `markProgressUsed()` 的函数头
+      if (entry && entry.value && entry.value.cid && !entry.used) prog = entry.value;
     }
 
     if (prog !== null) {
@@ -3879,6 +3916,18 @@
         var v = document.querySelector('video');
         if (v && v.currentTime > 3) prog = null;
       } catch (e) {}
+
+      /**
+       * **机会用掉就作废** —— 放在闸门之后、真正改写之前。
+       *
+       * 为什么不放在"写入成功之后"：值本来就相等时 `patchPlayurlBody()` 会返回
+       * `null` 提前退出，那条路永远走不到写入点；于是第二次（重开流）仍会被写回
+       * 旧位置。实测就是这么漏的（A9 第二条用例先红后绿）。
+       *
+       * 语义也更干净：**"这次页面打开时的还原机会"只有一次**，用掉就是用掉，
+       * 与"值有没有差异"无关。
+       */
+      if (prog !== null && ids) markProgressUsed(progressCache[ids.aid + '|' + ids.cid]);
     }
 
     // 规则没下发 → 等同于"过滤未启用"（判不了就别动响应体），并上报一次 rulesMissing

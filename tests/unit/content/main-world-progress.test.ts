@@ -59,6 +59,15 @@ interface Options {
   jsonBody?: Record<string, unknown>;
   /** playurl 地址，默认 PLAYURL_URL */
   url?: string;
+  /**
+   * 同一个页面里**再发一次** playurl（用这份服务端响应）。
+   *
+   * 存在的唯一理由：验证"进度只用一次"。切清晰度 / 重开流会重新拉 playurl，
+   * 而 `prefetchProgress` 的缓存是页面打开那一刻冻结的 —— 若第二次还写回去，
+   * 播放器就会被拽回旧位置（真机实测 `13.33 → 5.98`）。
+   * 单个 JSDOM 才能复现"两次请求共享同一份缓存"。
+   */
+  secondServed?: Record<string, unknown>;
 }
 
 interface Result {
@@ -75,6 +84,8 @@ interface Result {
   patches: Record<string, unknown>[];
   /** `jsonBody` 被就地改写后的样子（文本路径下等于传入的那个对象） */
   jsonBody: Record<string, unknown> | undefined;
+  /** 第二次 playurl 页面读到的内容（只在传了 `secondServed` 时非 null） */
+  second: { text: string; data: Record<string, unknown> | null } | null;
 }
 
 /** 建一个干净页面、执行真源码、跑一次 playurl XHR，返回页面最终读到的响应 */
@@ -183,7 +194,44 @@ async function runPlayurl(opts: Options = {}): Promise<Result> {
   } catch {
     data = null;
   }
-  return { text, data, patches, jsonBody: opts.jsonBody };
+
+  /**
+   * 第二次请求：**同一个页面、同一个 XHR 原型**，只是换一份"服务端响应"。
+   *
+   * 这是复现"重开流被拽回过去"的最小条件 —— 缓存、`used` 标记、
+   * 事件监听全都还在，只有响应体是新的。
+   */
+  let second: { text: string; data: Record<string, unknown> | null } | null = null;
+  if (opts.secondServed !== undefined) {
+    const xhr2 = new (XHR as unknown as new () => Record<string, unknown>)() as Record<
+      string,
+      unknown
+    >;
+    const servedText2 = JSON.stringify(opts.secondServed);
+    Object.defineProperty(xhr2, 'responseText', { configurable: true, get: () => servedText2 });
+    Object.defineProperty(xhr2, 'readyState', { configurable: true, get: () => 4 });
+    Object.defineProperty(xhr2, 'responseType', {
+      configurable: true,
+      get: () => opts.responseType ?? '',
+    });
+    (xhr2 as unknown as { open: (m: string, u: string) => void }).open(
+      'GET',
+      opts.url ?? PLAYURL_URL,
+    );
+    (xhr2 as unknown as { dispatchEvent: (e: unknown) => boolean }).dispatchEvent(
+      new win.Event('readystatechange'),
+    );
+    const text2 = String(xhr2.responseText);
+    let data2: Record<string, unknown> | null = null;
+    try {
+      data2 = (JSON.parse(text2) as { data: Record<string, unknown> }).data;
+    } catch {
+      data2 = null;
+    }
+    second = { text: text2, data: data2 };
+  }
+
+  return { text, data, patches, jsonBody: opts.jsonBody, second };
 }
 
 describe('ADR 0017 观看进度还原', () => {
@@ -235,6 +283,53 @@ describe('ADR 0017 观看进度还原', () => {
       });
       expect(data!.last_play_time).toBe(PRIMARY_TIME);
       expect(data!.last_play_cid).toBe(PRIMARY_CID);
+    });
+  });
+
+  /**
+   * ## A9 · 进度只用一次（2026-11-17 真机定位的闭环）
+   *
+   * 真机看到 `currentTime` 在往回走：`13.33 → 5.98`，而 5.98 正是账户的
+   * 历史进度。机制是：
+   *
+   * ```
+   * 播放器重开流（切清晰度/错误恢复）→ MediaSource 重建 → currentTime 归 0
+   *   → `currentTime > 3` 的闸放行 → 又写回冻结的 5.98 → 被拽回去 → 再重开 → …
+   * ```
+   *
+   * 🔁 反向验证：把 `markProgressUsed()` 的三处调用删掉 → 本组全红。
+   */
+  describe('A9 · 进度只用一次', () => {
+    it('★★★ 第二次 playurl 原样返回，不再写 last_play_time', async () => {
+      const { data, second, patches } = await runPlayurl({
+        served: { data: { last_play_time: 0, last_play_cid: 0 } },
+        primary: { last_play_time: 5000, last_play_cid: 1234 },
+        // 重开流拿到的同样是"服务端说 0"的响应 —— 区别只在缓存已经用过了
+        secondServed: { data: { last_play_time: 0, last_play_cid: 0 } },
+      });
+
+      expect(data!.last_play_time, '第一次照常还原进度').toBe(5000);
+      expect(data!.last_play_cid).toBe(1234);
+
+      expect(second!.data!.last_play_time, '第二次必须保持服务端原值 —— 否则播放器被拽回过去').toBe(
+        0,
+      );
+      expect(second!.data!.last_play_cid).toBe(0);
+
+      // 只该报一次「扩展介入」：第二次什么都没改
+      expect(patches, '第二次不许再报「扩展介入」').toHaveLength(1);
+    });
+
+    it('★★ 值本来就相等时也要作废（否则下一次仍会参与改写）', async () => {
+      const { second } = await runPlayurl({
+        served: { data: { last_play_time: PRIMARY_TIME, last_play_cid: PRIMARY_CID } },
+        secondServed: { data: { last_play_time: 0, last_play_cid: 0 } },
+      });
+      /**
+       * 第一次的值与主账号一致 ⇒ 没"写"出差异，但它确实是**这次页面打开**的
+       * 还原动作；若不标记作废，第二次（重开流）就会把它写回去。
+       */
+      expect(second!.data!.last_play_time).toBe(0);
     });
   });
 
