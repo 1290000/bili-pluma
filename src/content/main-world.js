@@ -663,6 +663,19 @@
     lastStage: 'boot',
     lastSkip: '',
     /**
+     * 首波接管时序竞争（2026-11-20，REPORT-handoff.md）：首波常被播放器原生 XHR
+     * 抢走（门控要等 cfg + page/activate 两个回包），补挂回调后必须主动重开一次流。
+     *
+     * - `reloadIssued`：我们主动调用 `player.reload()` 的次数，正常 0 或 1。
+     *   一次性硬上限：达到 1 后永不复位（SPA 切换 / 播放器重建都不再触发）。
+     * - `firstWave`：`pending` = 未判定；`ours` = 回调真的走到 fetch 并拿到响应；
+     *   `native` = 补挂时确认首波没被我们接管（门控晚到）。reload 前重置回 pending，
+     *   让新一波重新判定。判据**不用 cbHits**（门控关闭时回调也可能被调一次，
+     *   cbHits=1 却根本没 fetch），只看 lastQuery / lastRespCode + 结构性事实。
+     */
+    reloadIssued: 0,
+    firstWave: 'pending',
+    /**
      * 实际发出的 playurl 的 query 串（**脱敏视图**，2026-11-19 加）。
      *
      * 用途只有一个：真机拿到 `-400` 时，能一眼看出
@@ -1000,6 +1013,11 @@
           festivalTrace.lastStatus = r.status;
           return r.json().then(function (json) {
             festivalNoteResp(json);
+            // 首波来源：只有真的走到 fetch 并拿到响应才算我们的流。
+            // 真机用 Resource Timing 的 initiator=fetch + rewritten>0 交叉佐证。
+            if (festivalTrace.firstWave === 'pending') {
+              festivalTrace.firstWave = 'ours';
+            }
             if (!r.ok || !json || json.code !== 0 || !json.data || typeof json.data !== 'object') {
               throw new Error('bad playurl payload');
             }
@@ -1146,15 +1164,65 @@
   function festivalMaybeActivate() {
     if (!IS_FESTIVAL || !festivalGateOpen()) return;
     if (!festivalPlayer) return; // createPlayer 还没来 -> 由包装函数负责
-    if (!festivalHooked) {
-      if (festivalAttach(festivalConfig)) {
+    if (festivalHooked) return; // 已经接管（含首波 A）-> 绝不 reload
+
+    /**
+     * 首波来源判定（REPORT-handoff §4）：能走到这里说明 createPlayer 时门控未开，
+     * `festivalAttach` 只建了空 requestConfig 就返回 false —— 播放器随后自己 XHR
+     * 取了首波。判据刻意**不看 cbHits**：门控关闭时回调也可能被调一次
+     * （`skip-gate-at-cb` → fallback），cbHits=1 却根本没 fetch。这里用的是
+     * "hook 没挂上"这个结构性事实 + lastQuery/lastRespCode 双空（没走到 fetch）。
+     */
+    if (
+      festivalTrace.firstWave === 'pending' &&
+      festivalTrace.remounts === 0 &&
+      festivalTrace.lastQuery === '' &&
+      festivalTrace.lastRespCode === null
+    ) {
+      festivalTrace.firstWave = 'native';
+    }
+
+    if (festivalAttach(festivalConfig)) {
+      var remountOk = false;
+      try {
+        festivalPlayer.updateRequestConfig({ reqHttpPlayUrlInfo: festivalCb });
+        remountOk = true;
+        festivalTrace.remounts += 1;
+      } catch (e) {
+        festivalTrace.errors += 1;
+        festivalTrace.lastSkip =
+          'late activate: ' + String(e && e.message ? e.message : e);
+      }
+
+      /**
+       * 核心补救：首波漏接管时主动重开一次流，让新一波走刚挂好的回调。
+       *
+       * - 只在补挂真正成功（updateRequestConfig 没抛）时做：没挂上就 reload 只会
+       *   再产生一波原生 XHR，白花一次机会。
+       * - `reloadIssued` 是硬上限，达到 1 后永不再次 reload（防 SPA 切换 / 播放器
+       *   重建导致的循环）；它同时是一次性标记，不需要额外的复位路径。
+       * - 只调播放器级 `reload()`，**绝不 location.reload()**：整页重载会丢进度。
+       * - 不在这里碰 `last_play_time` / progressCache：续播机会"用掉即作废"的保护
+       *   由原路径负责，reload 不得绕过它往回写旧进度。
+       */
+      if (
+        remountOk &&
+        festivalTrace.firstWave === 'native' &&
+        festivalTrace.reloadIssued === 0
+      ) {
+        festivalTrace.reloadIssued += 1;
+        // 先重置再 reload：若 reload 内部同步触发我们的回调取流，不能被旧值吞掉。
+        festivalTrace.firstWave = 'pending';
         try {
-          festivalPlayer.updateRequestConfig({ reqHttpPlayUrlInfo: festivalCb });
-          festivalTrace.remounts += 1;
+          if (typeof festivalPlayer.reload !== 'function') {
+            throw new Error('no reload method');
+          }
+          festivalPlayer.reload();
+          festivalTrace.lastStage = 'reload-issued';
         } catch (e) {
+          // 最坏只是没补救成功：回调已经挂上，播放器原样继续播，不黑屏。
           festivalTrace.errors += 1;
-          festivalTrace.lastSkip =
-            'late activate: ' + String(e && e.message ? e.message : e);
+          festivalTrace.lastSkip = 'late reload: ' + String(e && e.message ? e.message : e);
         }
       }
     }

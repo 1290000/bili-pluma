@@ -505,6 +505,156 @@ describe('SPA 换片：createPlayer 不再调，靠 updateRequestConfig 重挂',
 });
 
 /**
+ * 首波接管时序竞争（REPORT-handoff.md）：门控晚到 → 补挂成功 → 主动 reload 一次。
+ *
+ * 这里只钉住**结构性事实**（reload 次数、埋点、回调仍在、不写进度）；
+ * "首波 initiator 真的变 fetch / 起播是否变慢 / 进度是否对"只能真机验。
+ */
+describe('首波漏接管的主动补救：补挂后 reload 一次', () => {
+  interface LateSetup {
+    config: any;
+    reloads: number[];
+    patches: Array<{ reqHttpPlayUrlInfo?: unknown }>;
+  }
+
+  /** 门控**未开**就 createPlayer（复现首波被播放器原生 XHR 抢走的前置条件）。 */
+  function lateCreatePlayer(sb: Sandbox, reloadImpl?: () => void): LateSetup {
+    const config: any = { cid: 42141027046, bvid: 'BV1ydeX65Edn' };
+    const reloads: number[] = [];
+    const patches: Array<{ reqHttpPlayUrlInfo?: unknown }> = [];
+    const player = {
+      updateRequestConfig(patch: { reqHttpPlayUrlInfo?: unknown }) {
+        patches.push(patch);
+      },
+      reload() {
+        reloads.push(reloads.length + 1);
+        if (reloadImpl) reloadImpl();
+      },
+    };
+    installNano(sb, player).createPlayer(config); // 此时还没 sendCfg
+    return { config, reloads, patches };
+  }
+
+  it('门控晚到 → 补挂 + 恰好一次 player.reload()，埋点 reloadIssued=1', async () => {
+    const sb = bootAt(FESTIVAL_URL);
+    await ready(sb);
+    const s = lateCreatePlayer(sb);
+    expect(traceOf(sb).reloadIssued).toBe(0);
+    expect(traceOf(sb).firstWave).toBe('pending');
+
+    sendCfg(sb); // cfg + page/activate 回包到齐
+    await flush();
+
+    expect(s.reloads).toEqual([1]);
+    const t = traceOf(sb);
+    expect(t.reloadIssued).toBe(1);
+    expect(t.firstWave).toBe('pending'); // reload 后重置，让新一波重新判定
+    expect(t.remounts).toBe(1);
+    expect(t.lastStage).toBe('reload-issued');
+    expect(t.errors).toBe(0);
+    // 回调真的挂上了，reload 只是让播放器重新取流
+    expect(typeof s.config.requestConfig.reqHttpPlayUrlInfo).toBe('function');
+    expect(s.patches).toHaveLength(1);
+    expect(s.patches[0]!.reqHttpPlayUrlInfo).toBe(s.config.requestConfig.reqHttpPlayUrlInfo);
+  });
+
+  it('reload 后播放器重建 / SPA 切换 / 再来一条 cfg → 都不再 reload', async () => {
+    const sb = bootAt(FESTIVAL_URL);
+    await ready(sb);
+    const s = lateCreatePlayer(sb);
+    sendCfg(sb);
+    await flush();
+    expect(s.reloads).toHaveLength(1);
+
+    // 再来一条 cfg：festivalMaybeActivate 会被再次调用，但已经 hooked
+    sendCfg(sb);
+    await flush();
+    // SPA 换片走 festivalRemount，不经过补挂分支
+    sb.win.history.replaceState({}, '', '/festival/COLMO2026?bvid=BV1eoZ7BnEGy');
+    sb.win.dispatchEvent(new sb.win.PopStateEvent('popstate'));
+    await flush();
+
+    expect(s.reloads).toEqual([1]); // 一次性硬上限
+    expect(traceOf(sb).reloadIssued).toBe(1);
+    expect(traceOf(sb).spaSwaps).toBe(1);
+    expect(traceOf(sb).remounts).toBe(2); // 只有补挂 + SPA 那次重挂
+  });
+
+  it('首波已被我们接管（festivalHooked=true）→ 不进补挂分支、不 reload', async () => {
+    const sb = bootAt(FESTIVAL_URL, () =>
+      okResponse({ code: 0, data: { dash: { video: [], audio: [] } } }),
+    );
+    await ready(sb);
+    sendCfg(sb); // 门控先到
+    await flush();
+
+    const config: any = { cid: 42141027046, bvid: 'BV1ydeX65Edn' };
+    const reloads: number[] = [];
+    const player = {
+      updateRequestConfig() {},
+      reload() {
+        reloads.push(1);
+      },
+    };
+    installNano(sb, player).createPlayer(config); // attach 当场成功
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    await cb({ cid: 42141027046, qn: 120 }, config); // 首波 fetch
+    expect(traceOf(sb).firstWave).toBe('ours');
+
+    sendCfg(sb); // 后到的 cfg 不该误伤首波 A
+    await flush();
+
+    expect(reloads).toHaveLength(0);
+    expect(traceOf(sb).reloadIssued).toBe(0);
+    expect(traceOf(sb).remounts).toBe(0);
+    expect(traceOf(sb).firstWave).toBe('ours');
+  });
+
+  it('reload 抛错 → 吞掉，回调仍挂着，lastSkip 记异常', async () => {
+    const sb = bootAt(FESTIVAL_URL);
+    await ready(sb);
+    const s = lateCreatePlayer(sb, () => {
+      throw new TypeError('reload boom');
+    });
+
+    expect(() => sendCfg(sb)).not.toThrow();
+    await flush();
+
+    expect(s.reloads).toEqual([1]); // 调用前计数，失败也不重试
+    expect(traceOf(sb).reloadIssued).toBe(1);
+    expect(traceOf(sb).lastSkip).toContain('late reload');
+    expect(traceOf(sb).lastSkip).toContain('reload boom');
+    expect(traceOf(sb).errors).toBeGreaterThanOrEqual(1);
+    // 最坏只是没补救：回调仍在，播放器照常播
+    expect(typeof s.config.requestConfig.reqHttpPlayUrlInfo).toBe('function');
+    expect(s.patches).toHaveLength(1);
+  });
+
+  it('reload 后的新一波取流不写 last_play_time（不绕过进度只用一次的保护）', async () => {
+    const payload = {
+      code: 0,
+      data: { last_play_time: 0, last_play_cid: 0, dash: { video: [], audio: [] } },
+    };
+    const sb = bootAt(FESTIVAL_URL, () => okResponse(payload));
+    await ready(sb);
+    const s = lateCreatePlayer(sb);
+    sendCfg(sb);
+    await flush();
+    expect(s.reloads).toEqual([1]);
+
+    // 播放器 reload 后重新取流：走刚挂上的回调（nativeFetch，绕过响应改写链）
+    const cb = s.config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ avid: 1, cid: 42141027046, qn: 64 }, s.config);
+
+    expect(out.data.data.last_play_time).toBe(0); // 不被改写成任何"历史进度"
+    expect(out.data.data.last_play_cid).toBe(0);
+    expect(sb.sent.some((m) => m.__PLUMA_EXT_PATCH__ === true)).toBe(false);
+    expect(traceOf(sb).firstWave).toBe('ours');
+    expect(traceOf(sb).reloadIssued).toBe(1);
+  });
+});
+
+/**
  * 34a8286 真机回归：开关一开就 -400 黑屏，关掉则播放器原生 XHR 正常出流。
  *
  * 这一组钉住的是**序列化契约**（不是播放结果，那只能真机验）：
