@@ -277,20 +277,24 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
   });
 
   /**
-   * ## 屏蔽 PCDN 开关（ADR 0038，2026-11-17）
+   * ## 屏蔽 PCDN 开关（ADR 0038 授权 → ADR 0039 换 authority）
    *
-   * 三条：**在**、**读不到时不画成关**、**hint 必须说代价**。
+   * 三条：**在**、**读不到时不画成关**、**hint 收益与代价都要说准**。
    *
-   * 第三条不是文案洁癖：实测 2160p 的 24 条轨里有 15 条剔除后只剩 1 条候选，
-   * 代价是"没有备份可切"而不是"不能播"。只写"屏蔽 PCDN"会让用户
-   * 以为白得一个优化，卡了也不知道是这里换来的。
+   * 第三条不是文案洁癖：ADR 0039 把"删候选"换成"换 authority"后，候选条数不变，
+   * 旧文案的代价"只剩一条线路、弱网更容易卡"**已经不成立**。新代价是少数 mcdn 线路
+   * 走官方代理、首块略慢。写过时的代价和只写收益一样会误导用户 —— 前者更糟。
    */
-  it('★ 屏蔽 PCDN 开关在「显示」Tab 里，且 hint 说明了代价', () => {
+  it('★ 屏蔽 PCDN 开关在「显示」Tab 里，且 hint 说准收益与新代价', () => {
     const box = display();
     const cb = checkboxFor(box, '屏蔽 PCDN 线路');
     expect(cb, '开关必须在').not.toBeNull();
     expect(cb?.disabled, '已读到设置 → 可点').toBe(false);
-    expect(box.textContent, 'hint 必须提到"更容易卡"这个代价').toContain('弱网时更容易卡');
+    expect(box.textContent, 'hint 必须说明候选条数不变（换 authority 不是删）').toContain('候选条数不变');
+    expect(box.textContent, 'hint 必须提到新代价：代理导致首块略慢').toContain('首块可能略慢');
+    expect(box.textContent, '旧代价（弱网更容易卡）已随 ADR 0039 作废，不许再出现').not.toContain(
+      '更容易卡',
+    );
   });
 
   it('★ 还没读到设置 → 开关禁用（不猜成"用户关了"）', () => {

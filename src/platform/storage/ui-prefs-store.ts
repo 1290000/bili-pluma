@@ -129,7 +129,7 @@ export async function writeFeedAccountEnabled(enabled: boolean): Promise<void> {
 }
 
 /**
- * 候选过滤开关（ADR 0038）—— 从取流的候选 URL 里剔除 PCDN。
+ * 候选改写开关（ADR 0038 授权 → ADR 0039 换 authority）—— 把 PCDN 候选的 authority 换成官方镜像。
  *
  * ## 为什么放在本文件（它其实不是"界面偏好"）
  *
@@ -154,7 +154,7 @@ const PCDN_FILTER_KEY = 'pluma:pcdn-filter-enabled';
 /** 供 content script 监听 `storage.onChanged` 时比对键名 */
 export const PCDN_FILTER_ENABLED_KEY = PCDN_FILTER_KEY;
 
-/** 是否剔除 PCDN 候选。默认 `false`（新增能力，用户不打开就不改行为） */
+/** 是否把 PCDN 候选换成官方镜像。默认 `false`（新增能力，用户不打开就不改行为） */
 export async function readPcdnFilterEnabled(): Promise<boolean> {
   const bag = await chrome.storage.local
     .get(PCDN_FILTER_KEY)

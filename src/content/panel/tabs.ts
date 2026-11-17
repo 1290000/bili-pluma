@@ -541,17 +541,20 @@ export function displayTab(
   );
 
   /**
-   * ## 播放线路：屏蔽 PCDN（ADR 0038）
+   * ## 播放线路：屏蔽 PCDN（ADR 0038 授权 → ADR 0039 换 authority）
    *
-   * ### 为什么 hint 必须写"代价"，不能只写"屏蔽 PCDN"
+   * ### hint 为什么必须同时说收益和代价
    *
-   * 2026-11-17 真机实测（`poc/probe/pcdn-diag/REPORT-remaining.md`）：
-   * 2160p 的 24 条轨里，剔除 PCDN 后 **15 条只剩 1 条官方候选**（62.5%）。
-   * 播放器接受这种轨（同日实测 `readyState=4`、无降级），但**它没有备份可切了** ——
-   * 而毒化对照证明了备份是真起作用的（假 host 失败后正是靠 backup 回落）。
+   * ADR 0039 把"删除 PCDN 候选"升级为"把候选的 authority 换成官方镜像"，
+   * **候选条数不变**（4K 验证 33/33 = 206，`REPORT-rewrite-4k.md`）。
+   * 所以旧文案"剔除后只剩一条线路、弱网更容易卡"**不再成立** —— 那是删时代的代价。
    *
-   * 所以这个开关的代价不是"不能播"，是"弱网更容易卡"。只说前半句等于撒谎：
-   * 用户会以为白得一个优化，卡了也不知道是这里换来的。
+   * 现在的代价是另一处：少数 `mcdn` + `/v1/resource/upgcxcode/` 的候选必须经官方代理
+   * 包装（直连换 host 稳定 403，18/18 实测），首块会略慢一些。不写秒数 —— ADR 0038
+   * 「价值判断」节明确禁止承诺收益数字，这里对代价也一样。
+   *
+   * 只写"屏蔽 PCDN"会让用户以为白得一个优化；把已经过时的代价写出来则更糟 ——
+   * 用户会按一个不存在的风险做判断。两头都要说准。
    *
    * ### 可点性
    *
@@ -563,7 +566,7 @@ export function displayTab(
   box.appendChild(
     switchRow({
       label: '屏蔽 PCDN 线路',
-      hint: '优先走官方线路。部分画质剔除后只剩一条线路，弱网时更容易卡',
+      hint: '优先把 PCDN 线路换成官方镜像，候选条数不变。少数线路需经官方代理，首块可能略慢',
       checked: actions.pcdnFilterEnabled === true,
       disabled: actions.pcdnFilterEnabled === null,
       onToggle: actions.togglePcdnFilter,
