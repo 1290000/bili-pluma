@@ -1,0 +1,52 @@
+{
+  "source": "bsk 0.5.0 eval --expect（独立 scope=probe-handoff，登录态真实 Edge）；Resource Timing + window.__PLUMA_FESTIVAL__",
+  "redaction": "URL 仅保留 host + path + qn/fnval + w_rid 是否出现；不含签名值、Cookie、账号信息。",
+  "runs": [
+    {
+      "id": "COLMO-A",
+      "url": "festival/COLMO2026?bvid=BV1ydeX65Edn",
+      "phase": "首波",
+      "at_ms": 21243,
+      "hook": { "wrapped": true, "createPlayerSrcIncludes": "O.createCalls+=1,ye(arguments[0])" },
+      "resources": [
+        { "start": 561, "end": 692, "duration": 131, "initiator": "fetch", "path": "/x/player/wbi/playurl", "qn": 120, "fnval": 4048, "w_rid": "absent" }
+      ],
+      "trace": { "cbHits": 1, "createCalls": 1, "nanoSets": 1, "remounts": 0, "fallbacks": 0, "errors": 0, "rewritten": 4, "lastStage": "cb", "lastQuery": true, "lastRespCode": 0, "lastRespMsg": "OK", "lastStatus": 200, "lastCid": "42141027046" },
+      "player": { "login": true, "quality": { "newQ": 120, "nowQ": 120, "realQ": 120 }, "video": { "h": 2160, "w": 3840, "dur": 732, "t": 19, "ready": 4, "srcHost": "blob:https://www.bilibili.com/<uuid>" } },
+      "wave2": { "trigger": "player.requestQuality(64) 后 player.reload()", "fetchStart": 79732, "initiator": "fetch", "qn": 64, "cbHits": 2, "rewritten": 10, "lastStage": "cb" }
+    },
+    {
+      "id": "COLMO-B-then-A",
+      "url": "festival/COLMO2026?bvid=BV1ydeX65Edn",
+      "phase": "首波",
+      "at_ms": 8021,
+      "hook": { "wrapped": true, "createPlayerSrcIncludes": "O.createCalls+=1,ye(arguments[0])" },
+      "resources": [
+        { "start": 1206, "end": 1335, "duration": 129, "initiator": "xmlhttprequest", "path": "/x/player/wbi/playurl", "qn": 64, "fnval": 4048, "w_rid": "present", "wts": 1794943426 },
+        { "start": 1206, "initiator": "fetch", "path": "/x/player/wbi/v2" },
+        { "start": 2536, "initiator": "xmlhttprequest", "path": "/x/player/online/total" }
+      ],
+      "trace": { "cbHits": 0, "createCalls": 1, "nanoSets": 1, "remounts": 1, "fallbacks": 0, "errors": 0, "rewritten": 0, "lastStage": "hooked", "lastQuery": false, "lastRespCode": null, "lastStatus": -1, "lastCid": "" },
+      "player": { "login": true, "quality": { "newQ": 64, "nowQ": 64, "realQ": 64 }, "video": { "h": 720, "w": 1280, "dur": 732, "t": 6, "ready": 4 } },
+      "wave2": { "trigger": "player.reload() after performance.setResourceTimingBufferSize(2000)", "fetchStart": 17220, "initiator": "fetch", "qn": 64, "w_rid": "absent", "cbHits": 1, "rewritten": 6, "lastStage": "cb", "lastRespCode": 0, "lastCid": "42141027046" }
+    },
+    {
+      "id": "BNJ-B-then-A",
+      "url": "festival/bnj2026?bvid=BV1eoZ7BnEGy",
+      "phase": "首波",
+      "at_ms": 10627,
+      "hook": { "wrapped": true, "createPlayerSrcIncludes": "O.createCalls+=1,ye(arguments[0])" },
+      "resources": [
+        { "start": 2057, "end": 2200, "duration": 144, "initiator": "xmlhttprequest", "path": "/x/player/wbi/playurl", "qn": 64, "fnval": 4048, "w_rid": "present", "wts": 1794943360 }
+      ],
+      "trace": { "cbHits": 0, "createCalls": 1, "nanoSets": 1, "remounts": 1, "fallbacks": 0, "errors": 0, "rewritten": 0, "lastStage": "hooked", "lastQuery": false, "lastRespCode": null, "lastStatus": -1, "lastCid": "" },
+      "player": { "login": true, "quality": { "newQ": 64, "nowQ": 64, "realQ": 64 }, "video": { "h": 720, "w": 1280, "dur": 248, "t": 8, "ready": 4 } },
+      "wave2": { "trigger": "player.reload()", "note": "第一次 reload 后 cbHits 1、rewritten 2，但 Resource Timing 缓冲已满(300)未记录新条目", "fetchStart": 52919, "initiator": "fetch", "qn": 64, "w_rid": "absent", "cbHits": 2, "rewritten": 3, "lastStage": "cb" }
+    }
+  ],
+  "limitations": [
+    "bsk debug start 的 coverage 明确含 initial_load_not_recorded；首波请求未被 debug capture 记录，网络线改用 Resource Timing（initiatorType 区分 fetch/XHR + startTime）。",
+    "bsk debug capture 也没录到 callback 的 nativeFetch；响应 body（dash.video[].id=120）未抓到，4K 只以 lastRespCode=0 / rewritten>0 / getQuality().newQ=120 / videoHeight=2160 间接佐证。",
+    "首波时刻无法在 bsk 中安装 document_start 探针（0.5.0 限制）；回调安装与门控时机由产品埋点 + Resource Timing 反推。"
+  ]
+}
