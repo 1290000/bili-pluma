@@ -33,6 +33,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildLoadingQuick,
   buildTimelineRows,
+  clockText,
   describeCounts,
   describeLine,
   describeKindPill,
@@ -45,7 +46,9 @@ import {
   legendKinds,
   loadingDetailPane,
   loadingQuickRow,
+  pageOriginAnchor,
   stageLabel,
+  timelineFootnote,
   TIMELINE_FOOTNOTE,
 } from '../../../src/content/panel/loading-pane';
 import type { LoadingOutcome } from '../../../src/content/panel/loading-pane';
@@ -813,6 +816,79 @@ describe('「扩展介入」事件（ext-patch）', () => {
   it('⛔ 没有 ext-patch 事件时，时间轴上不出现「扩展介入」', () => {
     const rows = buildTimelineRows(snapshot().events);
     expect(rows.map((r) => r.label)).not.toContain('扩展介入');
+  });
+});
+
+// ─────────────────────────── 尾注的锚点 ───────────────────────────
+
+describe('尾注的锚点（PGC 换集后时间轴没有 nav）', () => {
+  /**
+   * ## 这一条修的是什么
+   *
+   * `resetLoadingTrace()` 之后**有意不补** `nav`（补了会凭空多出一条几分钟的
+   * 空档行）。于是番剧换集后时间轴第一行可能是 `302.41s` —— 而尾注只写
+   * 「时间从页面开始加载算起」，看起来像"这一集从 302 秒开始"。
+   *
+   * 那句话本身没错（时间戳确实相对页面 `timeOrigin`），缺的是**锚点**。
+   * 现在不补假事件、不加新行，只把可观测的那个数说进尾注。
+   */
+  const noNav = (t: number): LoadingSnapshotLite =>
+    snapshot({
+      events: [{ t, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' }],
+    });
+
+  it('★ 无 nav + 首条 t=302410 → 尾注含「5:02.41」', () => {
+    const text = timelineFootnote(noNav(302_410));
+    expect(text).toContain('5:02.41');
+    expect(text).toContain('本集开始于页面加载后');
+    // ⚠️ 只加锚点：另外三句说明必须还在（否则等于为了补一个数砍掉三个解释）
+    expect(text).toContain('+x.xxs 是比上一条多花的时间');
+    expect(text).toContain('只列出每次线路类别变化后的第一段');
+  });
+
+  it('★ 有 nav → **不**含括号那段（基准版一字不多）', () => {
+    const withNav = snapshot({ events: [{ t: 0, stage: 'nav' }, ...snapshot().events] });
+    expect(timelineFootnote(withNav)).toBe(TIMELINE_FOOTNOTE);
+    expect(timelineFootnote(withNav)).not.toContain('本集开始于');
+    expect(timelineFootnote(withNav)).not.toContain('（');
+  });
+
+  it('⛔ truncated（环形缓冲丢过早期事件）→ 不补锚点', () => {
+    /**
+     * 反例：`nav` 也会被 200 条环形缓冲挤掉。那种情况下已经有一句
+     * 「更早的事件被丢掉了」在说"开头不是页面开始"；再补一句"本集开始于 X"
+     * 就是两个互相矛盾的说法 —— 而且后者是假的。
+     */
+    expect(timelineFootnote(snapshot({ truncated: true }))).toBe(TIMELINE_FOOTNOTE);
+    expect(pageOriginAnchor(snapshot({ truncated: true }))).toBeNull();
+  });
+
+  it('一条事件都没有 → 没有数可说（**不补 0**）', () => {
+    const empty = snapshot({ events: [], truncated: false });
+    expect(pageOriginAnchor(empty)).toBeNull();
+    expect(timelineFootnote(empty)).toBe(TIMELINE_FOOTNOTE);
+  });
+
+  it('DOM：换集后的时间轴，尾注带锚点', () => {
+    const box = loadingDetailPane(
+      ok({
+        events: [{ t: 302_410, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' }],
+      }),
+      { back: () => undefined, refresh: () => undefined, openDiagnostics: () => undefined },
+    );
+    expect(box.textContent).toContain('（本集开始于页面加载后 5:02.41）');
+  });
+
+  it('clockText：m:ss.SS，超过 1 小时才带小时', () => {
+    expect(clockText(302_410)).toBe('5:02.41');
+    expect(clockText(61_000)).toBe('1:01.00');
+    expect(clockText(590)).toBe('0:00.59');
+    expect(clockText(3_600_000)).toBe('1:00:00.00');
+    expect(clockText(3_661_230)).toBe('1:01:01.23');
+    // 边界：59.999s 不许拼成 0:60.00
+    expect(clockText(59_999)).toBe('1:00.00');
+    // 非法输入不拼出 NaN
+    expect(clockText(Number.NaN)).toBe('0:00.00');
   });
 });
 

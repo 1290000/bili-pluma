@@ -627,16 +627,29 @@ const LOADING_EVENT_LIMIT = 40;
  * | `absent` | 一行中性色：本页没有加载记录（不是播放页） |
  * | `unanswered` | 一行**危险色**：读取失败（无应答）—— 刷新页面后重试 |
  *
+ * 表里没有第四种"还没读到"：那个状态由 `panel.ts` 在 `!model` 时早退成
+ * 「正在读取…」，**进不到这里**（入参必填，见下）。
+ *
  * ⚠️ `unanswered` 画成"没有记录"就是 `logsMeta.ok` 那次事故的复发：
  * 读失败伪装成空态，用户和排查者都会去查错方向。
  *
- * @param outcome 面板模型里那一份原始结局（`undefined` 与 `absent` 同义）
+ * ## 2026-11-20（审计收尾）：入参**必填**，`undefined` 那条分支删掉了
+ *
+ * 以前签名是 `LoadingOutcome | undefined`，`undefined` 走 `absent` 那一支，
+ * 渲染出「本页没有加载记录（**不是播放页**）」—— 而"不是播放页"只对真正的
+ * `absent` 成立（那是有页面判据支撑的事实），"还没读到"复用它就是编因果。
+ *
+ * 唯一的调用点是 `diagnosticsPane()`，而它的 `data.loading` 现在也是必填
+ * （生产侧 `panel.ts` 在 `!model` 时早退，本来就不可达）。所以这里跟着收窄，
+ * 让那句因果断言**只**能由真实观测触发。
+ *
+ * @param outcome 面板模型里那一份原始结局（`LoadingOutcome` 三态之一）
  */
-export function loadingSectionNodes(outcome: LoadingOutcome | undefined): HTMLElement[] {
+export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
   const nodes: HTMLElement[] = [el('p', 'diag-section', '本次加载')];
 
-  if (outcome === undefined || outcome.kind !== 'ok') {
-    if (outcome?.kind === 'unanswered') {
+  if (outcome.kind !== 'ok') {
+    if (outcome.kind === 'unanswered') {
       nodes.push(
         factRow({
           label: '加载记录',
@@ -645,6 +658,10 @@ export function loadingSectionNodes(outcome: LoadingOutcome | undefined): HTMLEl
         }),
       );
     } else {
+      /**
+       * `absent` = **页面判据说的**「这一页不是播放页」，不是"没读到"。
+       * 这句因果有观测支撑（`pageKind` 由 `parsePlayPage()` 判定）。
+       */
       nodes.push(factRow({ label: '加载记录', value: '本页没有加载记录（不是播放页）' }));
     }
     return nodes;
@@ -875,12 +892,23 @@ export function diagnosticsPane(
     /**
      * 加载时间轴的通道结局（2026-11-20，T7）。
      *
-     * ⚠️ **可以传 `undefined`**：与 `logsMeta` 同一个理由（调用方在"还没采到"
-     * 时会传 `undefined`）。`undefined` 与 `absent` 同义 —— 不渲染任何看起来
-     * 像数据的行，只说"本页没有加载记录"。真正的"读取失败"只有
-     * `unanswered` 那一种，见 `loadingSectionNodes()`。
+     * ## ⚠️ **必填**（2026-11-20 审计收尾改了）
+     *
+     * 以前这个字段是**可选**的（带 `?`），`undefined` 与 `absent` 同义 → 两者共用同一句文案「本页没有加载记录（**不是播放页**）」。
+     * 而"不是播放页"是一句**因果断言**：它只对真正的 `absent`（页面判据说这页
+     * 没有播放器）成立；"还没读到"复用它，就是拿没观测过的事当结论。
+     *
+     * ## 为什么可以做成必填（而不是再编一句"还没读到"的文案）
+     *
+     * 唯一的生产调用点是 `panel.ts` 的 `render()`，那里第一件事就是
+     * `if (!model) { 正在读取…; return; }` —— `undefined` 那条路**本来就不可达**。
+     * 所以把这个分支**用类型去掉**，比给它配一句新文案更彻底：不可达的分支
+     * 不配文案，它连存在的机会都没有。
+     *
+     * 结果：`absent` 只剩一个含义（真·非播放页），`unanswered` 仍然是危险色
+     * 的"读取失败"，两者不再和第三种"未读到"挤在同一个形状里。
      */
-    loading?: LoadingOutcome | undefined;
+    loading: LoadingOutcome;
   },
   actions: { back: () => void; exportJson: () => void; refresh: () => void },
 ): HTMLElement {

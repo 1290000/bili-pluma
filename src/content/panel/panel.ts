@@ -1400,10 +1400,18 @@ export function mountPanelBody(actions: PanelActions): PanelController {
              *
              * ⚠️ 传 `model.loading`（画质 Tab 速览行读的**同一份**），不在这里
              * 重新取数：诊断页要说的是"这一次加载"，重取只会得到同一份内存状态，
-             * 却多一次 2 秒空窗。`undefined` 与 `absent` 同义，浮层会如实说
-             * "本页没有加载记录"。
+             * 却多一次 2 秒空窗。
+             *
+             * 2026-11-20（审计收尾）：`diagnosticsPane()` 里这个字段改成**必填**，
+             * "还没读到"那条路（渲染成「不是播放页」的因果断言）被类型去掉了。
+             *
+             * 这里的 `?? { kind: 'absent' }` **不是**在把两者混回去：生产路径的
+             * `buildPanelModel()` **恒填** `loading`（`input.loading ?? absent`），
+             * 所以真相是"永远有值"。默认值的唯一用途是让**手工构造的 `PanelModel`
+             * 字面量**（今天只有 13 处测试辅助函数）也能过类型 —— 那些字面量从不
+             * 渲染诊断页。
              */
-            loading: model?.loading,
+            loading: model.loading ?? { kind: 'absent' },
           },
           {
             back: () => {

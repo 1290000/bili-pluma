@@ -454,7 +454,7 @@ export function gapText(ms: number): string {
 }
 
 /**
- * 时间轴尾注。
+ * 时间轴尾注（**基准版**：时间轴上有 `nav` 原点时用它）。
  *
  * ## 第 3 句为什么不写"同一条线路"
  *
@@ -464,9 +464,90 @@ export function gapText(ms: number): string {
  *
  * 导出是为了让 `tests/unit/content/panel-loading.test.ts` 能用一条**文案守卫**
  * 钉住"不许写回去"，而不是断言整段长文本。
+ *
+ * ⚠️ 渲染时**不要**直接用这个常量：用 `timelineFootnote(events)` ——
+ * 番剧换集后时间轴没有 `nav` 原点，光凭这句话会让人以为"这一集从 0 秒开始"。
  */
 export const TIMELINE_FOOTNOTE =
   '时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，下载视频片段那几行给的是请求到返回的耗时。只列出每次线路类别变化后的第一段，其余片段未逐段列出。';
+
+/**
+ * 毫秒 → `m:ss.SS`（≥ 1 小时用 `h:mm:ss.SS`）。
+ *
+ * ## 为什么用「分:秒」而不是再写一遍 `302.41s`
+ *
+ * 5 分钟的播放写成 `302.41s`，用户要在脑子里除一次 60；而这种"这一集从页面
+ * 加载后多久才开始"的数字恰恰是给人看时间感的。秒保留两位小数，与面板里
+ * 其它时间（`3.18s` / `+0.40s` / `6.21s`）**同一精度**。
+ *
+ * 取整先落在**百分之一秒**上再拆分，避免 `59.999 → "60.00"` 拼出 `59:60.00`。
+ *
+ * @param ms 毫秒（非有限数按 0 —— 调用方本来就不该传，但别让它拼出 `NaN:NaN`）
+ */
+export function clockText(ms: number): string {
+  const safe = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const cs = Math.round(safe / 10); // 百分之一秒
+  const h = Math.floor(cs / 360_000);
+  const m = Math.floor((cs % 360_000) / 6000);
+  const s = (cs % 6000) / 100;
+  const ss = s.toFixed(2).padStart(5, '0');
+  return h > 0 ? `${String(h)}:${String(m).padStart(2, '0')}:${ss}` : `${String(m)}:${ss}`;
+}
+
+/**
+ * 时间轴的**锚点**：这一集是页面加载后多久开始的（`null` = 不用补这句）。
+ *
+ * ## 为什么需要它（2026-11-20，审计「已记录未修」）
+ *
+ * `resetLoadingTrace()` 之后**有意不补** `nav`（补了会凭空多出一条几分钟的空档
+ * 行，见 `loading-trace.ts` 的 `recordNavStart()`），于是番剧换集后时间轴第一行
+ * 可能直接是 `302.41s`。
+ *
+ * 尾注那句「时间从页面开始加载算起」**本身是对的**（时间戳确实相对页面
+ * `timeOrigin`），错的只是**没有锚点**让它看起来像"这一集从 302 秒开始"。
+ * 所以这里不补假事件、不加新行，只把**可观测的那个数**说进尾注。
+ *
+ * ## 判据（三条，缺一不可）
+ *
+ * | 情形 | 补锚点？ | 为什么 |
+ * | --- | --- | --- |
+ * | 有 `nav` | ❌ | 时间轴第一行就是原点，没什么可补 |
+ * | 一条事件都没有 | ❌ | 没有数可说（**不补 0**） |
+ * | `truncated`（环形缓冲丢过早期事件） | ❌ | 此时"第一条事件"**不是**这一集的开始 —— 说「本集开始于…」是假的 |
+ *
+ * 第三条是最容易漏的：`nav` 也会被 200 条环形缓冲挤掉。那种情况下已经有一句
+ * 「更早的事件被丢掉了」在解释"开头不是页面开始"，再补一句"本集开始于 X"
+ * 就是**两个互相矛盾的说法**。
+ *
+ * @param snapshot 快照（用 `events` 与 `truncated`）
+ * @returns 锚点文案；`null` = 不补
+ */
+export function pageOriginAnchor(snapshot: LoadingSnapshotLite): string | null {
+  if (snapshot.events.some((e) => e.stage === 'nav')) return null;
+  if (snapshot.truncated) return null;
+  const first = snapshot.events.find((e) => Number.isFinite(e.t));
+  if (first === undefined) return null;
+  return `本集开始于页面加载后 ${clockText(first.t)}`;
+}
+
+/**
+ * 尾注（**按有没有锚点分两版**）。
+ *
+ * - 有 `nav`：基准版，原样不动
+ * - 没有 `nav`：把锚点插进第一句 → `时间从页面开始加载算起（本集开始于页面
+ *   加载后 5:02.41）；+x.xxs 是…`
+ *
+ * ⚠️ 只换第一句，**后面三句一律保留**：`+x.xxs` 的含义与"其余片段未逐段列出"
+ * 这两条解释跟锚点无关，砍掉它们等于为了修一个文案问题丢掉三个说明。
+ *
+ * @param snapshot 快照
+ */
+export function timelineFootnote(snapshot: LoadingSnapshotLite): string {
+  const anchor = pageOriginAnchor(snapshot);
+  if (anchor === null) return TIMELINE_FOOTNOTE;
+  const clause = '时间从页面开始加载算起';
+  return TIMELINE_FOOTNOTE.replace(clause, `${clause}（${anchor}）`);
+}
 
 /**
  * 阶段 → 颜色 + 形状（只对**线路行**有意义）。
@@ -1247,7 +1328,13 @@ export function loadingDetailPane(
 
   box.appendChild(diagnosticsEntry(actions));
 
-  box.appendChild(el('p', 'pane-note', TIMELINE_FOOTNOTE));
+  /**
+   * 尾注：**按有没有 `nav` 原点分两版**（见 `timelineFootnote()`）。
+   * 番剧换集后（`resetLoadingTrace()` 不补 `nav`）这里会多一句
+   * 「本集开始于页面加载后 5:02.41」—— 否则时间轴第一行 `302.41s` 会让人
+   * 以为这一集从 302 秒开始。
+   */
+  box.appendChild(el('p', 'pane-note', timelineFootnote(snapshot)));
 
   return box;
 }

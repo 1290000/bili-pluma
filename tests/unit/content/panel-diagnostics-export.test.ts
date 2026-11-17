@@ -418,6 +418,8 @@ describe('★★★ `logsMeta` 缺失时渲染不崩（task-28）', () => {
         logs: [],
         version: '0.0.0-test',
         // 这里**不传** logsMeta —— 正是 task-26 崩掉的那个输入形状
+        // （`loading` 是必填项，与本条要验的 logsMeta 无关，给 absent 即可）
+        loading: { kind: 'absent' },
       },
       acts,
     );
@@ -461,6 +463,7 @@ describe('★★★ `logsMeta` 缺失时渲染不崩（task-28）', () => {
         version: '0.0.0-test',
         // 故意只给一半：TypeScript 拦得住，但运行期（旧缓存 / 跨版本 SW）拦不住
         logsMeta: { ok: false } as never,
+        loading: { kind: 'absent' },
       },
       acts,
     );
@@ -718,7 +721,13 @@ describe('★★ 诊断页「本次加载」（T7）', () => {
           instanceId: 'ab12cd',
           readAt: NOW.getTime(),
         },
-        loading: outcome,
+        /**
+         * 2026-11-20（审计收尾）：这个字段在 `diagnosticsPane()` 里改成**必填** ——
+         * "还没读到"那条路（会渲染成「不是播放页」的因果断言）被类型去掉了。
+         * 本组要测的是"本次加载"那一块，缺省给 `absent` 是**测试自己的形状要求**，
+         * 与产品里 `buildPanelModel()` 恒填 `loading` 无关。
+         */
+        loading: outcome ?? { kind: 'absent' },
       },
       acts,
     );
@@ -891,6 +900,33 @@ describe('★★ 诊断页「本次加载」（T7）', () => {
     expect(text).toContain('刷新页面后重试');
     expect(text).not.toContain('本页没有加载记录');
     expect(box.querySelector('.diag-row.bad')).not.toBeNull();
+  });
+
+  it('★ 审计收尾：`loading` 必填，`undefined` 那条路已被**类型**去掉', async () => {
+    /**
+     * ## 修的是什么
+     *
+     * 旧签名 `loading?: LoadingOutcome | undefined` 让"还没读到"复用 `absent`
+     * 的文案 ——「本页没有加载记录（**不是播放页**）」。而"不是播放页"是一句
+     * **因果断言**，只有真正的 `absent`（`pageKind` 由 `parsePlayPage()` 判定）
+     * 才有观测支撑。
+     *
+     * 生产侧 `panel.ts` 在 `!model` 时早退成「正在读取…」，那条路本来就不可达；
+     * 所以这里把分支**用类型删掉**，而不是给它配一句新文案。
+     *
+     * 反例：把签名改回可选 / 恢复 `outcome === undefined` 分支 → 本条必红。
+     */
+    const src = await readFile('src/content/panel/diagnostics.ts', 'utf8');
+    expect(src).toContain('loading: LoadingOutcome;');
+    expect(src).not.toContain('loading?: LoadingOutcome');
+    // `loadingSectionNodes` 的入参也跟着收窄，`undefined` 分支不存在了
+    expect(src).not.toContain('outcome === undefined');
+    expect(src).not.toContain('outcome?.kind');
+  });
+
+  it('absent：那句话是**观测过的**因果（页面判据说这页没有播放器）', () => {
+    const text = pane({ kind: 'absent' }).textContent ?? '';
+    expect(text).toContain('本页没有加载记录（不是播放页）');
   });
 
   it('原始事件表：默认折叠，点一下展开（箭头同时转向）', () => {
