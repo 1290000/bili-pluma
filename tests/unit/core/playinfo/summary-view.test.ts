@@ -184,7 +184,7 @@ describe('describeUnlock：没有提升的两种原因必须分开说', () => {
 describe('describeUnlock：基线不可用时锚点必须说清原因', () => {
   it.each([
     ['client-written', '主账号基线不可用（数据来源是取流账号）'],
-    ['absent', '主账号基线未知（本页没有 SSR 数据）'],
+    ['absent', '本页不提供主账号画质对比'],
     ['unparsable', '主账号基线未知（数据解析失败）'],
   ] as const)('%s → %s', (reason, expected) => {
     const s = describeUnlock(
@@ -846,8 +846,8 @@ describe('describeUnlock：总开关关着时不产出视图（问题 5）', () 
       playback: null,
       diff: null,
     });
-    // 开关开着时会显示锚点「主账号基线未知（本页没有 SSR 数据）」
-    expect(describeUnlock(noSsr, true)?.anchor).toContain('主账号基线未知');
+    // 开关开着时锚点直说"这页不提供对比"，不提 SSR 实现细节（活动页基线不可补，见 REPORT-baseline.md）
+    expect(describeUnlock(noSsr, true)?.anchor).toContain('本页不提供主账号画质对比');
     // 关着时整块不产出
     expect(describeUnlock(noSsr, false)).toBeNull();
   });

@@ -323,7 +323,16 @@ function anchorText(view: PageTracksView): string {
     case 'client-written':
       return '主账号基线不可用（数据来源是取流账号）';
     case 'absent':
-      return '主账号基线未知（本页没有 SSR 数据）';
+      /**
+       * 2026-11-18 改：原来是"主账号基线未知（本页没有 SSR 数据）"。
+       * 活动页实测（`poc/probe/festival/REPORT-baseline.md`）证明这里**补不出**基线：
+       * ① 活动页 SSR 与 `__INITIAL_STATE__` 里没有任何画质/权益字段；
+       * ② 唯一可能的源（主账号身份 playurl）要越 ADR 0006/0014 的边界；
+       * ③ 即便拿到，两个大会员号的响应**逐字段相同**，对比没有价值。
+       * 所以不再提"SSR 数据"这种实现细节（用户看不懂，还暗示"等加载就有"），
+       * 直说这页不提供对比。视频页的 `ssr` / `client-written` 分支不受影响。
+       */
+      return '本页不提供主账号画质对比';
     case 'unparsable':
       return '主账号基线未知（数据解析失败）';
     case 'ssr':
