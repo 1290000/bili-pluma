@@ -37,6 +37,8 @@ interface Sandbox {
   page: Record<string, any>;
   sent: Array<Record<string, unknown>>;
   fetchCalls: FetchCall[];
+  /** stubXhr=true 时，降级 XHR 的 open() 收到的 URL（验证降级路径的序列化） */
+  xhrUrls: string[];
 }
 
 const openDoms: JSDOM[] = [];
@@ -72,6 +74,7 @@ function bootAt(
   openDoms.push(dom);
   const win = dom.window;
   const fetchCalls: FetchCall[] = [];
+  const xhrUrls: string[] = [];
 
   (win as any).fetch = (u: string, init?: { credentials?: string }) => {
     fetchCalls.push({ url: u, init });
@@ -84,6 +87,7 @@ function bootAt(
     // 那两份方法（见 main-world.js 的 nativeXhrOpen/nativeXhrSend）。
     const proto = (win as any).XMLHttpRequest.prototype;
     proto.open = function (method: string, url: string) {
+      xhrUrls.push(url);
       this.__url = url;
       this.__method = method;
     };
@@ -105,7 +109,7 @@ function bootAt(
   });
 
   win.eval(SOURCE);
-  return { win, sent, fetchCalls, page: win as unknown as Record<string, any> };
+  return { win, sent, fetchCalls, xhrUrls, page: win as unknown as Record<string, any> };
 }
 
 function flush(): Promise<void> {
@@ -497,5 +501,164 @@ describe('SPA 换片：createPlayer 不再调，靠 updateRequestConfig 重挂',
     expect(traceOf(sb).spaSwaps).toBe(1);
     expect(traceOf(sb).remounts).toBe(0);
     expect(traceOf(sb).lastSkip).toContain('updateRequestConfig');
+  });
+});
+
+/**
+ * 34a8286 真机回归：开关一开就 -400 黑屏，关掉则播放器原生 XHR 正常出流。
+ *
+ * 这一组钉住的是**序列化契约**（不是播放结果，那只能真机验）：
+ * 播放器交给回调的 params 里混着对象/数组（B站 的 `dm_img_list` / `dm_img_inter`
+ * 设备指纹），旧 `new URLSearchParams(params).toString()` 会把它们变成
+ * `[object Object]` / 空串。这里确认输出与播放器原生一致，且埋点不泄密。
+ */
+describe('playurl query 序列化与 -400 埋点（34a8286 回归修复）', () => {
+  const SESSION = '0123456789abcdef0123456789abcdef';
+  const W_RID = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+  const IMG_STR = 'SECRET_DM_IMG_STR_BASE64';
+  const COVER_STR = 'SECRET_DM_COVER_IMG_STR_BASE64';
+  const WTS = '1732000000';
+
+  /** 覆盖真机 Network 抓到的全部复杂类型：数组、嵌套对象、布尔、数字、null、undefined。 */
+  function richParams(): Record<string, any> {
+    return {
+      avid: 1,
+      bvid: 'BV1ydeX65Edn',
+      cid: 42141027046,
+      qn: 120,
+      fnval: 4048,
+      fourk: 1,
+      session: SESSION,
+      w_rid: W_RID,
+      wts: WTS,
+      dm_img_list: [],
+      dm_img_str: IMG_STR,
+      dm_cover_img_str: COVER_STR,
+      dm_img_inter: {
+        ds: [{ t: 0, c: 'abc' }],
+        wh: [307, 614, 307],
+        of: [307, 614, 307],
+      },
+      is_main_page: true,
+      nil: null,
+      undef: undefined,
+    };
+  }
+
+  function expectedKeys(): string[] {
+    const p = richParams();
+    return Object.keys(p).filter((k) => p[k] !== null && p[k] !== undefined);
+  }
+
+  it('对象/数组 → JSON 串，无 [object Object]；签名参数与顺序原样透传', async () => {
+    const sb = bootAt(FESTIVAL_URL, () =>
+      okResponse({ code: 0, message: 'ok', data: { dash: { video: [] } } }),
+    );
+    await ready(sb);
+    sendCfg(sb);
+    await flush();
+
+    const config: any = { cid: 42141027046, bvid: 'BV1ydeX65Edn' };
+    const { cb } = await hookedCallback(sb, config);
+    await cb(richParams(), config);
+
+    const call = onlyFetch(sb);
+    const sp = new URL(call.url).searchParams;
+    expect(sp.get('dm_img_list')).toBe('[]');
+    expect(sp.get('dm_img_inter')).toBe(JSON.stringify(richParams().dm_img_inter));
+    expect(sp.get('w_rid')).toBe(W_RID);
+    expect(sp.get('wts')).toBe(WTS);
+    expect(sp.get('session')).toBe(SESSION);
+    expect(sp.get('fourk')).toBe('1');
+    expect(sp.get('is_main_page')).toBe('true');
+    // null / undefined 与探针一致：跳过，不留 `nil=null`
+    expect(sp.has('nil')).toBe(false);
+    expect(sp.has('undef')).toBe(false);
+    // 顺序不能被重排（签名是按参数算的）
+    expect([...sp.keys()]).toEqual(expectedKeys());
+    expect(call.url).not.toContain('[object Object]');
+    expect(call.url).not.toContain('%5Bobject%20Object%5D');
+  });
+
+  it('埋点 paramTypes / lastQuery 脱敏正确（不含真实 session / w_rid 值）', async () => {
+    const sb = bootAt(FESTIVAL_URL, () =>
+      okResponse({ code: 0, message: 'ok', data: { dash: { video: [] } } }),
+    );
+    await ready(sb);
+    sendCfg(sb);
+    await flush();
+
+    const config: any = { cid: 42141027046 };
+    const { cb } = await hookedCallback(sb, config);
+    await cb(richParams(), config);
+
+    const t = traceOf(sb);
+    expect(t.paramTypes).toMatchObject({
+      cid: 'number',
+      bvid: 'string',
+      session: 'string',
+      w_rid: 'string',
+      dm_img_list: 'array',
+      dm_img_inter: 'object',
+      is_main_page: 'boolean',
+    });
+    expect(t.paramTypes.nil).toBeUndefined();
+    expect(t.paramTypes.undef).toBeUndefined();
+
+    // 只留键与长度；四个敏感键的值一个字节都不能出现在埋点里
+    expect(t.lastQuery).toContain(`w_rid=<redacted:${W_RID.length}>`);
+    expect(t.lastQuery).toContain(`session=<redacted:${SESSION.length}>`);
+    expect(t.lastQuery).toContain(`dm_img_str=<redacted:${IMG_STR.length}>`);
+    expect(t.lastQuery).toContain(`dm_cover_img_str=<redacted:${COVER_STR.length}>`);
+    // 非敏感值保留原文，才能肉眼看出有没有 [object Object]
+    expect(t.lastQuery).toContain('dm_img_list=[]');
+    expect(t.lastQuery).toContain('dm_img_inter={"ds":');
+    expect(t.lastQuery).not.toContain(SESSION);
+    expect(t.lastQuery).not.toContain(W_RID);
+    expect(t.lastQuery).not.toContain(IMG_STR);
+    expect(t.lastQuery).not.toContain(COVER_STR);
+    expect(t.lastQuery).not.toContain('[object Object]');
+
+    expect(t.lastRespCode).toBe(0);
+    expect(t.lastRespMsg).toBe('ok');
+  });
+
+  it('响应 code=-400 时埋点记下业务码与 message', async () => {
+    const sb = bootAt(FESTIVAL_URL, () =>
+      okResponse({ code: -400, message: 'risk control reject', traceId: 'tid-123' }),
+    );
+    await ready(sb);
+    sendCfg(sb);
+    await flush();
+
+    const config: any = {
+      cid: 42141027046,
+      requestConfig: { reqHttpPlayUrlInfo: () => Promise.resolve('orig') },
+    };
+    const { cb } = await hookedCallback(sb, config);
+    await expect(cb({ cid: 42141027046 }, config)).resolves.toBe('orig');
+
+    expect(traceOf(sb).lastRespCode).toBe(-400);
+    expect(traceOf(sb).lastRespMsg).toBe('risk control reject');
+    expect(traceOf(sb).fallbacks).toBe(1);
+  });
+
+  it('降级 XHR 路径共用同一套序列化（不保留第二份 String(v) 拼串）', async () => {
+    const sb = bootAt(FESTIVAL_URL, () => Promise.reject(new Error('offline')), true);
+    await ready(sb);
+    sendCfg(sb);
+    await flush();
+
+    const config: any = { cid: 42141027046 };
+    const { cb } = await hookedCallback(sb, config);
+    await cb(richParams(), config);
+
+    expect(sb.xhrUrls).toHaveLength(1);
+    const fallbackUrl = sb.xhrUrls[0]!;
+    const sp = new URL(fallbackUrl).searchParams;
+    expect(sp.get('dm_img_list')).toBe('[]');
+    expect(sp.get('dm_img_inter')).toBe(JSON.stringify(richParams().dm_img_inter));
+    expect(sp.get('w_rid')).toBe(W_RID);
+    expect(fallbackUrl).not.toContain('[object Object]');
   });
 });

@@ -641,6 +641,8 @@
    *   （探针实测这三步的先后是稳定的，任何一步为 0 就等于后面全没发生）
    * - `lastCid` / `cidMismatch` / `spaSwaps` / `remounts`：SPA 换片有没有重挂、有没有串场
    * - `rewritten` / `lastStatus` / `fallbacks` / `errors`：PCDN 是否换到官方线路、取流成败
+   * - `lastQuery` / `paramTypes` / `lastRespCode` / `lastRespMsg`：2026-11-19 为 -400 加的
+   *   取流现场快照（见各字段注释）。**只写内存，不 postMessage、不落盘**。
    * - `lastStage` / `lastSkip`：最后停在哪一步；`lastSkip` 记异常原文，便于真机抄回来
    */
   var festivalTrace = {
@@ -660,6 +662,28 @@
     lastBvid: '',
     lastStage: 'boot',
     lastSkip: '',
+    /**
+     * 实际发出的 playurl 的 query 串（**脱敏视图**，2026-11-19 加）。
+     *
+     * 用途只有一个：真机拿到 `-400` 时，能一眼看出
+     *   ① 播放器给的签名参数（`w_rid` / `wts`）有没有原样透传；
+     *   ② 有没有字面量 `[object Object]`（旧 `URLSearchParams(params)` 的坏产物）。
+     *
+     * 脱敏：`w_rid` / `session` / `dm_img_str` / `dm_cover_img_str` 的值换成
+     * `<redacted:N>`（N = 原值字符长度，"只留键与长度"），**其余键保留原值**。
+     * 值与真实 URL 的唯一差别是这里**不做 percent-encode**，这样 `[object Object]`
+     * 是字面可见的（真实 URL 里会变成 `%5Bobject%20Object%5D`）。
+     * 真实请求仍带全部原值 —— 脱敏只发生在这一个诊断字段里。
+     *
+     * ⚠️ 只是 `window.__PLUMA_FESTIVAL__` 上的一个属性：不 postMessage、不写 storage。
+     */
+    lastQuery: '',
+    /** params 每个值的 JS 类型（`array` / `object` / `string` / `number` / …）。只有类型，没有值。 */
+    paramTypes: {},
+    /** 取流响应的 B站业务码 `json.code`（HTTP 码另有 `lastStatus`）。`null` = 还没解析到。 */
+    lastRespCode: null,
+    /** 取流响应的 `json.message`（B站 -400 时会带 traceId 提示）。 */
+    lastRespMsg: '',
   };
 
   if (IS_FESTIVAL) {
@@ -729,32 +753,137 @@
   }
 
   /**
+   * 埋点视图里必须脱敏的 param 键（2026-11-19）。
+   *
+   * 只用于 `festivalTrace.lastQuery`，**不参与真实 URL 构造** —— 请求仍带原值。
+   */
+  var FESTIVAL_REDACT_PARAMS = {
+    w_rid: true,
+    session: true,
+    dm_img_str: true,
+    dm_cover_img_str: true,
+  };
+
+  /**
+   * 把 params 的**一个值**转成 URL 里的字符串。
+   *
+   * ## 为什么不能交给 `new URLSearchParams(params)` 隐式转换
+   *
+   * URLSearchParams 对每个值走 `String(v)`：
+   *   - 对象 `{}` → `[object Object]`
+   *   - 空数组 `[]` → `''`（而播放器原生发出去的是 `[]`）
+   *
+   * 播放器把 `dm_img_list` / `dm_img_inter` 这类**设备指纹**放在 params 里，
+   * 它们的值在 URL 上必须是 JSON 串（`[]` / `{"ds":[…]}`）。变成废值后服务端
+   * 返回 `code:-400`（带 traceId），表现就是黑屏 —— 这是 34a8286 之后真机回归的形态。
+   *
+   * 规则（与播放器原生一致）：
+   * - string / number / boolean → `String(v)`
+   * - object / array → `JSON.stringify(v)`
+   * - null / undefined → 调用方跳过（见 `festivalBuildQuery`）
+   *
+   * @param {*} value 单个 param 值
+   * @returns {string} URL 里的值（尚未 percent-encode）
+   */
+  function festivalParamToString(value) {
+    var t = typeof value;
+    if (t === 'string') return value;
+    if (t === 'number' || t === 'boolean') return String(value);
+    // 数组 / 普通对象 / 其它可 JSON 化的值（函数、symbol 落到最后的 String 兜底）
+    try {
+      var json = JSON.stringify(value);
+      if (typeof json === 'string') return json;
+    } catch (e) {
+      // 循环引用等：不让埋点/序列化把回调弄断，退回 String
+    }
+    return String(value);
+  }
+
+  /**
+   * params → query 串 + 脱敏视图 + 类型快照（一次遍历，三者严格同源）。
+   *
+   * ## 顺序
+   *
+   * `for...in` 按对象插入顺序走，与播放器交给回调的 params 顺序一致。
+   * 不排序、不重组 —— 签名是按参数算的，顺序变了就可能 -400。
+   * 签名参数 `w_rid` / `wts` 一律原样透传，扩展不自己算、也不删。
+   *
+   * @param {object} params 播放器交过来的含签 params
+   * @returns {{query:string, traceQuery:string, paramTypes:object}}
+   */
+  function festivalBuildQuery(params) {
+    var parts = [];
+    var traceParts = [];
+    var paramTypes = {};
+    if (!params || typeof params !== 'object') {
+      return { query: '', traceQuery: '', paramTypes: paramTypes };
+    }
+    for (var key in params) {
+      if (!Object.prototype.hasOwnProperty.call(params, key)) continue;
+      var value = params[key];
+      if (value === null || typeof value === 'undefined') continue; // 与探针一致：跳过
+
+      var isArray = Array.isArray(value);
+      paramTypes[key] = isArray ? 'array' : typeof value;
+
+      var text = festivalParamToString(value);
+      var encKey = encodeURIComponent(key);
+      parts.push(encKey + '=' + encodeURIComponent(text));
+
+      // 埋点视图：不 percent-encode，肉眼能直接看到 `[object Object]`；
+      // 敏感项只留键与长度（`<redacted:N>`），绝不落原值。
+      if (FESTIVAL_REDACT_PARAMS[key]) {
+        traceParts.push(encKey + '=<redacted:' + text.length + '>');
+      } else {
+        traceParts.push(encKey + '=' + text);
+      }
+    }
+    return { query: parts.join('&'), traceQuery: traceParts.join('&'), paramTypes: paramTypes };
+  }
+
+  /**
    * 用播放器交过来的**含签名 params** 拼 playurl。
    *
    * 主机与路径直接复用已授权的两份常量（ADR 0013 / ADR 0017），
    * 不新造一份主机白名单；两个字面量只是常量尚未赋值时的兜底，
    * 永远不会在正常的 `document_start` 流程里走到。
    * `w_rid` / `wts` 等签名由播放器算好放在 params 里，**扩展不自己算签**。
+   *
+   * ⚠️ 2026-11-19 修 -400：原实现是 `new URLSearchParams(params).toString()`，
+   * try/catch 里还有第二份逐项 `String(v)` 拼串。两份都会把对象/数组变成废值。
+   * 现在两条路径（正常 + `festivalFallback` 里的降级）统一走 `festivalBuildQuery()`，
+   * 不再有第二份实现可以漂移。
    */
   function festivalPlayUrl(params) {
     var host = PATCH_HOSTS && PATCH_HOSTS[0] ? PATCH_HOSTS[0] : 'api.bilibili.com';
     var path = PROGRESS_PATCH_PATHS && PROGRESS_PATCH_PATHS[0]
       ? PROGRESS_PATCH_PATHS[0]
       : '/x/player/wbi/playurl';
-    var query = '';
+
+    var built = festivalBuildQuery(params);
     try {
-      query = new URLSearchParams(params).toString();
-    } catch (e) {
-      // params 形状异常时逐项拼，至少不把这次取流直接弄断
-      var parts = [];
-      for (var key in params) {
-        if (Object.prototype.hasOwnProperty.call(params, key) && params[key] != null) {
-          parts.push(encodeURIComponent(key) + '=' + encodeURIComponent(String(params[key])));
-        }
+      festivalTrace.lastQuery = built.traceQuery;
+      festivalTrace.paramTypes = built.paramTypes;
+    } catch (e) {}
+    return 'https://' + host + path + '?' + built.query;
+  }
+
+  /**
+   * 把响应的**业务码**记进埋点（2026-11-19，-400 排查）。
+   *
+   * 只读 `json.code` / `json.message`，不写响应体、不 postMessage、不落盘。
+   * 正常取流与降级 XHR 两条路都调它，避免"fetch 那条记了、兜底那条没记"。
+   */
+  function festivalNoteResp(json) {
+    try {
+      if (json && typeof json === 'object') {
+        festivalTrace.lastRespCode = typeof json.code === 'number' ? json.code : null;
+        festivalTrace.lastRespMsg = typeof json.message === 'string' ? json.message : '';
+      } else {
+        festivalTrace.lastRespCode = null;
+        festivalTrace.lastRespMsg = '';
       }
-      query = parts.join('&');
-    }
-    return 'https://' + host + path + '?' + query;
+    } catch (e) {}
   }
 
   /**
@@ -776,8 +905,10 @@
         var xhr = new XMLHttpRequest();
         xhr.onload = function () {
           try {
+            var json = JSON.parse(xhr.responseText);
+            festivalNoteResp(json);
             resolve({
-              data: JSON.parse(xhr.responseText),
+              data: json,
               headers: {},
               status: xhr.status,
             });
@@ -868,6 +999,7 @@
         .then(function (r) {
           festivalTrace.lastStatus = r.status;
           return r.json().then(function (json) {
+            festivalNoteResp(json);
             if (!r.ok || !json || json.code !== 0 || !json.data || typeof json.data !== 'object') {
               throw new Error('bad playurl payload');
             }
