@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   PLAY_PAGE_URL_PATTERNS,
+  parseFestivalPage,
   parsePgcPage,
   parsePlayPage,
   parseVideoPage,
@@ -124,6 +125,103 @@ describe('parsePgcPage（番剧 / 国创 / 电影，ADR 0019）', () => {
   });
 });
 
+describe('parseFestivalPage（活动专区页，ADR 0040）', () => {
+  it('真实形态：活动 key 在路径，bvid 在 query', () => {
+    expect(parseFestivalPage('https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn')).toEqual({
+      kind: 'festival',
+      pageKey: 'COLMO2026',
+      bvid: 'BV1ydeX65Edn',
+      p: 1,
+    });
+  });
+
+  it('拜年纪活动页也能解析', () => {
+    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=BV1eoZ7BnEGy')).toEqual({
+      kind: 'festival',
+      pageKey: 'bnj2026',
+      bvid: 'BV1eoZ7BnEGy',
+      p: 1,
+    });
+  });
+
+  it('带尾斜杠也能解析', () => {
+    expect(parseFestivalPage('https://www.bilibili.com/festival/COLMO2026/?bvid=BV1ydeX65Edn')).toEqual({
+      kind: 'festival',
+      pageKey: 'COLMO2026',
+      bvid: 'BV1ydeX65Edn',
+      p: 1,
+    });
+  });
+
+  it('带 p 参数与追踪参数也能解析', () => {
+    expect(
+      parseFestivalPage(
+        'https://www.bilibili.com/festival/COLMO2026/?bvid=BV1ydeX65Edn&p=3&spm_id_from=333.7',
+      ),
+    ).toEqual({ kind: 'festival', pageKey: 'COLMO2026', bvid: 'BV1ydeX65Edn', p: 3 });
+  });
+
+  it('p 沿用视频页口径：0 / 负数 / 非数字回落 1，小数向下取整', () => {
+    const base = 'https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn&p=';
+    expect(parseFestivalPage(`${base}0`)?.p).toBe(1);
+    expect(parseFestivalPage(`${base}-3`)?.p).toBe(1);
+    expect(parseFestivalPage(`${base}abc`)?.p).toBe(1);
+    expect(parseFestivalPage(`${base}2.9`)?.p).toBe(2);
+  });
+
+  it('不带 www 的裸域名也认', () => {
+    expect(parseFestivalPage('https://bilibili.com/festival/bnj2026?bvid=BV1eoZ7BnEGy')).toEqual({
+      kind: 'festival',
+      pageKey: 'bnj2026',
+      bvid: 'BV1eoZ7BnEGy',
+      p: 1,
+    });
+  });
+
+  it('bvid 不是 BV 开头（如 av 号）不解析', () => {
+    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=av12345')).toBeNull();
+  });
+
+  it('bvid 必须是完整参数值：带后缀或前缀都不认（不许裸 includes）', () => {
+    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=BV1x.evil')).toBeNull();
+    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=xxBV1x')).toBeNull();
+    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=BV1x%20')).toBeNull();
+  });
+
+  it('缺 bvid 不解析', () => {
+    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026')).toBeNull();
+    expect(parseFestivalPage('https://www.bilibili.com/festival/bnj2026?bvid=')).toBeNull();
+  });
+
+  it('错误 host 不解析（含直播子域与其它子域）', () => {
+    expect(parseFestivalPage('https://live.bilibili.com/festival/x?bvid=BV1x')).toBeNull();
+    expect(parseFestivalPage('https://space.bilibili.com/festival/x?bvid=BV1x')).toBeNull();
+  });
+
+  it('仿冒域名不解析', () => {
+    expect(
+      parseFestivalPage('https://www.bilibili.com.evil.com/festival/x?bvid=BV1x'),
+    ).toBeNull();
+    expect(parseFestivalPage('https://evil.com/festival/x?bvid=BV1x')).toBeNull();
+  });
+
+  it('`/festival/` 后面无 key、或多分段都不解析', () => {
+    expect(parseFestivalPage('https://www.bilibili.com/festival/?bvid=BV1x')).toBeNull();
+    expect(parseFestivalPage('https://www.bilibili.com/festival')).toBeNull();
+    expect(parseFestivalPage('https://www.bilibili.com/festival/a/b?bvid=BV1x')).toBeNull();
+  });
+
+  it('普通视频页 / PGC 页不由 parseFestivalPage 解析', () => {
+    expect(parseFestivalPage('https://www.bilibili.com/video/BV1x')).toBeNull();
+    expect(parseFestivalPage('https://www.bilibili.com/bangumi/play/ep1')).toBeNull();
+  });
+
+  it('非法 URL 返回 null', () => {
+    expect(parseFestivalPage('not a url')).toBeNull();
+    expect(parseFestivalPage('')).toBeNull();
+  });
+});
+
 describe('parsePlayPage（统一入口）', () => {
   it('视频页带 kind', () => {
     expect(parsePlayPage('https://www.bilibili.com/video/BV1x?p=3')).toEqual({
@@ -139,6 +237,19 @@ describe('parsePlayPage（统一入口）', () => {
       epId: '1',
       seasonId: null,
     });
+  });
+
+  it('活动页带 kind 与 pageKey（bvid 从 query 取）', () => {
+    expect(parsePlayPage('https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn')).toEqual({
+      kind: 'festival',
+      pageKey: 'COLMO2026',
+      bvid: 'BV1ydeX65Edn',
+      p: 1,
+    });
+  });
+
+  it('活动页缺 bvid 时统一入口也返回 null', () => {
+    expect(parsePlayPage('https://www.bilibili.com/festival/COLMO2026')).toBeNull();
   });
 
   it('都不是则 null', () => {
@@ -213,13 +324,14 @@ describe('readPrimaryMidFromCookie', () => {
  * 查标签页查不到"，表现为 options 的主账号卡片与诊断页的「当前页取流数据」
  * 在番剧页上显示"打开任意视频页后可见"（2026-10-28 真实 bug）。
  *
- * 这里只锁"两个家族都在"；`scripts/check-page-gate.mjs` 锁的是"用它的地方没绕开它"。
+ * 这里只锁"三个家族都在"；`scripts/check-page-gate.mjs` 锁的是"用它的地方没绕开它"。
  */
 describe('PLAY_PAGE_URL_PATTERNS', () => {
-  it('同时覆盖普通视频与 PGC 两种播放页', () => {
+  it('同时覆盖普通视频、PGC 与活动页三种播放页', () => {
     expect([...PLAY_PAGE_URL_PATTERNS]).toEqual([
       '*://*.bilibili.com/video/*',
       '*://*.bilibili.com/bangumi/play/*',
+      '*://www.bilibili.com/festival/*',
     ]);
   });
 
@@ -232,6 +344,8 @@ describe('PLAY_PAGE_URL_PATTERNS', () => {
     const samples: Record<string, string> = {
       '*://*.bilibili.com/video/*': 'https://www.bilibili.com/video/BV1jt421t7XH?p=2',
       '*://*.bilibili.com/bangumi/play/*': 'https://www.bilibili.com/bangumi/play/ep3854820',
+      '*://www.bilibili.com/festival/*':
+        'https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn',
     };
 
     for (const pattern of PLAY_PAGE_URL_PATTERNS) {

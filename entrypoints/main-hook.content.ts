@@ -48,7 +48,11 @@ export default defineContentScript({
    * `world: 'MAIN'`：由浏览器直接注入页面主世界，早于页面的内联脚本，
    * 且不需要 `web_accessible_resources` / 内联 `<script>`（后者会被 CSP 拒）。
    */
-  matches: ['*://*.bilibili.com/video/*', '*://*.bilibili.com/bangumi/play/*'],
+  matches: [
+    '*://*.bilibili.com/video/*',
+    '*://*.bilibili.com/bangumi/play/*',
+    '*://www.bilibili.com/festival/*',
+  ],
   world: 'MAIN',
   runAt: 'document_start',
   main() {

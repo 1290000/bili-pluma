@@ -142,6 +142,16 @@ describe('background.ts 的 isVideoPageUrl —— 必须走 parsePlayPage()', ()
       why: 'PGC 季页',
     },
     {
+      url: 'https://www.bilibili.com/festival/COLMO2026?bvid=BV1ydeX65Edn',
+      expected: true,
+      why: '活动专区页（ADR 0040）：bvid 在 query，取流接口与视频页相同',
+    },
+    {
+      url: 'https://www.bilibili.com/festival/bnj2026',
+      expected: false,
+      why: '活动页缺 bvid 就不是可播放页；避免无主规则留在标签页',
+    },
+    {
       url: 'https://www.bilibili.com/bangumi/media/md28233943',
       expected: false,
       why: '详情页不是播放页 —— 那里没有播放器，不该留规则',

@@ -35,9 +35,15 @@ const CONTENT = readFileSync(resolve(process.cwd(), 'entrypoints/content.ts'), '
 
 describe('content.ts 特征测试（拆分安全网）', () => {
   describe('入口契约：WXT 匹配规则必须与主世界一致', () => {
-    it('matches 包含普通视频页与 PGC 页两类', () => {
+    it('matches 包含普通视频页、PGC 页与活动页三类', () => {
       expect(CONTENT).toContain("'*://*.bilibili.com/video/*'");
       expect(CONTENT).toContain("'*://*.bilibili.com/bangumi/play/*'");
+      expect(CONTENT).toContain("'*://www.bilibili.com/festival/*'");
+    });
+
+    it('活动页按 video 装标签页 DNR 规则（取流接口与视频页相同）', () => {
+      // ADR 0040：活动页也走 /x/player/wbi/playurl，不能传 kind: 'festival' 给 page/activate
+      expect(CONTENT).toContain("info.kind === 'festival' ? 'video' : info.kind");
     });
 
     it('runAt 是 document_start（早于播放器初始化）', () => {

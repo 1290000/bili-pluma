@@ -76,7 +76,7 @@ const ROOT = process.cwd();
  *
  * `src/platform/page/page-state-client.ts` 不在 MUST_USE_GATE 里：
  * 它**不判断**播放页，只用 `PLAY_PAGE_URL_PATTERNS` 喂 `tabs.query`，
- * 已被规则 2b（常量必须含两个模式）与规则 3（不许出现字面量）覆盖。
+ * 已被规则 2b（常量必须含三个模式）与规则 3（不许出现字面量）覆盖。
  */
 const MUST_USE_GATE = [
   'entrypoints/content-panel.content.ts',
@@ -85,7 +85,7 @@ const MUST_USE_GATE = [
 ];
 
 /**
- * content script 入口：`matches` 必须写字面量，且两个模式都要在。
+ * content script 入口：`matches` 必须写字面量，且三个模式都要在。
  *
  * 为什么不能引用 `PLAY_PAGE_URL_PATTERNS`：WXT 生成 manifest 时对入口文件做**静态分析**，
  * 取不到跨文件常量的值 —— 换了会让 manifest 里 `matches` 变空，等于扩展不注入。
@@ -142,8 +142,8 @@ const EXTRA_DOMAIN_WHY =
  * 但不进 manifest 的 `content_scripts`** —— 直播页永远不会注入，且**构建不报任何错**。
  * 2026-10-31 实测踩到过。改这个名字等于让功能静默失效。
  *
- * 若把它并进 `MANIFEST_MATCHES`，规则 2 会要求它也含 `video/*` 与 `bangumi/play/*` ——
- * 那等于逼着直播入口去注入视频页，反向扩大暴露面。
+ * 若把它并进 `MANIFEST_MATCHES`，规则 2 会要求它也含 `video/*`、`bangumi/play/*`
+ * 与 `festival/*` —— 那等于逼着直播入口去注入视频页，反向扩大暴露面。
  *
  * 若完全不登记，规则 1/3 都不知道它存在，将来谁把它删了或改成注入全站，这里也发现不了。
  *
@@ -247,10 +247,19 @@ const NON_PLAY_PAGE_ENTRIES = [
   },
 ];
 
-/** 每个 content 入口都必须同时出现的两个模式 */
-const REQUIRED_MATCH_PATTERNS = ['*://*.bilibili.com/video/*', '*://*.bilibili.com/bangumi/play/*'];
+/** 每个播放页 content 入口都必须同时出现的三个模式（ADR 0040 加活动页） */
+const REQUIRED_MATCH_PATTERNS = [
+  '*://*.bilibili.com/video/*',
+  '*://*.bilibili.com/bangumi/play/*',
+  '*://www.bilibili.com/festival/*',
+];
 
-/** 允许出现 `/video/` 字面量的文件：解析入口与白名单，各一个 */
+/**
+ * 允许出现 `/video/` 与 `/festival/` 路径字面量的文件：判据真相源、白名单与入口。
+ *
+ * festival 只加 `*://www.bilibili.com/festival/*` 这一条精确路径（ADR 0040），
+ * **不加全站通配**：规则 2c 仍会拦下非播放页入口里多出来的域。
+ */
 const PATH_LITERAL_ALLOWED = new Set([
   'src/shared/utils/video-page.ts',
   'src/shared/constants/routes.ts',
@@ -259,10 +268,10 @@ const PATH_LITERAL_ALLOWED = new Set([
 ]);
 
 /**
- * 共享常量所在的文件 —— 它必须同时含两个模式。
+ * 共享常量所在的文件 —— 它必须同时含三个模式。
  *
  * 不检查的话有个洞：`page-state-client.ts` 引用常量、自己不含字面量，规则 3 就放它过了；
- * 而谁把常量里的 PGC 那条删掉，`tabs.query` 会静默查不到番剧页，检查却全绿。
+ * 而谁把常量里的 PGC 或活动页那条删掉，`tabs.query` 会静默查不到那类页面，检查却全绿。
  */
 const PATTERN_SOURCE = 'src/shared/utils/video-page.ts';
 
@@ -376,7 +385,7 @@ function maskImports(masked) {
 }
 
 /**
- * 找 `/video/`，返回 1-based 行号。
+ * 找形如 `/xxx/` 的路径字面量，返回 1-based 行号。
  *
  * ⚠️ 必须同时认**转义写法**：正则在源码里写成 `/\/video\//`，
  * 直接按裸串 `/video/` 去搜**一个都找不到**（2026-10-29 反例验证时踩到的）。
@@ -385,19 +394,33 @@ function maskImports(masked) {
  * 那种正则里 `\\?` 会被编译成**字面问号**，看起来对、实际全漏（同一个坑踩过一次）。
  * 归一化只删反斜杠不碰换行，所以行号仍然准确。
  *
+ * 两条路径共用这一个函数，避免 `/video/` 与 `/festival/` 的扫描规则漂移。
+ *
  * @param {string} masked
+ * @param {string} path 形如 `/video/` / `/festival/`
  * @returns {number[]}
  */
-function findVideoLiteral(masked) {
+function findPathLiteral(masked, path) {
   const flat = masked.split('\\/').join('/');
+  const body = path.slice(1, -1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`/${body}/`, 'g');
   /** @type {number[]} */
   const lines = [];
-  const re = /\/video\//g;
   let m;
   while ((m = re.exec(flat)) !== null) {
     lines.push(flat.slice(0, m.index).split('\n').length);
   }
   return lines;
+}
+
+/** `/video/` 字面量（手写视频页判据的老形状） */
+function findVideoLiteral(masked) {
+  return findPathLiteral(masked, '/video/');
+}
+
+/** `/festival/` 字面量（ADR 0040：判据只许在真相源与两个入口） */
+function findFestivalLiteral(masked) {
+  return findPathLiteral(masked, '/festival/');
 }
 
 async function main() {
@@ -436,7 +459,7 @@ async function main() {
     }
   }
 
-  // 规则 2：content 入口的 matches 必须覆盖两种播放页
+  // 规则 2：content 入口的 matches 必须覆盖三种播放页
   for (const f of MANIFEST_MATCHES) {
     const masked = maskedByFile.get(f);
     if (masked === undefined) {
@@ -451,7 +474,7 @@ async function main() {
         problems.push({
           what: `${f} 的 matches 里缺 \`${p}\``,
           why:
-            '两个 content 入口的 matches 必须一致且覆盖普通视频 + PGC。' +
+            '两个 content 入口的 matches 必须一致且覆盖普通视频 + PGC + 活动页。' +
             '只改一边会让某个页面"有 hook 没报到"或反之（2026-10-27 真机踩过）',
         });
       }
@@ -542,7 +565,7 @@ async function main() {
         problems.push({
           what: `${file} 的 matches 里出现了播放页模式 \`${p}\``,
           why:
-            '非播放页入口不该注入视频页 / 番剧页。需要在那两个页面上做事，' +
+            '非播放页入口不该注入视频页 / 番剧页 / 活动页。需要在那几个页面上做事，' +
             '改 `content.ts`，不要把这个入口变成第二个播放页入口（ADR 0031 / ADR 0033）',
         });
       }
@@ -559,7 +582,7 @@ async function main() {
     }
   }
 
-  // 规则 2b：共享常量必须同时含两个模式（否则引用它的地方静默漏掉一类页面）
+  // 规则 2b：共享常量必须同时含三个模式（否则引用它的地方静默漏掉一类页面）
   {
     const masked = maskedByFile.get(PATTERN_SOURCE);
     if (masked === undefined) {
@@ -584,21 +607,26 @@ async function main() {
   // 规则 3：路径字面量只许出现在真相源文件与 content 入口里
   for (const [f, masked] of maskedByFile) {
     if (PATH_LITERAL_ALLOWED.has(f)) continue;
-    for (const line of findVideoLiteral(masked)) {
-      problems.push({
-        what: `${f}:${line} 出现 \`/video/\` 路径字面量`,
-        why:
-          '播放页路径只允许写在 shared/utils/video-page.ts（解析）、shared/constants/routes.ts（白名单）' +
-          '与两个 content 入口的 matches。这里出现等于又造了一份判据 —— ' +
-          'page-state-client.ts 就是这么漏掉番剧页的',
-      });
+    for (const [path, finder] of [
+      ['/video/', findVideoLiteral],
+      ['/festival/', findFestivalLiteral],
+    ]) {
+      for (const line of finder(masked)) {
+        problems.push({
+          what: `${f}:${line} 出现 \`${path}\` 路径字面量`,
+          why:
+            '播放页路径只允许写在 shared/utils/video-page.ts（解析）、shared/constants/routes.ts（白名单）' +
+            '与两个播放页 content 入口的 matches。这里出现等于又造了一份判据 —— ' +
+            'page-state-client.ts 就是这么漏掉番剧页的',
+        });
+      }
     }
   }
 
   if (problems.length === 0) {
     console.log(
       `[page-gate] ✅ ${MUST_USE_GATE.length} 个入口走统一判据 · ` +
-        `${MANIFEST_MATCHES.length} 个 content 入口覆盖两种播放页 · ` +
+        `${MANIFEST_MATCHES.length} 个 content 入口覆盖三种播放页 · ` +
         `${NON_PLAY_PAGE_ENTRIES.length} 个非播放页入口的 matches 与登记表一致 · ` +
         `${files.length} 个文件里无越界路径字面量`,
     );

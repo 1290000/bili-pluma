@@ -6,6 +6,19 @@
  *   2. 这段逻辑（URL 怎么解析、哪些 cookie 能借）本身就和运行环境无关
  *
  * content script 只负责调用它 + 发消息。
+ *
+ * ## 为什么活动页的 bvid 在 query 而不是路径
+ *
+ * 活动页 URL 形如 `/festival/COLMO2026?bvid=BV1ydeX65Edn`：path 是**活动 key**
+ * （决定 SSR 主题与播放器布局），bvid 才是**稿件 ID**。从 `/video/BV…` 点进活动页会被
+ * 站点重定向成这个形状（真机证据：`poc/probe/festival/REPORT.md` §1）。
+ * 所以解析时 path 与 query 都要看，bvid 必须按 `^BV[0-9A-Za-z]+$` **全串**匹配。
+ *
+ * ## 历史教训：路径判据只许写在这里
+ *
+ * 2026-10-28 番剧页因别处手写 `/video/` 正则漏判 —— tsc / 单测 / verify 全绿，
+ * 界面却谎报「未生效」。活动页同理：**任何地方都不要自己写前缀判断**，
+ * 一律走 `parsePlayPage()`（要活动页专属的 pageKey 时用 `parseFestivalPage()`）。
  */
 
 /** 可以从页面借的设备 Cookie（Q5 实测均为非 httpOnly） */
@@ -29,11 +42,13 @@ export const DEVICE_COOKIE_NAMES = [
  *
  * ⚠️ content script 的 `matches` **不用这个常量**：WXT 生成 manifest 时对入口文件做
  * 静态分析，取不到跨文件常量的值，manifest 里会变成空数组（等于不注入）。
- * 那两处必须写字面量，由 `scripts/check-page-gate.mjs` 断言"两个模式都在"。
+ * 那两处必须写字面量，由 `scripts/check-page-gate.mjs` 断言"三个模式都在"。
  */
 export const PLAY_PAGE_URL_PATTERNS = [
   '*://*.bilibili.com/video/*',
   '*://*.bilibili.com/bangumi/play/*',
+  // 活动页真机 URL 都在 www 下，两个 content 入口的 matches 用同一条精确模式
+  '*://www.bilibili.com/festival/*',
 ] as const;
 
 export interface VideoPageInfo {
@@ -55,8 +70,26 @@ export interface PgcPageInfo {
   seasonId: string | null;
 }
 
-/** 播放页的两种形态。`parsePlayPage` 的返回值 */
-export type PlayPageInfo = (VideoPageInfo & { kind: 'video' }) | PgcPageInfo;
+/**
+ * 活动专区页信息（`/festival/<key>?bvid=BV…`，ADR 0040）。
+ *
+ * 与视频页并存 `bvid` / `p` 是为了让下游（pageState、page/activate）不必为活动页
+ * 再写一套映射；多出来的 `pageKey` 是活动 key，供主世界识别当前活动场景。
+ */
+export interface FestivalPageInfo {
+  kind: 'festival';
+  /** `/festival/COLMO2026` → `'COLMO2026'`（活动 key，**不是**稿件 ID） */
+  pageKey: string;
+  /** query 里的 `?bvid=BV1ydeX65Edn` */
+  bvid: string;
+  p: number;
+}
+
+/** 播放页的三种形态。`parsePlayPage` 的返回值 */
+export type PlayPageInfo =
+  | (VideoPageInfo & { kind: 'video' })
+  | PgcPageInfo
+  | FestivalPageInfo;
 
 /**
  * 从 URL 解析视频页信息。非视频页返回 null。
@@ -115,14 +148,50 @@ export function parsePgcPage(url: string): PgcPageInfo | null {
 }
 
 /**
- * 解析任意播放页。视频页与 PGC 页的统一入口。
+ * 解析活动专区页。非活动播放页返回 null。
+ *
+ * 只认 `www.bilibili.com` / `bilibili.com` 下形如 `/festival/<key>[/]` 的路径，
+ * 且 query 必须带**合法且完整**的 `bvid=BV…`：
+ *   - `pageKey` 取 path 的单个非空分段，`/festival/` 后面没 key 或有额外分段都不认
+ *   - `bvid` 用 `^BV[0-9A-Za-z]+$` 全串匹配；不做 `includes`，不接受 `av…` / 空值
+ *   - `p` 沿用 `parseVideoPage` 的口径（默认 1、非正数回落、小数向下取整）
+ *
+ * ⚠️ 仿冒域名（`www.bilibili.com.evil.com`）必须返回 null —— 与另两个解析器同口径。
+ */
+export function parseFestivalPage(url: string): FestivalPageInfo | null {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return null;
+  }
+
+  if (u.hostname !== 'www.bilibili.com' && u.hostname !== 'bilibili.com') return null;
+
+  const m = u.pathname.match(/^\/festival\/([^/]+)\/?$/);
+  const pageKey = m?.[1];
+  if (!pageKey) return null;
+
+  const rawBvid = u.searchParams.get('bvid') ?? '';
+  if (!/^BV[0-9A-Za-z]+$/.test(rawBvid)) return null;
+
+  const raw = Number(u.searchParams.get('p') ?? '1');
+  const p = Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 1;
+
+  return { kind: 'festival', pageKey, bvid: rawBvid, p };
+}
+
+/**
+ * 解析任意播放页。视频页、PGC 页与活动专区页的统一入口。
  *
  * @returns `null` 表示这不是一个受支持的播放页
  */
 export function parsePlayPage(url: string): PlayPageInfo | null {
   const v = parseVideoPage(url);
   if (v) return { kind: 'video', ...v };
-  return parsePgcPage(url);
+  const pgc = parsePgcPage(url);
+  if (pgc) return pgc;
+  return parseFestivalPage(url);
 }
 
 /**

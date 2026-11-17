@@ -2045,10 +2045,17 @@ function report(): void {
   const info = parsePlayPage(location.href);
   if (!info) return;
 
-  /** 状态键：视频页用 bvid，PGC 页用 `ep:` / `ss:` */
-  const pageKey =
-    info.kind === 'video' ? info.bvid : info.epId ? `ep:${info.epId}` : `ss:${info.seasonId ?? ''}`;
-  const p = info.kind === 'video' ? info.p : 1;
+  /** 状态键：视频页 / 活动页用 bvid，PGC 页用 `ep:` / `ss:` */
+  let pageKey: string;
+  let p: number;
+  if (info.kind === 'pgc') {
+    pageKey = info.epId ? `ep:${info.epId}` : `ss:${info.seasonId ?? ''}`;
+    p = 1;
+  } else {
+    // 活动页的 bvid 在 query，parsePlayPage 已取出；沿用 bvid 作状态键
+    pageKey = info.bvid;
+    p = info.p;
+  }
 
   /**
    * 登记当前页，供 popup §2.3 与 §2.4 的 A 卡片用。
@@ -2090,7 +2097,8 @@ function report(): void {
   void (async () => {
     const res = (await sendToBackground({
       type: 'page/activate',
-      kind: info.kind,
+      // 活动页取流与视频页同为 /x/player/wbi/playurl，按 video 装标签页规则（ADR 0040）
+      kind: info.kind === 'festival' ? 'video' : info.kind,
       pageKey,
       p,
       deviceCookies: readDeviceCookies(document.cookie),
@@ -2403,14 +2411,19 @@ function report(): void {
 
 export default defineContentScript({
   /**
-   * 两类页面：
+   * 三类页面：
    *   - `/video/*` 普通视频（投稿）
    *   - `/bangumi/play/*` 番剧 / 国创 / 电影（PGC，ADR 0019）
+   *   - `/festival/*` 活动专区页（ADR 0040，bvid 在 query）
    *
    * 主世界那一半是 `entrypoints/main-hook.content.ts`（`world: 'MAIN'`），
    * 匹配串必须与本文件保持一致 —— 只改一边会让某个页面"有 hook 没报到"或反之。
    */
-  matches: ['*://*.bilibili.com/video/*', '*://*.bilibili.com/bangumi/play/*'],
+  matches: [
+    '*://*.bilibili.com/video/*',
+    '*://*.bilibili.com/bangumi/play/*',
+    '*://www.bilibili.com/festival/*',
+  ],
   // document_start：必须早于播放器初始化。
   // - __playinfo__ 要在播放器读它之前藏好
   // - playurl 只在页面加载时调一次，晚了就没机会

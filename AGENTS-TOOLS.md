@@ -206,6 +206,7 @@ node poc/probe/bsk-eval.mjs <session> <tabId> <expr-file> c1 \
 | `poc/probe/api-inventory/` | 真实接口盘点：账号职责可配置化的可行性取证 | 2026-11-11 |
 | `poc/probe/blocked-by-client/` | 扫码窗「已阻止 / `ERR_BLOCKED_BY_CLIENT`」取证 | 2026-11-15 |
 | `poc/probe/dnr-initiator/` | DNR 能力边界实测（initiator 判定 / 规则行为） | 2026-11-11 |
+| `poc/probe/festival/` | 活动专区页 `/festival/*` 接管可行性探针（真机调查 + `nano.createPlayer` 方案 B 验证） | 2026-11-18 |
 | `poc/probe/feed-boundary/` | 推荐流分界线：首屏 SSR 批大小是否稳定为 10 | 2026-11-11 |
 | `poc/probe/feed-cover/` | 首页封面隐藏取证（含取流身份胶囊不渲染的配对取证） | 2026-11-11 |
 | `poc/probe/heartbeat-check/` | 跨分区心跳到底写没写过（读 LevelDB 原始字节 + 对照组） | 2026-11-12 |
