@@ -70,7 +70,7 @@ const ROOT = process.cwd();
  *
  * ### 为什么这也是一种**加强**
  *
- * 面板覆盖 `www` + `live` 全站，是**比 popup 更靠前**的判据落点：
+ * 面板覆盖 `www` + `live` + `search` 全站（搜索页是独立子域），是**比 popup 更靠前**的判据落点：
  * 判错了会让画质 Tab 在番剧页显示「未生效」。
  * 守卫从"只显示状态的地方"挪到了"真正决定行为的地方"。
  *
@@ -150,7 +150,7 @@ const EXTRA_DOMAIN_WHY =
  * ## 表格形状（2026-11-10 扩）
  *
  * 原来每项只有 `{file, match}` 两个字段，只够"某一条必须含"。页内面板入口
- * （ADR 0033）要覆盖**两个域**，于是把 `match` 升级成 `requires: string[]`，
+ * （ADR 0033）要覆盖**三个域**，于是把 `match` 升级成 `requires: string[]`，
  * 并新增 `onlyMatch`：
  *
  * | 字段 | 含义 |
@@ -199,22 +199,27 @@ const NON_PLAY_PAGE_ENTRIES = [
   /**
    * 页内侧栏面板入口（ADR 0033 决定二）。
    *
-   * `requires` 两个域**同时**都要：面板要在首页 / 视频页 / 直播页都能唤起。
+   * `requires` 三个域**同时**都要：面板要在首页 / 视频页 / 直播页 / 搜索页都能唤起。
    * 只写一个域时不会报错，只会让另一类页面上的面板**静默不出现** ——
    * 这正是本脚本存在的理由（漏一个入口，只有人肉看 manifest 才能发现）。
    *
-   * `onlyMatch: false`：它**故意**覆盖两个域，所以 `matches` 数组里可以有多项。
+   * `search.bilibili.com` 必须单独登记：B站搜索页最终落在独立子域
+   * `search.bilibili.com/all`（不是 `www.bilibili.com/search`），不注入就没有面板入口。
+   * 这是**域**而不是播放页路径，不违反下面规则 2c 的播放页模式反向断言。
+   *
+   * `onlyMatch: false`：它**故意**覆盖三个域，所以 `matches` 数组里可以有多项。
    * 另两个入口保持 `onlyMatch: true`（只许一项），它们各自只服务一个站点，
    * 多一项就等于扩大注入面。
    */
   {
     file: 'entrypoints/content-panel.content.ts',
-    requires: ['*://www.bilibili.com/*', '*://live.bilibili.com/*'],
+    requires: ['*://www.bilibili.com/*', '*://live.bilibili.com/*', '*://search.bilibili.com/*'],
     onlyMatch: false,
     why:
-      '面板要在首页 / 视频页 / 直播页都能唤起（ADR 0033 决定二），所以两个域缺一不可：' +
-      '缺 www → 首页和视频页没有面板；缺 live → 直播页没有面板。' +
-      '两种情况都是**构建不报错、单测不覆盖**的静默失效 —— 只有这条断言会发现',
+      '面板要在首页 / 视频页 / 直播页 / 搜索页都能唤起（ADR 0033 决定二），三个域缺一不可：' +
+      '缺 www → 首页和视频页没有面板；缺 live → 直播页没有面板；' +
+      '缺 search → 搜索页（search.bilibili.com 独立子域）没有面板入口。' +
+      '三种情况都是**构建不报错、单测不覆盖**的静默失效 —— 只有这条断言会发现',
   },
   /**
    * ## ✅ 首页推荐流**顺序重排**入口（2026-11-11 重建）

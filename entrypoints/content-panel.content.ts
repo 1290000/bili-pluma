@@ -4,13 +4,18 @@
  * ## 为什么必须新开一个入口，不能复用现有的三个
  *
  * 三个现有入口的 `matches` 都被 `scripts/check-page-gate.mjs` 锁死了，
- * **没有一个同时覆盖 `www` 与 `live` 两域**：
+ * **没有一个同时覆盖 `www` / `live` / `search` 三域**：
  *
  *   - `content.ts` —— 规则 2 强制它只能 `video` + `bangumi/play`
  *   - `content-home.content.ts` —— 只 `www`，不含直播域
  *   - `content-live.content.ts` —— 规则 2c 反向断言**禁止**它含播放页模式
  *
- * 面板要在"任何 B站 页面"都能唤起（首页 / 视频 / 直播），所以只能新开。
+ * 面板要在"任何 B站 页面"都能唤起（首页 / 视频 / 直播 / 搜索），所以只能新开。
+ *
+ * ⚠️ 搜索必须**单独登记一个域**：B站搜索页最终落在独立子域
+ * `search.bilibili.com/all`（不是 `www.bilibili.com/search`），Chrome 按文档注入，
+ * 不写这个域就没有 content script、没有 `#pluma-panel-host`，贴边条静默消失。
+ * `host_permissions` 里的 `*://*.bilibili.com/*` 只管 fetch/cookie，不管注入。
  *
  * ## ⚠️ 文件名必须带 `.content.`
  *
@@ -149,12 +154,13 @@ export default defineContentScript({
    * ⚠️ 字面量，不能引用共享常量：WXT 生成 manifest 时对入口文件做**静态分析**，
    * 取不到跨文件常量的值（换成常量会让 manifest 里 `matches` 变空 = 扩展不注入）。
    *
-   * 两域都要，而且**一个播放页模式都不许出现**：
+   * 三域都要，而且**一个播放页模式都不许出现**：
    * 一旦含 `video/*` 或 `bangumi/play/*`，`check-page-gate.mjs` 规则 2c 的反向断言
    * 会把它判成"又一个播放页入口"（那个入口的规矩是「改 `content.ts`」，
-   * 不是新开一个）。所以这里只写两个具体域，让面板覆盖全站但不触碰播放页判据。
+   * 不是新开一个）。所以这里只写三个具体域：`www` / `live` / `search`。
+   * `search` 不能省 —— 搜索页是独立子域，缺它就没有面板入口（见文件头）。
    */
-  matches: ['*://www.bilibili.com/*', '*://live.bilibili.com/*'],
+  matches: ['*://www.bilibili.com/*', '*://live.bilibili.com/*', '*://search.bilibili.com/*'],
 
   /** 不抢跑时序，见文件头 */
   runAt: 'document_idle',
