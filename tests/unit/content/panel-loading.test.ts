@@ -371,7 +371,7 @@ describe('时间轴：请求与返回配对成一行', () => {
       '1.77s',
       '2.53s → 2.82s · 0.29s',
       '3.27s +0.45s',
-      '3.27s +0.00s',
+      '3.27s 同一刻',
       '3.74s → 3.89s · 0.15s',
       '4.16s → 4.22s · 0.06s',
     ]);
@@ -646,7 +646,9 @@ describe('取流请求（playurl）在时间轴上', () => {
     ];
     const rows = buildTimelineRows(sparse);
     expect(rows.map((r) => r.kind)).toEqual(['event', 'gap', 'event', 'segment']);
-    expect(rows[1]?.label).toBe('⋯ 5.00s（这段时间的片段未逐段列出）');
+    // 这条空档发生在**第一个分片之前**（样本里只有两个里程碑，没有 seg）
+    // ⇒ 说"片段未逐段列出"是假的，那时连分片请求都还没有。见 `gapText()`。
+    expect(rows[1]?.label).toBe('⋯ 5.00s（这段时间没有采集到分片请求）');
   });
 
   it('⛔ 图例里不出现取流（它不是线路类别）', () => {
@@ -722,9 +724,59 @@ describe('空档分隔行：间隔 ≥ 2 秒才插一条', () => {
   it('★ 真机那份 2.07s → 8.28s：文案写 6.21s（秒数就是两个节点相减）', () => {
     const rows = between(2070, 8280);
     const gap = rows.find((r) => r.kind === 'gap');
-    expect(gap?.label).toBe('⋯ 6.21s（这段时间的片段未逐段列出）');
+    // 样本里没有分片 ⇒ 走"没有采集到分片请求"那一版（不是"未逐段列出"）
+    expect(gap?.label).toBe('⋯ 6.21s（这段时间没有采集到分片请求）');
     // 与"用两个 t 相减"的结果逐字一致 —— 不是估计出来的
-    expect(gap?.label).toBe(gapText(8280 - 2070));
+    expect(gap?.label).toBe(gapText(8280 - 2070, true));
+  });
+
+  /**
+   * ## 两种空档的文案必须分得开（2026-11-17 真机提问）
+   *
+   * 用户看到时间轴最上面那条「⋯ 2.56s（这段时间的片段未逐段列出）」直接问：
+   * 「这段时间哪来的片段？」—— 那片区间里**连取流请求都还没发**。
+   *
+   * 判据是 `sawSegment`：第一个分片**之前**的空档不能说"片段未列出"。
+   * 反例守卫：把 `gapText(ms, !sawSegment)` 改回 `gapText(ms)` → 本条红。
+   */
+  it('★★ 第一个分片之前的空档：不许说"片段未逐段列出"', () => {
+    const beforeSeg = buildTimelineRows([
+      { t: 0, stage: 'nav' },
+      { t: 2560, stage: 'playurl-req' },
+    ]);
+    expect(beforeSeg.find((r) => r.kind === 'gap')?.label).toBe(
+      '⋯ 2.56s（这段时间没有采集到分片请求）',
+    );
+
+    // 有分片之后同样的间隔 —— 这时"未逐段列出"才是真话
+    const afterSeg = buildTimelineRows([
+      { t: 0, stage: 'nav' },
+      { t: 1000, stage: 'seg-req', host: 'a.bilivideo.com' },
+      { t: 1100, stage: 'seg-res', host: 'a.bilivideo.com' },
+      { t: 5000, stage: 'canplay' },
+    ]);
+    expect(afterSeg.find((r) => r.kind === 'gap')?.label).toBe(
+      '⋯ 3.90s（这段时间的片段未逐段列出）',
+    );
+  });
+
+  /**
+   * ## 同一刻不写 `+0.00s`（2026-11-17 真机提问）
+   *
+   * 用户看到「扩展介入 2.56s +0.00s」问"为什么是 0 秒"。
+   * 原因是 `recordPlayurl()` 把 `ext-patch` 与 `playurl-req` 放在同一个
+   * `startTime` 上 —— 两行天生同刻。`+0.00s` 让"同时发生"读起来像"耗时 0"。
+   *
+   * 反向守卫：把 `rowMeta()` 里的 `delta < 5` 分支删掉 → 本条红。
+   * 同时钉住"13ms 仍然写 +0.01s"，防止有人把阈值放大到把真实差值也吞掉。
+   */
+  it('★★ 同一刻标「同一刻」；真实差值哪怕很小也要写出来', () => {
+    const rows = buildTimelineRows([
+      { t: 2560, stage: 'playurl-req' },
+      { t: 2560, stage: 'ext-patch', note: '接管取流' },
+      { t: 2573, stage: 'canplay' },
+    ]);
+    expect(rows.map((r) => r.meta)).toEqual(['2.56s', '2.56s 同一刻', '2.57s +0.01s']);
   });
 
   it('⛔ 分隔行不是事件：没有阶段、没有形状、没有右列元信息与明细', () => {
@@ -1248,7 +1300,7 @@ describe('「本次加载」浮层', () => {
     const box = loadingDetailPane(gapped, spyActions());
     const gaps = [...box.querySelectorAll('.ld-gap')];
     expect(gaps).toHaveLength(1);
-    expect(gaps[0]?.textContent).toBe('⋯ 6.21s（这段时间的片段未逐段列出）');
+    expect(gaps[0]?.textContent).toBe('⋯ 6.21s（这段时间没有采集到分片请求）');
 
     // 它不是事件：三种"节点"标记一个都不许有
     expect(gaps[0]?.querySelector('.ld-node')).toBeNull();

@@ -619,6 +619,33 @@ export function downloadJson(text: string, fileName: string): void {
  * ⚠️ **`ok === undefined` 也要渲染一个透明点**：不能"没有状态就不占位"，
  * 否则同一列里有点与没点的行，标签起始位置差 12px，看起来像没对齐。
  */
+/**
+ * `快照状态` 那一行的人话。
+ *
+ * ## 为什么需要它（2026-11-17 排查）
+ *
+ * 诊断页原来直接渲染 `snapshot.confidence`，于是中文界面上出现两行这样的东西：
+ *
+ * ```
+ * 快照状态    measured
+ * ```
+ *
+ * `measured` / `none` 是**内部枚举**，它们的读者是导出 JSON 和测试，
+ * 不是正在排查问题的用户。界面照抄枚举值等于**把字段名漏给了用户** ——
+ * 和这次一起修的 `+0.00s` 是同一类问题：字都对，但它不是给这个人看的。
+ *
+ * ⚠️ **导出 JSON 里仍然是原始枚举**（给机器），只有界面走这个函数。
+ *
+ * 文案只陈述观测到的边界，不评价好坏：
+ * - `measured` = 至少有一条线路是**从真实请求里分类出来的**（`hosts.length > 0`）
+ * - `none` = 一条都没有 ⇒ 可能是没在播、也可能全都没认出来
+ */
+export function confidenceText(c: LoadingExport['confidence']): string {
+  return c === 'measured'
+    ? '有实测数据（线路来自真实请求）'
+    : '没有可用的线路数据（未播放，或全部认不出来源）';
+}
+
 function factRow(r: DiagRow): HTMLElement {
   const tone = r.ok === true ? ' ok' : r.ok === false ? ' bad' : '';
   const row = el('div', `diag-row${tone}`);
@@ -810,7 +837,7 @@ export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
     }),
   );
   nodes.push(factRow({ label: '换线次数', value: String(detectSwitches(snapshot.events).length) }));
-  nodes.push(factRow({ label: '快照状态', value: snapshot.confidence }));
+  nodes.push(factRow({ label: '快照状态', value: confidenceText(snapshot.confidence) }));
   /**
    * ## 采集窗口（2026-11-17，T13/P1-7）
    *

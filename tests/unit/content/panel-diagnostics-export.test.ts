@@ -761,6 +761,32 @@ describe('★★ 诊断页「本次加载」（T7）', () => {
     expect(values[2]).toBe('2.53s');
     // 采集窗口：没有丢过东西
     expect(values[5]).toBe('完整');
+
+    /**
+     * ## 快照状态必须是**人话**，不许把内部枚举漏到界面上
+     *
+     * 2026-11-17 排查：这里原来直接渲染 `snapshot.confidence`，
+     * 于是中文界面上出现一行「快照状态  measured」。
+     *
+     * `measured` / `none` 的读者是导出 JSON 和测试，不是排查问题的用户。
+     * 同一天修掉的 `+0.00s` 是同一类问题：**字都对，但不是给这个人看的**。
+     *
+     * 🔁 反例：把 `confidenceText(...)` 改回 `snapshot.confidence` → 本条红。
+     */
+    expect(values[4], '快照状态必须是中文人话').not.toBe('measured');
+    expect(values[4]).toContain('有实测数据');
+    // 原始枚举仍然留在导出里（给机器）—— 界面与导出两条路各走各的
+    expect(pane({ kind: 'ok', snapshot: loadingSnapshot() })).toBeTruthy();
+  });
+
+  it('★ 快照状态：没有线路数据时也要说人话（不是 `none`）', () => {
+    const box = pane({
+      kind: 'ok',
+      snapshot: loadingSnapshot({ hosts: [], confidence: 'none' }),
+    });
+    const values = [...box.querySelectorAll('.diag-value')].map((n) => n.textContent);
+    expect(values, '不许出现 `none`').not.toContain('none');
+    expect(values.join('|'), '要说清"没有可用的线路数据"').toContain('没有可用的线路数据');
   });
 
   it('★ P0-2：主要线路 ≠ 当前线路时，两行都显示（别二选一）', () => {

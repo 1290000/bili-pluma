@@ -266,6 +266,30 @@ function seconds(ms: number): string {
   return (ms / 1000).toFixed(2);
 }
 
+/**
+ * 里程碑行右列的文字：`2.56s +0.13s` / `2.56s 同一刻`。
+ *
+ * ## 为什么同一刻不写 `+0.00s`（2026-11-17 真机提问）
+ *
+ * 用户看到「扩展介入 2.56s **+0.00s**」问："为什么是 0 秒？"
+ *
+ * 算术上没错，但**读起来像"这次介入耗时 0"**，而真相是：
+ * `recordPlayurl()` 把 `ext-patch` 和 `playurl-req` 放在**同一个 `startTime`**
+ * 上（介入发生在请求发出那一刻，不是返回后）—— 所以这两行天生同刻。
+ *
+ * `+0.00s` 把一个"同时发生"表达的像一个"0 时长"，是这一整轮在消灭的
+ * 那类问题：**数字对，但它回答的不是用户会问的那个问题**。
+ *
+ * 阈值取 5ms：`seconds()` 保留两位小数，5ms 以下已经显示成 `0.00`，
+ * 写 `+0.00s` 等于把"同一刻"和"不到 10 毫秒"混为一谈。
+ */
+function rowMeta(t: number, previous: number | null): string {
+  if (previous === null) return `${seconds(t)}s`;
+  const delta = t - previous;
+  if (delta < 5) return `${seconds(t)}s 同一刻`;
+  return `${seconds(t)}s +${seconds(delta)}s`;
+}
+
 /** 第一条 `playing` 事件；没有就 `null`（**不补 0**） */
 export function playingEvent(events: readonly LoadEvent[]): LoadEvent | null {
   return events.find((e) => e.stage === 'playing') ?? null;
@@ -449,8 +473,26 @@ const GAP_THRESHOLD_MS = 2000;
  *
  * @param ms 相邻两个节点之间没被列出的那段时长（毫秒，由两个节点的时刻相减得到）
  */
-export function gapText(ms: number): string {
-  return `⋯ ${seconds(ms)}s（这段时间的片段未逐段列出）`;
+export function gapText(ms: number, beforeFirstSegment = false): string {
+  /**
+   * ## 两种空档，不能套同一句话（2026-11-17 真机提问）
+   *
+   * 用户看到时间轴最上面那条 `⋯ 2.56s（这段时间的片段未逐段列出）` 就问：
+   * 「这段时间哪来的片段？」
+   *
+   * 他说得对。**0 → 2.56s 这一段的真相是"还没有任何分片请求"** ——
+   * 取流请求都还没发出去。而"未逐段列出"暗示"有片段、只是没列"，
+   * 那是另一码事（3.00 → 7.81s 那种，分片在跑、被 `cls` 闸门压掉了）。
+   *
+   * 判据是**可证的**：闸门对第一片必定放行（`lastSegCls` 初值 `null` ⇒ 必算变化），
+   * 所以"在此之前一条 `seg-req` 都没有" ⟺ "没观测到任何分片请求"。
+   * 这里只陈述观测，不断言页面"没在下"——我们确实不知道，只是没看见。
+   *
+   * @param beforeFirstSegment 这条空档是否发生在**第一个分片之前**（由调用方按事件顺序判定）
+   */
+  return beforeFirstSegment
+    ? `⋯ ${seconds(ms)}s（这段时间没有采集到分片请求）`
+    : `⋯ ${seconds(ms)}s（这段时间的片段未逐段列出）`;
 }
 
 /**
@@ -469,7 +511,7 @@ export function gapText(ms: number): string {
  * 番剧换集后时间轴没有 `nav` 原点，光凭这句话会让人以为"这一集从 0 秒开始"。
  */
 export const TIMELINE_FOOTNOTE =
-  '时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，下载视频片段那几行给的是请求到返回的耗时。只列出每次线路类别变化后的第一段，其余片段未逐段列出。';
+  '时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，两条在同一刻发生的标「同一刻」。下载视频片段那几行给的是请求到返回的耗时。只列出每次线路类别变化后的第一段，其余片段未逐段列出。';
 
 /**
  * 毫秒 → `m:ss.SS`（≥ 1 小时用 `h:mm:ss.SS`）。
@@ -677,6 +719,16 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
    * 被吃掉的 `seg-res` 不更新它（它们不是行）。空档行同样不更新它。
    */
   let previous: number | null = null;
+  /**
+   * 到目前为止有没有出现过**分片事件**（`seg-req`）。
+   *
+   * 只服务于空档文案的判据：第一个分片**之前**的空档，说"片段未逐段列出"是假的
+   * （那时连取流请求都还没发）。见 `gapText()` 的第 2 个参数。
+   *
+   * ⚠️ 必须在**推入该行之后**置 `true`：`pushGapBefore()` 在推行之前调用，
+   * 顺序写反了会让"第一个分片之前"那条空档也拿到 `sawSegment === true`。
+   */
+  let sawSegment = false;
 
   /**
    * 在时刻 `t` 那一行之前按需插一条空档分隔行。
@@ -693,7 +745,7 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
     rows.push({
       kind: 'gap',
       stage: null,
-      label: gapText(ms),
+      label: gapText(ms, !sawSegment),
       meta: '',
       detail: null,
       marker: null,
@@ -735,6 +787,9 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
         dangerTitle: false,
       });
       previous = pair.doneAt ?? pair.t;
+      // ⚠️ 必须在 `pushGapBefore()` **之后**置位 —— 否则"第一个分片之前"那条空档
+      // 会拿到 `sawSegment === true`，文案又退回"片段未逐段列出"（就是这次要修的病）
+      sawSegment = true;
     } else {
       pushGapBefore(event.t);
 
@@ -755,10 +810,7 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
         kind: 'event',
         stage: event.stage,
         label: stageLabel(event.stage),
-        meta:
-          previous === null
-            ? `${seconds(event.t)}s`
-            : `${seconds(event.t)}s +${seconds(event.t - previous)}s`,
+        meta: rowMeta(event.t, previous),
         /**
          * 明细：有 host 给 host；没有就用 `note`（`error` 的 `code=3`、
          * `ext-patch` 的 `接管取流` / `改写响应`）。
@@ -774,6 +826,7 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
         dangerTitle: event.stage === 'error',
       });
       previous = event.t;
+      if (event.stage === 'seg-req') sawSegment = true;
     }
   }
 
