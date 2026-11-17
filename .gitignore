@@ -99,6 +99,7 @@ poc/probe/result-*.json
 poc/probe/pcdn-diag/remaining-candidates.json
 poc/probe/pcdn-diag/backup-empty-acceptance.json
 poc/probe/pcdn-diag/ab-filter.json
+poc/probe/pcdn-diag/progress-fix-check.json
 
 # 例外：这些是**结论**不是原始数据，必须入库
 !poc/verify/result-q2-summary.json
