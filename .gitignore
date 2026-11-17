@@ -93,6 +93,11 @@ poc/verify/.keep
 poc/verify/*.json
 poc/probe/result-*.json
 
+# 2026-11-17 加：`pcdn-diag` 批次把原始结果落在**批次目录内**（`result-*.json`
+# 那条只管 `poc/probe/` 这一层，管不到子目录）。内容是带签名与过期时间的
+# CDN 直链，不是成果 —— 同目录的 `REPORT-remaining.md` 才是结论。
+poc/probe/pcdn-diag/remaining-candidates.json
+
 # 例外：这些是**结论**不是原始数据，必须入库
 !poc/verify/result-q2-summary.json
 !poc/verify/p0-result.json
