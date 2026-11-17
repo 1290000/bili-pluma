@@ -1,7 +1,7 @@
 # ADR 0038：在取流数据上过滤 PCDN 候选（只减不增）
 
 - 日期：2026-11-17
-- 状态：**已采纳并已落地**（**第五类响应体改写授权**；前四类见 [ADR 0013](./0013-patch-player-info-response.md) / [ADR 0017](./0017-restore-primary-progress-in-playurl.md) / [ADR 0021](./0021-patch-pgc-preview-flags.md) / [ADR 0023](./0023-intercept-playview-durl-swap.md)）。授权、实现、价值判断三件事均已定：实现见提交 `a791d41`（三处取流点接线），价值判断见「价值判断：证据强度与为何没有严格 A/B」一节。原先"值不值得做尚未定、第 1/3 项实测之前不许开工"的闸门**已解除且已完成** —— 第 1 项由剩余候选实测回答，第 3 项由实现侧兜住。
+- 状态：**已被 ADR 0039 部分取代**（2026-11-17，用户明确批准）。授权本身（第五类响应体改写）继续有效，但**边界 2（不许换 host）与边界 5（全 PCDN 原样保留）已被 [ADR 0039](./0039-rewrite-pcdn-authority.md) 取代**，边界 1 从"删除或重排"升级为"替换 authority"。实现以 ADR 0039 为准；本文件保留作为决策演变记录与继承条款（边界 3/4）的来源。
 - 授权来源：**用户 2026-11-17 在本会话中明确指示**——「本会话的新要求优先，既有 ADR 的限制不再构成阻碍，需要新 ADR 就写」
 - 相关：[ADR 0004](./0004-request-level-identity-proxy.md)（请求级身份代理）、[ADR 0017](./0017-restore-primary-progress-in-playurl.md)（本 ADR 要越过的字面边界）、[ADR 0020](./0020-pgc-sync-injection-and-reload.md) / [ADR 0023](./0023-intercept-playview-durl-swap.md)（本次一并追认的两类流数据改写）
 - 方案出处：`docs/plans/2026-11-17-pcdn-diag-plan.md` §12（v3 候选过滤）

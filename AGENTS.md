@@ -183,9 +183,9 @@ ADR 记录"为什么当时这么定"，不是让你重新讨论。
 | `PGC_TOAST_ITEM` + `PGC_TOAST_MARK` | 只隐藏含 `PromptBar` 的提示条（**DOM，不改数据**），不误伤跳过片头/续播 | [ADR 0022](./docs/decisions/0022-hide-pgc-preview-toast.md) |
 | `pgcPatchPlayinfo` / `pgcCachedVideoInfo` | PGC 整页：把 `result.video_info` 换成缓存里的完整流（**`__playinfo__` 注入**） | [ADR 0020](./docs/decisions/0020-pgc-sync-injection-and-reload.md) |
 | `pgcSwapPlayviewBody` | PGC 切集：换掉 `data.video_info`，含 `dash`/`quality`/`support_formats`/`accept_quality`，删 `durl`/`durls` | [ADR 0023](./docs/decisions/0023-intercept-playview-durl-swap.md) |
-| 候选过滤（独立常量，待新增） | **只减不增**：删/重排 `dash[].base_url`/`backup_url`；**禁改** `quality`/`support_formats`/轨数/`height`/`codecid`/带宽；**禁新增 URL**；**全 PCDN 的轨原样保留** | [ADR 0038](./docs/decisions/0038-filter-pcdn-candidates.md) |
+| 候选过滤（独立常量） | **只换 authority、不增删候选**：把 PCDN 候选的 `protocol`/`host`/`port` 换成官方镜像（mcdn 特例走 proxy 包装），`path`/`search`/`hash` 一字不动，候选条数严格不变；**禁改** `quality`/`support_formats`/轨数/`height`/`codecid`/带宽 | [ADR 0038](./docs/decisions/0038-filter-pcdn-candidates.md)（授权）+ [ADR 0039](./docs/decisions/0039-rewrite-pcdn-authority.md)（升级：取代 0038 的"删除/不许换 host/全 PCDN 原样保留"） |
 
-⚠️ 本节曾写"两类"，ADR 0021/0022 之后没同步；**ADR 0020/0023 落地后仍未补登**（两者都在改 `dash`/`quality`/`support_formats`）——2026-11-17 由 ADR 0038 一次性纠正。加改写时先看 `check-patch-scope.mjs` 认了哪些常量：它**覆盖前六行**（2026-11-17 补上 `pgcSwapPlayviewBody` 的写集断言与 `pgcPatchPlayinfo` 的"只写 `result.video_info`"断言）；⚠️ **候选过滤（ADR 0038）尚未纳入校验集** —— 实现常量还没落地，落地时必须补，否则那道闸门对第五类不成立（该补什么写在脚本末尾）。
+⚠️ 本节曾写"两类"，ADR 0021/0022 之后没同步；**ADR 0020/0023 落地后仍未补登**（两者都在改 `dash`/`quality`/`support_formats`）——2026-11-17 由 ADR 0038 一次性纠正。加改写时先看 `check-patch-scope.mjs` 认了哪些常量：它**覆盖前六行 + 第七类**（2026-11-17：补上 `pgcSwapPlayviewBody` 写集断言、`pgcPatchPlayinfo`"只写 `result.video_info`"断言，以及候选过滤的写集/禁改字段/签名派生断言）。**第五类的实现与闸门已就位**（`a791d41`）；但注意其语义已由 [ADR 0039](./docs/decisions/0039-rewrite-pcdn-authority.md) 从"删除"升级为"换 authority"——**守卫断言与测试不变量必须同步升级**，否则仍是旧的"只减不增"口径。
 ⚠️ 本节曾把最后一行的常量写成 `PGC_TOAST_SELECTOR`——**代码里从没有这个名字**（2026-10-29 更正，B-10）。实际是 `PGC_TOAST_ITEM`（容器 `.bpx-player-toast-item`）与 `PGC_TOAST_MARK`（筛选标记 `[class*="PromptBar"]`），**两个都要有**，只有容器会把跳过片头/续播一起藏掉。
 `PATCH_HOSTS`（裸 JS）与 `routes.ts` 的 `BILI_API_HOSTS` 是**手写两份**，已由 `check-patch-scope.mjs` 断言"集合完全一致"（B-06，2026-10-29 加）。
 
