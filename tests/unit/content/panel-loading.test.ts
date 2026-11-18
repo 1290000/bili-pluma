@@ -42,6 +42,7 @@ import {
   gapText,
   hostClsOf,
   hostCountText,
+  isPlayingWithoutData,
   legendEntries,
   legendHasExtPatch,
   legendKinds,
@@ -166,7 +167,20 @@ describe('线路文案：七种情况逐条钉住', () => {
   });
 
   it('★ confidence === none → 同一句「还不知道」（即使 actual 意外有值）', () => {
-    const quick = buildLoadingQuick(ok({ confidence: 'none', actual: null, hosts: [] }));
+    /**
+     * ⚠️ `video` 必须显式写成"没起播"。默认 fixture 的 `readyState` 是 4
+     * （在播），那会落进 2026-11-20 新增的第二态
+     * 「视频已在播放 · 这次没拿到线路数据」—— 见下面的四态用例。
+     * 本用例要钉的是**"什么都没看到"**那一态，所以得把"在播"这个变量按住。
+     */
+    const quick = buildLoadingQuick(
+      ok({
+        confidence: 'none',
+        actual: null,
+        hosts: [],
+        video: { readyState: 0, durationSec: 0, height: 0, errorCode: 0 },
+      }),
+    );
     expect(quick?.title).toBe('还不知道走哪条线路');
   });
 
@@ -493,8 +507,20 @@ describe('P0-1 · 认不出来源的线路必须被看见', () => {
     expect(quick?.marker).toBe('dashed');
   });
 
-  it('⛔ 一条 host 都没有 → 仍然是「还不知道走哪条线路」（三态不许归并）', () => {
-    const quick = buildLoadingQuick(ok({ actual: null, confidence: 'none', hosts: [] }));
+  it('⛔ 一条 host 都没有（视频也没起来）→ 仍然是「还不知道走哪条线路」（四态不许归并）', () => {
+    /**
+     * ⚠️ 和一个显式的"没起播" `video` 一起断言。默认 fixture 的
+     * `readyState: 4` + 空 `hosts` 现在是**另一态**（2026-11-20 新增），
+     * 不把 `video` 按住的话，这条会去测另一件事而本意被悄悄换掉。
+     */
+    const quick = buildLoadingQuick(
+      ok({
+        actual: null,
+        confidence: 'none',
+        hosts: [],
+        video: { readyState: 0, durationSec: 0, height: 0, errorCode: 0 },
+      }),
+    );
     expect(quick?.title).toBe('还不知道走哪条线路');
     expect(quick?.marker).toBe('ring');
   });
@@ -544,7 +570,7 @@ describe('P0-1 · 认不出来源的线路必须被看见', () => {
     expect(box.querySelector('.ld-conclusion-title')?.textContent).toBe('有 1 条线路认不出来源');
   });
 
-  it('★ `describeSnapshotLine()` 三态一次看全（DOM 之外也能直接用）', () => {
+  it('★ `describeSnapshotLine()` 四态一次看全（DOM 之外也能直接用）', () => {
     const onlyUnknown = snapshot({ actual: null, confidence: 'measured', hosts: [UNKNOWN_HOST] });
     expect(describeSnapshotLine(onlyUnknown)).toMatchObject({
       title: '有 1 条线路认不出来源',
@@ -552,9 +578,129 @@ describe('P0-1 · 认不出来源的线路必须被看见', () => {
       tone: 'muted',
     });
     expect(describeSnapshotLine(snapshot()).title).toBe('B站官方线路（自建 CDN）');
+    // ③ 什么都没看到，视频也没起来
     expect(
-      describeSnapshotLine(snapshot({ actual: null, confidence: 'none', hosts: [] })).title,
+      describeSnapshotLine(
+        snapshot({
+          actual: null,
+          confidence: 'none',
+          hosts: [],
+          video: { readyState: 0, durationSec: 0, height: 0, errorCode: 0 },
+        }),
+      ).title,
     ).toBe('还不知道走哪条线路');
+    // ④ 视频已经在播，但我们没拿到线路数据
+    expect(
+      describeSnapshotLine(
+        snapshot({
+          actual: null,
+          confidence: 'none',
+          hosts: [],
+          video: { readyState: 4, durationSec: 1441, height: 1080, errorCode: 0 },
+        }),
+      ).title,
+    ).toBe('视频已在播放 · 这次没拿到线路数据');
+  });
+
+  /**
+   * 2026-11-20 真机反馈第 2 条：番剧换集后，视频已经加载出来了，
+   * 线路卡却写「还不知道走哪条线路」。
+   *
+   * 根因是 `resetLoadingTrace()` 清空后，新一集的 m4s 已经在传，但
+   * `PerformanceObserver` **资源完成后才回调**，实测空窗 288–932ms
+   * 里 `hosts` 恒为 0（`<video>.readyState` 已经 ≥ 2）。
+   *
+   * 那一瞬间显示「还不知道」不是"数据没有"，而是"我们晚了"——
+   * 而用户读到的是前者，会以为等一会儿就有。
+   */
+  it('★★ 视频在播但一条 host 都没拿到 → 「视频已在播放 · 这次没拿到线路数据」', () => {
+    const quick = buildLoadingQuick(
+      ok({
+        actual: null,
+        confidence: 'none',
+        hosts: [],
+        video: { readyState: 2, durationSec: 1441, height: 1080, errorCode: 0 },
+      }),
+    );
+    expect(quick?.title).toBe('视频已在播放 · 这次没拿到线路数据');
+    // 绝不能说成"还不知道"—— 那句话暗示"等一会儿就有了"，而这里再等也没有
+    expect(quick?.title).not.toContain('还不知道');
+    // 也绝不能说成"没流量"或"功能没数据"
+    expect(quick?.title).not.toContain('还没有数据');
+    // 形状与「认不出来源」同为虚线空心圆：都是"有活动但无结论"
+    expect(quick?.marker).toBe('dashed');
+    expect(quick?.tone).toBe('muted');
+    // 有明细可看（时间轴里那些分片确实在，只是还没入账）
+    expect(quick?.hasDetail).toBe(true);
+  });
+
+  it('⛔ `readyState === 1`（只有元数据、没有帧）**不许**判成"已在播放"', () => {
+    /**
+     * 这条最容易误用：`HAVE_METADATA` 时 `duration` 已经有了，
+     * 看起来像"视频起来了"，但**一个帧都还没解码**。那一刻确实还没拿到
+     * 分片数据，说"没拿到线路数据"是拿一句真话掩盖一个假结论。
+     */
+    for (const readyState of [0, 1]) {
+      expect(
+        isPlayingWithoutData(
+          snapshot({
+            hosts: [],
+            video: { readyState, durationSec: 1441, height: 1080, errorCode: 0 },
+          }),
+        ),
+        `readyState=${String(readyState)} 不该判成在播`,
+      ).toBe(false);
+    }
+    // 2 是分界：HAVE_CURRENT_DATA 起才算"当前帧够用"
+    expect(
+      isPlayingWithoutData(
+        snapshot({
+          hosts: [],
+          video: { readyState: 2, durationSec: 1441, height: 1080, errorCode: 0 },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('⛔ 有 host 时不进这一态（哪怕视频在播）', () => {
+    expect(isPlayingWithoutData(snapshot())).toBe(false);
+    expect(isPlayingWithoutData(snapshot({ hosts: [UNKNOWN_HOST] }))).toBe(false);
+  });
+
+  it('⛔ `durationSec === 0` 时不下这个结论（自相矛盾的状态，宁可少说一句）', () => {
+    expect(
+      isPlayingWithoutData(
+        snapshot({
+          hosts: [],
+          video: { readyState: 4, durationSec: 0, height: 1080, errorCode: 0 },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it('⛔ 页面上没有 `<video>` → 退回「还不知道」，不编一个"在播"', () => {
+    expect(
+      describeSnapshotLine(snapshot({ actual: null, confidence: 'none', hosts: [], video: null }))
+        .title,
+    ).toBe('还不知道走哪条线路');
+  });
+
+  it('★ 第四态只改文案，不动 `confidence` / `present`（采集事实不许被界面美化）', () => {
+    /**
+     * 采集侧"确实没看到"是事实。界面这一层不许为了话说得好听，
+     * 就把 `confidence` 抬成 `'measured'` —— 那是拿显示层去改数据层。
+     */
+    const snap = snapshot({
+      present: false,
+      actual: null,
+      confidence: 'none',
+      hosts: [],
+      events: [],
+      video: { readyState: 4, durationSec: 1441, height: 1080, errorCode: 0 },
+    });
+    expect(describeSnapshotLine(snap).title).toBe('视频已在播放 · 这次没拿到线路数据');
+    expect(snap.confidence).toBe('none');
+    expect(snap.present).toBe(false);
   });
 
   it('图例顺序：三个已知类别 → 认不出来源 → 扩展介入', () => {
