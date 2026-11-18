@@ -157,6 +157,29 @@ export function describeUnknownSource(count: number): string {
   return `有 ${String(count)} 条线路认不出来源`;
 }
 
+/**
+ * 视频**已经在播**、但这次一条线路都没看到时说的那句话（2026-11-20，真机反馈第 2 条）。
+ *
+ * ## 为什么不能沿用 `TITLE_UNKNOWN`
+ *
+ * 用户在番剧页换集，视频明明起来了，卡片却写「还不知道走哪条线路」。
+ * 那句话在原设计里是对的（"什么都没看到"= 事实），但它把**两件不同的事
+ * 说成了同一句**：
+ *
+ * | 真实情况 | 用户读到「还不知道走哪条线路」时以为的 |
+ * | --- | --- |
+ * | 页面还没开始播放 | 对，等一会儿就有了 |
+ * | **视频已经 800ms 在播，我们没看到分片** | "等一会儿就有了" —— **错**，再等也不会有 |
+ *
+ * 第二种正是实测到的空窗期：`resetLoadingTrace()` 清空后，新一集的
+ * m4s 已经在传，但 `PerformanceObserver` 是**资源完成后才回调**，
+ * 于是 288–932ms 里 `hosts` 恒为 0，而 `<video>.readyState` 已经 ≥ 2。
+ *
+ * 采集侧的问题（晚 200-900ms 才入账）不该让用户读成"你们没数据"。
+ * 这句话把责任说对：**没拿到**，不是**不存在**。
+ */
+const TITLE_PLAYING_UNMEASURED = '视频已在播放 · 这次没拿到线路数据';
+
 /** 没人应答时说的那句话。**不许写成「还没有数据」** —— 那是另一件事 */
 const TITLE_UNREADABLE = '读取失败 · 刷新页面后重试';
 
@@ -272,24 +295,73 @@ export function describeLine(
 }
 
 /**
- * 快照 → 结论行（**三态**，2026-11-17 P0-1）。
+ * 快照 → 结论行（**四态**，2026-11-17 P0-1；2026-11-20 补第四态）。
  *
  * | 情形 | 文案 | 形状 |
  * | --- | --- | --- |
- * | 一条 host 都没有 | 「还不知道走哪条线路」 | 空心圆（muted） |
+ * | 一条 host 都没有，视频也没起来 | 「还不知道走哪条线路」 | 空心圆（muted） |
+ * | 一条 host 都没有，但**视频已在播** | 「视频已在播放 · 这次没拿到线路数据」 | 虚线空心圆（muted） |
  * | 有 host，但**全部**认不出来源 | 「有 N 条线路认不出来源」 | **虚线**空心圆 |
  * | 有已知线路 | 正常线路文案 | 线路形状 |
  *
- * 三态**不许归并**：第二态以前被并进第一态（因为 `unknown` 被丢弃 → `hosts`
+ * 第二态与第三态形状相同（都是虚线空心圆）：**都是"有播放活动但没有可用的
+ * 线路结论"**。区分它们的是文案与"能不能等出结果"这件事，不是形状。
+ *
+ * 四态**不许归并**：第三态以前被并进第一态（因为 `unknown` 被丢弃 → `hosts`
  * 是空的），于是"有流量但认不出"看起来和"没流量"一模一样 ——
- * 那正是这次审计的 P0。
+ * 那正是这次审计的 P0。第二态是同一类错误的另一半：把"我们来晚了"
+ * 说成"没有这件事"。
  */
 export function describeSnapshotLine(snapshot: LoadingSnapshotLite): LineDescription {
   if (snapshot.actual !== null) return describeLine(snapshot.actual);
 
   const unknownCount = snapshot.hosts.filter((h) => h.cls === 'unknown').length;
-  if (unknownCount === 0) return describeLine(null);
-  return { title: describeUnknownSource(unknownCount), tone: 'muted', marker: 'dashed' };
+  if (unknownCount > 0) {
+    return { title: describeUnknownSource(unknownCount), tone: 'muted', marker: 'dashed' };
+  }
+  if (isPlayingWithoutData(snapshot)) {
+    return { title: TITLE_PLAYING_UNMEASURED, tone: 'muted', marker: 'dashed' };
+  }
+  return describeLine(null);
+}
+
+/**
+ * 视频是否**已经起播**，而采集侧一条线路都没看到。
+ *
+ * ## 判据为什么是 `readyState >= 2`
+ *
+ * `HTMLMediaElement.readyState` 的四个值里，只有 `≥ 2` 表示"**当前**帧的数据
+ * 够用了"：
+ *
+ * | 值 | 含义 | 能不能证明"在播" |
+ * | --- | --- | --- |
+ * | 0 `HAVE_NOTHING` | 什么都没有 | ❌ |
+ * | 1 `HAVE_METADATA` | 只有元数据（`duration` 有了，**没有帧**） | ❌ **这条最容易误用** |
+ * | 2 `HAVE_CURRENT_DATA` | 当前帧够用 | ✅ |
+ * | 3 `HAVE_FUTURE_DATA` | 还够播一小段 | ✅ |
+ * | 4 `HAVE_ENOUGH_DATA` | 够播完 | ✅ |
+ *
+ * 用 `≥ 1` 会把"元数据回来了、帧还在路上"判成在播 —— 那一刻确实**还没**
+ * 拿到分片数据，说"没拿到线路数据"就是拿一句真话掩盖一个假结论。
+ *
+ * ## 为什么还要求 `durationSec > 0`
+ *
+ * `readyState ≥ 2` 但 `duration` 为 0 在真机上没见过，属于自相矛盾的状态
+ * （有帧却没有时长）。这种情况下不发表格外的结论 —— 归回「还不知道」，
+ * 宁可少说一句。
+ *
+ * ## 这一态**只影响文案**，不改 `confidence` / `actual` / `present`
+ *
+ * 采集侧"确实没看到"是事实，快照不能为了界面好看而把 `confidence` 抬成
+ * `'measured'`。这里只回答一个界面问题："这句话该怎么说才不误导人"。
+ *
+ * @param snapshot 待判的轻量快照
+ */
+export function isPlayingWithoutData(snapshot: LoadingSnapshotLite): boolean {
+  if (snapshot.hosts.length > 0) return false;
+  const video = snapshot.video;
+  if (video === null) return false;
+  return video.readyState >= 2 && video.durationSec > 0;
 }
 
 /**
@@ -647,13 +719,20 @@ export function clockText(ms: number): string {
  * `timeOrigin`），错的只是**没有锚点**让它看起来像"这一集从 302 秒开始"。
  * 所以这里不补假事件、不加新行，只把**可观测的那个数**说进尾注。
  *
- * ## 判据（三条，缺一不可）
+ * ## 判据（四条，缺一不可）
  *
  * | 情形 | 补锚点？ | 为什么 |
  * | --- | --- | --- |
+ * | **`originT > 0`（时间轴已归零）** | ❌ | 时间轴已经从本集 0.00s 起算，再说「本集开始于页面加载后 5:02.41」是自相矛盾 |
  * | 有 `nav` | ❌ | 时间轴第一行就是原点，没什么可补 |
  * | 一条事件都没有 | ❌ | 没有数可说（**不补 0**） |
  * | `truncated`（环形缓冲丢过早期事件） | ❌ | 此时"第一条事件"**不是**这一集的开始 —— 说「本集开始于…」是假的 |
+ *
+ * 第一条是**归零的配套**（2026-11-21）：换集后 `snapshotOf()` 已经把 `t` 平移过，
+ * 首条事件不再是"页面加载后多久"而是"本集开始后多久"。这条判据必须排在**最前面** ——
+ * 归零后 `nav` 本来就不在（reset 有意不补），若让它落到第二条以下的判据里，
+ * 面板就会同时说「时间从本集开始播放算起」和「本集开始于页面加载后 5:02.41」，
+ * 两句话互相打架。
  *
  * 第三条是最容易漏的：`nav` 也会被 200 条环形缓冲挤掉。那种情况下已经有一句
  * 「更早的事件被丢掉了」在解释"开头不是页面开始"，再补一句"本集开始于 X"
@@ -663,6 +742,8 @@ export function clockText(ms: number): string {
  * @returns 锚点文案；`null` = 不补
  */
 export function pageOriginAnchor(snapshot: LoadingSnapshotLite): string | null {
+  // 归零后这句话不再成立：时间轴时基已经换成"本集起点"（见上面的第一条判据）
+  if ((snapshot.originT ?? 0) > 0) return null;
   if (snapshot.events.some((e) => e.stage === 'nav')) return null;
   if (snapshot.truncated) return null;
   const first = snapshot.events.find((e) => Number.isFinite(e.t));
@@ -671,18 +752,28 @@ export function pageOriginAnchor(snapshot: LoadingSnapshotLite): string | null {
 }
 
 /**
- * 尾注（**按有没有锚点分两版**）。
+ * 尾注（**按时基分三版**）。
  *
  * - 有 `nav`：基准版，原样不动
  * - 没有 `nav`：把锚点插进第一句 → `时间从页面开始加载算起（本集开始于页面
  *   加载后 5:02.41）；+x.xxs 是…`
+ * - **已归零**（`originT > 0`）：第一句换成 `时间从本集开始播放算起` ——
+ *   `snapshotOf()` 已经把 `t` 平移过，再说"从页面开始加载算起"是陈述错误事实
  *
  * ⚠️ 只换第一句，**后面三句一律保留**：`+x.xxs` 的含义与"其余片段未逐段列出"
- * 这两条解释跟锚点无关，砍掉它们等于为了修一个文案问题丢掉三个说明。
+ * 这两条解释跟时基无关，砍掉它们等于为了修一个文案问题丢掉三个说明。
+ *
+ * ⚠️ **不改 `TIMELINE_FOOTNOTE` 常量本身**：`tests/unit/content/panel-loading.test.ts`
+ * 用文案守卫钉着它（四句话逐条断言）。所以按归零与否在**本函数里**换第一句，
+ * 与"有/无锚点"两版并存的写法完全一致 —— 现在是三版。
  *
  * @param snapshot 快照
  */
 export function timelineFootnote(snapshot: LoadingSnapshotLite): string {
+  // 判据与 `pageOriginAnchor()` 的第一条同源：归零 ⟺ 时基是本集起点
+  if ((snapshot.originT ?? 0) > 0) {
+    return TIMELINE_FOOTNOTE.replace('时间从页面开始加载算起', '时间从本集开始播放算起');
+  }
   const anchor = pageOriginAnchor(snapshot);
   if (anchor === null) return TIMELINE_FOOTNOTE;
   const clause = '时间从页面开始加载算起';
