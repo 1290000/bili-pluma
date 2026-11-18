@@ -403,22 +403,62 @@ function isMediaPath(pathname: string): boolean {
 }
 
 /**
- * B站 取流接口的路径标识（2026-11-17，T12）。
+ * B站 取流接口的路径标识（2026-11-17，T12；2026-11-20 补 `playview`）。
  *
- * 覆盖三种已知形状，都靠同一个子串命中：
+ * 覆盖四种已知形状，前三种靠 `/playurl` 这个子串命中：
  * ```
  * /x/player/playurl          ← 普通视频（旧接口）
  * /x/player/wbi/playurl      ← 普通视频（WBI 签名版）
- * /pgc/player/web/playurl/v2 ← 番剧 / PGC
+ * /pgc/player/web/playurl/v2 ← 番剧 / PGC 的**首屏**取流
  * ```
+ *
+ * 第四种 `playview` **不含 `/playurl`**，必须单列：
+ * ```
+ * /ogv/player/playview       ← 番剧 / PGC 的 **SPA 换集**取流
+ * ```
+ *
+ * ## 为什么必须补 `playview`（2026-11-20 真机反馈的第 4 条）
+ *
+ * 用户在 PGC 页面换集，时间轴里连「发出取流请求 / B站 返回线路清单」这两行
+ * 都不出现，只剩「下载视频片段」。原因是换集**根本不走 playurl**——
+ * 主世界那条 `isPgcPlayview` 分支（`main-world.js`）拦的就是它。
+ *
+ * 漏了这条的代价不是少两行：`recordPlayurl()` 还顺带承担
+ * **「本页由扩展代理 → 这一次取流就是扩展介入」**的上报（见那里的注释）。
+ * 换集时 `resetLoadingTrace()` 会把 `extPatchRecorded` 清掉，而下一次
+ * `playurl` 可能一整个页面都不再来 —— 于是新一集里「扩展介入」这个标签
+ * 永远不会重新出现，即使扩展明明在换流。
+ *
+ * `playview` 只出现在 `api.bilibili.com` 上，但仍走 `isPlayurlApi()` 里
+ * 同一个域判据（带点后缀），不单开一条放行的口子。
  */
 const PLAYURL_PATH_MARKER = '/playurl';
+
+/** PGC SPA 换集的取流路径（不含 `/playurl`，见上） */
+const PGC_PLAYVIEW_PATH_MARKER = '/ogv/player/playview';
+
+/**
+ * `pathname` 是否**以** `marker` 为路径段结尾（`/a/b/c` 或 `/a/b/c/…`）。
+ *
+ * 为什么不能直接 `pathname.includes(marker)`：那样 `/ogv/player/playviewx`
+ * 也会命中。真机上不存在这个接口，但判据写松了，将来 B站 加一个
+ * `playviewxxx` / `playview_v2` 就会把无关请求塞进时间轴 —— 而这条通道
+ * 顺带承担「扩展介入」上报，误报比漏报更难排查。
+ *
+ * 注意只比 `pathname`：query 已经在 `URL` 里被切走了，所以
+ * `/ogv/player/playview?ep_id=…` 自然判对。
+ */
+function pathnameIsOrUnder(pathname: string, marker: string): boolean {
+  if (!pathname.startsWith(marker)) return false;
+  const rest = pathname.slice(marker.length);
+  return rest === '' || rest.startsWith('/');
+}
 
 /** B站 自己的域。**必须带点**做后缀判断，否则 `evilbilibili.com` 会被放进来 */
 const BILI_DOMAIN = 'bilibili.com';
 
 /**
- * 这个 URL 是不是**B站 自己的取流接口**请求（`playurl`）。
+ * 这个 URL 是不是**B站 自己的取流接口**请求（`playurl` / PGC 的 `playview`）。
  *
  * ## 为什么需要这条通道（用户在真机上指着时间轴第一行问的话）
  *
@@ -439,30 +479,41 @@ const BILI_DOMAIN = 'bilibili.com';
  * `api.bilibili.com` 不是线路，把它写进 `hosts` 会让「N 条线路」的计数虚高 ——
  * 而那个数字是用户判断"是不是被切走了"的主要依据。
  *
+ * ## 两条路径并列，不是"换集时另算一次"
+ *
+ * `playview` 与 `playurl` 走同一个出口：`recordPlayurl()` 里那对
+ * `playurl-req` / `playurl-res` 事件、以及 `streamingProxied` 为真时补的
+ * `ext-patch`。**事件名不加 `pgc-` 前缀**：对用户来说两件事一样
+ * （「第几秒发出取流请求」），多一个 stage 只是给面板加一栏没人看得懂的区别。
+ *
  * @param parsed 已解析的 URL（pathname 只在这里被判读一次，不存）
  */
 function isPlayurlApi(parsed: URL): boolean {
   const host = parsed.hostname.toLowerCase();
   if (host !== BILI_DOMAIN && !host.endsWith(`.${BILI_DOMAIN}`)) return false;
-  return parsed.pathname.includes(PLAYURL_PATH_MARKER);
+  const pathname = parsed.pathname;
+  return (
+    pathname.includes(PLAYURL_PATH_MARKER) || pathnameIsOrUnder(pathname, PGC_PLAYVIEW_PATH_MARKER)
+  );
 }
 
 /**
- * 记录一条 playurl 请求 —— 第二条通道，与媒体分片**并列**（见 `isPlayurlApi()`）。
+ * 记录一条取流请求（`playurl` 或 PGC 的 `playview`）—— 第二条通道，
+ * 与媒体分片**并列**（见 `isPlayurlApi()`）。
  *
  * 产出两条事件：`playurl-req` @ `startTime`、`playurl-res` @ `responseEnd`。
  * **不带 `host`、不带 `kind`**：它们不是线路（理由见 `isPlayurlApi()`）。
  *
  * ## 每一次都记，不做去重
  *
- * 画质切换、换轨、PGC 换集都会重新拉一次 playurl —— 那**是**事实，一次播放里
- * 有几次取流就有几对节点。闸门（`cls` 变化才发分片事件）不能套在这里：
- * 它压的是"几百条同类别分片"，而 playurl 一次播放只有个位数。
+ * 画质切换、换轨、PGC 首屏取流、PGC 换集（`playview`）都会重新拉一次 ——
+ * 那**是**事实，一次播放里有几次取流就有几对节点。闸门（`cls` 变化才发分片
+ * 事件）不能套在这里：它压的是"几百条同类别分片"，而取流一次播放只有个位数。
  * PGC 换集的旧数据由 `resetLoadingTrace()` 兜底清掉。
  *
  * @param state 采集器状态（就地修改）
  * @param entry 一条 resource 条目
- * @returns 是否命中（`false` = 不是 playurl，交给媒体通道继续判）
+ * @returns 是否命中（`false` = 不是取流请求，交给媒体通道继续判）
  */
 export function recordPlayurl(state: LoadingTraceState, entry: ResourceEntryLike): boolean {
   const parsed = parseUrl(entry.name);

@@ -385,6 +385,76 @@ describe('recordPlayurl —— 第二条通道：B站 取流接口（T12）', ()
     expect(state.events.map((e) => e.stage)).toEqual(['playurl-req', 'playurl-res']);
   });
 
+  /**
+   * ★★ 2026-11-20 真机反馈第 4 条：PGC **换集**走的是 `/ogv/player/playview`，
+   * 它的 pathname **不含 `/playurl`** —— 只按 `/playurl` 判会整条漏掉。
+   *
+   * 漏掉的后果不只是少两行：`recordPlayurl()` 还负责「本页由扩展代理 →
+   * 这一次取流就是扩展介入」的上报，而换集时 `resetLoadingTrace()` 会把
+   * `extPatchRecorded` 清空。于是新一集里「扩展介入」永远不会重新出现。
+   */
+  it('★★ PGC 换集的 /ogv/player/playview 也命中（换集不走 playurl）', () => {
+    const state = createTraceState();
+    const hit = recordPlayurl(state, {
+      name: 'https://api.bilibili.com/ogv/player/playview?ep_id=733318&qn=80&fnval=4048',
+      startTime: 2636700.2,
+      responseEnd: 2636822.9,
+    });
+
+    expect(hit, 'playview 必须命中，否则换集时时间轴缺「发出取流请求」两行').toBe(true);
+    expect(state.events.map((e) => [e.stage, e.t])).toEqual([
+      ['playurl-req', 2636700.2],
+      ['playurl-res', 2636822.9],
+    ]);
+  });
+
+  it('★ 换集时 playview 也会补 ext-patch（reset 后新一集仍需「扩展介入」）', () => {
+    /**
+     * 时序照抄真机：`resetLoadingTrace()` 清掉 `extPatchRecorded` →
+     * 换集请求发出 → 命中 playview → `streamingProxied` 为真则补一条。
+     *
+     * 反例：如果 playview 不命中，这一集时间轴上就**永远**没有
+     * 「接管取流」那一行，尽管扩展正在换流。
+     */
+    const state = createTraceState();
+    state.streamingProxied = true;
+    state.extPatchRecorded = false;
+
+    recordPlayurl(state, {
+      name: 'https://api.bilibili.com/ogv/player/playview?ep_id=733318&qn=80',
+      startTime: 5000,
+      responseEnd: 5100,
+    });
+
+    const ext = state.events.filter((e) => e.stage === 'ext-patch');
+    expect(ext).toHaveLength(1);
+    expect(ext[0]).toMatchObject({ t: 5000, note: '接管取流' });
+  });
+
+  it('⛔ playview 也走同一个域判据（别单开一条放行的口子）', () => {
+    const state = createTraceState();
+    for (const name of [
+      'https://evil.com/ogv/player/playview',
+      'https://evilbilibili.com/ogv/player/playview',
+      'https://bilibili.com.evil.com/ogv/player/playview',
+    ]) {
+      expect(recordPlayurl(state, { name, startTime: 1, responseEnd: 2 })).toBe(false);
+    }
+    expect(state.events).toEqual([]);
+  });
+
+  it('⛔ 只认 /ogv/player/playview，同前缀的其它 ogv 接口不收', () => {
+    const state = createTraceState();
+    for (const name of [
+      'https://api.bilibili.com/ogv/player/playviewx?ep_id=1',
+      'https://api.bilibili.com/ogv/player/playinfo?ep_id=1',
+      'https://api.bilibili.com/ogv/review/list?ep_id=1',
+    ]) {
+      expect(recordPlayurl(state, { name, startTime: 1, responseEnd: 2 })).toBe(false);
+    }
+    expect(state.events).toEqual([]);
+  });
+
   it('每一次 playurl 都记（画质切换 / 换轨会重新拉，那是事实）', () => {
     const state = createTraceState();
     recordResource(state, { name: PLAYURL, startTime: 100, responseEnd: 150 });
