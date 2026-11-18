@@ -53,6 +53,7 @@ import {
   patchCleanOption,
   toggleHideCategory,
   loadPanelModel,
+  onLoadingChanged,
   openUpdateWindow,
   readUpdateStatus,
   requestUpdateCheck,
@@ -62,7 +63,7 @@ import {
   type PanelModel,
 } from './panel-data';
 import { aboutTab, accountTab, cleanTab, displayTab, homeCleanPane, qualityTab } from './tabs';
-import { loadingDetailPane } from './loading-pane';
+import { loadingDetailPane, type LoadingOutcome } from './loading-pane';
 import { isStreamingReady, type StreamingIdentity } from '@shared/constants/streaming-identity';
 import { isNewerThan } from '@core/update/state';
 import { UPDATE_RELEASES_PAGE } from '@shared/constants/update';
@@ -171,6 +172,21 @@ export interface PanelController {
    * 这里清的是**上一条**。
    */
   clearNotice(): void;
+  /**
+   * 卸载：摘掉面板在 `window` 上挂的监听器与待触发的定时器。
+   *
+   * ## 为什么需要它（2026-11-20）
+   *
+   * 面板从"换集后主动重取"订阅了 `window` 的 `message`
+   * （见 `panel-data.ts` 的 `onLoadingChanged`）。`window` 上的监听器**不跟着
+   * DOM 走**：不摘的话用户每关一次开关、每 reload 一次扩展，就多叠一层 ——
+   * 之后一次换集会触发 N 次重取（N = 曾经挂载过的次数）。
+   *
+   * 与 `SidebarHandle.dispose()` **同一形状、同一处调用点**
+   * （`content-panel.content.ts` 的 `paint()` 关闭分支与 `ctx.onInvalidated`），
+   * 不是新造的生命周期机制。
+   */
+  dispose(): void;
   /** 整块根节点（塞进 sidebar 的 sheet 里） */
   root: HTMLElement;
 }
@@ -283,6 +299,28 @@ export interface PanelActions {
  * ⚠️ **失败类不自动消失** —— 见 `PanelController.showNotice` 的注释。
  */
 const NOTICE_TTL_MS = 5000;
+
+/**
+ * 换集后**补救取数**的延迟（毫秒）—— 单次 `setTimeout`，**不是轮询**。
+ *
+ * ## 这个数字怎么来的（2026-11-20 真机 6 轮换集实测）
+ *
+ * | 事件 | `pushState` 之后的时刻 |
+ * | --- | --- |
+ * | `resetLoadingTrace()` | 28.0 – 49.2ms |
+ * | 新集首波 `.m4s` | **577.1 – 848.1ms** |
+ *
+ * 也就是说从 reset 到"真的有事可看"之间恒有 532.5–798.9ms 的空窗。
+ * 通知到达面板时第一次重取几乎必然落在这个空窗里（只看到 playurl 那两行），
+ * 所以要在空窗**之后**再补一次。
+ *
+ * 取值 1200ms：比实测最大的 848.1ms 还留 ~350ms 给一次消息往返与
+ * `PerformanceObserver` 的回调滞后（实测 `seg-req` 入账滞后 72.5–292.9ms）。
+ *
+ * ⚠️ **不许**改成"每 N 毫秒再看一次" —— 项目硬纪律：无常驻定时器，
+ * 曾因此出现过挂后台白屏。这里只在换集这一个事件之后排**一次**。
+ */
+const LOADING_CHANGED_RETRY_MS = 1200;
 
 /**
  * ── 退出 / 取数失败时用户必须看到的那几句话（2026-11-12，task-3）──
@@ -1253,7 +1291,20 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     loadingRefreshing = true;
     void fetchLoadingSnapshot({ pageKind: model?.pageKind ?? 'other' })
       .then((next) => {
-        if (model !== null) model = { ...model, loading: next };
+        if (model === null) return;
+        /**
+         * ⚠️ **两处都要写**（2026-11-20 修）。
+         *
+         * `model.loading` 是浮层（`loadingDetailPane`）读的，`model.quality.loading`
+         * 是速览行（`tabs.ts` 的 `buildQualityQuick`）读的 —— 它们是**两个字段**。
+         *
+         * 旧实现只写前者，于是这段话上面的注释「写回 `model.loading` ……
+         * 速览行读的是 `model.quality.loading`，两处各存一份就会出现"浮层刷新了、
+         * 速览行还是旧值"」讲的其实是**它自己**：点 ⟳ 浮层变了、速览行没变。
+         * 归零 / 主动推送之后这个偏差会更容易被看见（换集后速览行停在上一集的
+         * 「线路」结论上），所以在这里一次补齐，而不是让下游各自兜底。
+         */
+        model = { ...model, loading: next, quality: { ...model.quality, loading: next } };
       })
       .catch(() => {
         /**
@@ -1268,6 +1319,84 @@ export function mountPanelBody(actions: PanelActions): PanelController {
         render();
       });
   };
+
+  /**
+   * ── 换集后主动重取（2026-11-20）──
+   *
+   * ## 为什么要订阅（真机实测的空白）
+   *
+   * 面板开着累计 900.4 秒、**0 次取数**；换集本身一条取数都不产生。于是用户
+   * 换完集把鼠标移到侧边条看时间轴，看到的还是上一集的数据 —— 而那正是
+   * 他要看的那一刻。
+   *
+   * ## 为什么不做"展开才重取"的判据
+   *
+   * `mountPanelBody()` 不知道侧边条的开合状态（那是 `sidebar.ts` 的），要判就得
+   * 往 `PanelActions` 里加一个注入项 —— 为一个**低频**推送去增加一条跨层耦合，
+   * 收益远小于"漏接线就永远不重取"的风险。而且这条推送只在**真的换页**时来
+   * （一次会话几次），不是常驻：一次只读 `postMessage` 的成本可以忽略。
+   *
+   * 反过来更划算：面板收着的时候把 `model.loading` 也更新掉，用户下一次 hover
+   * 展开时数据已经是新的 —— 正是"鼠标快速移到侧边条"那个场景。
+   *
+   * ## 为什么还要一次补救取数（不是轮询）
+   *
+   * 实测：新集首波 `.m4s` 在 `pushState` 后 **577.1–848.1ms** 才到，而 reset 在
+   * 28.0–49.2ms 就做完了 —— 通知到达面板时，采集器里**还什么都没有**（实测空窗
+   * 288ms 内 `hosts` 恒为空）。所以第一次重取很可能只拿到一份"只有下载视频片段、
+   * 没有可以播放/开始播放"的半成品。
+   *
+   * 补救**只排一次**、延迟 1200ms（略大于实测最大 848.1ms + 一次消息往返），
+   * 且只在"确实还没到"时才真的再取一次；`setTimeout` 单次，**不是** `setInterval`。
+   * 项目硬纪律：不许常驻定时器（曾因此挂后台白屏）。
+   */
+  let loadingRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const clearLoadingRetry = (): void => {
+    if (loadingRetryTimer === null) return;
+    clearTimeout(loadingRetryTimer);
+    loadingRetryTimer = null;
+  };
+
+  /**
+   * 这份快照值不值得再取一次：还没见到分片（`hosts` 空）或还没见到起播。
+   *
+   * ## 为什么这里还要自己判一次 `hosts`（桥已经校验过了）
+   *
+   * `panel-data.ts` 的 `fetchLoadingSnapshotViaPage()` 现在会拒绝缺 `hosts` 的应答
+   * （那是不信任输入的**边界**，见那里的注释）。所以正常路径下这里拿到的
+   * `snapshot.hosts` 一定是数组，这个判据"用不上"。
+   *
+   * 保留它的理由只有一条，但足够：**这段代码跑在 `setTimeout` 回调里**。
+   * 回调里的异常没人 `await`、没人 catch，只会变成一行控制台报错，
+   * 然后补救取数**永远不发生** —— 症状与"根本没接推送"一模一样，最难查。
+   * 边界已经挡住了畸形输入，这里是"万一挡漏了别静默死掉"的第二道：
+   * 缺字段时按"还没到"处理，保守地多取一次（多取一次只读快照的代价可忽略）。
+   */
+  const loadingNeedsRetry = (outcome: LoadingOutcome | undefined): boolean => {
+    if (outcome === undefined || outcome.kind !== 'ok') return false;
+    const snapshot = outcome.snapshot;
+    if (!Array.isArray(snapshot.hosts) || snapshot.hosts.length === 0) return true;
+    return !snapshot.events.some((e) => e.stage === 'playing');
+  };
+
+  const onLoadingPush = (): void => {
+    refreshLoading();
+    clearLoadingRetry();
+    loadingRetryTimer = setTimeout(() => {
+      loadingRetryTimer = null;
+      // 此刻第一次重取早已落地（那是一次 ms 级的 postMessage 往返），
+      // 所以这里读到的 `model.loading` 就是它的结果，不是上一集的旧值。
+      if (!loadingNeedsRetry(model?.loading)) return;
+      refreshLoading();
+    }, LOADING_CHANGED_RETRY_MS);
+  };
+
+  /**
+   * ⚠️ 必须保存取消函数并在卸载时调 —— `window` 上的监听器不跟着 DOM 走。
+   * 不摘的话每次面板重挂都多叠一层监听（用户反复开关 / 扩展 reload 之后累积）。
+   */
+  const stopLoadingPush = onLoadingChanged(onLoadingPush);
 
   const render = (): void => {
     /**
@@ -1807,6 +1936,22 @@ export function mountPanelBody(actions: PanelActions): PanelController {
     depth: () => stack.length,
     showNotice,
     clearNotice,
+    /**
+     * 卸载：先摘 `window` 监听、再清待触发的补救定时器。
+     *
+     * ## 顺序为什么是"先摘监听"
+     *
+     * 反过来的话，两行之间到达的一条 `loading-changed` 会**再排一个定时器**，
+     * 紧接着 `clearTimeout` 又把它清掉 —— 结果是运气决定有没有泄漏，
+     * 而那正是最难复现的一类 bug。先摘掉消息源，后面的清理就是确定的。
+     *
+     * 幂等：`removeEventListener` 对同一个函数重复调用无害；
+     * `clearLoadingRetry()` 自带 `null` 判断。
+     */
+    dispose() {
+      stopLoadingPush();
+      clearLoadingRetry();
+    },
     root,
   };
 }

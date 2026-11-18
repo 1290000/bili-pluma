@@ -153,6 +153,20 @@ export interface LoadingSnapshotLite {
   /** `<video>` 的即时状态；页面上还没有 video 时为 `null` */
   video: { readyState: number; durationSec: number; height: number; errorCode: number } | null;
   /**
+   * 时间轴的**输出原点**：`0` = 相对页面 `timeOrigin`（首屏，原样），
+   * `> 0` = 已换过集，`events[].t` 已经**减掉**这个值（时间轴从本集 0.00s 起算）。
+   *
+   * ## 为什么既要下发这个字段，又要它可选
+   *
+   * 下发：面板要靠它决定「尾注第一句说哪个时基」「还要不要补『本集开始于页面加载后 X』」
+   * —— 归零之后那句锚点是**自相矛盾**的（见 `loading-pane.ts` 的 `pageOriginAnchor()`）。
+   *
+   * 可选：这份快照被几十个测试当作 fixture 手工构造（理由同上面 `filter` / `hostCls`
+   * 那两段），做成必填会让与"时基"无关的断言全部变红。消费方**必须兜底**：
+   * `undefined` 与 `0` 同义（= 没换过集，时间从页面加载算起）。
+   */
+  originT?: number;
+  /**
    * 候选过滤（ADR 0038）这一次做了什么（2026-11-17 接线）。
    *
    * ## 为什么是可选字段
@@ -277,6 +291,29 @@ export interface LoadingTraceState {
    * **累加**而不是覆盖：一次播放可能先整页注入、再切一集，三个数都要算进去。
    */
   filter: PcdnFilterStats;
+  /**
+   * 时间轴的**输出原点**（毫秒，相对页面 `timeOrigin`）。`0` = 尚未换过集。
+   *
+   * ## 这不是事件，绝不进 `events`
+   *
+   * `events` 是"发生过什么"，原点是"从哪一刻开始算"——把原点写成一条事件会
+   * 让时间轴上凭空多出一个节点，而且它长得和 `nav` 一模一样（细节见
+   * `recordNavStart()` 的注释：换集时**有意不补** `nav`）。所以它只活在状态里，
+   * 唯一的作用是 `snapshotOf()` 在**输出层**把 `t` 平移。
+   *
+   * ## 为什么 `0` 表示"不平移"而不是"平移 0 毫秒"
+   *
+   * 两者数值上一样，但判据上必须分开：`0` 是"这一页还没换过集"，
+   * 首屏与现有 200+ 例测试都跑在这条路上 —— `snapshotOf()` 在那里**原样返回**
+   * 不创建新数组，保证输出与改动之前逐字节一致。
+   *
+   * ## 为什么是采集侧字段而不是 `buildTimeline()` 的参数
+   *
+   * `core/loading/timeline.ts` 是纯函数、零 IO，它**不该知道"集"这个概念**：
+   * 它的排序 / 去重语义建立在**原始时基**上（同一 `t` 的两条事件必须能对上），
+   * 平移必须发生在排序之后。所以原点留在本模块，`buildTimeline()` 签名一字不动。
+   */
+  originT: number;
 }
 
 /** 造一份空状态 */
@@ -289,7 +326,40 @@ export function createTraceState(): LoadingTraceState {
     extPatchRecorded: false,
     streamingProxied: false,
     filter: { applied: false, rewritten: 0, proxied: 0, fallbackKept: 0 },
+    // 0 = 尚未换过集 ⇒ `snapshotOf()` 不平移，首屏行为与改动前完全一致
+    originT: 0,
   };
+}
+
+/**
+ * 记录时间轴的**输出原点**：换集之后，时间轴从这一刻起算 0.00s。
+ *
+ * ## 为什么必须在 `resetLoadingTrace()` **之后**单独调一次
+ *
+ * `resetLoadingTrace()` 的语义是"清空"，它会把 state 整个换成新对象，
+ * `originT` 也跟着回到 `0`。**刻意不**让它顺手记一个原点：那样等于把
+ * "清空数据"和"给新一集定个起点"两个职责塞进一个函数，而后者需要
+ * `performance.now()` —— 一个纯清空函数不该读时钟（它现在连 `window` 都不碰，
+ * 单测直接调也不会有副作用）。所以调用方是**两条**：
+ *
+ * ```ts
+ * resetLoadingTrace();
+ * markTraceOrigin(performance.now()); // 必须紧跟着，否则新一集不归零
+ * ```
+ *
+ * ## 真机依据（2026-11-20 实测 6 轮换集）
+ *
+ * 换集后时间轴第一行出现 `55.62s` / `91.35s` / `267.49s` 这种大数，
+ * 用户读成"这一集从 55 秒开始播"——而实测 `t=3229.65s` 与本集
+ * `video.duration=1441s` 根本对不上（前者是页面 `timeOrigin` 起算的绝对毫秒）。
+ * 归零后第一行就是本集真实的"第几秒"。
+ *
+ * @param t 毫秒（`performance.now()`）；非有限数或负数**直接忽略**
+ *   （与 `pushEvent()` 同一条纪律：非法值不修正成某个"看起来正常"的数）
+ */
+export function markTraceOrigin(t: number): void {
+  if (!Number.isFinite(t) || t < 0) return;
+  state.originT = t;
 }
 
 /**
@@ -948,12 +1018,44 @@ export function snapshotOf(
         ? null
         : { host: top.host, cls: top.cls, flavor: top.flavor, hostCls: top.hostCls },
     hosts,
-    events: timeline.events,
+    events: shiftToOrigin(timeline.events, state.originT),
     truncated: state.truncated || timeline.truncated,
     // 候选过滤的累计值（永远是对象，消费方不必判空）
     filter: { ...state.filter },
     video,
+    // 恒填（可选只是为了不打断手工构造 fixture 的几十个测试）
+    originT: state.originT,
   };
+}
+
+/**
+ * 把时间轴事件的 `t` 平移到**本集起点**（`originT`）—— 归零的唯一实现处。
+ *
+ * ## 为什么必须在 `buildTimeline()` **之后**做
+ *
+ * `buildTimeline()` 的排序与去重都以**原始** `t` 为准（同一时刻的两条事件必须
+ * 仍然相等才能去重）。先平移再交进去，等于让它在一份已经被动过的时基上排序 ——
+ * 排序本身还成立（单调平移保序），但"去重键相同"这件事会变得依赖 `originT`
+ * 的精度，是一个没人会想到的前提。所以顺序是：**先归一，再平移**。
+ *
+ * ## `originT === 0` 时原样返回（不产出新数组）
+ *
+ * 首屏那 200+ 例测试跑的就是这条路。多一个 `map()` 不只是浪费：
+ * 返回新数组会让"事件对象是同一个引用"这类断言从"显然"变成"碰巧"。
+ *
+ * ## 平移后钳在 `0`
+ *
+ * `resetLoadingTrace()` 之后理论上不该有早于原点的残留事件，但**兜底判据要写死**：
+ * 负的 `t` 会在面板上出现两个错 —— `clockText()` 有 `ms > 0` 守卫，负数被
+ * 显示成 `0.00`（看起来正常，掩盖了异常）；而 `+x.xxs` 的增量是两个 `t` 相减，
+ * 会算出一个荒谬的负增量。所以钳在 0，不产出负数。
+ *
+ * @param events 已归一（排序 + 去重）的事件
+ * @param originT 输出原点（毫秒）；`0` = 不平移
+ */
+function shiftToOrigin(events: LoadEvent[], originT: number): LoadEvent[] {
+  if (originT <= 0) return events;
+  return events.map((event) => ({ ...event, t: Math.max(0, event.t - originT) }));
 }
 
 /** `<video>` 上的事件名 → 时间轴阶段（声明顺序即监听器安装顺序，不影响语义） */
@@ -1151,6 +1253,13 @@ export function getLoadingSnapshot(): LoadingSnapshotLite {
  * 为什么必须清：PGC 是 SPA，切集不会重新加载页面，content script 也不会重跑。
  * 不清的话上一集的 host 统计会算进新一集 —— 诊断页会指着一个这一集根本没用的
  * 线路说"当前线路"，而它连一条分片都没发过。
+ *
+ * ## ⚠️ 它**不**顺手记时间原点（`originT` 回到 `0`）
+ *
+ * 换集后要让时间轴从本集 0.00s 起算，调用方必须**紧接着**调
+ * `markTraceOrigin(performance.now())`。两条调用是刻意的：本函数的语义是"清空"，
+ * 让它顺手读时钟猜一个原点会把两个职责混在一起（详见 `markTraceOrigin()` 的注释）。
+ * 漏了那一句的后果不是崩溃，而是**新一集的时间轴仍然显示 55.62s 这种大数**。
  */
 export function resetLoadingTrace(): void {
   state = createTraceState();

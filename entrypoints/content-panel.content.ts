@@ -881,6 +881,16 @@ export default defineContentScript({
     const paint = (): void => {
       if (!enabled) {
         cycler.dispose();
+        /**
+         * ⚠️ **摘掉面板挂在 `window` 上的监听**（2026-11-20）。
+         *
+         * 面板订阅了 `loading-changed`（换集后主动重取，见 `panel.ts` 的
+         * `onLoadingChanged`）。`window` 上的监听器不跟着 DOM 走 ——
+         * 不摘的话每关一次开关就多叠一层，之后一次换集会触发 N 次重取。
+         *
+         * ⚠️ **必须在 `controller = null` 之前调**：置空之后就没法再摘了。
+         */
+        controller?.dispose();
         controller = null;
         /**
          * ⚠️ **先 `dispose()` 再置 null** —— sidebar 在 `document` 上挂了
@@ -1200,6 +1210,8 @@ export default defineContentScript({
       document.removeEventListener('visibilitychange', onVisible);
       chrome.storage.onChanged.removeListener(onChanged);
       cycler.dispose();
+      // 摘掉面板挂在 `window` 上的 `loading-changed` 监听（见 `paint()` 里的同段注释）
+      controller?.dispose();
       // 摘掉 sidebar 在 document 上挂的点击监听（见 `paint()` 里的同段注释）
       sidebar?.dispose();
       // 扩展失效（重载 / 卸载）→ 必须清轮询定时器，否则它挂在已失效的上下文里

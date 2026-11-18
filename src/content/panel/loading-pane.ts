@@ -684,6 +684,30 @@ export const TIMELINE_FOOTNOTE =
   '时间从页面开始加载算起；+x.xxs 是比上一条多花的时间，两条在同一刻发生的标「同一刻」。下载视频片段那几行给的是请求到返回的耗时。只列出每次线路类别变化后的第一段，其余片段未逐段列出。';
 
 /**
+ * 尾注里那句**时基声明**，单独提出来给 `timelineFootnote()` 做 `replace()` 的锚。
+ *
+ * ## 为什么要提成常量（2026-11-20）
+ *
+ * `timelineFootnote()` 靠 `TIMELINE_FOOTNOTE.replace(时基句, …)` 换第一句 ——
+ * 三版尾注（基准 / 带锚点 / 已归零）**只有第一句不同**，其余三句必须一字不动。
+ *
+ * 这个写法有个不报错的失效模式：**如果那句话在常量里改了字**（加个逗号、
+ * 把"加载"换成"载入"），`replace` 找不到目标、**原样返回**，于是：
+ *
+ * | 场景 | 显示 | 用户读到的 |
+ * | --- | --- | --- |
+ * | 归零后（`originT > 0`） | 「时间从页面开始加载算起」 | **错的时基** |
+ *
+ * 没有任何异常、测试若不逐句断言也会全绿 —— 而这句话正是问题 1 的收尾：
+ * 归零把数字改小了，尾注若还说"从页面加载算起"，用户会以为时间轴坏了。
+ *
+ * 提成常量让"目标串"与"常量内容"共用一个来源。`tests/unit/content/panel-loading.test.ts`
+ * 的 `★ 尾注的时基句必须仍在 TIMELINE_FOOTNOTE 里` 守这条：常量里找不到时基句
+ * 就直接红，而不是让 `replace` 静默不生效。
+ */
+export const FOOTNOTE_TIMEBASE_CLAUSE = '时间从页面开始加载算起';
+
+/**
  * 毫秒 → `m:ss.SS`（≥ 1 小时用 `h:mm:ss.SS`）。
  *
  * ## 为什么用「分:秒」而不是再写一遍 `302.41s`
@@ -728,7 +752,7 @@ export function clockText(ms: number): string {
  * | 一条事件都没有 | ❌ | 没有数可说（**不补 0**） |
  * | `truncated`（环形缓冲丢过早期事件） | ❌ | 此时"第一条事件"**不是**这一集的开始 —— 说「本集开始于…」是假的 |
  *
- * 第一条是**归零的配套**（2026-11-21）：换集后 `snapshotOf()` 已经把 `t` 平移过，
+ * 第一条是**归零的配套**（2026-11-20）：换集后 `snapshotOf()` 已经把 `t` 平移过，
  * 首条事件不再是"页面加载后多久"而是"本集开始后多久"。这条判据必须排在**最前面** ——
  * 归零后 `nav` 本来就不在（reset 有意不补），若让它落到第二条以下的判据里，
  * 面板就会同时说「时间从本集开始播放算起」和「本集开始于页面加载后 5:02.41」，
@@ -772,12 +796,14 @@ export function pageOriginAnchor(snapshot: LoadingSnapshotLite): string | null {
 export function timelineFootnote(snapshot: LoadingSnapshotLite): string {
   // 判据与 `pageOriginAnchor()` 的第一条同源：归零 ⟺ 时基是本集起点
   if ((snapshot.originT ?? 0) > 0) {
-    return TIMELINE_FOOTNOTE.replace('时间从页面开始加载算起', '时间从本集开始播放算起');
+    return TIMELINE_FOOTNOTE.replace(FOOTNOTE_TIMEBASE_CLAUSE, '时间从本集开始播放算起');
   }
   const anchor = pageOriginAnchor(snapshot);
   if (anchor === null) return TIMELINE_FOOTNOTE;
-  const clause = '时间从页面开始加载算起';
-  return TIMELINE_FOOTNOTE.replace(clause, `${clause}（${anchor}）`);
+  return TIMELINE_FOOTNOTE.replace(
+    FOOTNOTE_TIMEBASE_CLAUSE,
+    `${FOOTNOTE_TIMEBASE_CLAUSE}（${anchor}）`,
+  );
 }
 
 /**

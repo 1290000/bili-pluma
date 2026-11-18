@@ -38,6 +38,10 @@ function runTracksBranch(
     loadingTraceCid: string | null;
     resetLoadingTrace: () => void;
     attachLoadingTraceVideo: () => void;
+    /** 2026-11-20 归零：reset 之后必须紧接着定原点 */
+    markTraceOrigin?: (t: number) => void;
+    /** 换集后主动推一次，让面板重取 */
+    postMessage?: (message: unknown) => void;
   },
 ): { loadingTraceCid: string | null } {
   const at = CONTENT_SRC.indexOf("if (d.type === 'playurl-tracks')");
@@ -57,6 +61,12 @@ function runTracksBranch(
     loadingTraceCid: env.loadingTraceCid,
     resetLoadingTrace: env.resetLoadingTrace,
     attachLoadingTraceVideo: env.attachLoadingTraceVideo,
+    // 新增依赖（归零 + 主动推送）：测试必须显式提供，缺了会在源码里 ReferenceError
+    markTraceOrigin: env.markTraceOrigin ?? (() => {}),
+    NS: '__PLUMA__',
+    window: { postMessage: env.postMessage ?? (() => {}) },
+    // 真实实现读 `performance.now()`；jsdom 里有，但固定成常量让断言可复现
+    performance: { now: () => 1234.5 },
     badgeState: {},
     paintBadge: () => {},
     reportQuality: () => {},
@@ -103,6 +113,41 @@ describe('S-T3：/video/ SPA 换片 → cid 变化才重置加载观测', () => 
     expect(resets).toBe(1);
     expect(attaches).toBe(1); // 播放器可能重建了 <video>
     expect(loadingTraceCid).toBe('99999999999');
+  });
+
+  /**
+   * ## 2026-11-20：归零 + 主动推送（换片路径上的那一条）
+   *
+   * 三处 reset 漏任何一处，那种换页方式的时间轴就不归零 —— 而"不归零"的表现
+   * 是**看起来正常的**（一个 `267.49s` 的时间轴不报错）。所以这一条不只断言
+   * "发生过"，还断言**顺序**：必须在 reset **之后**定原点，否则原点记的是
+   * 换片之前那一刻，新集首行会变成负数（被钳成 0，看不出问题但语义是错的）。
+   */
+  it('★ cid 变化 → reset 之后紧接着 markTraceOrigin + 推 loading-changed', () => {
+    const order: string[] = [];
+    const posted: unknown[] = [];
+
+    runTracksBranch('99999999999', trackSummary(), {
+      loadingTraceCid: '42141027046',
+      resetLoadingTrace: () => {
+        order.push('reset');
+      },
+      markTraceOrigin: (t) => {
+        order.push(`origin:${String(t)}`);
+      },
+      postMessage: (message) => {
+        order.push('post');
+        posted.push(message);
+      },
+      attachLoadingTraceVideo: () => {
+        order.push('attach');
+      },
+    });
+
+    // 顺序：先清空、再定原点、再推、最后补挂 video 监听
+    expect(order).toEqual(['reset', 'origin:1234.5', 'post', 'attach']);
+    // 推送里**不含任何数据**（安全边界：只发类型名，快照由面板自己来取）
+    expect(posted).toEqual([{ __ns: '__PLUMA__', type: 'loading-changed' }]);
   });
 
   it('同 cid（切画质也发 playurl）→ 不重置，时间轴继续累计', () => {

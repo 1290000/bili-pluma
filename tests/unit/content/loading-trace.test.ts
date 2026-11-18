@@ -31,6 +31,7 @@ import {
   createTraceState,
   getLoadingSnapshot,
   hostFromUrl,
+  markTraceOrigin,
   noteExtPatch,
   pushEvent,
   recordExtPatch,
@@ -706,6 +707,8 @@ describe('snapshotOf —— actual 取 count 最大的真实线路', () => {
       video: null,
       // 2026-11-17 接线 / 0039 升级：候选改写的累计结果（默认全 0）
       filter: { applied: false, rewritten: 0, proxied: 0, fallbackKept: 0 },
+      // 2026-11-20 归零：0 = 还没换过集 ⇒ 时间轴时基仍是页面 timeOrigin
+      originT: 0,
     });
   });
 
@@ -1108,5 +1111,250 @@ describe('单例：reset 清空、快照不抛', () => {
     resetLoadingTrace();
     expect(noteExtPatch(30)).toBe(true);
     expect(getLoadingSnapshot().events.map((e) => e.t)).toEqual([30]);
+  });
+});
+
+// ─────────────────────── 时间轴归零（2026-11-20，真机换集）───────────────────────
+
+describe('markTraceOrigin —— 换集后时间轴从本集 0.00s 起算', () => {
+  /**
+   * ## 这一组修的是什么（真机实测）
+   *
+   * 番剧 `ep341217 ⇄ ep341218 ⇄ ep341219` 换集后，时间轴首行出现
+   * `55.62s` / `91.35s` / `267.49s` 这种大数 —— 用户读成"这一集从 267 秒开始播"。
+   * 实测 `t=3229.65s`，而本集 `video.duration=1441s`（前者是它的 2.24 倍），
+   * 因为它其实是**相对页面 `timeOrigin` 的绝对毫秒**。
+   *
+   * 归零的实现在**输出层**（`snapshotOf()` 里平移），`core/loading/timeline.ts`
+   * 签名一字未动 —— 它的排序/去重语义建立在原始时基上，平移必须在它之后做。
+   */
+  it('★ originT=0（未换集）→ **原样**返回，不新产数组（首屏行为逐字节不变）', () => {
+    const state = createTraceState();
+    recordVideoStage(state, 'canplay', 1772);
+    recordVideoStage(state, 'playing', 3270.2);
+
+    const before = state.events;
+    const snapshot = snapshotOf(state, null);
+
+    expect(snapshot.originT).toBe(0);
+    expect(snapshot.events.map((e) => e.t)).toEqual([1772, 3270.2]);
+    // 不产出新数组：`events` 逐元素与状态里**同一批对象**（不是 map 出来的副本）
+    expect(snapshot.events).toEqual(before);
+  });
+
+  it('★ 定了原点 → 每条事件的 t 都减去它（首行变成小数值）', () => {
+    const state = createTraceState();
+    recordVideoStage(state, 'canplay', 3_225_000);
+    recordVideoStage(state, 'playing', 3_229_650);
+
+    state.originT = 3_225_000;
+    const snapshot = snapshotOf(state, null);
+
+    expect(snapshot.originT).toBe(3_225_000);
+    expect(snapshot.events.map((e) => e.t)).toEqual([0, 4650]);
+  });
+
+  it('⛔ 早于原点的事件（reset 前残留）→ 钳在 0，**不产出负数**', () => {
+    /**
+     * 负的 `t` 会造成两个错：`clockText()` 有 `ms > 0` 守卫，负数被显示成
+     * `0.00`（看起来正常，掩盖了异常）；而 `+x.xxs` 的增量是两条 `t` 相减，
+     * 会算出一个荒谬的负增量。所以钳在 0。
+     */
+    const state = createTraceState();
+    recordVideoStage(state, 'canplay', 1000);
+    recordVideoStage(state, 'playing', 3000);
+
+    state.originT = 2000;
+    expect(snapshotOf(state, null).events.map((e) => e.t)).toEqual([0, 1000]);
+  });
+
+  it('非有限数 / 负数 → 忽略（**不修正成 0**，与 pushEvent 同一条纪律）', () => {
+    resetLoadingTrace();
+    markTraceOrigin(5000);
+    expect(getLoadingSnapshot().originT).toBe(5000);
+
+    /**
+     * 非法值不许把已经记好的原点改掉，也不许改成某个"看起来正常"的数 ——
+     * 与 `pushEvent()` / `recordExtPatch()` 同一条纪律：非法时间戳直接丢。
+     */
+    markTraceOrigin(Number.NaN);
+    markTraceOrigin(Number.POSITIVE_INFINITY);
+    markTraceOrigin(Number.NEGATIVE_INFINITY);
+    markTraceOrigin(-1);
+    expect(getLoadingSnapshot().originT).toBe(5000);
+
+    resetLoadingTrace();
+  });
+
+  it('⛔ 非法值从 `0` 起算：`NaN` 不许进 `originT`，更不许污染整条时间轴', () => {
+    /**
+     * 上一条守的是"非法值不许**改写**一个已记好的原点"。这一条守的是更靠前的一步：
+     * 从 `0` 起算时，`NaN` 也不许被写进去。
+     *
+     * ## 为什么只断言 `originT === 0` 是不够的
+     *
+     * 真正会被用户看见的不是那个字段，而是时间轴。若护栏漏掉（把 `Number.isNaN`
+     * 的那半边判据去掉），`originT` 会变成 `NaN`，于是 `shiftToOrigin()` 第一条
+     * 判据 `originT <= 0` 得到 **`false`**（`NaN` 与任何数比较都是 `false`），
+     * 走进 `Math.max(0, t - NaN)` → `NaN`。后果是：
+     *   - 每一条事件的 `t` 都是 `NaN`
+     *   - `clockText()` 对 `NaN` 有兜底，显示成 `0.00` —— **看起来完全正常**
+     *   - `+x.xxs` 增量是两条 `t` 相减，全是 `NaN`
+     *
+     * 也就是说，一个非法的入参能让整条时间轴静默变成一张"看起来正常"的废纸。
+     * 所以这条用例**同时**断言字段、事件值与有限性，三件事缺一件都守不住。
+     */
+    resetLoadingTrace();
+    expect(noteExtPatch(55_620)).toBe(true);
+    expect(getLoadingSnapshot().events.map((e) => e.t)).toEqual([55_620]);
+
+    markTraceOrigin(Number.NaN);
+    const afterNaN = getLoadingSnapshot();
+    expect(afterNaN.originT).toBe(0);
+    expect(afterNaN.events.map((e) => e.t)).toEqual([55_620]);
+    expect(afterNaN.events.every((e) => Number.isFinite(e.t))).toBe(true);
+
+    markTraceOrigin(-1);
+    expect(getLoadingSnapshot().originT).toBe(0);
+
+    /**
+     * `0` 是"还没换过集"的哨兵值，**不是**"已归零到第 0 毫秒" ——
+     * 这两个语义必须能对上：写了 `0` 之后时间轴仍按原始时基走，不平移。
+     */
+    markTraceOrigin(0);
+    expect(getLoadingSnapshot().originT).toBe(0);
+    expect(getLoadingSnapshot().events.map((e) => e.t)).toEqual([55_620]);
+
+    resetLoadingTrace();
+  });
+
+  it('★ 跨时基：换集前的 `55620` / `91350` 换集后变成 `100` / `420`（问题 1 的全部内容）', () => {
+    /**
+     * ## 这一条才是用户那个问题
+     *
+     * 前几条测的是"原点存对了""`snapshotOf()` 真的减了"两个零件。但真机上用户看到的
+     * 是一张截图：番剧 `ep341217 ⇄ ep341218` 换集后首行 `55.62s`、次行 `91.35s`
+     * （`t=55620` / `t=91350`，相对**页面** `timeOrigin`，与本集 `duration=1441s`
+     * 根本对不上）。这一条把那张截图的数字原样摆进来，走**真实的单例链路**
+     * （`noteExtPatch` 灌事件 → `resetLoadingTrace` → `markTraceOrigin` →
+     * `getLoadingSnapshot`），断言用户最后看到的是 `0.10s` / `0.42s`。
+     *
+     * ## 反例意义
+     *
+     * 只测"`markTraceOrigin(55900)` 之后 `originT === 55900"是**不够的** ——
+     * 参数存进去但 `snapshotOf()` 没接上也全绿。所以这里断言的是
+     * `getLoadingSnapshot().events` 的 `t`，那是面板真正读的那个数。
+     *
+     * `noteExtPatch()` 用它而不是 `pushEvent(state, ...)` 是因为后者要拿到 `state`：
+     * 单例不导出，而 `content.ts` 走的正是 `noteExtPatch()` 这条路 —— 用同一条路，
+     * 这条用例才在测"接线"而不只是"算法"。
+     */
+    resetLoadingTrace();
+
+    // ── 换集前（上一集，页面已加载 55.6 秒）──
+    //
+    // `noteExtPatch()` 是单例**唯一**能灌一条带自定义 `t` 的公开入口（`pushEvent()`
+    // 要拿到 `state`，而单例不导出）。它幂等，所以换集前最多一条 —— 够了：
+    // 这条要证明的是"旧时基的事件不会残留到新一集"，一条就能证明。
+    expect(noteExtPatch(55_620)).toBe(true);
+    expect(getLoadingSnapshot().events.map((e) => e.t)).toEqual([55_620]);
+
+    // ── 换集：三句是 `content.ts` 里那个调用序列的最小复刻 ──
+    resetLoadingTrace(); // 1) 清空上一集
+    markTraceOrigin(55_900); // 2) 记本集起点（`performance.now()`）
+    expect(noteExtPatch(56_000)).toBe(true); // 3) 新一集的事件按原始时基继续记
+
+    const snapshot = getLoadingSnapshot();
+    expect(snapshot.originT).toBe(55_900);
+    // 用户看到的：0.10s（不是 56.00s，也不是 55.62s）
+    expect(snapshot.events.map((e) => e.t)).toEqual([100]);
+    expect(snapshot.events).toHaveLength(1);
+
+    resetLoadingTrace();
+  });
+
+  it('★ 跨时基（多条）：`55620` / `91350` → 换集后 `100` / `420`', () => {
+    /**
+     * 上一条用单例链路（问题 1 的接线），但单例**只有一个**灌事件的公开入口
+     * （`noteExtPatch()` 幂等，写一次就不再写），所以那条只能放一条新事件。
+     * 这一条用 `snapshotOf()` 对齐 Lead 那组数字的**两条**事件，保证平移对
+     * 每一条都生效，而不是碰巧第一条对。
+     *
+     * 上一集的 `55620` / `91350` 正是截图里的 `55.62s` / `91.35s`；换集后本集记的是
+     * `56000` / `56320`，原点 `55900` → 必须变成 `100` / `420`。
+     *
+     * ⚠️ 这里直接写 `state.originT` 而不是调 `markTraceOrigin()`：后者只写**单例**，
+     * 而这份 `state` 是本用例自己造的。`markTraceOrigin()` 的写入路径由上一条
+     * 用例（真单例）守，这条守的是**平移**。两者分工不同，别以为这是绕过测试。
+     */
+    const history = createTraceState();
+    recordVideoStage(history, 'canplay', 55_620);
+    recordVideoStage(history, 'playing', 91_350);
+    expect(snapshotOf(history, null).events.map((e) => e.t)).toEqual([55_620, 91_350]);
+
+    // 换集：`resetLoadingTrace()` 的语义等价于换一份全新 state（本用例就地模拟）
+    const fresh = createTraceState();
+    expect(fresh.originT).toBe(0); // 清空后原点回到哨兵值
+
+    recordVideoStage(fresh, 'canplay', 56_000);
+    recordVideoStage(fresh, 'playing', 56_320);
+    fresh.originT = 55_900;
+
+    const snapshot = snapshotOf(fresh, null);
+    expect(snapshot.originT).toBe(55_900);
+    expect(snapshot.events.map((e) => e.t)).toEqual([100, 420]);
+  });
+
+  it('幂等：重复调用以**最后一次**为准', () => {
+    resetLoadingTrace();
+    markTraceOrigin(1000);
+    markTraceOrigin(2000);
+    expect(getLoadingSnapshot().originT).toBe(2000);
+    resetLoadingTrace();
+  });
+
+  it('★ 平移发生在 buildTimeline **之后**：排序/去重仍按原始 t', () => {
+    /**
+     * 若先平移再归一，`originT` 的精度就会参与去重键 —— 那是一个没人会想到的前提。
+     * 这里用"乱序输入 + 同 t 去重"两条一起钉住：结果必须是**按原始 t 排好序**的
+     * 那 3 条（2000 重复的那条被去重），且平移后仍然单调不减。
+     */
+    const state = createTraceState();
+    recordVideoStage(state, 'playing', 3000);
+    recordVideoStage(state, 'canplay', 2000);
+    recordVideoStage(state, 'canplay', 2000); // 重复：buildTimeline 会去掉
+    recordVideoStage(state, 'stall', 1000);
+
+    state.originT = 1000;
+    const events = snapshotOf(state, null).events;
+
+    expect(events.map((e) => [e.stage, e.t])).toEqual([
+      ['stall', 0],
+      ['canplay', 1000],
+      ['playing', 2000],
+    ]);
+  });
+
+  it('原点**不进 events**：时间轴上不会凭空多出一个节点', () => {
+    const state = createTraceState();
+    recordVideoStage(state, 'playing', 5000);
+    state.originT = 5000;
+
+    expect(snapshotOf(state, null).events).toHaveLength(1);
+    expect(state.events).toHaveLength(1);
+  });
+
+  it('★ resetLoadingTrace() 把 originT 清回 0（调用方必须自己补 markTraceOrigin）', () => {
+    /**
+     * 两条调用是**刻意的**：`resetLoadingTrace()` 的语义是"清空"，让它顺手读时钟
+     * 猜一个原点等于把两个职责塞进一个函数。漏补 `markTraceOrigin()` 的后果
+     * 不是崩溃，而是新一集的时间轴仍然显示 `55.62s` 这种大数。
+     */
+    resetLoadingTrace();
+    markTraceOrigin(6000);
+    expect(getLoadingSnapshot().originT).toBe(6000);
+
+    resetLoadingTrace();
+    expect(getLoadingSnapshot().originT).toBe(0);
   });
 });

@@ -715,11 +715,31 @@ export function fetchLoadingSnapshotViaPage(timeoutMs = 2000): Promise<LoadingOu
 
       const s = d.snapshot as SnapshotOf | null | undefined;
       /**
-       * ⚠️ 认 `present` 与 `events` 两个字段就够判"形状对不对"：
-       * 前者是布尔（区分空快照与垃圾对象），后者必须是数组
-       * （时间轴是这条桥的主体，缺了就没法画）。
+       * ⚠️ 认 `present` / `events` / `hosts` 三个字段判"形状对不对"：
+       * - `present` 是布尔（区分空快照与垃圾对象）
+       * - `events` 必须是数组（时间轴是这条桥的主体，缺了就没法画）
+       * - `hosts` 必须是数组（2026-11-20 补：`describeSnapshotLine()` 直接
+       *   `snapshot.hosts.filter(...)`，缺了会在**渲染**里抛 TypeError）
+       *
+       * 前两个字段不够。第三条是这次发现的真缺口：只认前两个时，一条
+       * `{ present: true, events: [] }`（没有 `hosts`）能过校验、被判成 `ok`，
+       * 然后在 `qualityTab()` → `buildLoadingQuick()` → `describeSnapshotLine()`
+       * 里抛 `Cannot read properties of undefined (reading 'filter')` —— 而那个
+       * 异常发生在一段没有 `await` 的渲染调用栈里，用户看到的是**面板整块消失**，
+       * 不会看到任何"读取失败"的提示。
+       *
+       * 判据放在**这里**而不是各个消费方：这条桥是唯一的不信任输入边界
+       * （`window.postMessage` 的来源是页面上下文，页面脚本可以伪造应答）。
+       * 在边界上验一次，下游就可以信任类型 —— 各处再补 `.filter` 兜底反而会把
+       * "形状不对"这件事分散成 N 个不一致的默认值。
        */
-      if (s && typeof s === 'object' && typeof s.present === 'boolean' && Array.isArray(s.events)) {
+      if (
+        s &&
+        typeof s === 'object' &&
+        typeof s.present === 'boolean' &&
+        Array.isArray(s.events) &&
+        Array.isArray(s.hosts)
+      ) {
         finish({ kind: 'ok', snapshot: s });
         return;
       }
@@ -733,6 +753,48 @@ export function fetchLoadingSnapshotViaPage(timeoutMs = 2000): Promise<LoadingOu
     window.addEventListener('message', onMessage);
     window.postMessage({ __ns: PAGE_NS, type: 'loading-snapshot' }, '*');
   });
+}
+
+/**
+ * 订阅「加载观测已经换了」的推送（2026-11-20）。
+ *
+ * ## 为什么需要它（真机实测的空白）
+ *
+ * 面板开着累计 900.4 秒、**0 次取数**；换集本身一条取数都不产生 ——
+ * 只有用户手点 ⟳ 或「收起→再展开」才会重取。于是换集后用户把鼠标快速移到
+ * 侧边条（谁会在那种时候去点 ⟳），时间轴停在旧数据上。
+ *
+ * ## 这是推送，不是轮询
+ *
+ * `entrypoints/content.ts` 在三处 `resetLoadingTrace()` 之后各发一条
+ * `{ __ns, type: 'loading-changed' }`。没有定时器参与 —— 项目硬纪律：
+ * 不许常驻定时器（曾因此挂后台白屏）。
+ *
+ * ## 消息里**没有任何数据**（安全边界）
+ *
+ * 与 `fetchLoadingSnapshotViaPage()` 那条桥同一条纪律：通知里只有一个类型名，
+ * 快照仍由本模块发 `loading-snapshot` 去取（应答侧只读内存、不含凭据）。
+ * 页面脚本伪造这条通知的最坏效果 = 让面板多做一次**只读**查询。
+ *
+ * ## ⚠️ 必须返回取消函数
+ *
+ * 面板会被卸载（用户关开关 / 扩展 reload / 导航走）。`window` 上的监听器
+ * 不跟着 DOM 走 —— 不摘的话每次重挂都多叠一层，长期累积。
+ *
+ * @param cb 收到推送时调（调用方自己做 in-flight 去重，见 `panel.ts` 的 `refreshLoading`）
+ * @returns 取消订阅函数（**幂等**，重复调用无害）
+ */
+export function onLoadingChanged(cb: () => void): () => void {
+  const onMessage = (ev: MessageEvent): void => {
+    const d = ev.data as { __ns?: string; type?: string } | null;
+    if (!d || d.__ns !== PAGE_NS || d.type !== 'loading-changed') return;
+    cb();
+  };
+
+  window.addEventListener('message', onMessage);
+  return () => {
+    window.removeEventListener('message', onMessage);
+  };
 }
 
 /**

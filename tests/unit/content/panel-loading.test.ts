@@ -39,6 +39,7 @@ import {
   describeKindPill,
   describePcdnCaveat,
   describeSnapshotLine,
+  FOOTNOTE_TIMEBASE_CLAUSE,
   gapText,
   hostClsOf,
   hostCountText,
@@ -60,6 +61,7 @@ import {
   buildQualityView,
   fetchLoadingSnapshot,
   fetchLoadingSnapshotViaPage,
+  onLoadingChanged,
 } from '../../../src/content/panel/panel-data';
 import { qualityTab } from '../../../src/content/panel/tabs';
 import type { LoadingSnapshotLite } from '../../../src/content/isolated/loading-trace';
@@ -1474,6 +1476,106 @@ describe('尾注的锚点（PGC 换集后时间轴没有 nav）', () => {
   });
 });
 
+// ─────────────────── 归零之后：锚点消失、尾注换时基（2026-11-20）───────────────────
+
+describe('归零时间轴的配套文案（originT > 0）', () => {
+  /**
+   * ## 这一组修的是什么（用户截图证实）
+   *
+   * 番剧换集后时间轴首行显示 `55.62s` / `267.49s` —— 那是相对页面 `timeOrigin`
+   * 的绝对毫秒。修法是**采集侧归零**（`loading-trace.ts` 的 `originT`）。
+   *
+   * 归零之后，上面那套「本集开始于页面加载后 5:02.41」的锚点不但没用了，
+   * 而且**与归零自相矛盾**：时间轴已经改成"本集开始后第几秒"，
+   * 再说它从页面加载后 5 分钟开始，等于同一个界面陈述两个时基。
+   *
+   * 所以这是**归零的配套**，不是另一件事：归零了就必须撤锚点、换尾注第一句。
+   */
+  const zeroed = (t: number): LoadingSnapshotLite =>
+    snapshot({
+      originT: 302_410,
+      events: [{ t, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' }],
+    });
+
+  it('★ 归零后 → 锚点**必须消失**（再说「页面加载后 5:02.41」是自相矛盾）', () => {
+    expect(pageOriginAnchor(zeroed(0))).toBeNull();
+    // 哪怕首条事件不是 0（本集开播后 4.65s 起播），也照样不补
+    expect(pageOriginAnchor(zeroed(4650))).toBeNull();
+  });
+
+  it('★ 归零后 → 尾注第一句换成「时间从本集开始播放算起」', () => {
+    const text = timelineFootnote(zeroed(0));
+
+    expect(text).toContain('时间从本集开始播放算起');
+    // 自相矛盾的那半句必须一起消失（不是"再加一句新的"）
+    expect(text).not.toContain('时间从页面开始加载算起');
+    // ⚠️ 后面三句一律保留 —— 它们跟时基无关，砍掉等于为一个文案问题丢掉三个说明
+    expect(text).toContain('+x.xxs 是比上一条多花的时间');
+    expect(text).toContain('下载视频片段');
+    expect(text).toContain('只列出每次线路类别变化后的第一段');
+  });
+
+  it('★ 归零后**不许**再拼出「（本集开始于…）」括号（三版里的第二版不能漏判）', () => {
+    // 判据必须排在"无 nav ⇒ 补锚点"之前，否则会同时说两句时基
+    expect(timelineFootnote(zeroed(0))).not.toContain('（');
+    expect(timelineFootnote(zeroed(0))).not.toContain('本集开始于');
+  });
+
+  it('originT 缺席（旧快照 / fixture）→ 走原路：补锚点 + 页面时基（不崩）', () => {
+    /**
+     * `originT` 在 `LoadingSnapshotLite` 里是**可选**的（几十个 fixture 手工构造
+     * 这份形状）。消费方必须兜底成 `0` —— 缺字段 = "没换过集"，不是"读不到"。
+     */
+    const legacy = snapshot({
+      events: [{ t: 302_410, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' }],
+    });
+    expect(legacy.originT).toBeUndefined();
+    expect(pageOriginAnchor(legacy)).toBe('本集开始于页面加载后 5:02.41');
+    expect(timelineFootnote(legacy)).toContain('时间从页面开始加载算起（本集开始于页面加载后');
+  });
+
+  it('originT 为 0 → 与缺席同义（不是"归零成 0 秒"）', () => {
+    const atZero = snapshot({
+      originT: 0,
+      events: [{ t: 302_410, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' }],
+    });
+    expect(pageOriginAnchor(atZero)).toBe('本集开始于页面加载后 5:02.41');
+    expect(timelineFootnote(atZero)).toBe(timelineFootnote(snapshot({ events: atZero.events })));
+  });
+
+  /**
+   * ⛔ 这一条守的不是行为，是**不报错的失效模式**。
+   *
+   * `timelineFootnote()` 三版尾注只有第一句不同，靠
+   * `TIMELINE_FOOTNOTE.replace(时基句, …)` 换 —— 而 `String.prototype.replace`
+   * 在找不到目标时**原样返回，不抛不警告**。
+   *
+   * 于是有人把常量里的"时间从页面开始加载算起"改成"时间从页面载入算起"，
+   * 归零后界面就会显示「时间从页面开始加载算起」—— 一个**错误的时基陈述**，
+   * 而没有任何异常。这正是最难发现的那种错：数字都变小了看起来像修好了，
+   * 唯一还说着旧时基的地方就是这句。
+   *
+   * 所以这里直接钉"目标串必须仍在常量里"。上面那些行为用例都是间接的：
+   * 它们只证明"现在能换到"，证明不了"以后改字时会被发现"。
+   */
+  it('⛔ 时基句必须仍在 TIMELINE_FOOTNOTE 里（否则 replace 静默不生效）', () => {
+    expect(TIMELINE_FOOTNOTE).toContain(FOOTNOTE_TIMEBASE_CLAUSE);
+    // 而且只能出现一次：出现两次的话 `replace` 只换掉第一个，后半句还留在那儿
+    expect(TIMELINE_FOOTNOTE.split(FOOTNOTE_TIMEBASE_CLAUSE)).toHaveLength(2);
+  });
+
+  it('DOM：归零后的时间轴，尾注说本集时基且没有锚点括号', () => {
+    const box = loadingDetailPane(ok(zeroed(4650)), {
+      back: () => undefined,
+      refresh: () => undefined,
+      openDiagnostics: () => undefined,
+    });
+
+    expect(box.textContent).toContain('时间从本集开始播放算起');
+    expect(box.textContent).not.toContain('本集开始于页面加载后');
+  });
+});
+
 // ─────────────────────────── 文案守卫 ───────────────────────────
 
 describe('文案守卫：只说可证实的事', () => {
@@ -1969,6 +2071,41 @@ describe('取加载快照的桥', () => {
     expect(out.kind).toBe('unanswered');
   });
 
+  it('⛔ 只缺 `hosts` 也必须拒收（不是"差不多能画"）', async () => {
+    /**
+     * ## 这条是这次发现的一个真缺口（2026-11-20）
+     *
+     * 桥原先只认 `present` 与 `events`（理由写在那里：一个布尔 + 一个数组
+     * 足够判"不是垃圾对象"）。但 `describeSnapshotLine()` 第一件事就是
+     * `snapshot.hosts.filter(...)` —— `hosts` 缺席时，一条**能过桥**的应答会在
+     * `qualityTab()` → `buildLoadingQuick()` 的渲染栈里抛
+     * `Cannot read properties of undefined (reading 'filter')`。那段调用没人
+     * `await`，异常只落成控制台一行；用户看到的是**面板整块消失**，
+     * 连"读取失败 · 刷新页面后重试"都不会出现。
+     *
+     * 所以判据必须放在**边界**：`window.postMessage` 的来源是页面上下文，
+     * 这是唯一的不信任输入口。拒收之后走既有的 `unanswered` —— 面板会
+     * 老老实实说「读取失败」，比整块消失好得多。
+     */
+    let replied = 0;
+    const handler = (ev: MessageEvent): void => {
+      const d = ev.data as { __ns?: string; type?: string } | null;
+      if (!d || d.__ns !== '__PLUMA__' || d.type !== 'loading-snapshot') return;
+      replied += 1;
+      const { hosts: _dropped, ...withoutHosts } = snapshot();
+      window.postMessage(
+        { __ns: '__PLUMA__', type: 'loading-snapshot-reply', snapshot: withoutHosts },
+        '*',
+      );
+    };
+    window.addEventListener('message', handler);
+    cleanup.push(() => window.removeEventListener('message', handler));
+
+    const out = await fetchLoadingSnapshotViaPage(10_000);
+    expect(replied).toBe(1); // 确实收到了账，不是没人应答
+    expect(out.kind).toBe('unanswered');
+  });
+
   it('★ 非播放页 → absent，且**根本不发消息**（不发也就不会白等 2 秒）', async () => {
     const spy = installContentScript('ok');
     const out = await fetchLoadingSnapshot({ pageKind: 'other' });
@@ -1988,6 +2125,112 @@ describe('取加载快照的桥', () => {
     const c = await fetchLoadingSnapshot({ pageKind: 'other' });
 
     expect([a.kind, b.kind, c.kind]).toEqual(['ok', 'unanswered', 'absent']);
+  });
+});
+
+/**
+ * 让同页"content.ts"发一条 `loading-changed` 推送（换集后的通知）。
+ *
+ * ⚠️ 用真 `window.postMessage`（不是直接调 listener）：要验的是**消息形状判据**
+ * （`__ns` + `type` 两个字段都得对上），绕过 postMessage 就只测到了回调。
+ */
+function pushLoadingChanged(): void {
+  window.postMessage({ __ns: '__PLUMA__', type: 'loading-changed' }, '*');
+}
+
+/**
+ * 把 jsdom 的 `postMessage` 宏任务队列跑干净。
+ *
+ * ⚠️ `await Promise.resolve()` **不够**：jsdom 的 `postMessage` 派发走的是一个
+ * 真实的**宏任务**（`setTimeout(0)` 级别），微任务队列清空时监听器还没跑到。
+ * 这个坑先用一条空宏任务把它等掉，避免"单独跑必过、连跑必挂"。
+ */
+async function flushPostMessage(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+describe('换集推送的订阅（onLoadingChanged）', () => {
+  /**
+   * ## 这一组修的是什么（真机实测的空白）
+   *
+   * 面板开着累计 900.4 秒、**0 次取数**；换集本身一条取数都不产生 ——
+   * 只有用户手点 ⟳ 或「收起→再展开」才会重取。于是换完集把鼠标移到侧边条，
+   * 时间轴还是上一集的数据。
+   *
+   * 修法是**推送**：采集器 reset 后发一条 `loading-changed`，面板收到就重取。
+   * 不是轮询（项目硬纪律：不许常驻定时器，曾因此挂后台白屏）。
+   */
+  it('★ 收到 loading-changed → 回调被调（推送链路通了）', async () => {
+    resetBridge();
+    let calls = 0;
+    const stop = onLoadingChanged(() => {
+      calls += 1;
+    });
+    cleanup.push(stop);
+
+    pushLoadingChanged();
+    await flushPostMessage();
+
+    expect(calls).toBe(1);
+  });
+
+  it('★ 取消订阅之后不再回调（面板卸载必须能摘掉监听）', async () => {
+    resetBridge();
+    let calls = 0;
+    const stop = onLoadingChanged(() => {
+      calls += 1;
+    });
+
+    pushLoadingChanged();
+    await flushPostMessage();
+    expect(calls).toBe(1);
+
+    stop();
+    pushLoadingChanged();
+    await flushPostMessage();
+
+    // `window` 上的监听器不跟着 DOM 走：不摘的话每重挂一层就多一次重取
+    expect(calls).toBe(1);
+  });
+
+  it('取消函数**幂等**：重复调用无害（卸载路径可能走两遍）', async () => {
+    resetBridge();
+    let calls = 0;
+    const stop = onLoadingChanged(() => {
+      calls += 1;
+    });
+
+    stop();
+    expect(() => {
+      stop();
+    }).not.toThrow();
+
+    pushLoadingChanged();
+    await flushPostMessage();
+    expect(calls).toBe(0);
+  });
+
+  it('⛔ 别的消息类型 / 别的命名空间 → 一次都不回调（判据两个字段都要对上）', async () => {
+    resetBridge();
+    let calls = 0;
+    const stop = onLoadingChanged(() => {
+      calls += 1;
+    });
+    cleanup.push(stop);
+
+    // 同命名空间、不同类型（应答 / 请求都不是"变化"通知）
+    window.postMessage({ __ns: '__PLUMA__', type: 'loading-snapshot-reply' }, '*');
+    window.postMessage({ __ns: '__PLUMA__', type: 'loading-snapshot' }, '*');
+    // 同类型、不同命名空间（别的扩展 / 页面自己的消息）
+    window.postMessage({ __ns: 'other', type: 'loading-changed' }, '*');
+    // 垃圾
+    window.postMessage(null, '*');
+    window.postMessage('loading-changed', '*');
+    await flushPostMessage();
+
+    expect(calls).toBe(0);
   });
 });
 

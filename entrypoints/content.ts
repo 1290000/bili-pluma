@@ -82,6 +82,7 @@ import {
   attachLoadingTraceVideo,
   getLoadingSnapshot,
   installLoadingTrace,
+  markTraceOrigin,
   noteExtPatch,
   notePcdnFilter,
   notePcdnFilterOff,
@@ -1103,6 +1104,42 @@ function listenMainWorld(): void {
          * 一条分片都没发过的线路说"当前线路"。计数与时间轴一起清，不留一半。
          */
         resetLoadingTrace();
+        /**
+         * ⚠️ **必须紧接着定原点**（2026-11-20，时间轴归零）。
+         *
+         * `resetLoadingTrace()` 的语义是"清空"，它把 `originT` 也清回 `0`
+         * （= 不平移）。不补这一句的话，新一集的时间轴仍然是相对页面
+         * `timeOrigin` 的绝对毫秒 —— 用户看到的第一行是 `55.62s` / `267.49s`
+         * 这种大数（实测 `t=3229.65s` 与本集 `duration=1441s` 根本对不上），
+         * 而它真正想说的是"这一集开播后第几秒"。
+         *
+         * 两条调用刻意分开：清空与"给新一集定起点"是两件事，
+         * 详见 `markTraceOrigin()` 的注释。
+         */
+        markTraceOrigin(performance.now());
+        /**
+         * **主动推一次**：告诉同页的面板「加载观测已经换了，该重取」。
+         *
+         * ## 为什么必须是推送（2026-11-20 实测）
+         *
+         * 面板开着累计 900.4 秒、**0 次取数**；换集本身一条取数都不产生 ——
+         * 只有用户手点 ⟳ 或「收起→再展开」才会重取。于是换集后鼠标快速移到
+         * 侧边条（展开不看 ⟳），时间轴停在上一集、或只显示「下载视频片段」，
+         * 拿不到「可以播放」「开始播放」这两行。
+         *
+         * ## 这不是轮询
+         *
+         * 项目硬纪律：**不许常驻定时器**（曾因此挂后台白屏）。这里只在"数据真的
+         * 变了"的那一刻发一条消息，面板收到后才发 `loading-snapshot` 来取 ——
+         * 没有 `setInterval`，也没有"每 N 毫秒看一眼"。
+         *
+         * ## 安全边界（与下面那条 `loading-snapshot` 应答同一条纪律）
+         *
+         * 这条消息里**只有类型名，不含任何数据**：快照仍由面板自己发
+         * `loading-snapshot` 来取（应答侧只读内存）。页面脚本伪造它的最坏效果
+         * 是让面板多做一次只读查询 —— 不扩大任何权限、不触发任何写操作。
+         */
+        window.postMessage({ __ns: NS, type: 'loading-changed' }, '*');
         // 播放器可能把 `<video>` 整个重建了（那时旧元素上的监听器再也不会触发）
         attachLoadingTraceVideo();
         reportQuality({ height: 0, note: `[PGC] 切集换流已记录 cid=${cid}` });
@@ -1151,6 +1188,15 @@ function listenMainWorld(): void {
         // 与 PGC 换集（`:1094`）同一条纪律：SPA 换片是页内动作，采集器不会重装，
         // 不清的话上一片的线路统计与时间轴会留在新片名下。计数与时间轴一起清。
         resetLoadingTrace();
+        /**
+         * ⚠️ **紧接着定原点**（与 PGC 换集那条 `markTraceOrigin()` 同一纪律）。
+         * 三处 reset 漏任何一处，那种换页方式的时间轴就不归零 —— 而"不归零"
+         * 的表现是**看起来正常的**（一个 `267.49s` 的时间轴并不报错），
+         * 所以漏了只能靠人肉对照集数与首行时刻才能发现。
+         */
+        markTraceOrigin(performance.now());
+        // 数据换了就推一次，让面板重取（面板未挂载时这条消息没人听，无副作用）
+        window.postMessage({ __ns: NS, type: 'loading-changed' }, '*');
         // 播放器可能把 `<video>` 整个重建了（那时旧元素上的监听器再也不会触发）
         attachLoadingTraceVideo();
       }
@@ -2647,7 +2693,7 @@ function report(): void {
 /**
  * SPA 换集后重新问一次 background「本页取流是不是扩展在代理」。
  *
- * ## 为什么必须补这一问（2026-11-21 调查结论）
+ * ## 为什么必须补这一问（2026-11-20 调查结论）
  *
  * `resetLoadingTrace()` 会把 `streamingProxied` 清成 false（换集清零语义正确），
  * 而这个布尔**只由 `page/activate:ok` 写入**。但 `page/activate` 只在 `report()`
@@ -2710,6 +2756,15 @@ function handlePlayPageNavigation(destUrl: string, currentUrl: string): boolean 
   if (nextIdentity === null || nextIdentity === playPageIdentity(currentUrl)) return false;
 
   resetLoadingTrace();
+  /**
+   * ⚠️ **紧接着定原点**（2026-11-20，时间轴归零）。这是第三处、也是最常见的
+   * 一处（真机实测 6/6 轮换集都由 pushState 触发 `navigate`，只晚 0.6–1.6ms）。
+   * 漏了它，PG C／`/video/` 两条消息兜底路径都还在、时间轴却仍显示大数 ——
+   * 那种"改了一半"的状态最难查。
+   */
+  markTraceOrigin(performance.now());
+  // 数据换了就推一次，让面板重取（与两处 cid 兜底 reset 同一条纪律）
+  window.postMessage({ __ns: NS, type: 'loading-changed' }, '*');
   // 播放器可能把 `<video>` 整个重建，旧元素上的监听器再也不会触发
   attachLoadingTraceVideo();
   void refreshProxiedFlagAfterNavigation(destUrl);
@@ -2798,7 +2853,7 @@ export default defineContentScript({
     ctx.signal.addEventListener('abort', disposeLoadingTrace, { once: true });
 
     /**
-     * ## SPA 换集 / 换推荐视频 → 按 URL 身份清空诊断观测（2026-11-21）
+     * ## SPA 换集 / 换推荐视频 → 按 URL 身份清空诊断观测（2026-11-20）
      *
      * 守的是"诊断面板不能把上一集的线路与时间轴算到新集名下"。
      *

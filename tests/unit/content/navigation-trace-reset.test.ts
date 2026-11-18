@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 /**
- * SPA 换集 / 换推荐视频后的加载观测重置（2026-11-21）。
+ * SPA 换集 / 换推荐视频后的加载观测重置（2026-11-20）。
  *
  * ## 背景（根因已由只读调查坐实，这里只守修复）
  *
@@ -45,6 +45,10 @@ interface DecisionEnv {
   reset: () => void;
   attach: () => void;
   refresh: (url: string) => void;
+  /** 2026-11-20 归零：reset 之后必须紧接着定原点 */
+  markOrigin?: (t: number) => void;
+  /** 换集后主动推一次，让面板重取 */
+  post?: (message: unknown) => void;
 }
 
 /**
@@ -68,10 +72,19 @@ function decide(
   fromUrl: string,
   toUrl: string,
   env?: Partial<DecisionEnv>,
-): { changed: boolean; resets: number; attaches: number; refreshes: string[] } {
+): {
+  changed: boolean;
+  resets: number;
+  attaches: number;
+  refreshes: string[];
+  originCalls: number[];
+  posted: unknown[];
+} {
   let resets = 0;
   let attaches = 0;
   const refreshes: string[] = [];
+  const originCalls: number[] = [];
+  const posted: unknown[] = [];
   const changed = runFromSource<boolean>(
     'function handlePlayPageNavigation(',
     'return handlePlayPageNavigation(destUrl, currentUrl);',
@@ -84,6 +97,25 @@ function decide(
         (() => {
           resets += 1;
         }),
+      /**
+       * ⚠️ 归零的两个新依赖**必须显式注入**：源码里是会真的调到的
+       * （`markTraceOrigin(performance.now())` + `window.postMessage`），
+       * 缺了就是 ReferenceError —— 那不是测试不便，而是"漏接线"的正确报警。
+       */
+      markTraceOrigin:
+        env?.markOrigin ??
+        ((t: number) => {
+          originCalls.push(t);
+        }),
+      performance: { now: () => 4242.5 },
+      NS: '__PLUMA__',
+      window: {
+        postMessage:
+          env?.post ??
+          ((message: unknown) => {
+            posted.push(message);
+          }),
+      },
       attachLoadingTraceVideo:
         env?.attach ??
         (() => {
@@ -96,7 +128,7 @@ function decide(
         }),
     },
   );
-  return { changed, resets, attaches, refreshes };
+  return { changed, resets, attaches, refreshes, originCalls, posted };
 }
 
 /** 身份变化集合 = 应 reset 集合 —— 这里逐条钉死，防止有人拿整串 URL 比较 */
@@ -204,8 +236,54 @@ describe('navigate → resetLoadingTrace 的接线', () => {
       expect(result.attaches).toBe(shouldReset ? 1 : 0);
       // 换集必须重新问一次代理状态，否则新集拿不到「接管取流」
       expect(result.refreshes).toEqual(shouldReset ? [to] : []);
+
+      /**
+       * ## 2026-11-20 归零：换集必须同时定原点 + 推一次
+       *
+       * 漏 `markTraceOrigin()` ⇒ 新一集时间轴仍显示 `55.62s` / `267.49s` 这种
+       * 页面绝对毫秒（用户截图证实过）。漏推送 ⇒ 面板停在上一集数据上
+       * （实测面板开着 900 秒、0 次取数）。
+       *
+       * 两者都只在**换集**时发生；同集导航（切画质 / `?t=`）一条都不许有。
+       */
+      expect(result.originCalls).toEqual(shouldReset ? [4242.5] : []);
+      expect(result.posted).toEqual(
+        shouldReset ? [{ __ns: '__PLUMA__', type: 'loading-changed' }] : [],
+      );
     },
   );
+
+  it('事件顺序：reset → 定原点 → 推送 → 重挂 video → 重新报到代理状态', () => {
+    /**
+     * 顺序是语义，不是风格：
+     * - 原点**晚于** reset：早了就记成换集前的时刻，新集首行被钳成 0（语义错但不报错）
+     * - 推送**晚于**原点：面板收到通知就会立刻来取快照，早于原点取到的仍是未平移的
+     */
+    const order: string[] = [];
+    decide(
+      'https://www.bilibili.com/bangumi/play/ep111',
+      'https://www.bilibili.com/bangumi/play/ep222',
+      {
+        reset: () => {
+          order.push('reset');
+        },
+        markOrigin: (t) => {
+          order.push(`origin:${String(t)}`);
+        },
+        post: (m) => {
+          order.push(`post:${String((m as { type?: string }).type)}`);
+        },
+        attach: () => {
+          order.push('attach');
+        },
+        refresh: () => {
+          order.push('refresh');
+        },
+      },
+    );
+
+    expect(order).toEqual(['reset', 'origin:4242.5', 'post:loading-changed', 'attach', 'refresh']);
+  });
 
   it('目标不是播放页 → 一条都不动', () => {
     const result = decide('https://www.bilibili.com/video/BV1', 'https://www.bilibili.com/');
