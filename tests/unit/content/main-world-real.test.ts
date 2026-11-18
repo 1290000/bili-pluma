@@ -1234,3 +1234,78 @@ describe('token 握手观测埋点（B-04，只观测不改行为）', () => {
     expect(ref).toMatchObject({ locked: true, seen: 1 });
   });
 });
+
+/**
+ * `capturePlayurlJson` 的 `playurl-tracks` 载荷要带 `cid`（2026-11-18）。
+ *
+ * 用途：ISOLATED 侧靠 cid 变化检测 `/video/` 的 SPA 换片（合集 / 相关视频是
+ * pushState 导航，content.ts 不追踪 pageKey），以重置加载观测（计数 + 时间轴）。
+ * 这里把 `playurlIds` / `capturePlayurlJson` 两个真实函数从源码里抠出来执行
+ * （照 G7 的既有手法），其余依赖用桩注入。
+ */
+describe('playurl-tracks 载荷带 cid（SPA 换片检测的数据源）', () => {
+  /** 抠顶层函数：从名字定位开口，花括号计数找闭合（这两个函数体内无字符串花括号）。 */
+  function extractFn(name: string): string {
+    const start = SOURCE.indexOf(`function ` + name + `(`);
+    expect(start, `源码里找不到 ` + name).toBeGreaterThan(-1);
+    const open = SOURCE.indexOf(`{`, start);
+    let depth = 0;
+    let i = open;
+    for (; i < SOURCE.length; i++) {
+      const ch = SOURCE[i];
+      if (ch === `{`) depth += 1;
+      else if (ch === `}`) {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    return SOURCE.slice(start, i + 1);
+  }
+
+  function runCapture(url: string, body: unknown): Array<Record<string, unknown>> {
+    const posted: Array<Record<string, unknown>> = [];
+    const ctx: Record<string, any> = {
+      NS: '__PLUMA__',
+      token: 'test-token',
+      rawPlayurlPosted: true, // 屏蔽 playurl-raw 那条，只看 tracks
+      // ⚠️ 必须桩掉 safePost：它是主世界的真函数，不在 ctx 里会 ReferenceError，
+      // 被 capturePlayurlJson 的外层 try/catch 吞掉 → 这里什么都收不到。
+      safePost: (payload: Record<string, unknown>) => {
+        posted.push(payload);
+      },
+      isPlayurlPath: (u: string) => u.includes('playurl'),
+      summarizePlayurl: (j: unknown) => ({ dolbyVision: false, src: j }),
+      rememberVideoTracks: () => {},
+      location: { href: 'https://www.bilibili.com/video/BV1xx411c7mD' },
+    };
+    const defs = extractFn('playurlIds') + ' ' + extractFn('capturePlayurlJson');
+    const urlArg = JSON.stringify(url);
+    const bodyArg = JSON.stringify(JSON.stringify(body));
+    const runner = new Function(
+      'ctx',
+      'with (ctx) { ' + defs + '; capturePlayurlJson(' + urlArg + ', ' + bodyArg + '); }',
+    );
+    runner(ctx);
+    return posted;
+  }
+
+  it('URL 带 cid → 载荷 cid 是字符串化的 cid', () => {
+    const posted = runCapture(
+      'https://api.bilibili.com/x/player/wbi/playurl?cid=42141027046&avid=1&qn=120',
+      { code: 0, data: { dash: {} } },
+    );
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.type).toBe('playurl-tracks');
+    expect(posted[0]!.cid).toBe('42141027046');
+    expect(posted[0]!.summary).toBeDefined();
+  });
+
+  it('URL 解析不出 cid → 照发，cid 为空串（重置逻辑自己兜底）', () => {
+    const posted = runCapture('https://api.bilibili.com/x/player/wbi/playurl?avid=1', {
+      code: 0,
+      data: { dash: {} },
+    });
+    expect(posted).toHaveLength(1);
+    expect(posted[0]!.cid).toBe('');
+  });
+});

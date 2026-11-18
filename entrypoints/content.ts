@@ -420,6 +420,16 @@ let pgcCacheTried = false;
  */
 let pgcHandledCid = '';
 
+/**
+ * 当前加载观测对应的 cid（普通 `/video/` 页）。
+ *
+ * `null` = 还没见过第一次取流。来源：`playurl-tracks` 消息新带的 `cid` 字段
+ * （主世界 `capturePlayurlJson` 填的）—— `/video/` 的合集 / 相关视频是 pushState
+ * 导航，content script 不重启、采集器不重装， cid 变化是**唯一**能观测到换片的信号。
+ * 用途见 `playurl-tracks` 分支里的重置逻辑（与 PGC 换集 `:1094` 同一条纪律）。
+ */
+let loadingTraceCid: string | null = null;
+
 /** 重画角标。所有字段变化后统一调这一个入口（实现已下沉到 `badge-state.ts`） */
 function paintBadge(): void {
   paintBadgeFromModule(badgeState, badgeEnabled, {
@@ -1117,6 +1127,33 @@ function listenMainWorld(): void {
         }
       ).summary;
       if (!s) return;
+
+      /**
+       * SPA 换片 → **清空加载观测**（T3 同一条纪律的 `/video/` 版，2026-11-18）。
+       *
+       * B站合集 / 相关视频是 pushState 导航：页面不刷新、采集器不重装，
+       * content.ts 也不追踪 `/video/` 的 pageKey —— cid 变化是唯一可观测信号。
+       * 不清的话上一片（截图实测 48 次切换 / 时间轴滚到 26s+）会累加在新片名下。
+       *
+       * ## 两个时序陷阱（都实测过，别动）
+       *
+       * 1. **首次取流（`loadingTraceCid === null`）不许重置**：`loading-pane.ts`
+       *    写明 `resetLoadingTrace()` 之后有意不补 `nav` 事件（补了会凭空多一条
+       *    几分钟的空档）。首屏重置会把「页面开始加载 0.00s」清掉，时间轴起点
+       *    变成 playurl 时刻 —— 每次加载的显示都会变样。
+       * 2. **同 cid 不重置**：切画质也发 playurl（同 cid），时间轴继续累计
+       *    是正确语义（同一次"本次加载"）。
+       */
+      const cidRaw = (d as { cid?: unknown }).cid;
+      const cid = typeof cidRaw === 'string' ? cidRaw : '';
+      if (cid && loadingTraceCid !== null && cid !== loadingTraceCid) {
+        // 与 PGC 换集（`:1094`）同一条纪律：SPA 换片是页内动作，采集器不会重装，
+        // 不清的话上一片的线路统计与时间轴会留在新片名下。计数与时间轴一起清。
+        resetLoadingTrace();
+        // 播放器可能把 `<video>` 整个重建了（那时旧元素上的监听器再也不会触发）
+        attachLoadingTraceVideo();
+      }
+      if (cid) loadingTraceCid = cid;
 
       /**
        * 记录"本视频提供杜比视界"。

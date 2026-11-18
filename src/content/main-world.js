@@ -5698,9 +5698,21 @@
       var j = JSON.parse(text);
       var s = summarizePlayurl(j);
       if (!s) return;
+      var ids = playurlIds(url);
       // 记住轨道清单，供 quality id 反查
       rememberVideoTracks(s);
-      safePost({ __ns: NS, type: 'playurl-tracks', token: token, summary: s });
+      /**
+       * `cid`：供 ISOLATED 侧检测 SPA 换片（cid 变化）以重置加载观测
+       * （`/video/` 的合集 / 相关视频是 pushState 导航，content.ts 不追踪 pageKey）。
+       * 空串 = 从 URL 解析不出（形状异常的响应照发，重置逻辑自己兜底）。
+       */
+      safePost({
+        __ns: NS,
+        type: 'playurl-tracks',
+        token: token,
+        summary: s,
+        cid: ids ? ids.cid : '',
+      });
 
       /**
        * 再上报一次**原文**（只一次）。
