@@ -333,3 +333,176 @@ export function filterPcdnCandidates<T extends CandidateTrack>(
 ): FilterResult<T> {
   return rewritePcdnCandidates(tracks, rules);
 }
+
+/** `rewriteDashOf()` 的结果：三个计数 + 「这一次到底改没改」 */
+export interface DashFilterStats extends FilterStats {
+  /** 真的动过至少一条候选（`false` = 整份 `dash` 原样，`holder.dash` 引用不变） */
+  changed: boolean;
+}
+
+/**
+ * 把一份 **`dash` 容器**（不是一个轨数组）里的 PCDN 候选换成官方镜像。
+ *
+ * ## 为什么要有这一层：容器有四个，形状各不一样
+ *
+ * `rewritePcdnCandidates()` 只认「一个轨数组」，而 B站 的 `dash` 里带候选地址的
+ * 容器有**四个**，形状还不一致：
+ *
+ * | 容器 | 形状 | 外层的非候选字段 |
+ * | --- | --- | --- |
+ * | `dash.video` | track 数组 | — |
+ * | `dash.audio` | track 数组 | — |
+ * | `dash.flac.audio` | **单个** track 对象 | `dash.flac.display` 是布尔 |
+ * | `dash.dolby.audio` | track 数组 | `dash.dolby.vision` 是布尔 |
+ *
+ * 只覆盖前两个的后果是**静默失败**：Hi-Res / 杜比全景声那几轨照旧走 PCDN，
+ * 而开关是开着的、面板上一切正常 —— 正是 `classify.ts` 点名的「最坏失败方向」。
+ *
+ * ## 与主世界 `filterDashOf()` **逐条等价**，靠测试钉住
+ *
+ * 主世界（`src/content/main-world.js`）有一份自己的 `filterDashOf()`：它是裸 JS，
+ * 不能 `import` 本文件。于是**同一套容器遍历存在两份实现**，这是既定现实
+ * （ADR 0039 的决定：判据下沉 `core/`，主世界只经 `cfg` 收运行时值）。
+ *
+ * 两份必然漂移的那一天，表现是"开关开着却有一条路没过滤"。所以
+ * `tests/unit/content/pcdn-filter-wiring.test.ts` 用同一批 fixture 同时喂两个实现，
+ * 断言 `dash` 深相等 + 四个统计数相等 —— **任何一边单独动都会红**。
+ *
+ * ## 就地替换 `holder.dash`（与主世界一致）
+ *
+ * 调用点因此只需一行（见 `entrypoints/content.ts` 的 `prepareFullStream()`）。
+ * 语义与边界（与主世界实现一字不差）：
+ *
+ * - **条数严格不变、只换 authority**，`pathname` / `search` / `hash` 不动（ADR 0039 边界 1/2）；
+ * - 没改动的**轨返回原对象**；整份 `dash` 一条都没改时 `changed: false` 且
+ *   **不碰 `holder.dash`**（不制造无谓 diff，也让"幂等"可断言）；
+ * - 形状不对（缺 `dash` / `dash` 非对象 / `flac.audio` 非对象 / `dolby.audio` 非数组）
+ *   → 该容器整块跳过，**不抛错**（边界 5：判不了就别改）；
+ * - **`durl` / `durls` 一个字节都不碰**（FLV 那条路本轮不做，扩了要另写 ADR）；
+ * - `flac.display` / `dolby.vision` / `dash.duration` 等非候选字段原样带过。
+ *
+ * @param holder 形如 `{ dash: {...} }` 的对象（**就地替换** `holder.dash`）
+ * @param rules 改写规则（ISOLATED 侧直接传 `DEFAULT_REWRITE_RULES`）
+ * @returns 三个计数 + `changed`（形状不对时全 0、`changed: false`）
+ */
+export function rewriteDashOf(
+  holder: { dash?: unknown } | null | undefined,
+  rules: RewriteRules | null | undefined,
+): DashFilterStats {
+  const none: DashFilterStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
+  if (!holder || typeof holder !== 'object') return none;
+
+  const dashRaw: unknown = holder.dash;
+  if (!dashRaw || typeof dashRaw !== 'object') return none; // 纯 durl 响应 → 原样
+  const dash = dashRaw as Record<string, unknown>;
+
+  const video = Array.isArray(dash.video) ? (dash.video as unknown[]) : null;
+  const audio = Array.isArray(dash.audio) ? (dash.audio as unknown[]) : null;
+
+  // flac 是**对象**、里面装**单个** track；`display` 等键原样带过
+  let flacHolder: Record<string, unknown> | null = null;
+  const flacRaw: unknown = dash.flac;
+  if (flacRaw && typeof flacRaw === 'object' && !Array.isArray(flacRaw)) {
+    const flacAudio: unknown = (flacRaw as Record<string, unknown>).audio;
+    if (flacAudio && typeof flacAudio === 'object' && !Array.isArray(flacAudio)) {
+      flacHolder = flacRaw as Record<string, unknown>;
+    }
+  }
+
+  // dolby 是**对象**、里面的 `audio` 是**数组**；`vision` 等键原样带过
+  let dolbyHolder: Record<string, unknown> | null = null;
+  const dolbyRaw: unknown = dash.dolby;
+  if (dolbyRaw && typeof dolbyRaw === 'object' && !Array.isArray(dolbyRaw)) {
+    if (Array.isArray((dolbyRaw as Record<string, unknown>).audio)) {
+      dolbyHolder = dolbyRaw as Record<string, unknown>;
+    }
+  }
+
+  // 四个容器一个都没认出来（如 `{ dash: { duration: 1 } }`）→ 整块跳过
+  if (video === null && audio === null && flacHolder === null && dolbyHolder === null) {
+    return none;
+  }
+
+  const stats: DashFilterStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
+
+  const nextVideo = video === null ? null : rewriteTrackList(video, rules, stats);
+  const nextAudio = audio === null ? null : rewriteTrackList(audio, rules, stats);
+
+  // flac：单个 track —— 只在真的改了时才复制外层对象（不制造无谓 diff）
+  let nextFlac: Record<string, unknown> | null = null;
+  if (flacHolder !== null) {
+    const before = flacHolder.audio;
+    const after = rewriteTrackKeep(before, rules, stats);
+    if (after !== before) nextFlac = { ...flacHolder, audio: after };
+  }
+
+  // dolby：track 数组 —— 逐条过滤，只在真的改了时才复制外层对象
+  let nextDolby: Record<string, unknown> | null = null;
+  if (dolbyHolder !== null) {
+    const listBefore = dolbyHolder.audio as unknown[];
+    const listAfter = rewriteTrackList(listBefore, rules, stats);
+    // `rewriteTrackList()` 恒返回新数组，所以要另比一次元素身份才知道该不该复制外层
+    const dolbyChanged = listAfter.some((t, i) => t !== listBefore[i]);
+    if (dolbyChanged) nextDolby = { ...dolbyHolder, audio: listAfter };
+  }
+
+  // 一条都没改 → 计数照样返回（`fallbackKept` 可能是非零），但**不碰 holder.dash**
+  if (!stats.changed) return stats;
+
+  const nextDash: Record<string, unknown> = { ...dash };
+  if (nextVideo !== null) nextDash.video = nextVideo;
+  if (nextAudio !== null) nextDash.audio = nextAudio;
+  if (nextFlac !== null) nextDash.flac = nextFlac;
+  if (nextDolby !== null) nextDash.dolby = nextDolby;
+  holder.dash = nextDash;
+  return stats;
+}
+
+/**
+ * 过滤一个轨数组，逐条走 `rewritePcdnCandidates()` 并把统计累加进 `stats`。
+ *
+ * @param tracks 轨数组（元素可能是任意形状，交给 `rewriteTrackKeep()` 兜底）
+ * @param rules 改写规则
+ * @param stats 就地累加（含 `changed`）
+ * @returns 同长度的新数组（未改动的元素是**原引用**）
+ */
+function rewriteTrackList(
+  tracks: readonly unknown[],
+  rules: RewriteRules | null | undefined,
+  stats: DashFilterStats,
+): unknown[] {
+  return tracks.map((track) => rewriteTrackKeep(track, rules, stats));
+}
+
+/**
+ * 过滤**一条**轨，非对象原样返回。
+ *
+ * 主世界 `filterOneTrack()` 开头就有这道守卫（`!track || typeof track !== 'object'`）：
+ * `rewritePcdnCandidates()` 没有，因为它声明成"一批轨"。容器遍历必须自己补上 ——
+ * 否则 `dash.video: [null]` 这种畸形输入会在 `detectNaming()` 里抛 TypeError，
+ * 而"不抛错"是 ADR 0039 边界 5 的硬要求。
+ *
+ * @param track 任意形状的元素
+ * @param rules 改写规则
+ * @param stats 就地累加
+ * @returns 过滤后的轨；非对象 / 未改动时返回**原引用**
+ */
+function rewriteTrackKeep(
+  track: unknown,
+  rules: RewriteRules | null | undefined,
+  stats: DashFilterStats,
+): unknown {
+  // ⚠️ 只挡"非对象"。**不挡数组**：主世界那份守卫写的是 `typeof track !== 'object'`，
+  // 数组同样会进到 `filterOneTrack()`（然后在 `detectNaming()` 拿不到候选字段、
+  // 原样返回）。这里若多挡一层，两实现在这种畸形输入下就分道扬镳了。
+  if (track === null || typeof track !== 'object') return track;
+
+  const single = rewritePcdnCandidates([track as CandidateTrack], rules);
+  stats.rewritten += single.stats.rewritten;
+  stats.proxied += single.stats.proxied;
+  stats.fallbackKept += single.stats.fallbackKept;
+
+  const out: unknown = single.tracks[0];
+  if (out !== track) stats.changed = true;
+  return out;
+}

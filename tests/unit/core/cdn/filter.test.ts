@@ -31,8 +31,10 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_REWRITE_RULES,
   filterPcdnCandidates,
+  rewriteDashOf,
   rewritePcdnCandidates,
   type CandidateTrack,
+  type DashFilterStats,
 } from '@core/cdn/filter';
 
 // ─────────────────────────── 样本 ───────────────────────────
@@ -368,5 +370,452 @@ describe('rewritePcdnCandidates', () => {
     expect(viaAlias).toEqual(viaNew);
     expect(viaAlias.tracks[0]?.backup_url).toEqual([OFFICIAL]); // 条数不变
     expect(viaAlias.tracks[0]?.base_url).toBe(mirrorOf(PCDN)); // host 已换
+  });
+});
+
+/**
+ * ## `rewriteDashOf()`：容器层入口（四个容器，形状各不一样）
+ *
+ * `rewritePcdnCandidates()` 只认「一个轨数组」，而 `dash` 里带候选地址的容器有四个：
+ *
+ * | 容器 | 形状 | 外层非候选字段 |
+ * | --- | --- | --- |
+ * | `dash.video` | track 数组 | — |
+ * | `dash.audio` | track 数组 | — |
+ * | `dash.flac.audio` | **单个** track 对象 | `display` 是布尔 |
+ * | `dash.dolby.audio` | track 数组 | `vision` 是布尔 |
+ *
+ * 这一层存在的理由就是**后两个容器**：漏掉它们不会报错、界面也正常，
+ * 只是那几轨照旧走 PCDN —— 静默失败。
+ *
+ * ## ⚠️ 与主世界 `filterDashOf()` 必须逐条等价
+ *
+ * 主世界是裸 JS、不能 import 本文件，所以容器遍历存在**两份实现**。
+ * 这里的用例守 `core` 这一份的语义；**等价性**由
+ * `tests/unit/content/pcdn-filter-wiring.test.ts` 用同一批 fixture 同时喂两个实现来守。
+ */
+describe('rewriteDashOf（容器层入口，ADR 0039 边界 1/2/5）', () => {
+  /** 空统计（形状不对时的期望值） */
+  const NONE: DashFilterStats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
+
+  /** 造一条下划线风格的音/视轨（其余字段用来验"透传不改"） */
+  function track(
+    base: string,
+    backups: string[] = [],
+    extra: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return { base_url: base, backup_url: backups, ...extra };
+  }
+
+  /**
+   * 收窄成 `Record<string, unknown>` 再读字段。
+   *
+   * `rewriteDashOf()` 的入参是 `{ dash?: unknown }`（它要能接住任意畸形输入），
+   * 所以测试侧的 `holder.dash.video[0]` 是 `unknown`。断言里读具体字段要显式收窄 ——
+   * 这里统一走一个 helper，比每行写一次 `as Record<string, unknown>` 干净。
+   *
+   * @param v 任意值（通常是容器里的一个元素）
+   * @returns 同一个对象，按记录视图读
+   */
+  function rec(v: unknown): Record<string, unknown> {
+    return v as Record<string, unknown>;
+  }
+
+  it('容器1 · `dash.video[]`：只换 authority，条数与 path/search 不变', () => {
+    const holder = {
+      dash: {
+        duration: 1166,
+        video: [
+          track(PCDN, [PCDN_2, OFFICIAL], { id: 120, height: 2160, codecid: 12 }),
+          track(OFFICIAL_2, [OFFICIAL]),
+        ],
+        audio: [],
+      },
+    };
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    // 第一条轨：base 换 1 + backups 里 PCDN_2 换 1 = 2 条；第二条全官方不计数
+    expect(stats).toEqual({ changed: true, rewritten: 2, proxied: 0, fallbackKept: 0 });
+    const dash = rec(holder.dash);
+    const video = dash.video as Array<Record<string, unknown>>;
+    expect(video[0]?.base_url).toBe(mirrorOf(PCDN));
+    expect(video[0]?.backup_url).toEqual([mirrorOf(PCDN_2), OFFICIAL]);
+    expect(video[0]?.backup_url).toHaveLength(2);
+    // 边界 1：path + search 一字不动
+    const parsed = new URL(video[0]?.base_url as string);
+    expect(parsed.pathname + parsed.search).toBe('/v.m4s?upsig=cc');
+    // 边界 3：非候选字段透传
+    expect(video[0]?.height).toBe(2160);
+    expect(video[0]?.codecid).toBe(12);
+    // 非候选的 dash 字段不动
+    expect(dash.duration).toBe(1166);
+  });
+
+  it('容器2 · `dash.audio[]`：proxy 命中的那条走包装，其余只换 host', () => {
+    const holder = {
+      dash: {
+        video: [],
+        audio: [track(OFFICIAL_2, [MCDN_PROXY], { id: 30280, bandwidth: 320000 })],
+      },
+    };
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    expect(stats).toEqual({ changed: true, rewritten: 1, proxied: 1, fallbackKept: 0 });
+    const out = holder.dash.audio[0];
+    expect(out?.base_url).toBe(OFFICIAL_2); // 官方候选不动
+    expect(out?.backup_url).toEqual([proxyOf(MCDN_PROXY)]);
+    expect(out?.bandwidth).toBe(320000);
+  });
+
+  it('容器3 · ★ `dash.flac.audio` 是**单个对象**：换 host、条数不变、`display` 不动', () => {
+    const holder = {
+      dash: {
+        video: [],
+        audio: [],
+        flac: {
+          display: true,
+          audio: track(PCDN, [OFFICIAL], { id: 30251, bandwidth: 1_500_000 }),
+        },
+      },
+    };
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    expect(stats).toEqual({ changed: true, rewritten: 1, proxied: 0, fallbackKept: 0 });
+    const flac = rec(holder.dash).flac as {
+      display: boolean;
+      audio: Record<string, unknown>;
+    };
+    // `display` 是外层布尔，原样带过
+    expect(flac.display).toBe(true);
+    expect(flac.audio.base_url).toBe(mirrorOf(PCDN));
+    expect(flac.audio.backup_url).toEqual([OFFICIAL]);
+    expect(flac.audio.backup_url).toHaveLength(1);
+    expect(flac.audio.id).toBe(30251);
+    // 边界 1：path/search 不动
+    const parsed = new URL(flac.audio.base_url as string);
+    expect(parsed.pathname + parsed.search).toBe('/v.m4s?upsig=cc');
+  });
+
+  it('容器4 · ★ `dash.dolby.audio[]` 两条轨：各自换 host，顺序与条数不变、`vision` 不动', () => {
+    const DOLBY_PCDN = 'https://a1.szbdyd.com/d.m4s?upsig=zz';
+    const holder = {
+      dash: {
+        video: [],
+        audio: [],
+        dolby: {
+          vision: true,
+          type: 2,
+          audio: [
+            // ① base PCDN + 官方 backup → 换 1
+            track(DOLBY_PCDN, [OFFICIAL], { id: 30250 }),
+            // ② 官方 base + backup 里一条 proxy 的 PCDN → 换 1（其中 proxy 1）
+            track(OFFICIAL_2, [MCDN_PROXY, OFFICIAL], { id: 30251 }),
+          ],
+        },
+      },
+    };
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    expect(stats).toEqual({ changed: true, rewritten: 2, proxied: 1, fallbackKept: 0 });
+    const dolby = holder.dash.dolby;
+    expect(dolby.vision).toBe(true);
+    expect(dolby.type).toBe(2);
+    expect(dolby.audio).toHaveLength(2);
+    expect(dolby.audio[0]?.base_url).toBe(mirrorOf(DOLBY_PCDN));
+    expect(dolby.audio[0]?.backup_url).toEqual([OFFICIAL]);
+    expect(dolby.audio[1]?.base_url).toBe(OFFICIAL_2);
+    expect(dolby.audio[1]?.backup_url).toEqual([proxyOf(MCDN_PROXY), OFFICIAL]);
+    // 轨身份/顺序没被换位
+    expect(dolby.audio[0]?.id).toBe(30250);
+    expect(dolby.audio[1]?.id).toBe(30251);
+  });
+
+  it('★ 四个容器同时出现：统计累加、各自独立生效', () => {
+    const holder = {
+      dash: {
+        video: [track(PCDN)],
+        audio: [track(PCDN_2)],
+        flac: { display: true, audio: track(MCDN_PROXY) },
+        dolby: { vision: false, audio: [track(PCDN, [OFFICIAL_2])] },
+      },
+    };
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    // video 1 + audio 1 + flac 1（proxy）+ dolby 1
+    expect(stats).toEqual({ changed: true, rewritten: 4, proxied: 1, fallbackKept: 0 });
+    expect(holder.dash.video[0]?.base_url).toBe(mirrorOf(PCDN));
+    expect(holder.dash.audio[0]?.base_url).toBe(mirrorOf(PCDN_2));
+    expect(holder.dash.flac.audio.base_url).toBe(proxyOf(MCDN_PROXY));
+    expect(holder.dash.dolby.audio[0]?.base_url).toBe(mirrorOf(PCDN));
+  });
+
+  it('★ 一个候选都没改（四个容器都官方）→ `changed:false` 且 `holder.dash` **引用不变**', () => {
+    const holder = {
+      dash: {
+        duration: 1166,
+        video: [track(OFFICIAL, [OFFICIAL_2])],
+        audio: [track(OFFICIAL_2)],
+        flac: { display: false, audio: track(OFFICIAL) },
+        dolby: { vision: false, audio: [track(OFFICIAL_2, [OFFICIAL])] },
+      },
+    };
+    const dashBefore = holder.dash;
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    expect(stats).toEqual(NONE);
+    // 不制造无谓 diff：整份 dash 连引用都不换
+    expect(holder.dash).toBe(dashBefore);
+  });
+
+  it('★ 只在 flac 改了 → `dash.dolby` 保持原引用；未改动的**轨**也保持原引用', () => {
+    const officialVideo = track(OFFICIAL);
+    const officialAudio = track(OFFICIAL_2);
+    const officialDolby = track(OFFICIAL);
+    const holder = {
+      dash: {
+        video: [officialVideo],
+        audio: [officialAudio],
+        flac: { display: true, audio: track(PCDN) },
+        dolby: { vision: false, audio: [officialDolby] },
+      },
+    };
+    const dolbyBefore = holder.dash.dolby;
+    const flacBefore = holder.dash.flac;
+
+    expect(rewriteDashOf(holder, DEFAULT_REWRITE_RULES).changed).toBe(true);
+    // dolby 一条都没改 → 外层对象原引用（不制造无谓 diff）
+    expect(holder.dash.dolby).toBe(dolbyBefore);
+    // flac 改了 → 外层对象是新的（`display` 被带过去）
+    expect(holder.dash.flac).not.toBe(flacBefore);
+    expect(holder.dash.flac.display).toBe(true);
+    expect(holder.dash.flac.audio.base_url).toBe(mirrorOf(PCDN));
+    /**
+     * ⚠️ `video` / `audio` 的**数组**在 `changed: true` 时必然换新 ——
+     * 那是主世界 `filterDashOf()` 的既有形状（它无条件 `nextVideo = []` 再逐个 push，
+     * 只在完全没有改动时提前 return）。两份实现共用这个形状，等价性测试比对的是
+     * `dash` **深相等**，不受数组引用影响。但**元素身份**必须保留：
+     * 未改动的轨是两个实现都必须返回原对象（幂等性靠它）。
+     */
+    expect(holder.dash.video[0]).toBe(officialVideo);
+    expect(holder.dash.audio[0]).toBe(officialAudio);
+  });
+
+  it('★ 只在 video 改了 → `dash.flac` / `dash.dolby` 保持原引用', () => {
+    const holder = {
+      dash: {
+        video: [track(PCDN)],
+        audio: [],
+        flac: { display: false, audio: track(OFFICIAL) },
+        dolby: { vision: true, audio: [track(OFFICIAL_2)] },
+      },
+    };
+    const flacBefore = holder.dash.flac;
+    const dolbyBefore = holder.dash.dolby;
+
+    expect(rewriteDashOf(holder, DEFAULT_REWRITE_RULES).changed).toBe(true);
+    expect(holder.dash.flac).toBe(flacBefore);
+    expect(holder.dash.dolby).toBe(dolbyBefore);
+  });
+
+  it('★ 幂等：跑两遍 = 跑一遍（第二遍 `changed:false`、`dash` 引用不变）', () => {
+    const holder = {
+      dash: {
+        video: [track(PCDN, [PCDN_2])],
+        audio: [track(PCDN_2)],
+        flac: { display: true, audio: track(PCDN) },
+        dolby: { vision: true, audio: [track(PCDN)] },
+      },
+    };
+
+    expect(rewriteDashOf(holder, DEFAULT_REWRITE_RULES).changed).toBe(true);
+    const dashAfterFirst = holder.dash;
+
+    expect(rewriteDashOf(holder, DEFAULT_REWRITE_RULES)).toEqual(NONE);
+    expect(holder.dash).toBe(dashAfterFirst);
+  });
+
+  it('★ 畸形输入一律不抛错、返回全 0', () => {
+    const malformed: unknown[] = [
+      null,
+      undefined,
+      {},
+      { dash: null },
+      { dash: 'nope' },
+      { dash: [] },
+      // 四个容器一个都没认出来
+      { dash: { duration: 1166 } },
+      // video / audio 不是数组
+      { dash: { video: 'nope', audio: { base_url: PCDN } } },
+      // flac 各种畸形
+      { dash: { video: [], audio: [], flac: null } },
+      { dash: { video: [], audio: [], flac: { display: true } } },
+      { dash: { video: [], audio: [], flac: { display: true, audio: 'nope' } } },
+      { dash: { video: [], audio: [], flac: { display: true, audio: [] } } },
+      { dash: { video: [], audio: [], flac: 'nope' } },
+      // dolby 各种畸形
+      { dash: { video: [], audio: [], dolby: null } },
+      { dash: { video: [], audio: [], dolby: { vision: true } } },
+      { dash: { video: [], audio: [], dolby: { vision: true, audio: { base_url: PCDN } } } },
+      // 只有畸形容器、没有 video/audio
+      { dash: { flac: null, dolby: { vision: true } } },
+    ];
+
+    for (const [i, h] of malformed.entries()) {
+      expect(
+        () => rewriteDashOf(h as undefined, DEFAULT_REWRITE_RULES),
+        `case #${String(i)}`,
+      ).not.toThrow();
+      expect(rewriteDashOf(h as undefined, DEFAULT_REWRITE_RULES), `case #${String(i)}`).toEqual(
+        NONE,
+      );
+    }
+  });
+
+  it('★ 容器数组里塞了非对象（null / 字符串 / 数字）→ 原样保留、其余照改', () => {
+    const holder = {
+      dash: {
+        video: [null, 'nope', 42, track(PCDN)],
+        audio: [],
+      },
+    };
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    expect(stats).toEqual({ changed: true, rewritten: 1, proxied: 0, fallbackKept: 0 });
+    const video = rec(holder.dash).video as unknown[];
+    expect(video).toHaveLength(4);
+    expect(video[0]).toBeNull();
+    expect(video[1]).toBe('nope');
+    expect(video[2]).toBe(42);
+    expect(rec(video[3]).base_url).toBe(mirrorOf(PCDN));
+  });
+
+  it('★ 轨里的候选是非 URL 串 → 原样保留 + `fallbackKept++`，其它容器照旧改', () => {
+    const holder = {
+      dash: {
+        video: [],
+        audio: [],
+        flac: { display: true, audio: { id: 30251 } }, // 没有候选字段
+        dolby: {
+          vision: false,
+          audio: [track('not a url'), track(PCDN)],
+        },
+      },
+    };
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    expect(stats.changed).toBe(true);
+    expect(stats.rewritten).toBe(1);
+    expect(stats.fallbackKept).toBe(1);
+    expect(holder.dash.dolby.audio[0]?.base_url).toBe('not a url');
+    expect(holder.dash.dolby.audio[1]?.base_url).toBe(mirrorOf(PCDN));
+  });
+
+  it('★ 规则缺项 → 一条都不改、`changed:false`、`dash` 引用不变', () => {
+    const holder = {
+      dash: {
+        video: [track(PCDN)],
+        audio: [track(PCDN_2)],
+        flac: { display: true, audio: track(PCDN) },
+        dolby: { vision: true, audio: [track(PCDN)] },
+      },
+    };
+    const dashBefore = holder.dash;
+
+    const stats = rewriteDashOf(holder, null);
+
+    // 四条 PCDN 都"想换但换不了" → fallbackKept 计数，但 changed 为 false
+    expect(stats).toEqual({ changed: false, rewritten: 0, proxied: 0, fallbackKept: 4 });
+    expect(holder.dash).toBe(dashBefore);
+  });
+
+  it('⛔ `durl` / `durls` 一个字节都不动（FLV 那条路本轮不做）', () => {
+    const holder = {
+      dash: {
+        video: [track(PCDN)],
+        audio: [],
+      },
+      durl: [{ url: 'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/keep-me.flv' }],
+      durls: [{ durl: [{ url: 'https://a1.szbdyd.com/keep-me-too.flv' }] }],
+    };
+    const durlBefore = JSON.parse(JSON.stringify(holder.durl)) as unknown;
+    const durlsBefore = JSON.parse(JSON.stringify(holder.durls)) as unknown;
+
+    expect(rewriteDashOf(holder, DEFAULT_REWRITE_RULES).changed).toBe(true);
+    expect(holder.durl).toEqual(durlBefore);
+    expect(holder.durls).toEqual(durlsBefore);
+  });
+
+  it('★ 纯 `durl` 响应（没有 dash）→ 整块跳过、不抛错', () => {
+    const holder: Record<string, unknown> = {
+      durl: [{ url: 'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/x.flv' }],
+      quality: 80,
+    };
+
+    // 没有 `dash` 键 → 走"缺 dash"那条早退（`{ dash?: unknown }` 允许它存在与否）
+    expect(rewriteDashOf(holder as { dash?: unknown }, DEFAULT_REWRITE_RULES)).toEqual(NONE);
+    expect(rec((holder.durl as unknown[])[0]).url).toBe(
+      'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/x.flv',
+    );
+  });
+
+  it('★ `dash` 里其它键（`minBufferTime` / 未知键）逐字段透传', () => {
+    const holder = {
+      dash: {
+        duration: 1166,
+        minBufferTime: 1.5,
+        unknownKey: { nested: [1, 2, 3] },
+        video: [track(PCDN)],
+        audio: [],
+      },
+    };
+
+    expect(rewriteDashOf(holder, DEFAULT_REWRITE_RULES).changed).toBe(true);
+    expect(holder.dash.duration).toBe(1166);
+    expect(holder.dash.minBufferTime).toBe(1.5);
+    expect(holder.dash.unknownKey).toEqual({ nested: [1, 2, 3] });
+    // 键集合没变（只是把候选换了）
+    expect(Object.keys(holder.dash).sort()).toEqual(
+      ['audio', 'duration', 'minBufferTime', 'unknownKey', 'video'].sort(),
+    );
+  });
+
+  it('★ 驼峰形态（`baseUrl` / `backupUrl`）在容器里同样只输出驼峰', () => {
+    const holder = {
+      dash: {
+        video: [{ baseUrl: PCDN, backupUrl: [OFFICIAL] }],
+        audio: [{ baseUrl: OFFICIAL_2, backupUrl: [PCDN_2] }],
+      },
+    };
+
+    const stats = rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    expect(stats.rewritten).toBe(2);
+    const v = holder.dash.video[0] as Record<string, unknown>;
+    expect(v.baseUrl).toBe(mirrorOf(PCDN));
+    expect(v.backupUrl).toEqual([OFFICIAL]);
+    expect(v.base_url).toBeUndefined();
+    const a = holder.dash.audio[0] as Record<string, unknown>;
+    expect(a.backupUrl).toEqual([mirrorOf(PCDN_2)]);
+    expect(a.backup_url).toBeUndefined();
+  });
+
+  it('★ 不修改入参里的**轨**（未改动的容器保持原引用，改动的造新对象）', () => {
+    const untouched = track(OFFICIAL);
+    const before = JSON.parse(JSON.stringify(untouched)) as CandidateTrack;
+    const holder = { dash: { video: [untouched, track(PCDN)], audio: [] } };
+
+    rewriteDashOf(holder, DEFAULT_REWRITE_RULES);
+
+    expect(untouched).toEqual(before);
+    expect(holder.dash.video[0]).toBe(untouched);
+    expect(holder.dash.video[1]).not.toBe(untouched);
   });
 });

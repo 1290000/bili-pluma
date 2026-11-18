@@ -109,7 +109,7 @@ import {
   readPcdnFilterEnabled,
 } from '@platform/storage/ui-prefs-store';
 import { PCDN_RULES } from '@core/cdn/classify';
-import { DEFAULT_REWRITE_RULES } from '@core/cdn/filter';
+import { DEFAULT_REWRITE_RULES, rewriteDashOf, type DashFilterStats } from '@core/cdn/filter';
 import type { ProxyActivateReason } from '@shared/types/messages';
 import { buildPageSnapshot } from '@core/ui/page-snapshot';
 import {
@@ -1926,6 +1926,65 @@ function reloadWithGuard(cid: string, why: string): void {
 }
 
 /**
+ * 写 PGC 缓存**之前**要不要做候选过滤？—— 写侧的**唯一判定点**（2026-11-22）。
+ *
+ * ## 为什么不用模块级的 `pcdnFilterKnown` 当判据
+ *
+ * `pcdnFilterKnown` 的初值是 `false`（fail-closed：「重发 cfg 时该带什么」），
+ * 它在 `page/activate` 回包之后才被赋值。于是它有两个状态**无法区分**：
+ * 「还没读出来（初值 `false`）」与「真的关着（读到 `false`）」。
+ *
+ * 而写缓存是**不可逆动作**（产物躺 100 分钟、每次刷新都注入它）。拿一个
+ * "还没读到就当关着"的值当判据，等于让一个时序假设决定一份持久数据 ——
+ * ADR 0028「洞 1」正是这类事故（`extensionEngagedKnown` 天生读到 `null`）。
+ *
+ * `readPcdnFilterEnabled()` 读 `storage.local`，**任何时候问都有答案**；
+ * `ui-prefs-store.ts` 也写明"判据在读取函数里"。所以这里以它为准，
+ * 顺手把 `pcdnFilterKnown` 同步成最新值（那个变量只服务"重发 cfg 带什么"）。
+ *
+ * @returns 这一次写缓存要不要过滤候选
+ */
+async function pcdnFilterEnabledNow(): Promise<boolean> {
+  const on = await readPcdnFilterEnabled();
+  pcdnFilterKnown = on;
+  return on;
+}
+
+/**
+ * 把一次候选改写的统计上报到诊断侧（ISOLATED 侧，**不走 postMessage**）。
+ *
+ * ## 为什么直接调 `notePcdnFilter()`
+ *
+ * 主世界那几条要走 `postMessage → window listener → notePcdnFilter()` 是因为它跨 world。
+ * 本文件在 ISOLATED 侧、与 `loading-trace.ts` 同侧，绕一圈只会让"这次是写侧改的"
+ * 更难看出来，还多一个可被页面脚本伪造的入口。所以同侧直接调。
+ *
+ * ## 为什么不带 `where`
+ *
+ * `where` 是主世界给调用点打的标签（`playurl` / `playinfo` / `playview` …），
+ * `PcdnFilterStats` 里**没有**这个字段 —— 采集器把同一次页面的计数累加，
+ * 不做调用点区分。为一句诊断文案去扩导出契约（`diagnostics.ts`）与一组 fixture
+ * 不划算；调用点标识放在 `reportQuality` 的 note 里，诊断日志里看得见。
+ *
+ * @param stats `rewriteDashOf()` 的结果（`changed === true` 时才该调）
+ * @param where 调用点标识，只进日志 note
+ */
+function reportPcdnFilterChange(stats: DashFilterStats, where: string): void {
+  notePcdnFilter({
+    applied: true,
+    rewritten: stats.rewritten,
+    proxied: stats.proxied,
+    fallbackKept: stats.fallbackKept,
+  });
+  reportQuality({
+    height: 0,
+    note:
+      `[PCDN] ${where}：已换 ${String(stats.rewritten)} 条候选的 authority` +
+      `（其中 proxy ${String(stats.proxied)} 条，换不了原样保留 ${String(stats.fallbackKept)} 条）`,
+  });
+}
+
+/**
  * 取完整流 → 写缓存 → 刷新一次（P2 的第一趟）。
  *
  * ## 护栏全在 `pgc-reload-plan.ts`（纯函数，有单测）
@@ -1938,6 +1997,12 @@ function reloadWithGuard(cid: string, why: string): void {
  *
  * 刷新会丢进度。用户从第 3 分钟开始，刷完回到第 0 分钟，体感很差。
  * 记进 `sessionStorage`，第二趟由 `restoreResumeTime` 拉回去。
+ *
+ * ## ⚠️ 写缓存之前必须先过滤候选
+ *
+ * 见函数体内那一节长注释：主世界 `pgcPatchPlayinfo()` 的注入发生在 `cfg` 到达之前，
+ * 那条路径上的过滤**结构性必然失效**。缓存是注入的唯一来源，所以判据要放在这里
+ * （"判据该放在产出数据的地方，不是消费数据的地方"）。
  *
  * @param cid  章节 id
  * @param ssr  主世界报上来的 `ssr-playinfo` 的 `data`（用来取骨架 + 当前进度）
@@ -2098,6 +2163,64 @@ async function prepareFullStream(cid: string, ssr: unknown): Promise<void> {
     pgcReloadTrace.orchestrateExit = 'prepare-truncated-no-write';
     pgcReloadTrace.lastReason = '合并结果是截断流，拒绝写入缓存（避免污染 100 分钟）';
     return;
+  }
+
+  /**
+   * ## ★ 候选过滤必须发生在**写缓存之前**（2026-11-22 修：PGC 注入路径的过滤从未生效）
+   *
+   * ### 洞在哪：主世界那次注入，过滤条件**结构性**必然不成立
+   *
+   * `main-world.js` 的 `pgcPatchPlayinfo()` 在 `__playinfo__` 的 setter 里**同步**注入
+   * 完整流（ADR 0020），注入前调 `pcdnFilterReady()` + `filterDashOf()` 做候选改写。
+   * 但同一个函数自己的注释里记着真机时序：
+   *
+   * ```
+   * ssAt      : 357ms   ← SSR 赋值，setter 触发
+   * patchedAt : 358ms   ← 注入发生
+   * cfgCount  : 4       ← cfg 全部在 358ms 之后才到
+   * ```
+   *
+   * 而 `pcdnFilterReady()` 要求 `pcdnFilterOn && pcdnRules !== null && pcdnRewriteRules !== null`
+   * —— **三个值全部来自 `cfg`**。于是：
+   *
+   * 1. 358ms 那次注入，过滤条件必然不成立（不管用户开关开没开）；
+   * 2. 补救分支（`main-world.js:6066` 附近的 `if (playinfoValue && !pgcPatched) …`）
+   *    因为 `pgcPatched` 早已置 `true` 而**不会补第二次**；
+   * 3. 播放器 ~409ms 就把这份数据用掉了。
+   *
+   * 结论：**PGC 整页注入这条路径上的候选过滤在生产上大概率从未真正生效过。**
+   * （UGC 的 `/x/player/playurl` 不受影响 —— 它的过滤发生在响应时刻，那时 `cfg` 早已到达。）
+   *
+   * ### 修法：把判据放在**产出数据的地方**（`main-world.js:3005` 那节的方法论）
+   *
+   * 写进 `pluma:pgc-vi:<cid>` 的那份数据就是注入的唯一来源。ISOLATED 侧本来就能同步读
+   * 开关值、也本来就把规则当数据持有（`DEFAULT_REWRITE_RULES`），**不存在 `cfg` 时序问题**。
+   * 在这里过滤一次，主世界读到的就已经是干净数据 —— 不需要主世界再判一次，
+   * 也就不再受"`cfg` 晚于 setter"这个物理时序的支配。
+   *
+   * ⚠️ 主世界那四处调用点**保留不动**：它们服务的是别的时间点（`/video` 的 playurl 响应、
+   * `playview` 换流、ADR 0041 的回调接管），那几处 `cfg` 已经到达、过滤是真的生效的。
+   * 这里加的是**第五个生效点**，不是替换前四个。
+   *
+   * ### 位置约束（两条都不能动）
+   *
+   * | 约束 | 理由 |
+   * | --- | --- |
+   * | 在 `pageState.applyPlayback()` **之后** | 面板要的是**播放账号拿到的原文**，与 S4 的 `pgc-takeover-ok` 快照口径一致（那里明确写着"面板要的是改写前的原文"） |
+   * | 在 `writePgcCache()` / `writePgcSessionCache()` **之前** | 这两处就是"产出数据"本身；写在之后等于没写 |
+   *
+   * ### 与"清缓存"的配套（一起改的，别拆开看）
+   *
+   * 写侧过滤会让缓存**永久携带**换过的 authority（TTL 100 分钟）。若用户随后关掉开关，
+   * 缓存里那份过滤过的流仍会在下次刷新时被注入 → 表现为「关开关不生效」，
+   * 正是 ADR 0028 那一类"开关的动作在另一个方向不生效"。所以
+   * `chrome.storage.onChanged` 里 `PCDN_FILTER_ENABLED_KEY` 的那一段必须
+   * **开→关时清掉 PGC 缓存**。两条是一对，缺任一条都会留下一个方向的 bug。
+   */
+  if (await pcdnFilterEnabledNow()) {
+    const stats = rewriteDashOf(merged, DEFAULT_REWRITE_RULES);
+    // `changed === false` 时不发上报：与主世界那几处口径一致（"剔了 0 条"不需要报告）
+    if (stats.changed) reportPcdnFilterChange(stats, 'playinfo-cache');
   }
 
   await writePgcCache(cid, merged);
@@ -3227,6 +3350,51 @@ export default defineContentScript({
         const nextOn = filterChange.newValue === true;
         if (nextOn !== pcdnFilterKnown) {
           pcdnFilterKnown = nextOn;
+          /**
+           * ## 关掉开关 → **必须清 PGC 缓存**（2026-11-22，与写侧过滤配套）
+           *
+           * 写侧过滤（`prepareFullStream` 里那次 `rewriteDashOf`）让
+           * `pluma:pgc-vi:<cid>` / `pluma:pgc-playurl-cache` 里**永久携带**换过的
+           * authority，TTL 是 100 分钟。用户关掉开关后刷新，主世界照旧从
+           * `sessionStorage` 同步读走这份缓存并注入 —— 注入的仍是**过滤过**的流。
+           *
+           * 结果：**关开关不生效**（画质、线路都没回落），最长持续 100 分钟。
+           * 这正是 ADR 0028 那一类「开关的动作在另一个方向不生效」的 bug，
+           * 也是本功能自己上一次踩过的坑（"拨了开关要刷新才生效"）。
+           *
+           * 只清 `sessionStorage` 不够 —— `storage.local` 里那份 LRU 会在下一次
+           * 进同一集时被读出来，所以两处都清（与 `disabled` 分支同一手法）。
+           *
+           * ### ⚠️ 只清"开→关"这一个方向
+           *
+           * `nextOn === false` 且 `pcdnFilterKnown` 原来是 `true`。**从没开过**
+           * （键被删 / 首次安装 / 存储被清 → `newValue === undefined`）不算关闭，
+           * 那时也没有需要清的缓存。
+           *
+           * 关→开**不清**：缓存里那份是过滤过的、正是新状态想要的，清掉反而要重新取流。
+           *
+           * ### 代价：可能掉回试看 —— 但那正是"关掉"的语义
+           *
+           * 清掉缓存后，下一次加载 `prepareFullStream` 会重新取流、重新写缓存。
+           * 在那之前若当前页面的播放器已经用掉了旧缓存，用户可能停在试看 ——
+           * **这是正确行为**：关掉开关就不该再注入扩展账号的流。
+           *
+           * ### ⚠️ 绝不清 `pluma:pgc-reload:` 护栏
+           *
+           * 那是 ADR 0030 的三条硬护栏之一。清掉会让"取流 → 刷新 → 又没有缓存 → 再取 → 再刷"
+           * 变成死循环。`clearPgcSessionCache()` 只清 `pluma:pgc-vi:` 前缀（见它的文档表格），
+           * `clearPgcCache()` 只删 `pluma:pgc-playurl-cache` 这一个键 —— 两者都不碰护栏。
+           */
+          if (nextOn === false) {
+            const purged = clearPgcSessionCache();
+            void clearPgcCache();
+            reportQuality({
+              height: 0,
+              note:
+                `[PCDN] 候选过滤已关闭，已清 ${String(purged)} 条 PGC 同步缓存 + 持久缓存` +
+                '（否则关掉后仍会注入过滤过的流）',
+            });
+          }
           tellMainWorld(
             proxyEnabledKnown,
             activatedKnown ?? undefined,

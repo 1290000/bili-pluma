@@ -37,8 +37,10 @@ import { describe, expect, it } from 'vitest';
 import { classifyCdn, PCDN_RULES } from '@core/cdn/classify';
 import {
   DEFAULT_REWRITE_RULES,
+  rewriteDashOf,
   rewritePcdnCandidates,
   type CandidateTrack,
+  type DashFilterStats,
 } from '@core/cdn/filter';
 import { assertTestExports, spliceTestExports } from './helpers/main-world-exports';
 
@@ -1070,4 +1072,310 @@ describe('三处调用点各自真的改写（只接一处 = 一整类场景漏�
       },
     };
   }
+});
+
+/**
+ * ## ★ 等价性：主世界 `filterDashOf()` vs `core/cdn/filter.ts` 的 `rewriteDashOf()`
+ *
+ * 「同一套容器遍历存在两份实现」是**既定现实**：主世界是裸 JS，不能 `import` `core/`。
+ *
+ * | 实现 | 位置 | 谁在用 |
+ * | --- | --- | --- |
+ * | `filterDashOf()` | `src/content/main-world.js:441` | 主世界四处取流点（playurl / PGC 注入 / playview / 回调接管） |
+ * | `rewriteDashOf()` | `src/core/cdn/filter.ts` | **ISOLATED 侧写缓存**（`prepareFullStream`，2026-11-22 新增） |
+ *
+ * 两份漂移的后果**两个方向都是静默的**：
+ *
+ * - 写侧少一个容器 → 那类轨的 PCDN 照旧进缓存、被注入，界面上一切正常；
+ * - 读侧少一个容器 → 同上，只是发生在另一个时点。
+ *
+ * 所以这里用**同一批 fixture** 同时喂两个实现，断言：
+ *   1. 产出的 `dash` **深相等**；
+ *   2. 四个统计数（`changed` / `rewritten` / `proxied` / `fallbackKept`）相等。
+ *
+ * ⚠️ fixture 必须覆盖**四种容器 + 畸形形状**，否则"两份都只处理 video/audio"
+ * 这种同步退化会被判绿 —— 那正是 `dash.flac` / `dash.dolby` 曾经的状态。
+ */
+describe('★ 等价性：主世界 filterDashOf() vs core rewriteDashOf()', () => {
+  const OFFICIAL = 'https://cn-jsnt-ct-01-07.bilivideo.com/v.m4s?upsig=aa';
+  const OFFICIAL_2 = 'https://cn-jsnt-ct-01-08.bilivideo.com/v.m4s?upsig=bb';
+  /** 标签判据（`mcdn` 独立成标签） */
+  const PCDN = 'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/v.m4s?upsig=cc';
+  const PCDN_2 = 'https://xy220x180x77x45xy.mcdn.bilivideo.cn:8082/a.m4s?upsig=dd';
+  /** 供应商自有域判据 */
+  const PCDN_DOMAIN = 'https://a1.szbdyd.com/d.m4s?upsig=ee';
+  /** proxy 前缀变体（ADR 0039 边界 7） */
+  const PCDN_PROXY =
+    'https://xy116x196x140x25xy.mcdn.bilivideo.cn/v1/resource/upgcxcode/f.m4s?upsig=ff';
+  /** 官方域 + `os=mcdn`（`classify.ts` 第 5 条，唯一识破镜像代理的信号） */
+  const OFFICIAL_OS_MCDN = 'https://cn-jsnt-ct-01-09.bilivideo.com/v.m4s?os=mcdn&upsig=gg';
+  const THIRD = 'https://e1.akamaized.net/v.m4s?upsig=hh';
+
+  /** 造一条下划线轨 */
+  function snake(base: string, backups: string[] = [], extra: Record<string, unknown> = {}) {
+    return { base_url: base, backup_url: backups, ...extra };
+  }
+
+  /**
+   * 一批覆盖全部形状的 fixture。
+   *
+   * 每一条都**单独**跑一遍（不拼成一个大对象），这样失败时能立刻看出是哪一类形状漂了。
+   * 名字写进断言消息里 —— 只报"第 3 个 case"在真机上没什么用。
+   */
+  const FIXTURES: Array<{ name: string; make: () => Record<string, unknown> }> = [
+    {
+      name: 'video：PCDN base + [PCDN backup, 官方 backup]',
+      make: () => ({
+        dash: {
+          duration: 1166,
+          video: [
+            snake(PCDN, [PCDN_2, OFFICIAL], { id: 120, height: 2160, codecid: 12, bandwidth: 9e6 }),
+          ],
+          audio: [],
+        },
+      }),
+    },
+    {
+      name: 'audio：官方 base + proxy 前缀的 PCDN backup',
+      make: () => ({
+        dash: { video: [], audio: [snake(OFFICIAL_2, [PCDN_PROXY], { id: 30280 })] },
+      }),
+    },
+    {
+      name: 'flac：单个对象里的 PCDN base（外层 display 是布尔）',
+      make: () => ({
+        dash: {
+          video: [],
+          audio: [],
+          flac: {
+            display: true,
+            audio: snake(PCDN, [OFFICIAL], { id: 30251, bandwidth: 1_500_000 }),
+          },
+        },
+      }),
+    },
+    {
+      name: 'dolby：两条轨，一条换 host、一条走 proxy（外层 vision 是布尔）',
+      make: () => ({
+        dash: {
+          video: [],
+          audio: [],
+          dolby: {
+            vision: true,
+            type: 2,
+            audio: [
+              snake(PCDN_DOMAIN, [OFFICIAL], { id: 30250 }),
+              snake(OFFICIAL_2, [PCDN_PROXY, OFFICIAL], { id: 30251 }),
+            ],
+          },
+        },
+      }),
+    },
+    {
+      name: '四容器同时出现（统计累加）',
+      make: () => ({
+        dash: {
+          duration: 1441,
+          video: [snake(PCDN, [THIRD])],
+          audio: [snake(PCDN_2, [OFFICIAL_OS_MCDN])],
+          flac: { display: false, audio: snake(PCDN_PROXY) },
+          dolby: { vision: false, audio: [snake(PCDN, [OFFICIAL])] },
+        },
+      }),
+    },
+    {
+      name: '一条都没改（四容器全官方）→ 两边都该 changed:false',
+      make: () => ({
+        dash: {
+          video: [snake(OFFICIAL, [OFFICIAL_2])],
+          audio: [snake(OFFICIAL_2)],
+          flac: { display: true, audio: snake(OFFICIAL) },
+          dolby: { vision: true, audio: [snake(OFFICIAL_2, [OFFICIAL])] },
+        },
+      }),
+    },
+    {
+      name: '驼峰形态（baseUrl / backupUrl）',
+      make: () => ({
+        dash: {
+          video: [{ baseUrl: PCDN, backupUrl: [OFFICIAL] }],
+          audio: [{ baseUrl: OFFICIAL_2, backupUrl: [PCDN_2] }],
+        },
+      }),
+    },
+    {
+      name: '非法 URL + 没有候选字段的轨（fallbackKept 计数要对齐）',
+      make: () => ({
+        dash: {
+          video: [snake('not a url', [PCDN])],
+          audio: [{ id: 30280 }],
+          flac: { display: true, audio: { id: 30251, bandwidth: 1_500_000 } },
+          dolby: { vision: false, audio: [snake('broken', [OFFICIAL])] },
+        },
+      }),
+    },
+    {
+      name: '容器数组里塞非对象（null / 字符串 / 数字）',
+      make: () => {
+        const video: unknown[] = [null, 'nope', 42, snake(PCDN)];
+        const audio: unknown[] = [{}, snake(OFFICIAL_2)];
+        return { dash: { video, audio } };
+      },
+    },
+    {
+      name: '畸形容器：flac.audio 非对象 / dolby.audio 非数组（该整块跳过）',
+      make: () => ({
+        dash: {
+          video: [snake(PCDN)],
+          audio: [],
+          flac: { display: true, audio: 'nope' },
+          dolby: { vision: true, audio: { base_url: PCDN } },
+        },
+      }),
+    },
+    {
+      name: '四个容器一个都没认出来（只有 duration）',
+      make: () => ({ dash: { duration: 1166, minBufferTime: 1.5 } }),
+    },
+    {
+      name: '没有 dash（纯 durl 响应）',
+      make: () => ({ durl: [{ url: PCDN }], quality: 80 }),
+    },
+    {
+      name: 'dash 非对象',
+      make: () => ({ dash: 'nope' }),
+    },
+    {
+      name: 'dash 里带 durl / durls（两实现都一个字节都不许碰）',
+      make: () => ({
+        dash: { video: [snake(PCDN)], audio: [] },
+        durl: [{ url: PCDN }],
+        durls: [{ durl: [{ url: PCDN_2 }] }],
+      }),
+    },
+  ];
+
+  /** 深拷一份（同一 fixture 喂两个实现，互不影响） */
+  function clone<T>(v: T): T {
+    return JSON.parse(JSON.stringify(v)) as T;
+  }
+
+  it('★ 14 种形状：产出的 dash 深相等 + 四个统计数相等', async () => {
+    const { page } = await boot(true);
+    const filterDashOf = page.__PLUMA_TEST__.filterDashOf as unknown as (h: unknown) => MwStats;
+
+    for (const { name, make } of FIXTURES) {
+      const mwHolder = make();
+      const coreHolder = clone(mwHolder);
+
+      const mwStats = filterDashOf(mwHolder);
+      const coreStats: DashFilterStats = rewriteDashOf(coreHolder, DEFAULT_REWRITE_RULES);
+
+      // ① 产出的 dash 深相等（这一条就是"两份实现等价"的本体）
+      expect(coreHolder, `[${name}] dash 深相等`).toEqual(mwHolder);
+      // ② 四个统计数逐项相等（`changed` 也必须对齐，否则调用点的判断会分叉）
+      expect(
+        {
+          changed: coreStats.changed,
+          rewritten: coreStats.rewritten,
+          proxied: coreStats.proxied,
+          fallbackKept: coreStats.fallbackKept,
+        },
+        `[${name}] stats`,
+      ).toEqual(mwStats);
+    }
+  });
+
+  it('★ 有 fixture 真的改了东西（防止上面那条因为"全都没动"而假绿）', async () => {
+    const { page } = await boot(true);
+    const filterDashOf = page.__PLUMA_TEST__.filterDashOf as unknown as (h: unknown) => MwStats;
+
+    /**
+     * ⚠️ 这一条防的是本项目最隐蔽的假通过：上面那两条断言都比较"两次结果一样"，
+     * 若 fixture 恰好一条 PCDN 也没有，两边都返回 `changed:false` —— 深相等成立、
+     * 统计全 0 相等，测试绿，而**容器遍历一行都没被执行到**。
+     */
+    const changed = FIXTURES.filter(({ make }) => filterDashOf(make()).changed === true).map(
+      ({ name }) => name,
+    );
+
+    expect(changed.length).toBeGreaterThanOrEqual(8);
+    // 四个容器各至少被一条 fixture 覆盖到（容器遍历的每一支都真的跑过）
+    expect(changed).toContain('video：PCDN base + [PCDN backup, 官方 backup]');
+    expect(changed).toContain('audio：官方 base + proxy 前缀的 PCDN backup');
+    expect(changed).toContain('flac：单个对象里的 PCDN base（外层 display 是布尔）');
+    expect(changed).toContain('dolby：两条轨，一条换 host、一条走 proxy（外层 vision 是布尔）');
+  });
+
+  it('★ 幂等性两边一致：跑两遍，两个实现都该 changed:false', async () => {
+    const { page } = await boot(true);
+    const filterDashOf = page.__PLUMA_TEST__.filterDashOf as unknown as (h: unknown) => MwStats;
+
+    for (const { name, make } of FIXTURES) {
+      const mwHolder = make();
+      const coreHolder = clone(mwHolder);
+
+      filterDashOf(mwHolder);
+      rewriteDashOf(coreHolder, DEFAULT_REWRITE_RULES);
+
+      const mwSecond = filterDashOf(mwHolder);
+      const coreSecond = rewriteDashOf(coreHolder, DEFAULT_REWRITE_RULES);
+
+      /**
+       * ⚠️ 只有 `changed` 是幂等的硬断言，**`rewritten` 不是** —— 这是两个实现
+       * （以及 `rewriteOne()`）既有的统计口径，不是本次要改的东西：
+       *
+       * ```
+       * 原串: https://cn-jsnt-ct-01-09.bilivideo.com/v.m4s?os=mcdn&upsig=gg
+       * 第一遍: host 换成 mirrorHost，但 search 里的 `os=mcdn` 仍然留着
+       * 第二遍: classifyCdn 仍判 PCDN（第 5 条判据看的是 query）→ 进 rewrite 分支
+       *         → 目标 host 已经是 mirrorHost → 输出与原串**逐字节相同**
+       *         → `changedTrack` 保持 false → `changed: false`
+       *         → 但 `stats.rewritten += 1` 已经先加了
+       * ```
+       *
+       * 所以 `changed:false` + `rewritten:1` 是**正确且一致**的结果。
+       * 这里只钉"两边一模一样"，不去替实现决定统计口径 ——
+       * 要改就得两个实现一起改，那是另一件事。
+       */
+      expect(mwSecond.changed, `[${name}] 主世界第二次 changed`).toBe(false);
+      expect(coreSecond, `[${name}] 两边第二次结果必须一致`).toEqual(mwSecond);
+    }
+  });
+
+  it('★ `os=mcdn` 的重复计数是**两边一致的既有口径**（不是漂移）', async () => {
+    const { page } = await boot(true);
+    const filterDashOf = page.__PLUMA_TEST__.filterDashOf as unknown as (h: unknown) => MwStats;
+
+    /**
+     * 把上一条里那个 quirk 单独拎出来钉住。它容易被误读成"幂等性坏了"，
+     * 所以两种形态都写出来：
+     *
+     * | 输入 | 第二遍 `changed` | 第二遍 `rewritten` | 为什么 |
+     * | --- | --- | --- | --- |
+     * | 普通 PCDN（mcdn 域） | `false` | `0` | 换成镜像域后 `classifyCdn` 判 official |
+     * | 官方域 + `os=mcdn` | `false` | `1` | query 里的 `os=mcdn` 还在，判据仍命中 |
+     */
+    const ordinary = {
+      dash: { video: [snake('https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/v.m4s', [])] },
+    };
+    const osMcdn = {
+      dash: { video: [snake('https://cn-jsnt-ct-01-09.bilivideo.com/v.m4s?os=mcdn', [])] },
+    };
+
+    for (const [label, holder, wantRewritten] of [
+      ['普通 PCDN', ordinary, 0],
+      ['官方域 + os=mcdn', osMcdn, 1],
+    ] as Array<[string, Record<string, unknown>, number]>) {
+      filterDashOf(holder);
+      const coreHolder = clone(holder);
+      const mwSecond = filterDashOf(holder);
+      // 两个实现的第二遍结果必须一致（这才是本文件守的东西）
+      expect(mwSecond.changed, label).toBe(false);
+      expect(mwSecond.rewritten, label).toBe(wantRewritten);
+      expect(rewriteDashOf(coreHolder, DEFAULT_REWRITE_RULES), label).toEqual({
+        ...mwSecond,
+      });
+    }
+  });
 });

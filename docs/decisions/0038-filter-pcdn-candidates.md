@@ -37,6 +37,56 @@ PCDN 诊断这一轮已交付：`core/cdn/classify.ts` 判线路、`core/loading
 > 计划 §12.5 原来那句"必须同时作用于 `__playinfo__` 与 playurl"对 PGC 成立、对 `/video` 不成立，
 > 已按本节改写。
 
+#### 调用点记录：第五个生效点在**写缓存侧**（2026-11-22 补记）
+
+上面那张表回答的是"**数据从哪来**"，它没有错。但**生效点**（在哪一刻改写）比来源多一个：
+PGC 的整页注入路径上，主世界那次过滤**结构性必然失效**。
+
+**真机时序**（`main-world.js` 的 `pgcPatchPlayinfo()` 自己的注释里记着）：
+
+```
+ssAt      : 357ms   ← SSR 赋值，__playinfo__ 的 setter 触发
+patchedAt : 358ms   ← 注入发生（此刻 cfg 还没到）
+cfgCount  : 4       ← cfg 全部在 358ms 之后才到
+```
+
+而 `pcdnFilterReady()` 的三项判据（`pcdnFilterOn` / `pcdnRules` / `pcdnRewriteRules`）
+**全部来自 `cfg`**。所以 358ms 那次注入，过滤条件必然不成立 —— 不管用户开关开没开。
+补救分支（`main-world.js:6066` 附近的 `if (playinfoValue && !pgcPatched) …`）
+因为 `pgcPatched` 早已置 `true` 而不会补第二次；播放器 ~409ms 就用掉了这份数据。
+
+**结论：**「三处来源 / 四条消费路径」里的 PGC 整页注入那一行，候选过滤在生产上
+**大概率从未真正生效过**。（UGC 的 `/x/player/playurl` 不受影响 —— 它的过滤发生在
+响应时刻，那时 `cfg` 早已到达。）
+
+**修法**：把判据放在**产出数据的地方**（`main-world.js:3005` 那节记下的方法论），
+即 ISOLATED 侧的 `prepareFullStream()` 在写缓存**之前**过滤一次：
+
+| # | 生效点 | 位置 | 判据来源 | 为什么在这里 |
+| --- | --- | --- | --- | --- |
+| 1 | `/video` playurl 响应 | `main-world.js` `patchPlayurlXhrProgress` | `cfg` | 响应时刻 `cfg` 已到 |
+| 2 | PGC 整页注入 | `main-world.js` `pgcPatchPlayinfo` | `cfg` | ⚠️ **358ms 时 `cfg` 未到** |
+| 3 | PGC 切集换流 | `main-world.js` `pgcSwapPlayviewBody` | `cfg` | 换流时刻 `cfg` 已到 |
+| 4 | PGC 回调接管 | `main-world.js` `pgcFetch` | `cfg` | 回调时刻 `cfg` 已到 |
+| **5** | **PGC 写入缓存** | **`entrypoints/content.ts` `prepareFullStream`** | **`storage.local` 同步读** | **缓存就是注入的唯一来源，写它这一刻判据已可知** |
+
+第 5 个点用 `core/cdn/filter.ts` 的 `rewriteDashOf()`（容器层入口：`dash.video[]` /
+`dash.audio[]` / `dash.flac.audio`（单个对象）/ `dash.dolby.audio[]`）。
+它与主世界 `filterDashOf()` **逐条等价**，由
+`tests/unit/content/pcdn-filter-wiring.test.ts` 用同一批 fixture 同时喂两个实现钉住
+（`dash` 深相等 + 四个统计数相等）—— 两份实现必然漂移，只能靠这条测试接住。
+
+⚠️ 第 1–4 点**不动**：它们服务的是别的时间点，那几处 `cfg` 已经到达、过滤是真的生效的。
+第 5 点是**追加**，不是替换。
+
+**配套动作（缺一半就留下另一个方向的 bug）**：写侧过滤会让缓存**永久携带**换过的
+authority（`PGC_CACHE_TTL_MS` = 100 分钟）。用户关掉开关后刷新，主世界照旧从
+`sessionStorage` 同步读走这份缓存并注入 —— 注入的仍是**过滤过**的流，表现为
+「关开关不生效」。所以 `chrome.storage.onChanged` 里 `PCDN_FILTER_ENABLED_KEY`
+那一段必须**开→关时清 PGC 缓存**（`clearPgcSessionCache()` + `clearPgcCache()`）。
+开→关才清，关→开不清。**绝不碰 `pluma:pgc-reload:` 护栏**（ADR 0030 的三条硬护栏，
+清了会变成刷新死循环）。
+
 ### 三、撞上的字面边界
 
 [ADR 0017](./0017-restore-primary-progress-in-playurl.md):48、:59 写着：
