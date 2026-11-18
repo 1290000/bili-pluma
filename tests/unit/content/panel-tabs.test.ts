@@ -279,36 +279,38 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
   /**
    * ## 屏蔽 PCDN 开关（ADR 0038 授权 → ADR 0039 换 authority）
    *
-   * 三条：**在**、**读不到时不画成关**、**hint 收益与代价都要说准**。
+   * **在**、**读不到时不画成关**、**hint 一句话说清收益与代价**。
    *
-   * 第三条不是文案洁癖：ADR 0039 把"删候选"换成"换 authority"后，候选条数不变，
-   * 旧文案的代价"只剩一条线路、弱网更容易卡"**已经不成立**。新代价是少数 mcdn 线路
-   * 走官方代理、首块略慢。写过时的代价和只写收益一样会误导用户 —— 前者更糟。
+   * 文案在 2026-11-18 按用户要求精简过：原来那句 60 多字塞了「候选条数不变」
+   * 「经官方代理」「资源标记为 mcdn」三处开发视角的解释，普通用户看不完。
+   * 现在只留两件事：能干什么（P2P → 官方线路）、代价（部分起播变慢）。
+   *
+   * 代价这句**不能删**：实测代理分支 TTFB 中位 949ms vs 直连 128ms（7.4 倍），
+   * UGC 4K 上 18/25 轨命中。原先写「略慢」是低估，改成「部分起播会变慢」——
+   * 用用户能懂的「起播」，不写毫秒数（ADR 0038 禁止承诺收益数字）。
    */
-  it('★ 屏蔽 PCDN 开关在「显示」Tab 里，且 hint 说准收益与新代价', () => {
+  it('★ 屏蔽 PCDN 开关在「显示」Tab 里，hint 一句话说清收益与代价', () => {
     const box = display();
     const cb = checkboxFor(box, '屏蔽 PCDN 线路');
     expect(cb, '开关必须在').not.toBeNull();
     expect(cb?.disabled, '已读到设置 → 可点').toBe(false);
-    expect(box.textContent, 'hint 必须说明候选条数不变（换 authority 不是删）').toContain(
-      '候选条数不变',
-    );
-    expect(box.textContent, 'hint 必须提到新代价：代理导致首块略慢').toContain('首块可能略慢');
-    expect(box.textContent, '旧代价（弱网更容易卡）已随 ADR 0039 作废，不许再出现').not.toContain(
-      '更容易卡',
-    );
+    // 从开关往上找它自己那一行的 hint（不能用 querySelector 取第一个，那是"页内角标"的）
+    const ownRow = cb?.closest('.row');
+    const hint = ownRow?.querySelector('.row-hint')?.textContent ?? '';
+    expect(hint, '必须说清能干什么：换成官方线路').toContain('官方线路');
+    expect(hint, '必须保留真实代价：部分起播变慢（不是"略慢"）').toContain('部分起播会变慢');
+    expect(hint, '旧代价（弱网更容易卡）已作废，不许再出现').not.toContain('更容易卡');
     /**
-     * ## ADR 0042：已切换的线路在诊断面板仍带 `os=mcdn` 标记
+     * ## 精简纪律：不许再把开发视角的解释塞回去
      *
-     * 改写只换 authority，query 里的 `os=mcdn` 必须留着（`uparams` 含 `os`，
-     * 改了会 403）。所以用户在诊断面板/时间轴里**仍会看到 mcdn 字样**——
-     * 那是「资源源标记」，不是「还在走 P2P」。这句必须提前说，否则
-     * 用户看到 mcdn 就以为开关没生效，正是这轮 bug 的观感来源。
+     * 这三句是上一轮被用户点名"太长"的内容。它们各自都有技术依据
+     * （候选条数不变见 ADR 0039；mcdn 标记见 ADR 0042；代理见 4K 实测），
+     * 但都属于诊断面板/文档该说的事，不是开关描述该说的事。
      */
-    expect(
-      box.textContent,
-      'hint 必须预先说明：已换过的线路仍会显示「资源标记为 mcdn」（ADR 0042）',
-    ).toContain('资源标记为 mcdn');
+    for (const devJargon of ['候选条数不变', '资源标记为 mcdn', '首块']) {
+      expect(hint, `开关描述不许再出现开发视角的「${devJargon}」`).not.toContain(devJargon);
+    }
+    expect(hint.length, '开关描述必须精简（60 字 → 20 字量级）').toBeLessThan(40);
   });
 
   it('★ 还没读到设置 → 开关禁用（不猜成"用户关了"）', () => {

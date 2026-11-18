@@ -566,7 +566,7 @@ export function displayTab(
   box.appendChild(
     switchRow({
       label: '屏蔽 PCDN 线路',
-      hint: '把 PCDN 线路换成官方镜像，候选条数不变。少数线路需经官方代理，首块可能略慢；已换过的线路在诊断面板标为「资源标记为 mcdn」',
+      hint: '把 PCDN 线路换成官方线路，部分起播会变慢',
       checked: actions.pcdnFilterEnabled === true,
       disabled: actions.pcdnFilterEnabled === null,
       onToggle: actions.togglePcdnFilter,

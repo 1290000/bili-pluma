@@ -114,6 +114,7 @@ import type { ProxyActivateReason } from '@shared/types/messages';
 import { buildPageSnapshot } from '@core/ui/page-snapshot';
 import {
   parsePlayPage,
+  playPageIdentity,
   readDeviceCookies,
   readPrimaryMidFromCookie,
 } from '@shared/utils/video-page';
@@ -2643,6 +2644,87 @@ function report(): void {
   })();
 }
 
+/**
+ * SPA 换集后重新问一次 background「本页取流是不是扩展在代理」。
+ *
+ * ## 为什么必须补这一问（2026-11-21 调查结论）
+ *
+ * `resetLoadingTrace()` 会把 `streamingProxied` 清成 false（换集清零语义正确），
+ * 而这个布尔**只由 `page/activate:ok` 写入**。但 `page/activate` 只在 `report()`
+ * 里发过 —— `main()` 调一次、`DOMContentLoaded` 调一次，pushState 换集不再触发。
+ * 不补这一问的话，新集起就永远拿不到「接管取流」这条时间轴事件，即使 DNR
+ * 规则一直装在这个标签页上。
+ *
+ * 为什么不把旧值直接搬过来：`activated` 是 background 的回报，是唯一真相源；
+ * 用户在会话中可能关掉开关或改取流身份，搬旧值等于拿历史冒充结论。
+ *
+ * ## 时序
+ *
+ * 回包可能晚于新集的第一批请求（老链路就有 ~400ms 的晚到）。晚到只写布尔、
+ * 不回填事件（`setLoadingTraceProxied()` 的既有契约）——宁可漏报，不可补造。
+ */
+async function refreshProxiedFlagAfterNavigation(destUrl: string): Promise<void> {
+  const info = parsePlayPage(destUrl);
+  if (info === null) return;
+
+  // 与 report() 同口径算 pageKey / p。这里是新增的旁路，不动 report() 的任何判断。
+  const pageKey =
+    info.kind === 'pgc'
+      ? info.epId !== null
+        ? `ep:${info.epId}`
+        : `ss:${info.seasonId ?? ''}`
+      : info.bvid;
+  const p = info.kind === 'pgc' ? 1 : info.p;
+
+  const res = (await sendToBackground({
+    type: 'page/activate',
+    kind: info.kind === 'festival' ? 'video' : info.kind,
+    pageKey,
+    p,
+    deviceCookies: readDeviceCookies(document.cookie),
+    primaryMid: readPrimaryMidFromCookie(document.cookie),
+  })) as { type?: string; activated?: boolean } | null;
+
+  if (res?.type === 'page/activate:ok') {
+    setLoadingTraceProxied(res.activated === true);
+  }
+}
+
+/**
+ * 「导航后要不要清空加载观测」的唯一决策点。
+ *
+ * 做成具名函数而不是把判断写在监听器回调里，是为了能直接从源码取出来单测
+ * （content.ts 是 WXT 入口，没法在 Node 里 import）。监听器只负责把
+ * `ev.destination.url` 和 `location.href` 喂进来。
+ *
+ * @returns true = 已经换集并清过观测
+ */
+function handlePlayPageNavigation(destUrl: string, currentUrl: string): boolean {
+  const nextIdentity = playPageIdentity(destUrl);
+  /**
+   * 两种"不动"：
+   *   - 新身份为 null：导航到首页 / 直播等非播放页，不是本入口的职责
+   *   - 身份相同：首次加载、同集切画质、`?t=` 变化 —— reset 会清掉 nav@0 与
+   *     本集已有统计，那是误清；两处 cid 兜底 reset 也遵循同一条纪律
+   */
+  if (nextIdentity === null || nextIdentity === playPageIdentity(currentUrl)) return false;
+
+  resetLoadingTrace();
+  // 播放器可能把 `<video>` 整个重建，旧元素上的监听器再也不会触发
+  attachLoadingTraceVideo();
+  void refreshProxiedFlagAfterNavigation(destUrl);
+  return true;
+}
+
+/** Navigation API 的最小形状：只取本文件用到的 addEventListener + destination.url */
+interface NavigateListenerHost {
+  addEventListener(
+    type: 'navigate',
+    listener: (ev: { destination: { url: string } }) => void,
+    options?: { signal?: AbortSignal },
+  ): void;
+}
+
 export default defineContentScript({
   /**
    * 三类页面：
@@ -2714,6 +2796,39 @@ export default defineContentScript({
      */
     const disposeLoadingTrace = installLoadingTrace();
     ctx.signal.addEventListener('abort', disposeLoadingTrace, { once: true });
+
+    /**
+     * ## SPA 换集 / 换推荐视频 → 按 URL 身份清空诊断观测（2026-11-21）
+     *
+     * 守的是"诊断面板不能把上一集的线路与时间轴算到新集名下"。
+     *
+     * 原来只有两条 cid 触发的兜底：PGC 挂在 `pgc-playview-stream`（只有换流成功才发，
+     * 大会员完整流在 8 处早退，一条都不发）、UGC 挂在 `playurl-tracks`（只覆盖
+     * `/x/player/playurl`）。现在改按**身份**监听页面导航，不依赖业务消息发不发。
+     * 那两处 cid reset 保留：消息比 navigate 更早知道 cid 时仍是有效兜底，且
+     * reset 只是换一份空 state，重复调用幂等。
+     *
+     * ## 为什么用 Navigation API 而不是 `wxt:locationchange`
+     *
+     * 后者在不支持 Navigation API 的浏览器里退化成每秒 `setInterval` 轮询；
+     * 项目有"无常驻定时器"的硬纪律（曾因此白屏）。`minimum_chrome_version: 120`
+     * 保证 Navigation API 原生可用，用 `ctx.signal` 一起卸载，不留全局监听。
+     *
+     * ## 为什么比身份而不是比 URL
+     *
+     * 切画质、`?t=`、追踪参数都会改 URL 但没换集 —— 见 `playPageIdentity()`。
+     */
+    const navigationApi = (globalThis as unknown as { navigation?: NavigateListenerHost })
+      .navigation;
+    if (navigationApi !== undefined) {
+      navigationApi.addEventListener(
+        'navigate',
+        (ev) => {
+          handlePlayPageNavigation(ev.destination.url, location.href);
+        },
+        { signal: ctx.signal },
+      );
+    }
 
     /**
      * popup / 诊断页**直连**查询当前页数据（不经 SW）。

@@ -192,6 +192,47 @@ export function parsePlayPage(url: string): PlayPageInfo | null {
 }
 
 /**
+ * 播放页的**身份串** —— 只含"是不是同一片 / 同一集"的字段（SPA 换集的判据）。
+ *
+ * ## 守什么
+ *
+ * B站是 SPA：点右侧换集、换推荐视频都是 pushState，content script 不重启，
+ * 加载观测器也不重装。要清空上一集的 hosts / 时间轴，就得先回答"页面身份变了吗"。
+ * 这个回答**只能看身份**：`video` 看 `bvid + p`、`pgc` 看 `ep / ss`、
+ * `festival` 看 `pageKey + bvid + p`（ADR 0040 的 bvid 在 query 里）。
+ *
+ * ## 为什么不直接比 URL 字符串
+ *
+ * 同一个视频会带一堆无关 query：`?t=`（跳转进度）、`?spm_id_from=`、`?vd_source=`、
+ * 切画质时播放器也会改 URL。比整串会把"同一集改了个参数"误判成换集，
+ * 于是时间轴被无端清空 —— 那正是本次 bug 的反面。
+ *
+ * ## 为什么带 kind 前缀
+ *
+ * `video/BV1` 与 `bangumi/play/ep1` 的数字部分可能撞车；三类页共用一个 content
+ * script，前缀保证跨类型导航一定判为不同身份。
+ *
+ * @returns `null` 表示不是受支持的播放页（导航到首页 / 直播等）——调用方应忽略
+ */
+export function playPageIdentity(url: string): string | null {
+  const info = parsePlayPage(url);
+  if (info === null) return null;
+
+  switch (info.kind) {
+    case 'video':
+      return `video:${info.bvid}:p${info.p}`;
+    case 'pgc':
+      if (info.epId !== null) return `pgc:ep:${info.epId}`;
+      if (info.seasonId !== null) return `pgc:ss:${info.seasonId}`;
+      return null;
+    case 'festival':
+      return `festival:${info.pageKey}:${info.bvid}:p${info.p}`;
+    default:
+      return null;
+  }
+}
+
+/**
  * 从 `document.cookie` 字符串里挑出设备 Cookie。
  *
  * **只挑设备标识，绝不带出 SESSDATA / bili_jct / DedeUserID**——
