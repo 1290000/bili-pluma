@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { JSDOM } from 'jsdom';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const SOURCE = readFileSync(resolve(process.cwd(), 'src/content/main-world.js'), 'utf8');
 
@@ -228,7 +228,7 @@ describe('nano setter：包住 createPlayer 并新建 requestConfig', () => {
     expect(t.lastStage).toBe('hooked');
   });
 
-  it('改写闸关着 → 只建空 requestConfig，不挂回调、不删预取字段', async () => {
+  it('门控未知/关着也同步装代理（不再早退），且不碰页面自己的预取字段', async () => {
     const sb = bootAt(FESTIVAL_URL);
     await ready(sb);
     sendCfg(sb, { enabled: true, rewriteGate: false });
@@ -242,12 +242,13 @@ describe('nano setter：包住 createPlayer 并新建 requestConfig', () => {
     const nano = installNano(sb, { updateRequestConfig() {} });
     nano.createPlayer(config);
 
-    expect(config.requestConfig).toEqual({});
-    expect(config.requestConfig.reqHttpPlayUrlInfo).toBeUndefined();
-    // 门控关时不碰页面自己的数据：这是 fail-closed 的一半
+    // 门控没开也必须同步挂上代理：首波取流在 createPlayer 里就排好队
+    expect(typeof config.requestConfig.reqHttpPlayUrlInfo).toBe('function');
+    // fail-closed 在代理内部：等待期间不发请求；预取字段一个键都不动
     expect(config.prefetch).toEqual({ playUrl: 'native' });
     expect(config.playUrl).toBe('native');
-    expect(traceOf(sb).hookInstalled).toBe(false);
+    expect(traceOf(sb).hookInstalled).toBe(true);
+    expect(traceOf(sb).lastStage).toBe('hooked');
   });
 
   it('门控齐了才清预取字段（防站点改版引入 prefetch 短路）', async () => {
@@ -505,23 +506,24 @@ describe('SPA 换片：createPlayer 不再调，靠 updateRequestConfig 重挂',
 });
 
 /**
- * 首波接管时序竞争（REPORT-handoff.md）：门控晚到 → 只补挂回调，**不换流**。
+ * 首波接管：`createPlayer` 返回前同步注入门控等待代理（REPORT-gate-window.md）。
  *
- * 2026-11-18 真机否掉了"补挂后 `player.reload()` 换首波"：它重建 MediaSource 会把
- * `currentTime` 归 0，用户从中间续播时进度被拽回开头。所以这里钉住的是结构性事实
- * ——不调 reload、只记 `firstWaveSkipped`、并把取流原文回传 ISOLATED。
+ * 旧判断"补挂回调能抢首波"已被真机推翻——首波取流在 `createPlayer` 里就排好队，
+ * 晚到的 `updateRequestConfig` 只影响后续 reload。这里钉住结构性事实：代理同步装上、
+ * 门控未知时等待有上限、确定关闭立刻交还原生、绝不 reload、取流原文回传 ISOLATED。
  * "首波 initiator 是否 fetch / 起播耗时 / 进度"仍只能真机验。
  */
-describe('首波漏接管：只补挂、不换流，并回传取流原文', () => {
+describe('首波接管：createPlayer 同步代理 + 门控等待', () => {
   interface LateSetup {
     config: any;
     reloads: number[];
     patches: Array<{ reqHttpPlayUrlInfo?: unknown }>;
   }
 
-  /** 门控**未开**就 createPlayer（复现首波被播放器原生 XHR 抢走的前置条件）。 */
-  function lateCreatePlayer(sb: Sandbox): LateSetup {
+  /** 门控**未开**就 createPlayer；可选给一个"页面原生回调"用于验证降级交还。 */
+  function lateCreatePlayer(sb: Sandbox, orig?: () => Promise<any>): LateSetup {
     const config: any = { cid: 42141027046, bvid: 'BV1ydeX65Edn' };
+    if (orig) config.requestConfig = { reqHttpPlayUrlInfo: orig };
     const reloads: number[] = [];
     const patches: Array<{ reqHttpPlayUrlInfo?: unknown }> = [];
     const player = {
@@ -540,35 +542,55 @@ describe('首波漏接管：只补挂、不换流，并回传取流原文', () =
     return sb.sent.filter((m) => m.type === 'playurl-raw');
   }
 
-  it('门控晚到 → 补挂回调但绝不 reload，firstWaveSkipped=1', async () => {
+  it('门控未开就 createPlayer → 代理已同步挂上（不是空 requestConfig）', async () => {
     const sb = bootAt(FESTIVAL_URL);
     await ready(sb);
     const s = lateCreatePlayer(sb);
-    expect(traceOf(sb).firstWaveSkipped).toBe(0);
-    expect(traceOf(sb).firstWave).toBe('pending');
 
-    sendCfg(sb); // cfg + page/activate 回包到齐
-    await flush();
-
-    expect(s.reloads).toHaveLength(0); // 换流已撤销
-    const t = traceOf(sb);
-    expect(t.firstWaveSkipped).toBe(1);
-    expect(t.firstWave).toBe('native'); // 首波是原生流，如实记录
-    expect(t.remounts).toBe(1);
-    expect(t.errors).toBe(0);
-    // 回调仍然挂上：后续切画质 / SPA 换片走它
+    // 关键：还没收到任何 cfg，requestConfig 里就已经是我们的函数
     expect(typeof s.config.requestConfig.reqHttpPlayUrlInfo).toBe('function');
-    expect(s.patches).toHaveLength(1);
-    expect(s.patches[0]!.reqHttpPlayUrlInfo).toBe(s.config.requestConfig.reqHttpPlayUrlInfo);
+    const t = traceOf(sb);
+    expect(t.hookInstalled).toBe(true);
+    expect(t.createCalls).toBe(1);
+    expect(typeof t.tCreate).toBe('number');
+    expect(t.tCreate).toBeGreaterThanOrEqual(0);
   });
 
-  it('重复 cfg / SPA 换片 → firstWaveSkipped 不增长、仍不 reload', async () => {
+  it('门控随后打开 → 代理等到后走 fetch，firstWave=ours，不 reload', async () => {
+    const sb = bootAt(FESTIVAL_URL, () =>
+      okResponse({ code: 0, data: { dash: { video: [], audio: [] } } }),
+    );
+    await ready(sb);
+    const s = lateCreatePlayer(sb);
+    const cb = s.config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+
+    // 播放器在门控前调用代理：它只能等，不能发请求（fail-closed）
+    const pending = cb({ avid: 1, cid: 42141027046, qn: 120 }, s.config);
+    expect(sb.fetchCalls).toHaveLength(0);
+
+    sendCfg(sb); // cfg + page/activate 回包到齐 → 放行等待者
+    const out = await pending;
+    await flush();
+
+    expect(out.data.code).toBe(0);
+    expect(s.reloads).toHaveLength(0);
+    const t = traceOf(sb);
+    expect(t.firstWave).toBe('ours');
+    expect(t.firstWaveSkipped).toBe(0);
+    expect(t.gateTimeouts).toBe(0);
+    expect(t.tFirstCb).toBeGreaterThanOrEqual(0);
+    expect(t.tGate).toBeGreaterThanOrEqual(0);
+    expect(t.gateWaitedMs).toBeGreaterThanOrEqual(0);
+    expect(t.remounts).toBe(0); // 代理就是首波，不需要补挂
+    expect(s.patches).toHaveLength(0);
+  });
+
+  it('重复 cfg / SPA 换片 → 不重复等待、不 reload', async () => {
     const sb = bootAt(FESTIVAL_URL);
     await ready(sb);
     const s = lateCreatePlayer(sb);
     sendCfg(sb);
     await flush();
-    expect(traceOf(sb).firstWaveSkipped).toBe(1);
 
     sendCfg(sb); // 再来一条 cfg
     await flush();
@@ -577,12 +599,13 @@ describe('首波漏接管：只补挂、不换流，并回传取流原文', () =
     await flush();
 
     expect(s.reloads).toHaveLength(0);
-    expect(traceOf(sb).firstWaveSkipped).toBe(1);
+    expect(traceOf(sb).gateTimeouts).toBe(0);
+    expect(traceOf(sb).firstWaveSkipped).toBe(0);
     expect(traceOf(sb).spaSwaps).toBe(1);
-    expect(traceOf(sb).remounts).toBe(2); // 只有补挂 + SPA 那次重挂
+    expect(traceOf(sb).remounts).toBe(1); // 只有 SPA 那次重挂
   });
 
-  it('首波已被我们接管（festivalHooked=true）→ 不进补挂分支、不记 skipped', async () => {
+  it('首波已被我们接管 → 后续 cfg 不误伤，不 reload', async () => {
     const sb = bootAt(FESTIVAL_URL, () =>
       okResponse({ code: 0, data: { dash: { video: [], audio: [] } } }),
     );
@@ -598,7 +621,7 @@ describe('首波漏接管：只补挂、不换流，并回传取流原文', () =
         reloads.push(1);
       },
     };
-    installNano(sb, player).createPlayer(config); // attach 当场成功
+    installNano(sb, player).createPlayer(config); // 代理同步装上
     const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
     await cb({ cid: 42141027046, qn: 120 }, config); // 首波 fetch
     expect(traceOf(sb).firstWave).toBe('ours');
@@ -612,28 +635,55 @@ describe('首波漏接管：只补挂、不换流，并回传取流原文', () =
     expect(traceOf(sb).firstWave).toBe('ours');
   });
 
-  it('补挂失败（updateRequestConfig 抛）→ 记 error，不记 skipped', async () => {
+  it('cfgEnabled === false（确定关着）→ 立即交还原生，不进等待', async () => {
     const sb = bootAt(FESTIVAL_URL);
     await ready(sb);
-    const config: any = { cid: 42141027046, bvid: 'BV1ydeX65Edn' };
-    const player = {
-      updateRequestConfig() {
-        throw new TypeError('Cannot convert undefined or null to object');
-      },
-      reload() {
-        throw new Error('must not be called');
-      },
-    };
-    installNano(sb, player).createPlayer(config); // 门控未开
-
-    expect(() => sendCfg(sb)).not.toThrow();
+    const s = lateCreatePlayer(sb, () => Promise.resolve('orig'));
+    sendCfg(sb, { enabled: false, rewriteGate: false });
     await flush();
 
-    expect(traceOf(sb).firstWaveSkipped).toBe(0); // 没挂上就不算"放弃换流"
-    expect(traceOf(sb).lastSkip).toContain('late activate');
-    expect(traceOf(sb).errors).toBeGreaterThanOrEqual(1);
-    // 回调仍挂在 config 上，下一次 SPA 换片还有机会重挂
-    expect(typeof config.requestConfig.reqHttpPlayUrlInfo).toBe('function');
+    vi.useFakeTimers();
+    try {
+      const cb = s.config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+      const pending = cb({ cid: 42141027046 }, s.config);
+      expect(vi.getTimerCount()).toBe(0); // 没进等待队列
+      await expect(pending).resolves.toBe('orig');
+
+      const t = traceOf(sb);
+      expect(t.gateTimeouts).toBe(0);
+      expect(t.gateWaitedMs).toBe(0);
+      expect(t.firstWaveSkipped).toBe(1);
+      expect(t.firstWave).toBe('native');
+      expect(t.lastStage).toBe('skip-gate-at-cb');
+      expect(s.reloads).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('门控一直不开（超时）→ 交还原生，gateTimeouts / firstWaveSkipped 各 +1', async () => {
+    const sb = bootAt(FESTIVAL_URL);
+    await ready(sb);
+    const s = lateCreatePlayer(sb, () => Promise.resolve('orig'));
+
+    vi.useFakeTimers();
+    try {
+      const cb = s.config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+      const pending = cb({ cid: 42141027046 }, s.config);
+      expect(vi.getTimerCount()).toBe(1); // 确实在等门控
+      await vi.advanceTimersByTimeAsync(300);
+      await expect(pending).resolves.toBe('orig');
+
+      const t = traceOf(sb);
+      expect(t.gateTimeouts).toBe(1);
+      expect(t.gateWaitedMs).toBeGreaterThanOrEqual(0);
+      expect(t.firstWaveSkipped).toBe(1);
+      expect(t.firstWave).toBe('native');
+      expect(t.lastStage).toBe('gate-timeout');
+      expect(s.reloads).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('成功取流 → 上报未改写的 playurl-raw（必须在 filterDashOf 之前）', async () => {
@@ -678,7 +728,7 @@ describe('首波漏接管：只补挂、不换流，并回传取流原文', () =
     expect(posts).toHaveLength(1);
     expect(posts[0]!.json.data.dash.video[0].base_url).toContain('mcdn.example.com');
     expect(posts[0]!.token).toBe('test-token');
-    expect(traceOf(sb).firstWave).toBe('native'); // 首波仍是原生
+    expect(traceOf(sb).firstWave).toBe('ours');
   });
 
   it('SPA 换片后 playurl-raw 必须再发一次（按 cid 放行，不用布尔）', async () => {

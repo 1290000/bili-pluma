@@ -114,18 +114,27 @@
 **探针如实标注的残留限制**：4K 登录态下的回调注入**未直接实测**（bsk 0.5.0 不能在 document_start
 注入、复制 Edge Cookies 被运行中浏览器独占）。机制与身份无关，但真机验收必须用登录态再确认一次 4K。
 
-**首波接管的边界（2026-11-18 真机后修订）**
+**首波接管的边界（2026-11-18 真机后二次修订）**
 
-首波取流常发生在门控（`cfg` + `page/activate` 两个回包）就绪之前，此时 `createPlayer` 已经调过，
-`festivalAttach` 只能建空 `requestConfig` 就返回 —— 首波由播放器自己 XHR（DNR 换 Cookie 后的官方线路）
-取得。曾经在补挂回调成功后主动 `player.reload()` 一次把首波换成我们的流，真机确认有效，但它重建
-MediaSource 会把 `currentTime` 归 0：**从视频中间位置进入活动页时进度被拽回开头**。活动页这条线两个
-账号画质本来就相同，首波换流收益接近于零、回拽却是每次续播都能感知的确定伤害，**用户明确否掉，
-已移除 reload 补救**。
+> 依据：`poc/probe/festival/REPORT-gate-window.md`（门控窗口精确时序 + 同步注入实测）。
 
-现在的边界是：**首波接受播放器原生流**（只记 `firstWaveSkipped`），补挂仍然保留 —— 之后的切画质 /
-SPA 换片请求会走我们的回调（画质解锁、PCDN 换 authority 从第二波起生效）。要真正做到首波接管，只能
-让播放器等门控之后才建，那会把起播整体往后拖，代价更大，本期不做。
+旧归因是「门控晚到，补挂抢不到首波」。实测**推翻了它**：10 次里 9 次门控比首波 playurl **还早**
+200–500ms，首波依然是原生 XHR —— **首波取流在 `createPlayer` 里就排好队，之后再
+`updateRequestConfig` 结构上只影响 reload 后的那一波**。
+
+正解是**在 `createPlayer` 返回前同步写 `config.requestConfig.reqHttpPlayUrlInfo`**（门控等待代理）。
+真机实测同步注入会被调用：真实 fetch 模式 `cbHits=1`、正常起播、播放器自己一条原生 playurl XHR
+都没发；回调在 `createPlayer` 后 52–68ms 被调，比原生 XHR 早 0.45–1.1s。
+
+门控到达时刻相对 `createPlayer`：p50 50ms / p90 66ms / max 68ms，所以等待上限取 **300ms**
+（原生 XHR 在 create+约 496ms 才发，不会让首帧更晚）。代理仍是 fail-closed：
+
+- 门控**未知** → 只等、**不发任何请求**，超时交还原生（页面原回调 → 原生 XHR → code=-1 壳）；
+- `cfgEnabled === false` / `page/activate` 明确未激活 → **立即**交还原生，不让用户白等。
+
+同时**撤销**了上一版"补挂后 `player.reload()` 换首波"：它确实有效，但重建 MediaSource 会把
+`currentTime` 归 0，从中间续播时进度被拽回开头，用户明确否掉。`updateRequestConfig` 补挂保留，
+只作为兜底（钩子晚装 / config 非对象 / SPA 换片），不再承担抢首波。
 
 ### 第 4 步 · 真机验收（机器守卫盖不到的部分）
 

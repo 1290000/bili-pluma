@@ -90,7 +90,7 @@
    * | 8 | fetch playurl 分支 | 预取主账号进度 | `isPlayurl && rewriteGate` |
    * | 9 | XHR playurl 分支 | 预取主账号进度 | `if (rewriteGate)` |
    * | 10 | `patchPlayurlXhrProgress` | 还原观看进度 | `!rewriteGate` → return false |
-   * | 11 | `festivalRequestInfo` 回调 | 活动页 nano 取流 | `cfgEnabled && rewriteGate`（安装时 + 每次调用时） |
+   * | 11 | `festivalGateProxy` 回调 | 活动页 nano 取流 | 每次调用时判 `cfgEnabled && rewriteGate`；未知最多等 300ms，等不到交还原生 |
    *
    * **剩余 `enabled` 只有赋值与诊断用途**（`cfgEnabled` / `lastCfgEnabled` /
    * `ready` 上报 / `hello` 回执），**没有漏的副作用入口**。
@@ -643,7 +643,9 @@
    * - `rewritten` / `lastStatus` / `fallbacks` / `errors`：PCDN 是否换到官方线路、取流成败
    * - `lastQuery` / `paramTypes` / `lastRespCode` / `lastRespMsg`：2026-11-19 为 -400 加的
    *   取流现场快照（见各字段注释）。**只写内存，不 postMessage、不落盘**。
-   * - `firstWave` / `firstWaveSkipped`：首波是谁取的流；漏接管时只记一次，不主动 reload
+   * - `firstWave` / `firstWaveSkipped`：首波是谁取的流；没接管（确定关闭 / 等待超时）时记数
+   * - `tCreate` / `tFirstCb` / `tGate` / `gateWaitedMs` / `gateTimeouts`：门控等待窗口的时间线，
+   *   真机验收首波接管是否在门控就绪后立刻发生（见 `REPORT-gate-window.md`）
    * - `lastStage` / `lastSkip`：最后停在哪一步；`lastSkip` 记异常原文，便于真机抄回来
    */
   var festivalTrace = {
@@ -664,20 +666,29 @@
     lastStage: 'boot',
     lastSkip: '',
     /**
-     * 首波接管时序竞争（2026-11-20 埋点，REPORT-handoff.md）：首波常被播放器原生
-     * XHR 抢走（门控要等 cfg + page/activate 两个回包），补挂回调后**不主动换流**。
+     * 首波接管：**createPlayer 返回前同步注入门控等待代理**（2026-11-18 修正）。
      *
-     * - `firstWave`：`pending` = 未判定；`ours` = 回调真的走到 fetch 并拿到响应；
-     *   `native` = 补挂时确认首波没被我们接管（门控晚到）。判据**不用 cbHits**
-     *   （门控关闭时回调也可能被调一次，cbHits=1 却根本没 fetch），只看
-     *   lastQuery / lastRespCode + 结构性事实。
-     * - `firstWaveSkipped`：确认首波漏接管、接受原生流继续播的次数（正常 0 或 1）。
-     *   2026-11-18 真机验证过"补挂后主动 `player.reload()` 换流"确实能让首波变成
-     *   我们的流，但它重建 MediaSource 会把 `currentTime` 归 0 —— 用户从中间续播时
-     *   进度被拽回开头。用户明确否掉，故此处只记数、不补救（见 `festivalMaybeActivate`）。
+     * 旧判断"门控晚到导致首波漏接管"已被 `REPORT-gate-window.md` 推翻：9/10 次门控
+     * 比首波 playurl 还早 200–500ms，首波仍是原生 XHR —— 因为播放器在 `createPlayer`
+     * 里就把首波取流排好队，之后再 `updateRequestConfig` 只能影响后续 reload。
+     * 正解是在 `createPlayer` 返回前同步写 `config.requestConfig.reqHttpPlayUrlInfo`，
+     * 播放器首波会调用它。门控通常只晚 p50 50ms / p90 66ms / max 68ms，代理等一小会即可。
+     *
+     * - `firstWave`：`pending` = 还没判定（也可能代理从未被调用）；`ours` = 回调真的
+     *   走到 fetch 并拿到响应；`native` = 首波没被接管（确定关闭或等待超时，交还原生）。
+     * - `firstWaveSkipped`：首波没被我们接管、交给降级路径的次数。语义已从"接受原生流"
+     *   改为"确定关闭 / 等待超时"，不再有 reload 补救。
+     * - `tCreate` / `tFirstCb` / `tGate`：createPlayer、代理首次被调、门控首次为真，
+     *   都是 `Math.round(performance.now())`（与 Resource Timing 同一时基）。
+     * - `gateWaitedMs`：代理本次实际等待门控的毫秒数；`gateTimeouts`：等待超时次数。
      */
     firstWave: 'pending',
     firstWaveSkipped: 0,
+    tCreate: 0,
+    tFirstCb: 0,
+    tGate: 0,
+    gateWaitedMs: 0,
+    gateTimeouts: 0,
     /**
      * 实际发出的 playurl 的 query 串（**脱敏视图**，2026-11-19 加）。
      *
@@ -728,6 +739,17 @@
    * 同一次取流重试不重复发，SPA 换片（cid 变）必须再发一次，否则画质卡会停在上一片。
    */
   var festivalPostedRawCid = null;
+  /**
+   * 门控等待上限（毫秒）—— 探针实测门控在 `createPlayer` 后 p50 50 / p90 66 / max 68ms
+   * 就绪，而播放器原生 XHR 要到 create+约 496ms 才发。300ms 是 p90 的 ~4.5 倍、max 的
+   * ~4 倍，仍在原生 XHR 之前，不会让首帧更晚（`REPORT-gate-window.md` §3.3）。
+   *
+   * ⚠️ 只对"门控未知"生效；`cfgEnabled === false` / `pgcActive === false` 确定关着时
+   * 立即交还原生，不让用户白等。
+   */
+  var FESTIVAL_GATE_WAIT_MS = 300;
+  /** 正在等门控的代理回调：每个元素是 `resolve(true)` 的闭包，门控变真时统一放行。 */
+  var festivalGateWaiters = [];
 
   /**
    * 活动页能不能接管：与 PGC 同一套**双门控**，缺一不可。
@@ -740,7 +762,78 @@
    * 回调内部还会再判一次，覆盖"注入后用户热关闭"的情况。
    */
   function festivalGateOpen() {
-    return cfgEnabled === true && rewriteGate === true;
+    var open = cfgEnabled === true && rewriteGate === true;
+    // 门控首次为真：记时间戳，供真机对齐"首波回调 vs 门控"的先后
+    if (open && festivalTrace.tGate === 0) festivalTrace.tGate = festivalNow();
+    return open;
+  }
+
+  /**
+   * 门控是否**确定**关着（区别于"还没回包，未知"）。
+   *
+   * 只有这两个信号是确定的，且都来自 ISOLATED 侧的明确回包：
+   * - `cfgEnabled === false`：用户总开关关着（`enabled` 初值 `null` = 还没收到 cfg）
+   * - `pgcActive === false`：`page/activate` 明确回报"扩展没参与取流"
+   *   （初值 `null` = 回包还没到，不能当"关着"）
+   *
+   * ⚠️ **不能**用 `rewriteGate === false` 判"确定关着"：它的初值就是 `false`，
+   * `hello` 那条 cfg 也常带 `false`，要等 `page/activate` 之后才可能变 `true`。
+   * 拿它当判据会把"还没等到"误判成"永远不会来"，直接错过首波。
+   */
+  function festivalGateClosedDefinitively() {
+    return cfgEnabled === false || pgcActive === false;
+  }
+
+  /** 与 Resource Timing 同一时基的毫秒时间戳（`performance.now` 不可用时退化为 0）。 */
+  function festivalNow() {
+    try {
+      return performance && performance.now ? Math.round(performance.now()) : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /**
+   * 等门控打开，最多 `ms` 毫秒：resolve `true` = 打开了，`false` = 超时。
+   *
+   * 为什么用队列而不是轮询：`cfg` 到达是事件驱动的，轮询会引入额外延迟且不好收尾。
+   * 每个等待者只在首次结束时 resolve 一次；超时会把自己从队列里摘掉，避免泄漏。
+   */
+  function festivalWaitGate(ms) {
+    return new Promise(function (resolve) {
+      var done = false;
+      var timer = null;
+      var waiter = function () {
+        if (done) return;
+        done = true;
+        if (timer !== null) {
+          try {
+            clearTimeout(timer);
+          } catch (e) {}
+        }
+        resolve(true);
+      };
+      festivalGateWaiters.push(waiter);
+      timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        var i = festivalGateWaiters.indexOf(waiter);
+        if (i >= 0) festivalGateWaiters.splice(i, 1);
+        resolve(false);
+      }, ms);
+    });
+  }
+
+  /** 门控首次变真时放行所有等待者（只在这时调，别在"未知"时调）。 */
+  function festivalResolveGateWaiters() {
+    if (!festivalGateWaiters.length) return;
+    var list = festivalGateWaiters;
+    festivalGateWaiters = [];
+    for (var i = 0; i < list.length; i++) {
+      try {
+        list[i]();
+      } catch (e) {}
+    }
   }
 
   /**
@@ -984,151 +1077,221 @@
   }
 
   /**
-   * 造一枚新回调。**每次重挂都换函数身份**：真机上能靠 `cbHits` 之外的
-   * generation 区分"旧回调还在被调"与"新回调已接管"（探针 Q5 的坑）。
+   * 真正的取流实现（原 `festivalRequestInfo` 的函数体抽出）。
+   *
+   * ⚠️ 本函数开头仍保留一道 `festivalGateOpen()` 早退 —— 那是**热关闭**保护
+   * （注入后用户拨掉开关），不是门控等待；等待逻辑在 `festivalGateProxy`。
+   */
+  function festivalFetch(params, config) {
+    festivalTrace.lastStage = 'cb';
+
+    var cid = params && params.cid != null ? String(params.cid) : '';
+    if (cid) festivalTrace.lastCid = cid;
+    var expected = festivalExpectedCid();
+    if (expected && cid && expected !== cid) {
+      // 只记，不拦：SSR 在 SPA 切换后可能滞后，params 才是本轮请求的真值
+      festivalTrace.cidMismatch += 1;
+    }
+
+    // 热关闭也要挡住：门控不仅管"装不装"，还管"每一次调用发不发请求"
+    if (!festivalGateOpen()) {
+      festivalTrace.lastStage = 'skip-gate-at-cb';
+      return festivalFallback(params, config);
+    }
+
+    var url;
+    try {
+      url = festivalPlayUrl(params);
+    } catch (e) {
+      festivalTrace.errors += 1;
+      festivalTrace.lastSkip = 'build url: ' + String(e && e.message ? e.message : e);
+      return festivalFallback(params, config);
+    }
+
+    // 必须是 `nativeFetch`：本文件后面 hook 了 window.fetch，
+    // 走它自己的 hook 会把这次取流又喂进响应改写链，出问题分不清是哪一层。
+    // DNR 换 Cookie 在网络层生效，用 nativeFetch 不影响身份代理。
+    return nativeFetch(url, { credentials: 'include' })
+      .then(function (r) {
+        festivalTrace.lastStatus = r.status;
+        return r.json().then(function (json) {
+          festivalNoteResp(json);
+          // 首波来源：只有真的走到 fetch 并拿到响应才算我们的流。
+          // ⚠️ 别拿 `rewritten` 当"接管成功"的判据：它只统计 PCDN 换 authority
+          // 的次数，响应本身就是官方线路时恒为 0（2026-11-18 真机踩过这个坑）。
+          // 判据是 `lastStage:'cb'` + `lastStatus:200` + `lastRespCode:0` 这三点；
+          // 想知道这次取流是不是 fetch 发的，看 Network 的 initiator 列。
+          if (festivalTrace.firstWave === 'pending') {
+            festivalTrace.firstWave = 'ours';
+          }
+          if (!r.ok || !json || json.code !== 0 || !json.data || typeof json.data !== 'object') {
+            throw new Error('bad playurl payload');
+          }
+
+          /**
+           * 把这份响应原文回传 ISOLATED 侧（修「画质卡永久停在等待取流…」）。
+           *
+           * 活动页只在 `:1987` 装了 `createPlayer` 探针，**fetch/XHR 响应观察钩子
+           * 没装**，所以 `capturePlayurlJson()` 在活动页从不执行 → `playurl-raw`
+           * 从不发出 → `pageState.playback` 恒 null → `describeUnlock()` 走
+           * `!playback` 分支，标题恒为「等待取流…」（2026-11-18 真机）。
+           *
+           * ⚠️ **必须是 `filterDashOf` 之前的原文**：上报的是播放账号真实拿到的
+           * 版本，不是我们换过 authority 的版本；`filterDashOf` 会就地改
+           * `json.data`，顺序反了画质会算偏。所以这里不仅先发，还**显式做一份
+           * 快照**——不依赖 `postMessage` 的结构化克隆时机（真机是调用时克隆，
+           * jsdom 是派发时才克隆，不赌这个差异）。一个 cid 只做一次，开销可忽略。
+           */
+          if (cid !== festivalPostedRawCid) {
+            festivalPostedRawCid = cid;
+            var postedJson = json;
+            try {
+              postedJson = JSON.parse(JSON.stringify(json));
+            } catch (e) {}
+            safePost({ __ns: NS, type: 'playurl-raw', token: token, json: postedJson });
+          }
+
+          /**
+           * PCDN 换 authority（ADR 0039）—— 与 `/video` 的 playurl 同一套函数、
+           * 同一道闸门。活动页返回体同样是 `{code, data:{dash}}`，
+           * 所以 holder 就是 `json.data`（与 `patchPlayurlBody` 里的 `d` 同层）。
+           * 这里不碰 quality / timelength / duration：画质由服务端决定，
+           * 而探针实测 activity 页的 duration 由 SSR 分 P 锁定，改了也不会变。
+           */
+          if (pcdnFilterReady()) {
+            var stats = filterDashOf(json.data);
+            if (stats.changed) {
+              festivalTrace.rewritten += stats.rewritten;
+              reportPcdnFilter(stats, 'festival');
+            }
+          }
+
+          /**
+           * ⚠️ `data` 这一层不能少（探针 Q4）：内核 `requestDefault` 返回的是
+           * `{data: <完整 json>, headers, status}`，只返回 json 本身播放器解析不出流。
+           * 探针用 "裁 dash.video 6→3 后 videoHeight 480→360" 证明它吃的就是这份数据。
+           */
+          return { data: json, headers: {}, status: r.status };
+        });
+      })
+      .catch(function (err) {
+        festivalTrace.errors += 1;
+        festivalTrace.lastStage = 'fallback';
+        festivalTrace.lastSkip = 'fetch/json: ' + String(err && err.message ? err.message : err);
+        return festivalFallback(params, config);
+      });
+  }
+
+  /**
+   * 造一枚新回调供**补挂路径**（`festivalRemount` / `festivalMaybeActivate`）使用。
+   * 每次重挂都换函数身份：真机上能区分"旧回调还在被调"与"新回调已接管"（探针 Q5）。
+   *
+   * ⚠️ 这里不做门控等待：补挂发生时首波早已过去，剩下的只是热关闭保护
+   * （`festivalFetch` 开头的 `festivalGateOpen()` 早退）。
    */
   function festivalNewCallback() {
     festivalGeneration += 1;
-    var generation = festivalGeneration;
     return function festivalRequestInfo(params, config) {
       festivalTrace.cbHits += 1;
-      festivalTrace.lastStage = 'cb';
-
-      var cid = params && params.cid != null ? String(params.cid) : '';
-      if (cid) festivalTrace.lastCid = cid;
-      var expected = festivalExpectedCid();
-      if (expected && cid && expected !== cid) {
-        // 只记，不拦：SSR 在 SPA 切换后可能滞后，params 才是本轮请求的真值
-        festivalTrace.cidMismatch += 1;
-      }
-
-      // 热关闭也要挡住：门控不仅管"装不装"，还管"每一次调用发不发请求"
-      if (!festivalGateOpen()) {
-        festivalTrace.lastStage = 'skip-gate-at-cb';
-        return festivalFallback(params, config);
-      }
-
-      var url;
-      try {
-        url = festivalPlayUrl(params);
-      } catch (e) {
-        festivalTrace.errors += 1;
-        festivalTrace.lastSkip = 'build url: ' + String(e && e.message ? e.message : e);
-        return festivalFallback(params, config);
-      }
-
-      // 必须是 `nativeFetch`：本文件后面 hook 了 window.fetch，
-      // 走它自己的 hook 会把这次取流又喂进响应改写链，出问题分不清是哪一层。
-      // DNR 换 Cookie 在网络层生效，用 nativeFetch 不影响身份代理。
-      return nativeFetch(url, { credentials: 'include' })
-        .then(function (r) {
-          festivalTrace.lastStatus = r.status;
-          return r.json().then(function (json) {
-            festivalNoteResp(json);
-            // 首波来源：只有真的走到 fetch 并拿到响应才算我们的流。
-            // ⚠️ 别拿 `rewritten` 当"接管成功"的判据：它只统计 PCDN 换 authority
-            // 的次数，响应本身就是官方线路时恒为 0（2026-11-18 真机踩过这个坑）。
-            // 判据是 `lastStage:'cb'` + `lastStatus:200` + `lastRespCode:0` 这三点；
-            // 想知道这次取流是不是 fetch 发的，看 Network 的 initiator 列。
-            if (festivalTrace.firstWave === 'pending') {
-              festivalTrace.firstWave = 'ours';
-            }
-            if (!r.ok || !json || json.code !== 0 || !json.data || typeof json.data !== 'object') {
-              throw new Error('bad playurl payload');
-            }
-
-            /**
-             * 把这份响应原文回传 ISOLATED 侧（修「画质卡永久停在等待取流…」）。
-             *
-             * 活动页只在 `:1987` 装了 `createPlayer` 探针，**fetch/XHR 响应观察钩子
-             * 没装**，所以 `capturePlayurlJson()` 在活动页从不执行 → `playurl-raw`
-             * 从不发出 → `pageState.playback` 恒 null → `describeUnlock()` 走
-             * `!playback` 分支，标题恒为「等待取流…」（2026-11-18 真机）。
-             *
-             * ⚠️ **必须是 `filterDashOf` 之前的原文**：上报的是播放账号真实拿到的
-             * 版本，不是我们换过 authority 的版本；`filterDashOf` 会就地改
-             * `json.data`，顺序反了画质会算偏。所以这里不仅先发，还**显式做一份
-             * 快照**——不依赖 `postMessage` 的结构化克隆时机（真机是调用时克隆，
-             * jsdom 是派发时才克隆，不赌这个差异）。一个 cid 只做一次，开销可忽略。
-             */
-            if (cid !== festivalPostedRawCid) {
-              festivalPostedRawCid = cid;
-              var postedJson = json;
-              try {
-                postedJson = JSON.parse(JSON.stringify(json));
-              } catch (e) {}
-              safePost({ __ns: NS, type: 'playurl-raw', token: token, json: postedJson });
-            }
-
-            /**
-             * PCDN 换 authority（ADR 0039）—— 与 `/video` 的 playurl 同一套函数、
-             * 同一道闸门。活动页返回体同样是 `{code, data:{dash}}`，
-             * 所以 holder 就是 `json.data`（与 `patchPlayurlBody` 里的 `d` 同层）。
-             * 这里不碰 quality / timelength / duration：画质由服务端决定，
-             * 而探针实测 activity 页的 duration 由 SSR 分 P 锁定，改了也不会变。
-             */
-            if (pcdnFilterReady()) {
-              var stats = filterDashOf(json.data);
-              if (stats.changed) {
-                festivalTrace.rewritten += stats.rewritten;
-                reportPcdnFilter(stats, 'festival');
-              }
-            }
-
-            /**
-             * ⚠️ `data` 这一层不能少（探针 Q4）：内核 `requestDefault` 返回的是
-             * `{data: <完整 json>, headers, status}`，只返回 json 本身播放器解析不出流。
-             * 探针用 "裁 dash.video 6→3 后 videoHeight 480→360" 证明它吃的就是这份数据。
-             */
-            return { data: json, headers: {}, status: r.status };
-          });
-        })
-        .catch(function (err) {
-          festivalTrace.errors += 1;
-          festivalTrace.lastStage = 'fallback';
-          festivalTrace.lastSkip = 'fetch/json: ' + String(err && err.message ? err.message : err);
-          return festivalFallback(params, config);
-        });
+      if (festivalTrace.tFirstCb === 0) festivalTrace.tFirstCb = festivalNow();
+      return festivalFetch(params, config);
     };
   }
 
-  /** 在 config 上新建 requestConfig 并挂回调（活动页原生**两者都没有**）。 */
+  /**
+   * 门控等待代理 —— **在 `createPlayer` 返回前同步挂进 `config.requestConfig`**。
+   *
+   * 首波取流在 `createPlayer` 里就排好队，所以这是唯一能抢到首波的位置
+   * （`REPORT-gate-window.md` §2 / §3.4）。三种去向：
+   *   1. 门控已开 → 直接取流；
+   *   2. 门控**确定**关着（用户关开关 / activate 回报未激活）→ 立刻交还原生，不让用户白等；
+   *   3. 门控**未知**（回包还没到）→ 最多等 `FESTIVAL_GATE_WAIT_MS`，超时交还原生。
+   *
+   * fail-closed 没有被破坏：等待期间一个请求都不发；超时后走的是已有三级降级
+   * （页面原回调 → 原生 XHR → code=-1 壳），与"没接管"的行为完全一致。
+   */
+  function festivalGateProxy(params, config) {
+    festivalTrace.cbHits += 1;
+    if (festivalTrace.tFirstCb === 0) festivalTrace.tFirstCb = festivalNow();
+
+    if (festivalGateOpen()) return festivalFetch(params, config);
+
+    if (festivalGateClosedDefinitively()) {
+      festivalTrace.firstWaveSkipped += 1;
+      if (festivalTrace.firstWave === 'pending') festivalTrace.firstWave = 'native';
+      // 与旧回调的 "skip-gate-at-cb" 保持同一个可观测值（热关闭诊断不变）
+      festivalTrace.lastStage = 'skip-gate-at-cb';
+      return festivalFallback(params, config);
+    }
+
+    var t0 = festivalNow();
+    return festivalWaitGate(FESTIVAL_GATE_WAIT_MS).then(function (open) {
+      festivalTrace.gateWaitedMs = Math.max(0, festivalNow() - t0);
+      if (open) return festivalFetch(params, config);
+      festivalTrace.gateTimeouts += 1;
+      festivalTrace.firstWaveSkipped += 1;
+      if (festivalTrace.firstWave === 'pending') festivalTrace.firstWave = 'native';
+      festivalTrace.lastStage = 'gate-timeout';
+      return festivalFallback(params, config);
+    });
+  }
+
+  /**
+   * 在 config 上新建 requestConfig 并**同步挂上门控等待代理**（活动页原生两者都没有）。
+   *
+   * ⚠️ 2026-11-18 起**不再门控早退**：首波取流在 `createPlayer` 里就排好队，门控没到
+   * 就不挂等于把首波让给原生 XHR（`REPORT-gate-window.md` §3.4：事后再
+   * `updateRequestConfig` 结构上抢不到首波）。代理本身仍是 fail-closed ——
+   * 门控未知时不发任何请求，只等一小会（见 `festivalGateProxy`），等不到就交还原生。
+   */
   function festivalAttach(config) {
     if (!config || typeof config !== 'object') return false;
     festivalConfig = config;
 
     /**
-     * 空对象也要建：正常路径下它马上就会装上回调；
-     * 门控晚到的路径下，它是后面 `player.updateRequestConfig()` 不抛错的前提
+     * 空对象也要建：后面 `player.updateRequestConfig()` 要求它存在
      * （探针 Q5：原生页 requestConfig 为 undefined，内核 Object.assign 会抛）。
-     * 空 requestConfig 不改变播放器行为（内核只读 `?.reqHttpPlayUrlInfo`）。
+     * 空 requestConfig 本身不改变播放器行为（内核只读 `?.reqHttpPlayUrlInfo`）。
      */
     if (!config.requestConfig || typeof config.requestConfig !== 'object') {
       config.requestConfig = {};
     }
-    if (!festivalGateOpen()) return false;
 
-    if (typeof config.requestConfig.reqHttpPlayUrlInfo === 'function' && !festivalOrigReq) {
+    /**
+     * 必须在覆盖之前捕获：降级路径要把首波交回**页面自己的**实现。
+     * 排除我们自己挂过的两代回调，别把代理自己当成"原始回调"存起来。
+     */
+    if (
+      typeof config.requestConfig.reqHttpPlayUrlInfo === 'function' &&
+      config.requestConfig.reqHttpPlayUrlInfo !== festivalGateProxy &&
+      config.requestConfig.reqHttpPlayUrlInfo !== festivalCb &&
+      !festivalOrigReq
+    ) {
       festivalOrigReq = config.requestConfig.reqHttpPlayUrlInfo;
     }
-    if (config.requestConfig.reqHttpPlayUrlInfo === festivalCb) return true;
+    if (config.requestConfig.reqHttpPlayUrlInfo === festivalGateProxy) return true;
+    // 已经是我们的回调、且门控已开 → 不需要换回代理；门控没开则换回代理重新拿等待能力
+    if (config.requestConfig.reqHttpPlayUrlInfo === festivalCb && festivalGateOpen()) return true;
 
     /**
      * 防御性清预取字段：活动页当前**没有** prefetch（探针 Q2 / Q3），
      * 这不是删除 ADR 0019 那条的 `prefetch.playUrl`——那条路在这里根本不存在。
      * 清的是"站点将来改版加上预取"这种变体：预取会短路掉我们的回调。
-     * ⚠️ 只在门控已开、确认接管时才清；门控关时一个键都不动。
+     * ⚠️ 仍只在门控**已开**时清：门控关着时一个键都不动（fail-closed，不改页面
+     * 本来的取流路径）。活动页实测无 prefetch，所以这条防御不影响首波接管。
      * 绝不在 `element` / `auxiliary` 这类 DOM 键上套 Proxy（探针实测栈溢出）。
      */
-    try {
-      delete config.prefetch;
-    } catch (e) {}
-    try {
-      delete config.playUrl;
-    } catch (e) {}
+    if (festivalGateOpen()) {
+      try {
+        delete config.prefetch;
+      } catch (e) {}
+      try {
+        delete config.playUrl;
+      } catch (e) {}
+    }
 
-    festivalCb = festivalNewCallback();
-    config.requestConfig.reqHttpPlayUrlInfo = festivalCb;
+    festivalCb = festivalGateProxy;
+    config.requestConfig.reqHttpPlayUrlInfo = festivalGateProxy;
     festivalHooked = true;
     festivalTrace.hookInstalled = true;
     festivalTrace.lastStage = 'hooked';
@@ -1195,65 +1358,35 @@
   }
 
   /**
-   * cfg 晚到的补齐路径：`createPlayer` 可能早于 `page/activate` 回包。
-   * 此时 player 已经建好但回调没挂；我们靠已创建的空 requestConfig 走
-   * `updateRequestConfig`（或直接在同一个 config 对象上补）把回调装上去。
+   * cfg / activate 到齐后的兜底 —— **不再承担"抢首波"**。
    *
-   * ## 为什么不在这里主动换掉首波（2026-11-18 真机否掉）
+   * 首波已由 `createPlayer` 返回前同步注入的 `festivalGateProxy` 接管
+   * （`REPORT-gate-window.md` §3.4：晚到的 `updateRequestConfig` 结构上抢不到首波，
+   * 因为首波取流在 `createPlayer` 里就排好了队）。这里只做两件事：
    *
-   * 补挂之后确实能让首波换成我们的流：真机验证过 `festivalPlayer.reload()` 一调，
-   * `firstWave` 变 `ours`、Resource Timing 的 initiator 变 `fetch`、`rewritten` 增长。
-   * 但它重建 MediaSource 时 `currentTime` 归 0 —— **用户从视频中间位置进来，进度被
-   * 拽回开头**，每次续播都能感知。而活动页这条线两个账号的画质本来就相同，首波换流的
-   * 收益接近于零，伤害却是确定的，所以用户拍板撤销。
+   * 1. **放行门控等待者**：代理可能正等 `cfg` / `page/activate` 回包，门控一开就放行；
+   * 2. **补挂兜底**：钩子晚装 / `config` 不是对象等场景下把回调补到 player 上。
+   *    正常路径下 `festivalHooked` 在 `createPlayer` 时就已为 true，这段不会执行。
    *
-   * 想真正让首波就归我们，只能让播放器等门控（`page/activate` 往返）之后再建，
-   * 那会把起播整体往后拖，代价更大，不做。于是这里只保留补挂：让**后续**的
-   * 切画质 / SPA 换片请求走我们的回调，首波原生流就让播放器自己播完。
+   * ⚠️ 绝不 reload：上一轮"补挂后重开一次流"因重建 MediaSource 把 `currentTime`
+   * 归 0（续播进度回拽）已被用户撤销，别加回来。
    */
   function festivalMaybeActivate() {
-    if (!IS_FESTIVAL || !festivalGateOpen()) return;
+    if (!IS_FESTIVAL) return;
+    if (!festivalGateOpen()) return;
+    // 门控刚刚变真：先放行等待中的首波代理（必须在 festivalHooked 早退之前）
+    festivalResolveGateWaiters();
     if (!festivalPlayer) return; // createPlayer 还没来 -> 由包装函数负责
-    if (festivalHooked) return; // 已经接管（含首波 A）-> 无需补挂
-
-    /**
-     * 首波来源判定（REPORT-handoff §4）：能走到这里说明 createPlayer 时门控未开，
-     * `festivalAttach` 只建了空 requestConfig 就返回 false —— 播放器随后自己 XHR
-     * 取了首波。判据刻意**不看 cbHits**：门控关闭时回调也可能被调一次
-     * （`skip-gate-at-cb` → fallback），cbHits=1 却根本没 fetch。这里用的是
-     * "hook 没挂上"这个结构性事实 + lastQuery/lastRespCode 双空（没走到 fetch）。
-     */
-    if (
-      festivalTrace.firstWave === 'pending' &&
-      festivalTrace.remounts === 0 &&
-      festivalTrace.lastQuery === '' &&
-      festivalTrace.lastRespCode === null
-    ) {
-      festivalTrace.firstWave = 'native';
-    }
+    if (festivalHooked) return; // 代理已在 createPlayer 时同步装上，无需补挂
 
     if (festivalAttach(festivalConfig)) {
-      var remountOk = false;
       try {
         festivalPlayer.updateRequestConfig({ reqHttpPlayUrlInfo: festivalCb });
-        remountOk = true;
         festivalTrace.remounts += 1;
       } catch (e) {
         festivalTrace.errors += 1;
         festivalTrace.lastSkip =
           'late activate: ' + String(e && e.message ? e.message : e);
-      }
-
-      /**
-       * 首波漏接管只**记数**，不补救：接受播放器原生流继续播。
-       *
-       * 这里曾经主动 `player.reload()` 一次把首波换成我们的流，真机确认有效，但
-       * 会重建 MediaSource 把 `currentTime` 归 0（续播进度回拽），已撤销 —— 理由
-       * 见本函数头注释。补挂本身仍然有价值：`updateRequestConfig` 之后的切画质 /
-       * SPA 换片请求会走刚挂上的回调。
-       */
-      if (remountOk && festivalTrace.firstWave === 'native') {
-        festivalTrace.firstWaveSkipped += 1;
       }
     }
   }
@@ -1332,7 +1465,9 @@
             if (IS_FESTIVAL) {
               try {
                 festivalTrace.createCalls += 1;
-                // 必须在 orig.apply 之前：内核在 createPlayer 里就把 config 收进 configStore
+                if (festivalTrace.tCreate === 0) festivalTrace.tCreate = festivalNow();
+                // 必须在 orig.apply 之前：内核在 createPlayer 里就把 config 收进 configStore，
+                // 而且首波取流也在这一刻排好队 —— 代理必须赶在它之前挂上。
                 festivalAttach(arguments[0]);
               } catch (e) {
                 festivalTrace.errors += 1;
@@ -5222,9 +5357,11 @@
     pgcTrace.lastCfgEnabled = cfgEnabled;
 
     /**
-     * 活动页（方案 B）的**晚到 cfg 补齐**：`createPlayer` 可能早于 `page/activate`
-     * 回包，那时门控还没开、回调没挂。门控这次到齐了就立刻重挂；
-     * 门控关着时这里什么都不做，播放器继续走默认 XHR（fail-closed）。
+     * 活动页（方案 B）：门控这次到齐了就**放行等待中的首波代理**，并保留兜底补挂。
+     *
+     * 首波代理是在 `createPlayer` 返回前同步装上的，通常只差这几十毫秒的门控
+     * （`REPORT-gate-window.md`：p90 66ms），所以这里一开就 resolve 它。
+     * 门控关着时这里什么都不做，代理继续等/交还原生（fail-closed）。
      * ⚠️ 必须在 token / 门控判断之后，否则页面伪造的 cfg 也能触发接管。
      */
     festivalMaybeActivate();
