@@ -1031,6 +1031,17 @@ export const PANEL_CSS = `
   gap: 3px;
 }
 
+/* 「页内净化」那一段的行容器（2026-11-19）。
+   刻意**不共用** .diag-facts：共用会让 querySelector('.diag-facts') 先命中
+   本段（DOM 里靠前），把「自检信息」那段挡在外面（见 diagnostics.ts 的注释）。
+   所以样式复制一份，选择器名字独立。
+   ⚠️ 本段注释在模板字符串里，不许出现反引号。 */
+.diag-ad-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 /* 诊断事实行（2026-11-16）：行首 6px 状态点 + label + 右对齐 value。
    原来是 space-between + baseline —— 加点之后 space-between 会把 label 推向中间，
    所以改成"点 + label（不伸）+ value（伸满并右对齐）"，点这一列自然对齐。 */

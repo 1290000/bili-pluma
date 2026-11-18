@@ -22,7 +22,7 @@
  * 好处：调试时在控制台 `$$('[data-pluma-ad]')` 立刻能看到命中了哪些元素。
  */
 
-import { AD_CLEAN_CSS, AD_MARK_ATTR } from './ads-css';
+import { AD_CLEAN_CSS, AD_DEAD_ATTR, AD_MARK_ATTR } from './ads-css';
 import { prescreenSelector } from './ad-selectors';
 import { applyBodyClasses, BODY_CLASS } from './body-classes';
 import type { CleanOptions } from './clean-options';
@@ -241,12 +241,34 @@ export function installAdObserver(
   /**
    * 超时兜底：body 级 observer 已能覆盖慢加载，
    * 这里只在**一个已知容器都没找到**时告警（说明页面结构可能变了）。
+   *
+   * ## 2026-11-19：回调之外**再落一个 DOM 标记**
+   *
+   * `onGiveUp` 的调用方（`content-home.content.ts`）只 `console.warn` ——
+   * 用户永远看不到。ADR 0031 :185 把「选择器失效是静默的」列为本条最需要
+   * 警惕的失败模式，所以这里额外在 `document.documentElement` 上写
+   * `data-pluma-ad-dead="1"`，让诊断页（另一个 bundle）读得到。
+   *
+   * 写在 `documentElement` 而不是 `body`：`document_start` 时 body 可能还不存在，
+   * 而这个标记要落在一个**此刻一定存在**的节点上。
+   *
+   * ⚠️ 只写不清：15 秒的判据一旦成立就是既成事实（那段时间确实没有容器）。
+   * 后续容器出现时页面已经能正常工作，而"曾经 15 秒没有容器"仍是真事实 ——
+   * 清掉它等于抹掉一次真实的观测。诊断页文案说的是"页面结构与预期不符"，
+   * 不是"现在坏了"，所以不会误导。
    */
   let timer: ReturnType<typeof setTimeout> | null = null;
   if (attached === 0) {
     timer = setTimeout(() => {
       const still = CONTAINERS.some((s) => doc.querySelector(s));
-      if (!still) onGiveUp?.();
+      if (!still) {
+        try {
+          doc.documentElement.setAttribute(AD_DEAD_ATTR, '1');
+        } catch {
+          // 极端情况下（文档已卸载）写不进去，绝不能因此中断回调
+        }
+        onGiveUp?.();
+      }
     }, 15000);
   }
 
@@ -261,6 +283,68 @@ export function installAdObserver(
 /** 供调试：当前命中数 */
 export function countMarkedAds(doc: Document = document): number {
   return doc.querySelectorAll(`[${AD_MARK_ATTR}="1"]`).length;
+}
+
+/**
+ * 广告清理的**自检结论**（ADR 0031 要求的「失效可见化」，2026-11-19 落地）。
+ *
+ * ## 为什么需要它
+ *
+ * ADR 0031 :163-164 把「诊断页显示匹配状态」列为**必需项**，理由是
+ * 「B 站改版会让选择器失效，而我们没有任何远程手段修复它，用户必须等下一个版本」；
+ * :185 又点名了失败形态：「选择器失效是静默的：命中 0 不报错」。
+ *
+ * 现状曾经是：命中 0 与「这一页本来就没广告」在界面上**完全一样**，
+ * `installAdObserver()` 的 `onGiveUp` 只 `console.warn` 一句（用户看不见）。
+ *
+ * ## 两种 0 必须分开
+ *
+ * | 观测 | 含义 | 结论 |
+ * | --- | --- | --- |
+ * | 预筛命中 0 | 页面上连一个**候选元素**都没有 ⇒ 33 个选择器集体失效 | `dead` |
+ * | 预筛 > 0、标记 0 | 候选在，但判据（CSS 变量）一个都没命中 | `suspect` |
+ * | 标记 > 0 | 正常 | `working` |
+ *
+ * 判据为什么用**预筛**而不是"标记数 > 0"：`prescreenSelector()` 由 36 条判据
+ * 规则**生成**（33 个选择器，覆盖 `.feed-card` / `.ad-report` / `.gg-pic` 这类
+ * B 站到处都有的类名），不是手抄清单。它命中 0 是相当强的信号 —— 那意味着整页
+ * 没有任何一处结构长得像广告位，而真实页面上这类容器成片出现。
+ *
+ * ⚠️ `suspect` 只能叫"判据没命中"，**不许**说成"功能失效"：候选在而判据不命中
+ * 完全可能是"这些候选本来就不是广告"（预筛宽于判据，这是设计）。所以文案要
+ * 说清观测到的事实，不下失效结论。
+ *
+ * ## 判据的边界（说清才不会误用）
+ *
+ * 这是**当前 DOM 的快照**，不回答"历史上有没有生效过"。`adEnabled` 关着时
+ * 元素不会被标记，此时 `marked: 0` 不代表失效 —— 调用方必须自己判开关，
+ * 所以本函数**不产出** any 结论文案，只产观测值。
+ *
+ * @param doc 目标文档
+ * @returns 预筛命中数、实际标记数、容器超时信号、以及由它们推出的粗结论
+ */
+export function inspectAdClean(doc: Document = document): {
+  candidates: number;
+  marked: number;
+  /** `installAdObserver()` 报过"15 秒内一个已知容器都没出现"（跨 bundle 的 DOM 标记） */
+  containerMissing: boolean;
+  verdict: 'working' | 'suspect' | 'dead';
+} {
+  const candidates = doc.querySelectorAll(`body ${PRESCREEN}`).length;
+  const marked = countMarkedAds(doc);
+  /**
+   * 独立于命中数的第二个信号（2026-11-19）：由 `content-home` 那个 bundle 在
+   * 15 秒超时时写下的标记。它回答的是**时间维度**的问题 ——
+   * "容器有没有在合理时间内出现"，而命中数回答的是"此刻页面上有没有"。
+   *
+   * 两者都要：命中数 0 可能是这页没广告；但容器 15 秒都没出现，就不是"没广告"
+   * 能解释的了，那指向页面结构变了。
+   */
+  const containerMissing = doc.documentElement.getAttribute(AD_DEAD_ATTR) === '1';
+
+  if (marked > 0) return { candidates, marked, containerMissing, verdict: 'working' };
+  if (candidates > 0) return { candidates, marked, containerMissing, verdict: 'suspect' };
+  return { candidates, marked, containerMissing, verdict: 'dead' };
 }
 
 export { BODY_CLASS };

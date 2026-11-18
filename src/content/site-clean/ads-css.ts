@@ -169,3 +169,21 @@ export const AD_CLEAN_CSS = [
 
 /** JS 写入的标记属性 —— CSS 用它来命中 */
 export const AD_MARK_ATTR = 'data-pluma-ad';
+
+/**
+ * 「已知容器 15 秒内一个都没出现」这个**失效信号**的落地属性（2026-11-19）。
+ *
+ * ## 为什么用 DOM 属性，而不是 storage / 消息 / 日志
+ *
+ * 广告清理跑在 `content-home.content.ts`（`document_start`，`www` 域），
+ * 诊断页跑在 `content-panel.content.ts` —— **两个独立 bundle，模块级变量互不可见**，
+ * 唯一共享的东西是**同一个 document**。而 `content-home` 里连一个日志出口都没有
+ * （`reportQuality` / `diag` 都不可用），为了一句失效提示去给它接一套跨模块
+ * 依赖，比"在 document 上记一笔"重得多。
+ *
+ * 写在这里而不是 `ads.ts`：它是**跨两个 bundle 的契约**（一边写、另一边读），
+ * 与 `AD_MARK_ATTR` 同一性质 —— 两个 bundle 都必须 import 得到它，
+ * 而 `ads.ts` 会被 `panel.ts` 整个打包进来（含 `flash` 那句 console 逻辑），
+ * 常量放在这里最不容易被后来人当成"内部实现"而随手改掉。
+ */
+export const AD_DEAD_ATTR = 'data-pluma-ad-dead';

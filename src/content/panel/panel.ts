@@ -29,7 +29,7 @@ import {
   normalizeCleanPreferences,
   type CleanOptionKey,
 } from '@/src/content/site-clean/clean-options';
-import { applyAdClean } from '@/src/content/site-clean/ads';
+import { applyAdClean, inspectAdClean } from '@/src/content/site-clean/ads';
 import { applyHomeClean } from '@/src/content/site-clean/home-clean';
 import {
   readBadgeEnabled,
@@ -1602,6 +1602,27 @@ export function mountPanelBody(actions: PanelActions): PanelController {
              * 渲染诊断页。
              */
             loading: model.loading ?? { kind: 'absent' },
+            /**
+             * 广告清理的**当场**观测（2026-11-19，ADR 0031 失效可见化）。
+             *
+             * ## 为什么在 `render()` 里取，而不是塞进 `loadDiag()`
+             *
+             * `loadDiag()` 是懒加载 + in-flight 去重：一次进入只拉一次，
+             * 之后点 ⟳ 才重拉。而广告标记是 **DOM 的当前状态** —— 无限滚动会
+             * 持续插入新卡片，`installAdObserver()` 的 MutationObserver 也在补标记。
+             * 把命中数放进 `diagData` 会让它停在"进入诊断那一刻"，**越看越旧**。
+             *
+             * `render()` 每次重画都取一次，成本是一次 `querySelectorAll`（33 个
+             * 选择器的联合，实测在真机上是毫秒级），换来的是"此刻是什么样"。
+             *
+             * ## 为什么面板能取到
+             *
+             * 广告清理跑在 `content-home.content.ts`、面板跑在 `content-panel.content.ts`
+             * —— 两个 bundle 的模块级变量**互不可见**，但它们共享**同一个 document**，
+             * 而标记就写在元素的 `data-pluma-ad` 属性上。面板侧自己也 `import`
+             * 了 `ads.ts`（`panel.ts:32`，写偏好后要主动应用），所以判据是同源的。
+             */
+            adClean: inspectAdClean(document),
           },
           {
             back: () => {

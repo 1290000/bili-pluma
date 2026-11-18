@@ -969,6 +969,127 @@ export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
 }
 
 /**
+ * 「页内净化」段：广告清理在当前页**到底命中没有**（2026-11-19）。
+ *
+ * ## 这一段回答的是什么
+ *
+ * ADR 0031 :185 点名的失败形态是「选择器失效是**静默的**：命中 0 不报错」。
+ * 在此之前用户能看到的只有"广告还在"—— 而"B 站改版了"与"这页本来没广告"
+ * 在界面上完全一样。这一段把**观测到的数**摆出来，让两种 0 能分开。
+ *
+ * ## 三种结论各自的文案（都不许把"没命中"说成"功能坏了"）
+ *
+ * | `verdict` | 观测 | 文案 | 色调 |
+ * | --- | --- | --- | --- |
+ * | `working` | 标记数 > 0 | `已标记 N 处广告位` | 正常 |
+ * | `suspect` | 有候选、标记 0 | `找到 N 个候选位置，但没有一处命中广告判据` | 中性 |
+ * | `dead` | 连候选都没有 | `整页找不到任何广告位结构（判据可能已因 B 站改版失效）` | 警告 |
+ *
+ * `suspect` 为什么**不用**警告色：预筛（33 个选择器）宽于判据是**设计**，
+ * 候选在而判据不命中完全可能是"这些候选本来就不是广告"。
+ * 只有 `dead` 才够格叫失效 —— 那意味着 `.feed-card` / `.ad-report` 这类
+ * B 站成片出现的容器一个都没有。
+ *
+ * ## 为什么先有一句"这段看什么"
+ *
+ * 这两行数（候选 / 已标记）对普通用户是黑话。加一句交代口径，比让他在
+ * "0 个候选"与"0 处广告"之间自己猜要好。
+ *
+ * @param ad 来自 `inspectAdClean()` 的观测（`panel.ts` 在渲染时当场取）
+ */
+function adCleanSection(ad: {
+  candidates: number;
+  marked: number;
+  containerMissing: boolean;
+  verdict: 'working' | 'suspect' | 'dead';
+}): HTMLElement {
+  const wrap = el('div', 'diag-ad-clean');
+  wrap.appendChild(el('p', 'diag-section', '页内净化'));
+
+  /**
+   * ⚠️ **不共用 `.diag-facts`**，另起一个类名（样式在 sidebar.ts 里并列声明）。
+   *
+   * 共用会让 `querySelector('.diag-facts')` 先命中**本段**（它在 DOM 里靠前），
+   * 而既有用例 `panel-diag-wiring.test.ts:281` 正是用它定位「自检信息」那段 ——
+   * 于是它断言的 `.diag-row.ok` 全部落空。那个文件头早写着"以后再往这个浮层
+   * 加行时不许误伤"，所以这里靠独立类名隔离，而不是去改它的断言。
+   */
+  const facts = el('div', 'diag-ad-facts');
+  /**
+   * label 用「像广告位的位置」而不是「广告位」：预筛是**宽于**判据的（33 个
+   * 选择器，覆盖 `.feed-card` 这类正常内容也用的类名），所以这个数说的是
+   * "页面上有多少处**长得像**广告的地方"，不是"有多少广告"。
+   * 写成「广告位数」会让 `0` 读成"没有广告"，而这恰好是本段要区分的两件事之一。
+   */
+  facts.appendChild(factRow({ label: '像广告位的位置', value: String(ad.candidates) }));
+
+  /**
+   * ⚠️ label **不写**「已隐藏的广告位」：命中 0 时那句会读成"该隐藏的都没隐藏"，
+   * 而 0 恰恰可能是"本来就没有"。改成中性的「实际命中并标记」，配下面那句
+   * 结论一起读才是完整意思（label 单独看会误导）。
+   */
+  const markedRow = factRow({ label: '实际命中并标记', value: String(ad.marked) });
+  /**
+   * 色调只给**够格的证据**：
+   *
+   * - `bad`（红）：`dead` —— 整页连候选都没有，这才是"判据可能挂了"
+   * - `warn`（琥珀）：`containerMissing` —— 容器超时，结构与预期不符
+   * - 中性：`suspect` —— 预筛宽于判据是**设计**，候选在而判据不命中多半正常
+   *
+   * ⚠️ `suspect` **不给** warn：那样每个正常无广告页都会亮黄，等于教用户
+   * 忽略这个颜色（告警疲劳，本项目在别处也记过同一条）。
+   */
+  if (ad.verdict === 'dead') markedRow.classList.add('bad');
+  else if (ad.containerMissing) markedRow.classList.add('warn');
+  facts.appendChild(markedRow);
+
+  wrap.appendChild(facts);
+  /**
+   * 结论句单独一行（与结论卡 `.ld-conclusion-note` 同一思路：它解释的是**上面两行
+   * 合起来**的意思，挤在 `diag-value` 里会被读成第三个计数）。
+   */
+  const note = el('p', 'pane-note', adCleanVerdictText(ad));
+  if (ad.verdict === 'dead' || ad.containerMissing) note.classList.add('warn');
+  wrap.appendChild(note);
+
+  return wrap;
+}
+
+/**
+ * 广告清理的观察结论（纯函数，**从 DOM 渲染里拆出来**以便直接断言文案）。
+ *
+ * 拆出来的理由与 `describePcdnCaveat()` 相同：夹在 DOM 装配里就只能靠
+ * `textContent` 比对，而文案一旦被别处的节点顺序影响，断言就会假红/假绿。
+ *
+ * ⚠️ 任何一档都**不许**出现"已失效"这种断言式说法（`dead` 那档用的是
+ * "可能已"）—— 我们观测到的是"整页没有广告位结构"，而不是"B 站改版了"。
+ * 把因果说死会让用户去找一个我们并不知道的问题。
+ */
+export function adCleanVerdictText(ad: {
+  candidates: number;
+  marked: number;
+  containerMissing: boolean;
+  verdict: 'working' | 'suspect' | 'dead';
+}): string {
+  /**
+   * `containerMissing` 排在**最前面**：它是时间维度的证据（15 秒内一个已知容器
+   * 都没出现），比"此刻页面上数不到"强得多。哪怕此刻已经有标记（`working`），
+   * "曾经 15 秒没容器"仍是要让人知道的事 —— 那说明页面结构与预期不符。
+   */
+  if (ad.containerMissing) {
+    return '页面结构与预期不符：15 秒内没找到任何已知内容容器 —— 净化规则可能已因 B 站改版失效。';
+  }
+  if (ad.verdict === 'working') return `已隐藏 ${String(ad.marked)} 处广告位。`;
+  if (ad.verdict === 'suspect') {
+    return (
+      `找到 ${String(ad.candidates)} 个候选位置，但没有一处命中广告判据 —— ` +
+      '通常是这一页本来就没有广告。'
+    );
+  }
+  return '整页找不到任何广告位结构，广告判据可能已因 B 站改版失效。';
+}
+
+/**
  * `logsMeta` **缺失时**的唯一兜底（渲染侧与导出侧共用，不许各写一份）。
  *
  * ## 为什么必须收敛到一处（2026-11-12，task-28）
@@ -1054,6 +1175,20 @@ export function diagnosticsPane(
      * 的"读取失败"，两者不再和第三种"未读到"挤在同一个形状里。
      */
     loading: LoadingOutcome;
+    /**
+     * 广告清理在当前页的观测（2026-11-19，ADR 0031「失效可见化」）。
+     *
+     * **可选**：由 `panel.ts` 在渲染时用 `inspectAdClean()` 当场取（面板与
+     * 广告清理跑在同一 document 上）。手工构造的 `PanelModel` 不传它 ⇒ 整段不画
+     * —— 与 `logsMeta` 同一手法：缺数据就少画，不补一个"未知"。
+     */
+    adClean?: {
+      candidates: number;
+      marked: number;
+      /** 15 秒内一个已知容器都没出现（`content-home` 那个 bundle 写的 DOM 标记） */
+      containerMissing: boolean;
+      verdict: 'working' | 'suspect' | 'dead';
+    };
   },
   actions: { back: () => void; exportJson: () => void; refresh: () => void },
 ): HTMLElement {
@@ -1115,6 +1250,23 @@ export function diagnosticsPane(
    * 本函数不重复判。
    */
   for (const node of loadingSectionNodes(data.loading)) box.appendChild(node);
+
+  /**
+   * ── 页内净化（2026-11-19，落地 ADR 0031 的「失效可见化」）──
+   *
+   * ## 为什么单独一段，不塞进「自检信息」
+   *
+   * 上面那段注释已经把理由写死了：自检信息是 `collectFacts()` 的产出（**扩展自己的
+   * 状态**），而这一段的数是**页面 DOM 的观测**。混进去会让「自检项成没成」那条
+   * 竖线不再成立 —— 用户会以为"广告命中 0"是扩展自身的一项失败。
+   *
+   * ## 为什么 `adClean` 缺席就整段不画
+   *
+   * 它由 `panel.ts` 在渲染时当场取（面板与广告清理在同一页、同一 document），
+   * 手工构造的 `PanelModel` 与既有测试不传它 —— 与 `logsMeta` 同一手法：
+   * 缺数据就少画一段，**不补一个"未知"**（那看起来像一种状态）。
+   */
+  if (data.adClean !== undefined) box.appendChild(adCleanSection(data.adClean));
 
   // ── 自检信息 ──
   box.appendChild(el('p', 'diag-section', '自检信息'));

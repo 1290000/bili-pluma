@@ -67,7 +67,17 @@ vi.mock('@platform/storage/ui-prefs-store', () => ({
   writePcdnFilterEnabled: (...a: unknown[]) => mocks.writePcdnFilterEnabled(...a),
 }));
 
-vi.mock('../../../src/content/site-clean/ads', () => ({ applyAdClean: () => undefined }));
+vi.mock('../../../src/content/site-clean/ads', () => ({
+  applyAdClean: () => undefined,
+  /**
+   * 面板渲染诊断页时会问一次广告命中数（`inspectAdClean`）。这几个用例测的是
+   * 诊断**接线**（取数/弹栈/日志三态），与广告无关 —— 桩成"这页没广告位"
+   * 即可，它只是让 `adCleanSection()` 画出一段安静的内容。
+   * ⚠️ 不桩会直接抛 "No inspectAdClean export is defined on the mock"，
+   * 那是 mock 不全，不是被测代码的问题。
+   */
+  inspectAdClean: () => ({ candidates: 0, marked: 0, containerMissing: false, verdict: 'dead' as const }),
+}));
 vi.mock('../../../src/content/site-clean/home-clean', () => ({ applyHomeClean: () => undefined }));
 
 import { mountPanelBody } from '../../../src/content/panel/panel';
