@@ -297,6 +297,18 @@ describe('★ 显示 Tab（2026-11-10 新增，真机反馈）', () => {
     expect(box.textContent, '旧代价（弱网更容易卡）已随 ADR 0039 作废，不许再出现').not.toContain(
       '更容易卡',
     );
+    /**
+     * ## ADR 0042：已切换的线路在诊断面板仍带 `os=mcdn` 标记
+     *
+     * 改写只换 authority，query 里的 `os=mcdn` 必须留着（`uparams` 含 `os`，
+     * 改了会 403）。所以用户在诊断面板/时间轴里**仍会看到 mcdn 字样**——
+     * 那是「资源源标记」，不是「还在走 P2P」。这句必须提前说，否则
+     * 用户看到 mcdn 就以为开关没生效，正是这轮 bug 的观感来源。
+     */
+    expect(
+      box.textContent,
+      'hint 必须预先说明：已换过的线路仍会显示「资源标记为 mcdn」（ADR 0042）',
+    ).toContain('资源标记为 mcdn');
   });
 
   it('★ 还没读到设置 → 开关禁用（不猜成"用户关了"）', () => {
