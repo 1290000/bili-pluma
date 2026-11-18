@@ -76,7 +76,7 @@ export interface LoadEvent {
   /** 该 host 的线路分类，便于面板直接显示，不必再算一遍 */
   kind?: CdnKind;
   /**
-   * 技术层原值 / 短语（`error` 是 `code=3`，`ext-patch` 是 `接管取流` / `改写响应`）。
+   * 技术层原值 / 短语（`error` 是 `code=3`，`ext-patch` 是 `接管取流`）。
    *
    * 会显示在时间轴的明细行（`.ld-detail`），**不进导出** —— 导出按白名单另取
    * （`error` 的码由 `diagnostics.ts` 解析成 `code` 数字字段，见那里的注释）。

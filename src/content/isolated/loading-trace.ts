@@ -481,7 +481,8 @@ export function recordPlayurl(state: LoadingTraceState, entry: ResourceEntryLike
    * - `t` 用同一个 `startTime`：介入发生在**请求发出那一刻**，不是返回后。
    * - 去重共用 `extPatchRecorded`：同一次页面只留第一条。谁先到谁算
    *   （通常这里先到，因为请求先于响应）。
-   * - `note` 区分两种介入：`接管取流`（DNR 代理）vs `改写响应`（进度还原）。
+   * - `note` 区分来源：`接管取流`（两条路径共用 —— DNR 代理，以及 PGC 整页注入。
+   *   2026-11-19 起**不再**出现 `改写响应`，理由见 `noteExtPatch()` 的注释）。
    */
   if (state.streamingProxied) recordExtPatch(state, entry.startTime, '接管取流');
 
@@ -718,7 +719,7 @@ export function recordVideoStage(
  * | 触发点 | 语义 | `note` |
  * | --- | --- | --- |
  * | `recordPlayurl()` + `state.streamingProxied` | DNR 换掉 Cookie，**接管**了取流 | `接管取流` |
- * | `noteExtPatch()`（主世界 `reportExtPatch()`） | 改写了 playurl 响应体（还原进度） | `改写响应` |
+ * | `noteExtPatch()`（主世界 `reportExtPatch()`） | XHR 改写响应体 **或** PGC 换整份 `video_info` | `接管取流`（2026-11-19 前是 `改写响应`） |
  *
  * 只有第二个触发点时，**首次观看**（没有历史进度可还原）永远不会出现这一行 ——
  * 而扩展其实在介入。这就是 P0-3 说的"覆盖面不够"。
@@ -739,7 +740,8 @@ export function recordVideoStage(
  *
  * @param state 采集器状态（就地修改）
  * @param t 毫秒（主世界的 `performance.now()`，与采集侧同一时基）
- * @param note 介入方式的短语（`接管取流` / `改写响应`），显示在时间轴明细行
+ * @param note 介入方式的短语（当前恒为 `接管取流`；`note` 仍是参数是为了让
+ *   单测能直接构造任意短语，也留给将来真的需要区分来源时）
  * @returns 本次是否真的记下了（`false` = 重复 / 时间戳非法 / 已经记过）
  */
 export function recordExtPatch(state: LoadingTraceState, t: number, note?: string): boolean {
@@ -830,11 +832,35 @@ export function notePcdnFilterOff(): void {
  * 与 `recordExtPatch(state, t)` 的分工和 `resetLoadingTrace()` 一样 ——
  * 单例的读写都在本模块里，外面不需要拿到 `state`。
  *
- * `note` 固定写 `改写响应`：主世界这条上报的语义就是"我改了 playurl 的响应体"
- * （还原观看进度）。另一条触发点（`接管取流`）在 `recordPlayurl()` 里。
+ * ## `note` 为什么不能固定写「改写响应」（2026-11-19 修）
+ *
+ * 主世界 `reportExtPatch()` 现在有**两个**语义不同的调用方，而它们共用
+ * `{ __PLUMA_EXT_PATCH__, at }` 这一条消息，消息里**不带**来源标记：
+ *
+ * | 调用方 | 实际做了什么 | 说成「改写响应」对不对 |
+ * | --- | --- | --- |
+ * | `patchPlayurlXhrProgress()` | 改写 playurl 的 XHR 响应体（还原观看进度、换候选） | ✅ 对 |
+ * | `pgcPatchPlayinfo()` | 在 `__playinfo__` setter 里**换掉 `result.video_info`** | ❌ **一个响应体都没碰** |
+ *
+ * 番剧页走的是第二条。把它显示成「改写响应」是**事实错误**，而时间轴明细行
+ * 恰恰是用户用来分辨"扩展到底动了什么"的地方 —— 说错比不写更糟。
+ *
+ * ## 为什么用「接管取流」这个既有短语而不是新造一个
+ *
+ * 该短语在本文件里已经存在（`recordPlayurl()` 那条，语义是"DNR 换掉 Cookie，
+ * 接管了取流"）。PGC 整页注入**确实**属于接管取流：它把播放器要读的整份流
+ * 换成了播放账号那份，一次 playurl 都不用发。用同一个短语，用户不必学第三套说法，
+ * 面板图例与文案也不需要第三项。
+ *
+ * ⚠️ 代价要说清：现在两条路径（`recordPlayurl()` 与这里）都写「接管取流」，
+ * 所以**从明细行无法区分**"是 DNR 代理"还是"是 PGC 整页注入"。这是**故意的**：
+ * 两者对用户是同一件事（扩展接管了这次取流）。要区分请查 `hosts` 与
+ * `_trace` 的 `pgcTrace`，那是排查用的字段，不属于时间轴的语义层级。
+ *
+ * @param t 毫秒（主世界的 `performance.now()`，与采集侧同一时基）
  */
 export function noteExtPatch(t: number): boolean {
-  return recordExtPatch(state, t, '改写响应');
+  return recordExtPatch(state, t, '接管取流');
 }
 
 /**

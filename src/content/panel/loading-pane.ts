@@ -778,7 +778,8 @@ function isLineRow(event: LoadEvent): boolean {
  * | 阶段 | `note` | 显示成 |
  * | --- | --- | --- |
  * | `error` | `code=3` | `code=3`（`MediaError.code`，排查"网慢 vs 被拦"靠它） |
- * | `ext-patch` | `接管取流` / `改写响应` | 同字面，说清是哪一种介入 |
+ * | `ext-patch` | `接管取流` | 同字面（2026-11-19 起不再出现 `改写响应`，见
+ *   `loading-trace.ts` 的 `noteExtPatch()`） |
  *
  * 都没有就 `null` —— **不渲染空占位**（里程碑本来就没有明细）。
  *
@@ -955,7 +956,7 @@ export function buildTimelineRows(
         meta: rowMeta(event.t, previous),
         /**
          * 明细：有 host 给 host；没有就用 `note`（`error` 的 `code=3`、
-         * `ext-patch` 的 `接管取流` / `改写响应`）。
+         * `ext-patch` 的 `接管取流`）。
          *
          * 2026-11-17（P1-6）：`MediaError.code` 以前采了又扔 —— 时间轴上
          * 「播放出错」和「卡了一下」长得一样，分不清"网慢"与"被拦"。
@@ -1248,7 +1249,8 @@ export function legendKinds(
  * 本次事件序列里有没有「扩展介入」。
  *
  * 判据只看**事件**（不看 hosts —— 那里面没有这个阶段）：
- * `ext-patch` 有两个来源（`recordPlayurl()` 的 `接管取流`、主世界的 `改写响应`），
+ * `ext-patch` 有两个触发点（`recordPlayurl()` 的 DNR 代理、主世界 `reportExtPatch()`
+ * 的 XHR 改写 / PGC 整页注入），两处都写 `接管取流`；
  * 时间轴上只留第一条（去重在采集侧，见 `loading-trace.ts`）。
  */
 export function legendHasExtPatch(snapshot: LoadingSnapshotLite): boolean {

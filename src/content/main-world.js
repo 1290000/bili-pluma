@@ -3185,6 +3185,40 @@
     if (typeof fromSetter === 'boolean') pgcTrace.patchedInSetter = fromSetter;
 
     /**
+     * ## 上报「扩展介入」—— PGC 整页注入这条路（T14 补，2026-11-17 之后）
+     *
+     * ### 守的是什么
+     *
+     * 诊断面板时间轴上的「扩展介入」（`stage: 'ext-patch'`）此前**只**由
+     * `patchPlayurlXhrProgress()` 里那两处调用喂（改写 playurl 响应体、还原进度）。
+     * 而 PGC 番剧页的主介入路径根本不走 XHR 改写：`pgcPatchPlayinfo()` 在
+     * `__playinfo__` 的 setter 里**同步换掉整份 `video_info`**，一次 playurl 都不用发。
+     * 于是番剧页就算扩展真的把 4K 流注入了，时间轴上也**一行都不出现** ——
+     * 用户看到的是"扩展没介入"，而画面其实已经 3840×2160。
+     *
+     * ### 为什么必须放在「注入成功」之后，而不是函数入口
+     *
+     * 同一个函数头上有好几道早退：`pgcPatched` 已注入 / 没有缓存流 / `skip-proxy-off` /
+     * `skip-disabled` / `skip-inactive` / 合并不出流字段（`merged.videoInfo` 为空）。
+     * 那些分支**一次流都没换**，在那里上报就是"扩展介入了却什么都没改"的假事件 ——
+     * 正是 `reportExtPatch()` 函数头（"只在真的改了字段时调用"）要挡的东西。
+     * 所以位置定在 `pgcPatched = true` / `lastStage = 'patched'` 之后：
+     * 走到这里就意味着 `r.video_info = next` 已经落地。
+     *
+     * ### 重复调用是安全的，不要在这里再去重
+     *
+     * `reportExtPatch()` 内部走 `safePost()` 兜底；真正的去重在 ISOLATED 侧
+     * （`loading-trace.ts` 的 `recordExtPatch()`，判据 `state.extPatchRecorded`）。
+     * 主世界的职责只是"我改了就说"，"只显示一次"是显示层的事 ——
+     * 两边各维护一份"报过了"的状态迟早会不一致。
+     *
+     * ⚠️ 那份去重是**每次 `resetLoadingTrace()` 后重置**的（换成 `createTraceState()`）。
+     * 所以 PGC 换集后新一集再注入，会**再报一条** —— 这是期望行为：
+     * 新的一集就是一次新的介入。**不要**改成"整个页面生命周期只报一次"。
+     */
+    reportExtPatch();
+
+    /**
      * **把注入结果告诉 ISOLATED 侧**（2026-10-29 修：首次进入番剧页 popup 显示「等待取流…」）。
      *
      * ## 为什么必须有这条

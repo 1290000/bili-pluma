@@ -963,8 +963,8 @@ describe('P0-3 · 扩展介入的第二个触发点（接管取流）', () => {
     state.streamingProxied = true;
 
     recordPlayurl(state, { name: PLAYURL, startTime: 100, responseEnd: 150 });
-    // 等价于主世界那条上报（同一个 `recordExtPatch`，note 是「改写响应」）
-    expect(recordExtPatch(state, 160, '改写响应')).toBe(false);
+    // 等价于主世界那条上报（同一个 `recordExtPatch`，走 noteExtPatch 那条通道）
+    expect(recordExtPatch(state, 160, '接管取流')).toBe(false);
 
     expect(state.events.filter((e) => e.stage === 'ext-patch')).toHaveLength(1);
     expect(state.events.find((e) => e.stage === 'ext-patch')).toEqual({
@@ -974,11 +974,20 @@ describe('P0-3 · 扩展介入的第二个触发点（接管取流）', () => {
     });
   });
 
-  it('没有代理时，主世界那条上报照样能记（note 是「改写响应」）', () => {
-    // 单例在测试之间是共享的：先清干净，断言才不看顺序
+  it('没有代理时，主世界那条上报照样能记（note 是「接管取流」）', () => {
+    /**
+     * ## 为什么这里期望的是「接管取流」而不是「改写响应」（2026-11-19 改）
+     *
+     * 主世界 `reportExtPatch()` 有**两个**语义不同的调用方，消息里不带来源标记：
+     * 一是 XHR 改写响应体，二是 PGC 在 `__playinfo__` setter 里换整份
+     * `result.video_info`（**一个响应体都没碰**）。后者说成「改写响应」是事实错误。
+     *
+     * 采集侧于是统一用「接管取流」—— 两条路径对用户是同一件事：扩展接管了这次取流。
+     * 代价是明细行无法区分两者（故意的，理由见 `noteExtPatch()` 的注释）。
+     */
     resetLoadingTrace();
     expect(noteExtPatch(500)).toBe(true);
-    expect(getLoadingSnapshot().events).toEqual([{ t: 500, stage: 'ext-patch', note: '改写响应' }]);
+    expect(getLoadingSnapshot().events).toEqual([{ t: 500, stage: 'ext-patch', note: '接管取流' }]);
   });
 
   it('代理标记是**读时判定**：先设置后取流才算（不回填历史）', () => {
