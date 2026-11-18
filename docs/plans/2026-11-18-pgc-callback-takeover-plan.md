@@ -2,6 +2,7 @@
 
 - 作者：架构评审（team-lead 汇总）
 - 日期：2026-11-18
+- 状态：**进行中**（S0 探针待补；S1 已落地）
 - 依据：`poc/probe/pgc/REPORT-sync-callback.md`（真机探针，含四模式对照与返回体形状）
 - 关联：ADR 0019（PGC 异步取流注入）、0020（整页注入）、0021（试看标记）、0023（切集换流）、0030（reload 护栏）
 
@@ -77,7 +78,7 @@
 | `config.prefetch.playUrl` 是否也需要清 | 不清时回调是否仍被调用（活动页的经验是 `prefetch` 存在会抢跑）；若被抢跑，需在注入时 `delete config.prefetch.playUrl` |
 | 冷启动时门控到达时刻 | `tGate - tCreate` 分布；PGC 的 `page/activate` 要解密凭据，可能比活动页（p50 50ms）更晚，据此定等待上限 |
 
-**验收**：`poc/probe/pgc/REPORT-dash-merge.md`，三项都要有数字，测不出就写测不出。
+**验收**：S0 先产出 `REPORT-dash-merge.md`（放在 `poc/probe/pgc/`，尚未生成），三项都要有数字，测不出就写测不出。
 
 ### S1 抽出"骨架合并"单一实现（`main-world.js`）
 

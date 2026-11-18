@@ -2328,6 +2328,106 @@
   }
 
   /**
+   * 把「接口 / 缓存提供的流字段」合并进 SSR 的 `video_info` 骨架。
+   *
+   * ## 为什么必须是纯函数（S1，2026-11-18）
+   *
+   * `pgcPatchPlayinfo()`（缓存注入）和后续 PGC 回调路径（S3）需要**同一份**合并规则：
+   * 只搬 `STREAM_FIELDS` 同源字段、有 dash 就抹掉 durl/durls。两份实现必然漂移，
+   * 而漂移的后果是"一条路能播、另一条路黑屏"。所以收敛成唯一实现：
+   * **不读全局、不写埋点、不发消息、不改入参**，只返回新对象。
+   *
+   * ## 返回值为什么不是 `null`
+   *
+   * 规格原本写 `{videoInfo, moved} | null`，但"放弃注入"那条 `pgcPost` 的文案依赖
+   * 真实的 `moved`（真机排查要看"搬到了 N 个元信息"）。返回 `null` 会把这个数丢掉，
+   * 要么再加第二个出口、要么让调用方重算 —— 都比统一返回对象更绕。
+   * 所以约定固定为 `{videoInfo: object|null, moved: number}`，调用方判 `videoInfo`。
+   *
+   * @param {object} ssrVideoInfo SSR `result.video_info`（不是对象时按空骨架处理）
+   * @param {object} source 提供流字段的源（当前是 `pgcCachedVideoInfo`；S3 是接口 `result`）
+   * @returns {{videoInfo: object|null, moved: number}}
+   *   `videoInfo === null` = 源里没有可用流（连元信息都没有，或只有元信息没有流）。
+   */
+  function pgcMergeVideoInfo(ssrVideoInfo, source) {
+    var base = ssrVideoInfo && typeof ssrVideoInfo === 'object' ? ssrVideoInfo : {};
+    var next = Object.assign({}, base);
+    var src = source && typeof source === 'object' ? source : {};
+
+    // 白名单：与 core/playinfo/pgc-merge.ts 的 STREAM_FIELDS 一致
+    var keys = [
+      'quality',
+      'timelength',
+      'format',
+      'dash',
+      'durl',
+      'durls',
+      'accept_quality',
+      'accept_description',
+      'support_formats',
+      'video_codecid',
+      'fnval',
+    ];
+    var moved = 0;
+    for (var i = 0; i < keys.length; i += 1) {
+      var k = keys[i];
+      // 空数组不算"有流"：接口偶尔返回 `durls: []`，搬过去等于把流清空
+      if (Array.isArray(src[k]) && src[k].length === 0) continue;
+      if (src[k] === undefined || src[k] === null) continue;
+      next[k] = src[k];
+      moved += 1;
+    }
+
+    /**
+     * 一个**流字段**都没搬过来 → 不动原数据（返回 `videoInfo: null`）。
+     *
+     * ⚠️ 判据是"有没有流"，不是"搬到了几个字段"：缓存里可能只有
+     * `quality` / `timelength` 这类元信息（比如存的时候拿的是无权益响应），
+     * 那种补丁看着改了、其实没流，播放器拿到反而可能播不了。
+     * 宁可播试看，不要黑屏。
+     */
+    var hasStream = false;
+    if (next.dash && typeof next.dash === 'object') {
+      var dv = next.dash.video;
+      if (Array.isArray(dv) && dv.length > 0) hasStream = true;
+    }
+    if (!hasStream && Array.isArray(next.durl) && next.durl.length > 0) hasStream = true;
+    if (!hasStream && Array.isArray(next.durls)) {
+      for (var j = 0; j < next.durls.length; j += 1) {
+        var g = next.durls[j];
+        if (g && Array.isArray(g.durl) && g.durl.length > 0) {
+          hasStream = true;
+          break;
+        }
+      }
+    }
+    if (!hasStream) return { videoInfo: null, moved: moved };
+
+    /**
+     * ⚠️ **有 dash 时必须把 `durl` / `durls` 删掉**（2026-10-28 真机定位，最关键的一条）。
+     *
+     * 现象：注入后 `dash.duration = 1441` 是对的，但 `<video>.duration` 仍是 360、
+     * `currentSrc` 指向 `.../281989571-1-4...`（**durl 的地址**）、
+     * 把 `currentTime` 设到 600 会被夹回 360。
+     *
+     * 结论：**播放器在 `durl` 存在时优先走 durl**，SSR 那份 360 秒的试看 durl 一直在，
+     * 我们注入的 dash 就从来没被用过。所谓"6 分 01 秒被拦"根本不是被字段拦截，
+     * 是**流真的只有 360 秒**（SSR durl 的长度）。
+     *
+     * 所以：给了 dash 就把 durl 抹掉，强制播放器走 dash。
+     * 反之（缓存里只有 durl、没有 dash）才保留 durl。
+     */
+    var nextHasDash =
+      next.dash && typeof next.dash === 'object' && next.dash.video && next.dash.video.length > 0;
+    if (nextHasDash) {
+      delete next.durl;
+      delete next.durls;
+    }
+
+    return { videoInfo: next, moved: moved };
+  }
+
+  /**
    * 把缓存里的完整流塞进 `__playinfo__` 的那份 `result`。
    *
    * ## 为什么在这里合并而不直接赋值
@@ -2577,81 +2677,21 @@
     if (!inner || !inner.result) return;
 
     var r = inner.result;
-    var base = r.video_info && typeof r.video_info === 'object' ? r.video_info : {};
-    var next = Object.assign({}, base);
-
-    // 白名单：与 core/playinfo/pgc-merge.ts 的 STREAM_FIELDS 一致
-    var keys = [
-      'quality',
-      'timelength',
-      'format',
-      'dash',
-      'durl',
-      'durls',
-      'accept_quality',
-      'accept_description',
-      'support_formats',
-      'video_codecid',
-      'fnval',
-    ];
-    var moved = 0;
-    for (var i = 0; i < keys.length; i += 1) {
-      var k = keys[i];
-      // 空数组不算"有流"：接口偶尔返回 `durls: []`，搬过去等于把流清空
-      if (Array.isArray(pgcCachedVideoInfo[k]) && pgcCachedVideoInfo[k].length === 0) continue;
-      if (pgcCachedVideoInfo[k] === undefined || pgcCachedVideoInfo[k] === null) continue;
-      next[k] = pgcCachedVideoInfo[k];
-      moved += 1;
-    }
-
     /**
-     * 一个**流字段**都没搬过来 → 不动原数据。
+     * 骨架合并（S1，2026-11-18）：白名单裁剪 + `hasStream` 判据 + 有 dash 抹
+     * `durl`/`durls`，全部收在 `pgcMergeVideoInfo()` 里（回调路径将来复用同一份）。
      *
-     * ⚠️ 判据是"有没有流"，不是"搬到了几个字段"：缓存里可能只有
-     * `quality` / `timelength` 这类元信息（比如存的时候拿的是无权益响应），
-     * 那种补丁看着改了、其实没流，播放器拿到反而可能播不了。
-     * 宁可播试看，不要黑屏。
+     * ⚠️ `base` 仍要在这里留一份：下面 `injectedFrom` 必须在 `r.video_info = next`
+     * **之前**读 SSR 的 `dash.duration`。
      */
-    var hasStream = false;
-    if (next.dash && typeof next.dash === 'object') {
-      var dv = next.dash.video;
-      if (Array.isArray(dv) && dv.length > 0) hasStream = true;
-    }
-    if (!hasStream && Array.isArray(next.durl) && next.durl.length > 0) hasStream = true;
-    if (!hasStream && Array.isArray(next.durls)) {
-      for (var j = 0; j < next.durls.length; j += 1) {
-        var g = next.durls[j];
-        if (g && Array.isArray(g.durl) && g.durl.length > 0) {
-          hasStream = true;
-          break;
-        }
-      }
-    }
-    if (!hasStream) {
+    var base = r.video_info && typeof r.video_info === 'object' ? r.video_info : {};
+    var merged = pgcMergeVideoInfo(base, pgcCachedVideoInfo);
+    var moved = merged.moved;
+    if (!merged.videoInfo) {
       pgcPost('error', '缓存里没有可用的流字段（' + moved + ' 个元信息），放弃注入');
       return;
     }
-
-    /**
-     * ⚠️ **有 dash 时必须把 `durl` / `durls` 删掉**（2026-10-28 真机定位，最关键的一条）。
-     *
-     * 现象：注入后 `dash.duration = 1441` 是对的，但 `<video>.duration` 仍是 360、
-     * `currentSrc` 指向 `.../281989571-1-4...`（**durl 的地址**）、
-     * 把 `currentTime` 设到 600 会被夹回 360。
-     *
-     * 结论：**播放器在 `durl` 存在时优先走 durl**，SSR 那份 360 秒的试看 durl 一直在，
-     * 我们注入的 dash 就从来没被用过。所谓"6 分 01 秒被拦"根本不是被字段拦截，
-     * 是**流真的只有 360 秒**（SSR durl 的长度）。
-     *
-     * 所以：给了 dash 就把 durl 抹掉，强制播放器走 dash。
-     * 反之（缓存里只有 durl、没有 dash）才保留 durl。
-     */
-    var nextHasDash =
-      next.dash && typeof next.dash === 'object' && next.dash.video && next.dash.video.length > 0;
-    if (nextHasDash) {
-      delete next.durl;
-      delete next.durls;
-    }
+    var next = merged.videoInfo;
 
     /**
      * **候选过滤（ADR 0038）—— 调用点 ②：PGC 整页注入**

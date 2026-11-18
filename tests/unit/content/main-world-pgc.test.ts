@@ -1679,3 +1679,136 @@ describe('G7：playview 截断判据（与主判据一致）', () => {
     expect(fn(null)).toBe(false);
   });
 });
+
+/**
+ * S1（2026-11-18）：骨架合并收敛成单一纯函数 `pgcMergeVideoInfo()`。
+ *
+ * 主世界是裸 JS、函数在 IIFE 里，测试拿不到引用 —— 照上面 G7 的既有做法，
+ * 从源码里抠出函数体用 `new Function` 执行（它刻意是纯函数，不依赖任何全局）。
+ * 这组用例守住的是**缓存注入与将来回调路径共用的那一份规则**：
+ * 11 个白名单字段、跳过空值、有 dash 抹 durl、无流返回 null、不改入参。
+ */
+describe('S1：pgcMergeVideoInfo 纯函数（骨架合并单一实现）', () => {
+  type MergeResult = { videoInfo: Record<string, any> | null; moved: number };
+
+  function loadMerge(): (ssr: unknown, src: unknown) => MergeResult {
+    const m = /function pgcMergeVideoInfo\(ssrVideoInfo, source\) \{[\s\S]*?\n {2}\}/.exec(SOURCE);
+    expect(m, '源码里找不到 pgcMergeVideoInfo').not.toBeNull();
+    return new Function(`${String(m?.[0])}; return pgcMergeVideoInfo;`)() as (
+      ssr: unknown,
+      src: unknown,
+    ) => MergeResult;
+  }
+
+  /** 与 `core/playinfo/pgc-merge.ts` 的 `STREAM_FIELDS` 同源（顺序也一致） */
+  const STREAM_KEYS = [
+    'quality',
+    'timelength',
+    'format',
+    'dash',
+    'durl',
+    'durls',
+    'accept_quality',
+    'accept_description',
+    'support_formats',
+    'video_codecid',
+    'fnval',
+  ];
+
+  it('11 个白名单字段全搬；play_check / arc / watch_progress / user_status 不搬', () => {
+    const merge = loadMerge();
+    const src = {
+      quality: 120,
+      timelength: 1440083,
+      format: 'flv720',
+      dash: { duration: 1441, video: [{ height: 1080 }] },
+      durl: [{ length: 1440000, url: 'u' }],
+      durls: [{ quality: 120, durl: [{ length: 1440000, url: 'u2' }] }],
+      accept_quality: [120, 80],
+      accept_description: ['超清 4K', '高清 1080P'],
+      support_formats: [{ quality: 120 }],
+      video_codecid: 12,
+      fnval: 4048,
+      // 下面这些形状完全不同、绝不能进播放器的 `video_info`
+      play_check: { play_detail: 'PLAY_PREVIEW' },
+      arc: { cid: 281989571 },
+      watch_progress: { current_progress: 42000 },
+      user_status: { has_paid: false },
+      evil: 'x',
+    };
+
+    const out = merge({ type: 3, quality: 80 }, src);
+
+    expect(out.moved).toBe(11);
+    expect(out.videoInfo).not.toBeNull();
+    for (const k of STREAM_KEYS) {
+      // 有 dash 时 durl/durls 会被删掉（下面单独断言），但计数仍然算"搬过"
+      if (k === 'durl' || k === 'durls') continue;
+      expect(out.videoInfo).toHaveProperty(k);
+    }
+    expect(out.videoInfo).not.toHaveProperty('durl');
+    expect(out.videoInfo).not.toHaveProperty('durls');
+    for (const k of ['play_check', 'arc', 'watch_progress', 'user_status', 'evil']) {
+      expect(out.videoInfo).not.toHaveProperty(k);
+    }
+    // 骨架上的非白名单键照旧保留（`Object.assign({}, base)` 的既有语义）
+    expect(out.videoInfo).toMatchObject({ type: 3, quality: 120 });
+  });
+
+  it('源里 durls: [] / quality: null / fnval: undefined → 都不搬', () => {
+    const merge = loadMerge();
+    const out = merge(
+      {},
+      { quality: null, fnval: undefined, durls: [], timelength: 100, durl: [{ url: 'x' }] },
+    );
+
+    expect(out.moved).toBe(2); // 只有 timelength + durl
+    expect(out.videoInfo).toEqual({ timelength: 100, durl: [{ url: 'x' }] });
+    expect(out.videoInfo).not.toHaveProperty('durls');
+    expect(out.videoInfo).not.toHaveProperty('quality');
+    expect(out.videoInfo).not.toHaveProperty('fnval');
+  });
+
+  it('源里有非空 dash 且 base 带 durl/durls → 结果里 durl/durls 被删', () => {
+    const merge = loadMerge();
+    const base = {
+      quality: 80,
+      durl: [{ url: 'https://ssr.example/preview.m4s' }],
+      durls: [{ durl: [{ url: 'https://ssr.example/preview.m4s' }] }],
+    };
+
+    const out = merge(base, {
+      quality: 120,
+      dash: { duration: 1441, video: [{ height: 1080 }] },
+    });
+
+    expect(out.videoInfo?.dash).toBeDefined();
+    expect(out.videoInfo).not.toHaveProperty('durl');
+    expect(out.videoInfo).not.toHaveProperty('durls');
+    expect(out.videoInfo?.quality).toBe(120);
+  });
+
+  it('源里只有 durl（没有 dash）→ durl 保留，不被删', () => {
+    const out = loadMerge()({}, { timelength: 1440000, durl: [{ length: 1440000, url: 'u' }] });
+
+    expect(out.videoInfo?.durl).toHaveLength(1);
+    expect(out.videoInfo).not.toHaveProperty('dash');
+  });
+
+  it('只有元信息没有流 → videoInfo=null（调用方走「放弃注入」），moved 照样返回', () => {
+    const out = loadMerge()({}, { quality: 120, timelength: 1440083 });
+
+    expect(out.videoInfo).toBeNull();
+    // 这条数是「放弃注入」文案 `（N 个元信息）` 的唯一来源，不能丢
+    expect(out.moved).toBe(2);
+  });
+
+  it('不改入参：调用后 base 仍不含 dash，返回的是新对象', () => {
+    const base: Record<string, unknown> = { quality: 80 };
+    const out = loadMerge()(base, { dash: { video: [{ height: 1080 }] } });
+
+    expect(base).toEqual({ quality: 80 });
+    expect(base).not.toHaveProperty('dash');
+    expect(out.videoInfo).not.toBe(base);
+  });
+});
