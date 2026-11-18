@@ -107,6 +107,34 @@ poc/probe/pcdn-diag/pcdn-4k-ab.json
 poc/probe/pcdn-diag/rewrite-4k-candidates.json
 poc/probe/pcdn-diag/rewrite-4k-results.json
 
+# 2026-11-19 番剧（PGC）路径实测：playurl 逐轨候选里带签名 URL；
+# `mcdn-attribution.json` 是 `os=mcdn` 改写归属的原始响应头。
+# 两者都只留本地，结论在 REPORT-pgc-pcdn.md。
+poc/probe/pcdn-diag/pgc-pcdn.json
+poc/probe/pcdn-diag/mcdn-attribution.json
+# `os=mcdn` 归属实测的输入（带签名完整 URL，会过期）
+poc/probe/pcdn-diag/mcdn-candidates.json
+poc/probe/pcdn-diag/mcdn-attribution-phase2.json
+poc/probe/pcdn-diag/mcdn-reachable.json
+# 近 20 集 PCDN 分布巡检（含带签名 baseUrl，会过期）
+poc/probe/pcdn-diag/pgc-sweep.json
+
+# 2026-11-19 「`/v1/resource/upgcxcode/` 能否在官方 host 直连」探针：
+# 候选与逐请求明细都含带签名 URL（deadline 只约 2 小时），属本地产物；
+# 结论在 REPORT-v1-path-on-official.md。
+poc/probe/pcdn-diag/v1-path-candidates.json
+poc/probe/pcdn-diag/v1-path-on-official.json
+poc/probe/pcdn-diag/proxy-paired-latency.json
+poc/probe/pcdn-diag/proxy-cache-effect.json
+
+# 2026-11-19 「proxy 吞吐量与冷热档」探针：冷样本候选与逐次下载记录都含带签名 URL，
+# 结论在 REPORT-proxy-throughput.md。
+poc/probe/pcdn-diag/proxy-throughput-candidates.json
+poc/probe/pcdn-diag/proxy-throughput.json
+
+# 2026-11-19 「长窗口限速」探针：16 MiB 按 2 MiB 分桶，检验短窗口是否漏掉限速拐点。
+poc/probe/pcdn-diag/long-window.json
+
 # 例外：这些是**结论**不是原始数据，必须入库
 !poc/verify/result-q2-summary.json
 !poc/verify/p0-result.json
