@@ -1421,19 +1421,28 @@ describe('尾注的锚点（PGC 换集后时间轴没有 nav）', () => {
       events: [{ t, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' }],
     });
 
-  it('★ 无 nav + 首条 t=302410 → 尾注含「5:02.41」', () => {
+  it('★ 无 nav + 首条 t=302410 → 尾注首句换成「本集从 5:02.41 开始」', () => {
     const text = timelineFootnote(noNav(302_410));
     expect(text).toContain('5:02.41');
-    expect(text).toContain('本集开始于页面加载后');
-    // ⚠️ 只加锚点：另外三句说明必须还在（否则等于为了补一个数砍掉三个解释）
-    expect(text).toContain('+x.xxs 是比上一条多花的时间');
-    expect(text).toContain('只列出每次线路类别变化后的第一段');
+    /**
+     * 2026-11-19 精简：改成**整句替换**，不再往基准句里插括号。
+     *
+     * 旧写法 `时间从页面开始加载算起（本集开始于页面加载后 5:02.41）`
+     * 让读者在一句话里处理两个时基。这一版只出现在"没有 nav 的换集后"，
+     * 直接说"本集从 X 开始"就够了。
+     */
+    expect(text).toContain('本集从 5:02.41 开始');
+    // 时基句被换掉了，不该同时留着两句
+    expect(text).not.toContain('时间从页面开始加载算起');
+    // 另外那半句（两种耗时的区别）必须还在
+    expect(text).toContain('+x.xxs 是与上一条的间隔');
   });
 
-  it('★ 有 nav → **不**含括号那段（基准版一字不多）', () => {
+  it('★ 有 nav → **不**含锚点那段（基准版一字不多）', () => {
     const withNav = snapshot({ events: [{ t: 0, stage: 'nav' }, ...snapshot().events] });
     expect(timelineFootnote(withNav)).toBe(TIMELINE_FOOTNOTE);
     expect(timelineFootnote(withNav)).not.toContain('本集开始于');
+    expect(timelineFootnote(withNav)).not.toContain('本集从');
     expect(timelineFootnote(withNav)).not.toContain('（');
   });
 
@@ -1453,14 +1462,14 @@ describe('尾注的锚点（PGC 换集后时间轴没有 nav）', () => {
     expect(timelineFootnote(empty)).toBe(TIMELINE_FOOTNOTE);
   });
 
-  it('DOM：换集后的时间轴，尾注带锚点', () => {
+  it('DOM：换集后的时间轴，尾注首句说「本集从 … 开始」', () => {
     const box = loadingDetailPane(
       ok({
         events: [{ t: 302_410, stage: 'seg-req', host: 'a.bilivideo.com', kind: 'official' }],
       }),
       { back: () => undefined, refresh: () => undefined, openDiagnostics: () => undefined },
     );
-    expect(box.textContent).toContain('（本集开始于页面加载后 5:02.41）');
+    expect(box.textContent).toContain('本集从 5:02.41 开始');
   });
 
   it('clockText：m:ss.SS，超过 1 小时才带小时', () => {
@@ -1509,16 +1518,16 @@ describe('归零时间轴的配套文案（originT > 0）', () => {
     expect(text).toContain('时间从本集开始播放算起');
     // 自相矛盾的那半句必须一起消失（不是"再加一句新的"）
     expect(text).not.toContain('时间从页面开始加载算起');
-    // ⚠️ 后面三句一律保留 —— 它们跟时基无关，砍掉等于为一个文案问题丢掉三个说明
-    expect(text).toContain('+x.xxs 是比上一条多花的时间');
-    expect(text).toContain('下载视频片段');
-    expect(text).toContain('只列出每次线路类别变化后的第一段');
+    // 精简后只剩那半句"两种耗时的区别"，它跟时基无关，必须保留
+    expect(text).toContain('+x.xxs 是与上一条的间隔');
+    expect(text).toContain('耗时');
   });
 
-  it('★ 归零后**不许**再拼出「（本集开始于…）」括号（三版里的第二版不能漏判）', () => {
+  it('★ 归零后**不许**再拼出「本集从…开始」（三版里的第二版不能漏判）', () => {
     // 判据必须排在"无 nav ⇒ 补锚点"之前，否则会同时说两句时基
     expect(timelineFootnote(zeroed(0))).not.toContain('（');
     expect(timelineFootnote(zeroed(0))).not.toContain('本集开始于');
+    expect(timelineFootnote(zeroed(0))).not.toContain('本集从');
   });
 
   it('originT 缺席（旧快照 / fixture）→ 走原路：补锚点 + 页面时基（不崩）', () => {
@@ -1531,7 +1540,8 @@ describe('归零时间轴的配套文案（originT > 0）', () => {
     });
     expect(legacy.originT).toBeUndefined();
     expect(pageOriginAnchor(legacy)).toBe('本集开始于页面加载后 5:02.41');
-    expect(timelineFootnote(legacy)).toContain('时间从页面开始加载算起（本集开始于页面加载后');
+    // 尾注这一侧换成整句：「本集从 5:02.41 开始」
+    expect(timelineFootnote(legacy)).toContain('本集从 5:02.41 开始');
   });
 
   it('originT 为 0 → 与缺席同义（不是"归零成 0 秒"）', () => {
@@ -1603,14 +1613,38 @@ describe('文案守卫：只说可证实的事', () => {
     expect(box.textContent).not.toContain('同一线路');
   });
 
-  it('尾注同时说清四件事：时间基准 / 增量 / 配对行耗时 / 其余未逐段列出', () => {
+  /**
+   * 2026-11-19 精简（用户：「太长太繁琐，太啰嗦，尽量让普通用户一眼就能看明白」）。
+   *
+   * 四句 82 字 → 两句 42 字。这条用例守的是**精简后仍然必须说清的两件事**，
+   * 不是字数本身（字数会随措辞摇摆，不该被测试钉死）：
+   *
+   * | 必须留下 | 砍了会怎样 |
+   * | --- | --- |
+   * | 时基「从页面开始加载算起」 | `1.20s` 变成孤立的数，用户不知道从哪算 |
+   * | 两种耗时的区别 | 左列是**时刻**、`+x.xxs` 是**增量**、右列灰字是**单次请求耗时** —— 三列三种含义 |
+   *
+   * 砍掉的「同一刻」与「未逐段列出」各自的归处：
+   * - 「同一刻」：右列同刻时直接写这两个字，自解释
+   * - 「未逐段列出」：`gapText()` 的空档行本来就在说这件事，且更贴近它解释的现象
+   */
+  it('★ 尾注精简后仍说清两件事：时基 / 两种耗时的区别', () => {
     expect(TIMELINE_FOOTNOTE).toContain('时间从页面开始加载算起');
-    expect(TIMELINE_FOOTNOTE).toContain('比上一条多花的时间');
-    expect(TIMELINE_FOOTNOTE).toContain('下载视频片段');
-    expect(TIMELINE_FOOTNOTE).toContain('未逐段列出');
+    // `+x.xxs` 与"右侧灰字"是两种不同的数，必须分开说
+    expect(TIMELINE_FOOTNOTE).toContain('+x.xxs');
+    expect(TIMELINE_FOOTNOTE).toContain('耗时');
     // 也不能写成"同一条线路"的等价说法
     expect(TIMELINE_FOOTNOTE).not.toContain('同一条线');
     expect(gapText(6210)).not.toContain('同一条线');
+  });
+
+  it('★ 精简：不再出现已砍掉的两句（防止有人把长版写回来）', () => {
+    // 「同一刻」由右列自己表达，尾注不必再教
+    expect(TIMELINE_FOOTNOTE).not.toContain('同一刻');
+    // 「未逐段列出」归 `gapText()` 的空档行
+    expect(TIMELINE_FOOTNOTE).not.toContain('未逐段列出');
+    // 长度上限：普通用户一眼看完的量级（两句 ≈ 40 字，留一点余量）
+    expect(TIMELINE_FOOTNOTE.length).toBeLessThanOrEqual(45);
   });
 });
 
@@ -2003,9 +2037,18 @@ describe('「本次加载」浮层', () => {
   });
 
   it('尾注说清时间基准与 +x.xs 的含义', () => {
-    const box = loadingDetailPane(ok(), spyActions());
+    /**
+     * ⚠️ 必须喂一份**带 `nav`** 的快照：默认 fixture 没有 `nav`，会走
+     * 「本集从 0:01.77 开始」那一版（无 nav ⇒ 换锚点句）。本用例要钉的是
+     * **基准版**那句时基，所以把 nav 补上，别让它在两版之间漂移。
+     */
+    const box = loadingDetailPane(
+      ok({ events: [{ t: 0, stage: 'nav' }, ...snapshot().events] }),
+      spyActions(),
+    );
     expect(box.textContent).toContain('时间从页面开始加载算起');
-    expect(box.textContent).toContain('比上一条多花的时间');
+    // 2026-11-19 精简后：不再写"比上一条多花的时间"，改说"与上一条的间隔"
+    expect(box.textContent).toContain('与上一条的间隔');
   });
 });
 
