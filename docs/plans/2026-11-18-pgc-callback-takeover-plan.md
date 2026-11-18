@@ -2,7 +2,7 @@
 
 - 作者：架构评审（team-lead 汇总）
 - 日期：2026-11-18
-- 状态：**进行中**（S0 已完成、S1 已落地 `99f8a2b`；S2/S3 待开工）
+- 状态：**进行中**（S0/S1/S2/S3 已落地；S4（跳过 reload）与 S5（真机回归矩阵）待做；授权见 ADR 0041）
 - 依据：`poc/probe/pgc/REPORT-sync-callback.md`（真机探针，含四模式对照与返回体形状）
 - 关联：ADR 0019（PGC 异步取流注入）、0020（整页注入）、0021（试看标记）、0023（切集换流）、0030（reload 护栏）
 
@@ -122,7 +122,7 @@ if (config.prefetch) delete config.prefetch.playUrl;   // ⚠️ S0 实测：不
 - 确定关（`cfgEnabled === false` / `pgcActive === false`）→ `origCb`（**不是** fallback 到我们自己的 XHR）
 - 未知 → 等 `PGC_GATE_WAIT_MS = 300`，超时 `origCb`
 
-**内置开关**：常量 `PGC_CALLBACK_TAKEOVER = false` 先落地，S5 全绿后改 `true`。出现问题 revert 单个 commit 即可。
+**内置开关**：常量 `PGC_CALLBACK_TAKEOVER` **默认 `true`**（2026-11-18 实施时改定：三态已 fail-closed 且单常量可回滚，默认 `false` 用户就没法真机验收）。出现问题把该常量改成 `false` 即回到今天的 SSR 注入行为，**不需要 revert 提交**。
 
 **验收**：单测覆盖三态（含"确定关着时一次定时器都不起"）+「`prefetch.playUrl` 被删」；真机上关开关时 `cbHits` 由原生接管、页面表现与今天完全一致。
 
