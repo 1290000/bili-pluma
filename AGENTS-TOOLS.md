@@ -230,6 +230,26 @@ node poc/probe/bsk-eval.mjs <session> <tabId> <expr-file> c1 \
 > 这正是 2026-11-20 修掉的那个盲区（旧实现只扫一层，`pcdn-diag/probe.mjs`
 > 之类的子目录脚本会**绕过闸门**，而检查仍打印"全部有归属"）。
 
+### 3.3 PGC 同步注入 / 番剧进度探针（2026-11-18）
+
+一次取证留下的 6 个脚本，跑在番剧页上。结论见
+`poc/probe/pgc/REPORT-sync-callback.md` 与 [ADR 0019](./docs/decisions/0019-pgc-async-playurl-injection.md)
+的「2026-11-18 归因更正」。
+
+| 脚本 | 用途 | 用法 |
+| --- | --- | --- |
+| `poc/probe/pgc-sync-inject.cjs` | **在 `createPlayer` 返回前同步替换 PGC 取流回调**。四模式对照：`stub`（记录 params 后抛错，证明回调是否被调用）/ `raw`（返回接口扁平 json）/ `wrapped`（`{data:{code:0,data:{durl}}}`）/ `merged`（按 SSR 骨架合并）。`KEEP=1` = 只换函数字段、保留 `requestConfig` 原对象 | `MODE=stub POC_TARGET=<番剧 URL> POC_HEADLESS=1 node poc/probe/pgc-sync-inject.cjs`；`KEEP=1` 同法。产物 `result-pgc-sync-<mode>[-keep].json`（**不入库**，可能含未脱敏数据） |
+| `poc/probe/pgc-facts.js` | 一屏读出 SSR `__playinfo__.result` 关键字段 + `__PLUMA_PGC__` 埋点 + `<video>` 状态 | `node poc/probe/bsk-eval.mjs <sid> <tabId> poc/probe/pgc-facts.js <ctx>` |
+| `poc/probe/pgc-login-state.js` | 登录态 / 会员字段 / 主世界与 PGC 埋点是否在岗（判断"是不是登录态、扩展有没有装"） | 同上 |
+| `poc/probe/pgc-episodes.js` | 列 season 的分集元数据（id / badge / 时长），用于挑"免费集 vs 会员集"做对照 | 同上（先 `bsk` 打开番剧页） |
+| `poc/probe/pgc-playurl-progress.js` | 直接调 `/pgc/player/web/playurl`，**验证响应里有没有 `last_play_time` / `last_play_cid`**（番剧进度来自 SSR `watch_progress`，不是这个接口） | 同上 |
+| `poc/probe/pgc-seed-cache.js` | 按产品自己的 `sessionStorage` 格式（`pluma:pgc-vi:<cid>`）写入扩展账号完整流，用于**强制走产品注入路径**观测进度是否回拽 | 同上 |
+
+> ⚠️ 复用提醒：`pgc-sync-inject.cjs` **必须 `KEEP=1`** 才有意义 ——
+> 整体替换 `config.requestConfig` 会丢掉 `reqHttpPlayUrlInfoScope`，回调 `cbHits=0`
+> 且**静默失效**（播放器回落到 `enabled:false` 的 `/pgc/player/web/v2/playurl`，无报错）。
+> 上面 6 个是**一次性取证脚本**：结论已写进 ADR 0019 与报告，日常不需要跑。
+
 ---
 
 ## 4. bsk（browser-skill）专用

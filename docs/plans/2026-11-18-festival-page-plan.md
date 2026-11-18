@@ -194,3 +194,29 @@
 - 2026-11-18：用户选**方案 B**（nano 钩子真接管流），非 A 的诊断-only
 - 2026-11-18：探针 `REPORT-nano.md` 验证 B **可行但需额外条件**，已按实测结论改写第 3 步
 - 开关保持**默认关闭**（与 ADR 0039 一致，本期不改默认值）
+
+## PGC（番剧 / 国创）能否复用同步注入
+
+> 依据：`poc/probe/pgc/REPORT-sync-callback.md`；归因更正见
+> [ADR 0019](../decisions/0019-pgc-async-playurl-injection.md) 的「2026-11-18 归因更正」。
+
+**结论：技术上可行，但本期不做。**
+
+2026-11-18 用 Playwright `addInitScript` 保证抢到那一次 `createPlayer`、并在其返回前同步替换回调，
+证明番剧页的回调**会被调用**（`cbHits=1`、正常起播、`is_preview:0`）。也就是说，活动页这套
+「同步注入 + 门控等待」在 PGC 上并不是"机制不可用"。但落地前有五条硬事实：
+
+| # | 事实 | 后果 |
+| --- | --- | --- |
+| 1 | **必须保留原 `config.requestConfig` 对象**（尤其 `reqHttpPlayUrlInfoScope`），只替换 `reqHttpPlayUrlInfo` | 整体替换 → `cbHits=0`，播放器静默回落到 `enabled:false` 的 `/pgc/player/web/v2/playurl`，**无任何报错** |
+| 2 | 番剧是 **durl 流水线**，回调返回体必须**合并进 SSR 骨架**（`result.video_info.durl/durls/...`） | 扁平 json / `{data:{code:0,data:{durl}}}` 都黑屏（`[flv.js] Non-FLV` / `MediaError.code=4`）→ 不是"替代注入"，而是"叠加在注入之上" |
+| 3 | 回调 `params` 里 **`avid`/`bvid`/`cid` 全是 `null`，也没有 `ep_id`** | 只能从 `__playinfo__.result.arc.cid`（或 ep→cid 映射）取，不能照抄活动页的 `params.avid/cid` |
+| 4 | PGC playurl `result` **没有 `last_play_time`/`last_play_cid`**，进度来自 SSR `watch_progress` | **没有活动页那种进度回拽**，ADR 0017 的还原不需要在这里重复实现 |
+| 5 | 现有 SSR `__playinfo__` 注入链路已工作，改造要动 4 份 ADR + 3 条注入路径 | 收益只有"省一次 reload"，风险面远大于活动页 |
+
+补充：`/pgc/player/web/playurl` 在 DNR 白名单里（`routes.ts:118-122`），身份是扩展账号，
+所以"取不到流"不是瓶颈；真正的成本在返回体形状与注入链路的叠加关系。
+
+所以 PGC 继续走现有 SSR 注入；本方案**不扩到番剧**。若将来要做，必须先把上面第 1、2 条
+写成实现前置，并重新评估第 5 条的成本。
+

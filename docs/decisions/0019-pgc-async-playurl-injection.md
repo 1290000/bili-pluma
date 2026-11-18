@@ -175,3 +175,43 @@ durl 分支只在"电影 + 无权益"等场景才会走到。
   - `poc/probe/probe-pgc-is-preview.cjs` —— 改 `is_preview` 无效的对照实验
 - 真机观察：`ss28747`（国创）/ `ss34412`（番剧）—— 主账号 `hasPlayer=true`、`preview`、
   durl 4×180160ms / 4×360082ms，播放器**正常创建**（这是整条路线的前提）
+
+## 附录：2026-11-18 归因更正
+
+> 证据：`poc/probe/pgc/REPORT-sync-callback.md`（Playwright `addInitScript` 定序 + bsk 0.5.0 真机）。
+> 本节**只更正归因**，不改上面的历史叙述（那些是对当年现场的真实记录）。
+
+### 更正什么
+
+本文顶部与「落地状态」把 `cbCalled: 0` 解释成"播放器不认异步回调"。**这个归因是错的。**
+真因就在同一节的那条观察里：**`[PGC] takeover` 日志根本没有出现** —— MAIN-world 内容脚本
+没抢到页面那一次真实 `createPlayer`，包装函数没被调用，回调自然没有机会被执行。
+
+2026-11-18 用 `addInitScript` 保证在页面任何脚本之前执行、并在 `createPlayer(config)` 返回前
+同步替换回调之后，**同一套机制是会被调用的**：
+
+| 写法 | `cbHits` | 结果 |
+| --- | --- | --- |
+| 整个 `config.requestConfig = { reqHttpPlayUrlInfo: fn }`（丢掉 `reqHttpPlayUrlInfoScope`） | **0** | 播放器回落到 `/pgc/player/web/v2/playurl`（该路径 `enabled: false`），**静默失效、无报错** |
+| 保留原 `requestConfig` 对象，只替换 `reqHttpPlayUrlInfo` | **1** | 正常起播（`duration=360`、1080P、`is_preview: 0`） |
+
+### 决策不变，但理由要换
+
+**"继续用 SSR `__playinfo__` 注入"这个决策不变**，但理由**不是**"回调不可用"，而是：
+
+1. **返回体必须合并进 SSR 骨架才能播。** PGC 是 durl 流水线：回调返回扁平 json、或
+   `{data:{code:0,data:{durl:[...]}}}` 都黑屏（`[flv.js] Non-FLV` / `MediaError.code = 4`）；
+   只有把 `durl/durls/quality/timelength/...` 合并进 `result.video_info` 才能起播。
+   也就是说，回调路线不是"替代注入"，而是"叠加在注入之上"。
+2. **现有注入链路已经工作**，改造要动 4 份 ADR 与 3 条注入路径，收益只有"省一次 reload"。
+
+### 新增一条硬前提（最容易踩的坑）
+
+任何往 PGC `config` 里挂回调的实现，**必须保留原 `config.requestConfig` 对象**
+（尤其 `reqHttpPlayUrlInfoScope` 等字段），**只替换 `reqHttpPlayUrlInfo`**。
+整体替换会让 `cbHits = 0`，播放器静默回落到 `enabled: false` 的
+`/pgc/player/web/v2/playurl`，**没有任何报错** —— 从日志上看和"没接管"一模一样。
+
+> 附：PGC playurl 的 `result` 里**没有** `last_play_time` / `last_play_cid`，进度来自 SSR
+> `watch_progress`，所以番剧页**没有**活动页那种进度回拽（ADR 0017 不需要在这里重复实现）。
+
