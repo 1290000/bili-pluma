@@ -412,8 +412,28 @@
    * 四处调用点都调这一个函数（`check-patch-scope.mjs` 会断言原先三处都接了；
    * 第四处是活动页 nano 回调，见 `festivalRequestInfo`）。
    *
-   * ⚠️ 只碰 `dash.video` / `dash.audio` 两个数组，`dash.duration` 等其余键原样带过；
+   * 碰的是 `dash` 里**全部四个带候选地址的音轨/视频轨容器**：
+   *
+   * | 容器 | 形状 | 备注 |
+   * | --- | --- | --- |
+   * | `dash.video` | track 数组 | 常规视频轨 |
+   * | `dash.audio` | track 数组 | 常规音频轨 |
+   * | `dash.flac.audio` | **单个** track 对象 | 外层 `dash.flac` 还有 `display` 布尔 |
+   * | `dash.dolby.audio` | track 数组 | 外层 `dash.dolby` 还有 `vision` 布尔 |
+   *
+   * 后两个**必须**覆盖：Hi-Res（flac）/ 杜比全景声（dolby）的候选同样是 PCDN 地址，
+   * 漏掉它们不会报错、也不会让界面有任何异常 —— 只是那几轨照旧走 PCDN，
+   * 而开关是开着的、面板上一切正常，正是 `core/cdn/classify.ts` 点名的
+   * 「最坏失败方向（静默失败）」。形状依据见 `core/playinfo/parse.ts` 的 `parseDash()`
+   * （flac 当单个 record、dolby 的 `audio` 当数组）与 `poc/probe/pcdn-diag/probe.mjs`。
+   *
+   * 四个容器**同规则**（ADR 0039 八条硬边界）：条数不变、只换 authority、
+   * `pathname`/`search`/`hash` 一字不动。`dash.duration` / `flac.display` /
+   * `dolby.vision` 等非候选字段一律原样带过，**一个字节都不改**；
    * **`durl` / `durls` 一个字节都不碰**（FLV 那条路本轮不做）。
+   *
+   * 形状不对（缺失 / null / 非对象 / `flac.audio` 不是对象 / `dolby.audio` 不是数组）
+   * → 该容器整块跳过，**不抛错**（判不了就别改，边界 5）。
    *
    * @param {object} holder 形如 `{ dash: {...} }` 的对象（就地替换 `holder.dash`）
    * @returns {{changed:boolean,rewritten:number,proxied:number,fallbackKept:number}}
@@ -427,7 +447,23 @@
 
     var video = Array.isArray(dash.video) ? dash.video : null;
     var audio = Array.isArray(dash.audio) ? dash.audio : null;
-    if (video === null && audio === null) return none;
+
+    // flac 是**对象**、里面装**单个** track；`display` 等键原样带过
+    var flacHolder = null;
+    if (dash.flac && typeof dash.flac === 'object' && !Array.isArray(dash.flac)) {
+      var flacAudioRaw = dash.flac.audio;
+      if (flacAudioRaw && typeof flacAudioRaw === 'object' && !Array.isArray(flacAudioRaw)) {
+        flacHolder = dash.flac;
+      }
+    }
+
+    // dolby 是**对象**、里面的 `audio` 是**数组**；`vision` 等键原样带过
+    var dolbyHolder = null;
+    if (dash.dolby && typeof dash.dolby === 'object' && !Array.isArray(dash.dolby)) {
+      if (Array.isArray(dash.dolby.audio)) dolbyHolder = dash.dolby;
+    }
+
+    if (video === null && audio === null && flacHolder === null && dolbyHolder === null) return none;
 
     var stats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };
 
@@ -442,6 +478,39 @@
       for (var j = 0; j < audio.length; j += 1) nextAudio.push(filterOneTrack(audio[j], stats));
     }
 
+    // flac：单个 track —— 只在真的改了时才复制外层对象（不制造无谓 diff）
+    var nextFlac = null;
+    if (flacHolder !== null) {
+      var nextFlacAudio = filterOneTrack(flacHolder.audio, stats);
+      if (nextFlacAudio !== flacHolder.audio) {
+        nextFlac = {};
+        for (var fk in flacHolder) {
+          if (Object.prototype.hasOwnProperty.call(flacHolder, fk)) nextFlac[fk] = flacHolder[fk];
+        }
+        nextFlac.audio = nextFlacAudio;
+      }
+    }
+
+    // dolby：track 数组 —— 逐条过滤，只在真的改了时才复制外层对象
+    var nextDolby = null;
+    if (dolbyHolder !== null) {
+      var dolbyAudio = dolbyHolder.audio;
+      var nextDolbyAudio = [];
+      var dolbyChanged = false;
+      for (var k = 0; k < dolbyAudio.length; k += 1) {
+        var filteredDolby = filterOneTrack(dolbyAudio[k], stats);
+        if (filteredDolby !== dolbyAudio[k]) dolbyChanged = true;
+        nextDolbyAudio.push(filteredDolby);
+      }
+      if (dolbyChanged) {
+        nextDolby = {};
+        for (var dk in dolbyHolder) {
+          if (Object.prototype.hasOwnProperty.call(dolbyHolder, dk)) nextDolby[dk] = dolbyHolder[dk];
+        }
+        nextDolby.audio = nextDolbyAudio;
+      }
+    }
+
     if (!stats.changed) return stats;
 
     var nextDash = {};
@@ -450,6 +519,8 @@
     }
     if (nextVideo !== null) nextDash.video = nextVideo;
     if (nextAudio !== null) nextDash.audio = nextAudio;
+    if (nextFlac !== null) nextDash.flac = nextFlac;
+    if (nextDolby !== null) nextDash.dolby = nextDolby;
     holder.dash = nextDash;
     return stats;
   }

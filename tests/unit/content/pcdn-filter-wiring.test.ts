@@ -516,6 +516,306 @@ describe('接线语义：开关 / 规则 / 一次解析 / 幂等', () => {
 });
 
 /**
+ * ## `dash.flac.audio` 与 `dash.dolby.audio[]`：两个曾经完全没被过滤的容器
+ *
+ * `filterDashOf()` 原先只遍历 `dash.video` / `dash.audio`，而 B站 playurl 里还有
+ * 两处同样带候选地址的音轨容器，形状各不相同：
+ *
+ * | 容器 | 形状 | 依据 |
+ * | --- | --- | --- |
+ * | `dash.flac.audio` | **单个** track 对象（外层 `dash.flac.display` 是布尔） | `core/playinfo/parse.ts` 的 `parseDash()` 用 `isRecord(flacObj?.audio)` |
+ * | `dash.dolby.audio` | track **数组**（外层 `dash.dolby.vision` 是布尔） | 同一处用 `arr(dolbyObj?.audio)` |
+ *
+ * 漏掉的后果是**静默失败**：Hi-Res / 杜比全景声那几轨照旧走 PCDN，
+ * 而开关是开着的、界面一切正常 —— 正是 `core/cdn/classify.ts` 点名的
+ * 「最坏失败方向」。历史上没测到，是因为 `poc/probe/pcdn-diag/remaining-candidates.json`
+ * 那 8 个 UGC 视频的 `flac` / `dolby` 全是 null，样本没覆盖到这一块。
+ *
+ * 不变量与 `video` / `audio` **完全相同**（ADR 0039 八条硬边界）：
+ * 条数不变、只换 authority、`pathname`/`search`/`hash` 一字不动、其余字段透传。
+ */
+describe('`filterDashOf()` 也覆盖 `dash.flac.audio` / `dash.dolby.audio[]`', () => {
+  const OFFICIAL = 'https://cn-jsnt-ct-01-07.bilivideo.com/a.m4s';
+  const PCDN = 'https://xy220x180x77x45xy.mcdn.bilivideo.cn:8082/a.m4s?upsig=aa';
+  const PCDN_PROXY = 'https://xy116x196x140x25xy.mcdn.bilivideo.cn/v1/resource/upgcxcode/f.m4s';
+  const PCDN_DOMAIN = 'https://a1.szbdyd.com/d.m4s';
+
+  /** 每个用例都重新取一次出口（沙盒里的闭包状态互不影响） */
+  async function filterDashOfOf(): Promise<(h: unknown) => MwStats> {
+    const { page } = await boot(true);
+    return page.__PLUMA_TEST__.filterDashOf as unknown as (h: unknown) => MwStats;
+  }
+
+  it('★ flac：单个 track 里的 PCDN 候选换 host，条数不变、path/search 不动', async () => {
+    const filterDashOf = await filterDashOfOf();
+
+    const holder = {
+      dash: {
+        duration: 1166,
+        video: [],
+        audio: [],
+        flac: {
+          display: true,
+          audio: {
+            id: 30251,
+            bandwidth: 1500000,
+            base_url: PCDN,
+            backup_url: [OFFICIAL],
+          },
+        },
+      },
+    };
+
+    const stats = filterDashOf(holder);
+    expect(stats).toEqual({ changed: true, rewritten: 1, proxied: 0, fallbackKept: 0 });
+
+    const flac = (holder.dash as Record<string, unknown>).flac as Record<string, unknown>;
+    const track = flac.audio as Record<string, unknown>;
+    expect(track.base_url).toBe(mirrorOf(PCDN));
+    // 条数严格不变（ADR 0039 边界 2）
+    expect(track.backup_url).toEqual([OFFICIAL]);
+    expect((track.backup_url as string[]).length).toBe(1);
+    // path/search 一字不动（边界 1）
+    const parsed = new URL(track.base_url as string);
+    expect(parsed.pathname + parsed.search).toBe('/a.m4s?upsig=aa');
+    // 同一条轨上的非候选字段透传
+    expect(track.id).toBe(30251);
+    expect(track.bandwidth).toBe(1500000);
+  });
+
+  it('★ dolby：数组里至少两条轨各自换 host，且顺序与条数不变', async () => {
+    const filterDashOf = await filterDashOfOf();
+
+    const holder = {
+      dash: {
+        video: [],
+        audio: [],
+        dolby: {
+          vision: true,
+          audio: [
+            // ① base PCDN + 官方 backup
+            { id: 30250, base_url: PCDN, backup_url: [OFFICIAL] },
+            // ② backup 里有一整条走 proxy 的 PCDN，另一条是官方
+            { id: 30251, base_url: OFFICIAL, backup_url: [PCDN_PROXY, OFFICIAL] },
+          ],
+        },
+      },
+    };
+
+    const stats = filterDashOf(holder);
+    // ① 的 base（1 条）+ ② 的 backup 里的 proxy 那一条 = 2 条
+    expect(stats.rewritten).toBe(2);
+    expect(stats.proxied).toBe(1);
+    expect(stats.changed).toBe(true);
+
+    const dolby = (holder.dash as Record<string, unknown>).dolby as Record<string, unknown>;
+    const list = dolby.audio as Array<Record<string, unknown>>;
+    expect(list).toHaveLength(2);
+
+    expect(list[0]?.base_url).toBe(mirrorOf(PCDN));
+    expect(list[0]?.backup_url).toEqual([OFFICIAL]);
+    expect(new URL(list[0]?.base_url as string).pathname).toBe('/a.m4s');
+
+    expect(list[1]?.base_url).toBe(OFFICIAL);
+    expect(list[1]?.backup_url).toEqual([proxyOf(PCDN_PROXY), OFFICIAL]);
+    expect((list[1]?.backup_url as string[]).length).toBe(2);
+    // 轨顺序/身份没被换位（只是就地换 authority）
+    expect(list[0]?.id).toBe(30250);
+    expect(list[1]?.id).toBe(30251);
+  });
+
+  it('★ `flac.display` / `dolby.vision` / `dash.duration` 逐字段不动（深比较）', async () => {
+    const filterDashOf = await filterDashOfOf();
+
+    const holder = {
+      dash: {
+        duration: 1166,
+        minBufferTime: 1.5,
+        video: [],
+        audio: [],
+        flac: {
+          display: true,
+          audio: { base_url: PCDN, backup_url: [OFFICIAL] },
+        },
+        dolby: {
+          vision: true,
+          type: 2,
+          audio: [{ base_url: PCDN_DOMAIN, backup_url: [] }],
+        },
+      },
+    };
+    /**
+     * 深拷一份原文做对照 —— 只比对**非候选字段**，
+     * 因为候选字段本来就该变（这正是本函数的职责）。
+     */
+    const before = JSON.parse(JSON.stringify(holder)) as {
+      dash: Record<string, unknown>;
+    };
+
+    expect(filterDashOf(holder).changed).toBe(true);
+
+    const dash = holder.dash as Record<string, unknown>;
+    expect(dash.duration).toBe(before.dash.duration);
+    expect(dash.minBufferTime).toBe(before.dash.minBufferTime);
+    expect((dash.flac as Record<string, unknown>).display).toBe(true);
+    expect((dash.dolby as Record<string, unknown>).vision).toBe(true);
+    expect((dash.dolby as Record<string, unknown>).type).toBe(2);
+    // 非候选字段集合与顺序都没变（候选三键之外一模一样）
+    const stripCandidates = (o: Record<string, unknown>): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      for (const k of Object.keys(o)) {
+        if (k === 'base_url' || k === 'backup_url' || k === 'baseUrl' || k === 'backupUrl')
+          continue;
+        out[k] = o[k];
+      }
+      return out;
+    };
+    const flacNow = dash.flac as Record<string, unknown>;
+    const dolbyNow = dash.dolby as Record<string, unknown>;
+    expect(stripCandidates(flacNow.audio as Record<string, unknown>)).toEqual(
+      stripCandidates(
+        (before.dash.flac as Record<string, unknown>).audio as Record<string, unknown>,
+      ),
+    );
+    expect(stripCandidates((dolbyNow.audio as Array<Record<string, unknown>>)[0] ?? {})).toEqual(
+      stripCandidates(
+        (
+          (before.dash.dolby as Record<string, unknown>).audio as Array<Record<string, unknown>>
+        )[0] ?? {},
+      ),
+    );
+  });
+
+  it('★ 一个候选都没改（含 flac/dolby）→ `holder.dash` 引用不变（不制造无谓 diff）', async () => {
+    const filterDashOf = await filterDashOfOf();
+
+    const holder = {
+      dash: {
+        video: [],
+        audio: [],
+        flac: { display: false, audio: { base_url: OFFICIAL, backup_url: [] } },
+        dolby: { vision: false, audio: [{ base_url: OFFICIAL, backup_url: [OFFICIAL] }] },
+      },
+    };
+    const dashBefore = holder.dash;
+
+    const stats = filterDashOf(holder);
+    expect(stats.changed).toBe(false);
+    expect(stats.rewritten).toBe(0);
+    expect(holder.dash).toBe(dashBefore);
+  });
+
+  it('★ 只在 flac 改了时，`dash.dolby` 保持原引用（只复制真变了的那一层）', async () => {
+    const filterDashOf = await filterDashOfOf();
+
+    const holder = {
+      dash: {
+        video: [],
+        audio: [],
+        flac: { display: true, audio: { base_url: PCDN, backup_url: [] } },
+        dolby: { vision: false, audio: [{ base_url: OFFICIAL, backup_url: [] }] },
+      },
+    };
+    const dolbyBefore = holder.dash.dolby;
+
+    expect(filterDashOf(holder).changed).toBe(true);
+    expect((holder.dash as Record<string, unknown>).dolby).toBe(dolbyBefore);
+    expect(((holder.dash as Record<string, unknown>).flac as Record<string, unknown>).display).toBe(
+      true,
+    );
+  });
+
+  it('★ 幂等：改过一遍再喂回去 → 第二次 `changed:false` 且 `dash` 引用不变', async () => {
+    const filterDashOf = await filterDashOfOf();
+
+    const holder = {
+      dash: {
+        video: [
+          { base_url: 'https://xy116x196x140x25xy.mcdn.bilivideo.cn:8082/v.m4s', backup_url: [] },
+        ],
+        audio: [],
+        flac: { display: true, audio: { base_url: PCDN, backup_url: [OFFICIAL] } },
+        dolby: { vision: true, audio: [{ base_url: PCDN_DOMAIN, backup_url: [] }] },
+      },
+    };
+
+    expect(filterDashOf(holder).changed).toBe(true);
+    const dashAfterFirst = holder.dash;
+
+    const second = filterDashOf(holder);
+    expect(second).toEqual({ changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 });
+    // 第二次一条都没改 → 连 `holder.dash` 都不该被替换
+    expect(holder.dash).toBe(dashAfterFirst);
+  });
+
+  it('★ 畸形输入：`flac` 为 null / 缺 `audio` / `audio` 是字符串 / `dolby.audio` 非数组 → 不抛错', async () => {
+    const filterDashOf = await filterDashOfOf();
+
+    const malformed: unknown[] = [
+      // flac 为 null
+      { dash: { video: [], audio: [], flac: null } },
+      // flac 是对象但缺 audio
+      { dash: { video: [], audio: [], flac: { display: true } } },
+      // flac.audio 是字符串
+      { dash: { video: [], audio: [], flac: { display: true, audio: 'nope' } } },
+      // flac.audio 是数组（形状不对：这里当"不是单个 record"处理 → 跳过）
+      { dash: { video: [], audio: [], flac: { display: true, audio: [] } } },
+      // flac 本身是个字符串
+      { dash: { video: [], audio: [], flac: 'nope' } },
+      // dolby 缺 audio
+      { dash: { video: [], audio: [], dolby: { vision: true } } },
+      // dolby.audio 是对象而非数组
+      { dash: { video: [], audio: [], dolby: { vision: true, audio: { base_url: PCDN } } } },
+      // dolby 是 null
+      { dash: { video: [], audio: [], dolby: null } },
+      // 只有畸形容器、没有 video/audio → 整块跳过
+      { dash: { flac: null, dolby: { vision: true } } },
+    ];
+
+    for (const [i, h] of malformed.entries()) {
+      const out = filterDashOf(h);
+      expect(out, `case #${String(i)}`).toEqual({
+        changed: false,
+        rewritten: 0,
+        proxied: 0,
+        fallbackKept: 0,
+      });
+    }
+  });
+
+  it('★ 容器里的轨本身缺候选字段 / 候选是非 URL 串 → 不抛错，其它容器照旧改', async () => {
+    const filterDashOf = await filterDashOfOf();
+
+    const holder = {
+      dash: {
+        video: [],
+        audio: [],
+        // 只有元信息，没有候选 → filterOneTrack 原样返回
+        flac: { display: true, audio: { id: 30251, bandwidth: 1500000 } },
+        dolby: {
+          vision: false,
+          audio: [
+            // 非法 URL → 边界 5：判不了就别改（fallbackKept++）
+            { base_url: 'not a url', backup_url: [] },
+            { base_url: PCDN, backup_url: [] },
+          ],
+        },
+      },
+    };
+
+    const stats = filterDashOf(holder);
+    expect(stats.changed).toBe(true);
+    expect(stats.rewritten).toBe(1);
+    expect(stats.fallbackKept).toBe(1);
+
+    const dolby = (holder.dash as Record<string, unknown>).dolby as Record<string, unknown>;
+    const list = dolby.audio as Array<Record<string, unknown>>;
+    expect(list[0]?.base_url).toBe('not a url'); // 原样保留
+    expect(list[1]?.base_url).toBe(mirrorOf(PCDN));
+  });
+});
+
+/**
  * ## 三处调用点，一处都不能少（ADR 0038 背景 §二的核心事实）
  *
  * 候选来源有**三条消费路径**，不是一条：

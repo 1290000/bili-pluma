@@ -84,6 +84,33 @@ ADR 0038 选的是"把 PCDN 候选从 `backup_url` 里删掉"。代价在 `poc/p
 | 7 | **mcdn proxy 包装仅限 `/v1/resource/upgcxcode/` 变体**，且只对 PCDN 候选 | 这是唯一改变 URL 结构的例外，扩大会变成"任意 URL 重写" |
 | 8 | **不并发批量试探镜像**，控制请求规模 | 批量构造官方地址对 B站 基础设施有真实成本（见风险节） |
 
+#### 边界澄清：候选容器不止 `dash.video` / `dash.audio`（2026-11-18 补记）
+
+这不是新授权，是把上文既有授权**说全**。上表 1/2 条说的"候选"指的是 `dash` 里**所有**
+带候选地址的容器，共四处，规则完全相同：
+
+| 容器 | 形状 | 依据 |
+| --- | --- | --- |
+| `dash.video[]` | track 数组 | playurl 常规视频轨 |
+| `dash.audio[]` | track 数组 | playurl 常规音频轨 |
+| `dash.flac.audio` | **单个** track 对象（外层 `dash.flac.display` 是布尔） | `src/core/playinfo/parse.ts` 的 `parseDash()`：`isRecord(flacObj?.audio)` |
+| `dash.dolby.audio[]` | track 数组（外层 `dash.dolby.vision` 是布尔） | 同一处：`arr(dolbyObj?.audio)` |
+
+- 四者**同规则**：条数严格不变、只换 authority、`pathname`/`search`/`hash` 一字不动。
+- `dash.flac.display` / `dash.dolby.vision` / `dash.duration` 属于**非候选字段**，
+  一字不动（与本 ADR 边界 3 同源）。
+- 形状不对（缺失 / `null` / 非对象 / `flac.audio` 不是对象 / `dolby.audio` 不是数组）
+  → 该容器整块跳过，**不抛错**（边界 5 的同一口径）。
+
+**为什么必须写明这一条**：实现（`src/content/main-world.js` 的 `filterDashOf()`）在
+2026-11-18 之前只遍历 `dash.video` / `dash.audio`，而 Hi-Res（flac）与杜比全景声（dolby）
+这两类音轨的 PCDN 候选**完全没被过滤** —— 那几轨照旧走 PCDN，开关却是开着的、
+界面一切正常。这正是本 ADR 与 `src/core/cdn/classify.ts` 共同点名的
+**最坏失败方向（静默失败）**。当时没测到，是因为探针样本
+（`poc/probe/pcdn-diag/remaining-candidates.json` 的 8 个 UGC 视频）里
+`flac` / `dolby` 全是 `null`，样本没覆盖到这一块 —— 属"样本太窄"这条风险的
+第二个实例（第一个实例见上文风险表首行）。
+
 ### 与 ADR 0038 的关系（升级，不是推翻全部）
 
 | ADR 0038 条款 | 本 ADR 的处理 |
