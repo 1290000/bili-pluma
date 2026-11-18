@@ -1827,82 +1827,82 @@ describe('S1：pgcMergeVideoInfo 纯函数（骨架合并单一实现）', () =>
  * 保留 `requestConfig` 原对象、必须摘 `prefetch.playUrl`、返回体必须合并进 SSR 骨架。
  * jsdom 里没有真播放器与 DNR，这里守的是**结构性事实**；真机验收看 `__PLUMA_PGC__`。
  */
+interface PgcSandbox extends Sandbox {
+  fetchCalls: Array<{ url: string; init?: { credentials?: string } }>;
+}
+
+/**
+ * 与既有 `bootAt` 同构，但**必须在 eval 前替换 `window.fetch`**
+ * （主世界顶部就把 `window.fetch` 存进 `nativeFetch`），并支持：
+ * - `disableTakeover`：把源码里的 `PGC_CALLBACK_TAKEOVER` 改成 `false` 再 eval。
+ */
+function bootPgc(
+  opts: {
+    fetchImpl?: (url: string) => any;
+    disableTakeover?: boolean;
+  } = {},
+): PgcSandbox {
+  const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
+    runScripts: 'outside-only',
+    url: PGC_URL,
+    pretendToBeVisual: true,
+  });
+  const win = dom.window as unknown as Record<string, any>;
+  const sent: Array<Record<string, unknown>> = [];
+  const fetchCalls: Array<{ url: string; init?: { credentials?: string } | undefined }> = [];
+
+  win.fetch = (url: string, _init?: { credentials?: string }) => {
+    fetchCalls.push({ url, init: _init });
+    const body = opts.fetchImpl ? opts.fetchImpl(url) : { code: 0, result: {} };
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(body),
+      text: () => Promise.resolve(JSON.stringify(body)),
+    });
+  };
+
+  win.addEventListener('message', (ev: MessageEvent) => {
+    const d = ev.data as Record<string, unknown> | null;
+    if (d && d.__ns === '__PLUMA__') sent.push(d);
+  });
+
+  const src = opts.disableTakeover
+    ? SOURCE.replace('var PGC_CALLBACK_TAKEOVER = true;', 'var PGC_CALLBACK_TAKEOVER = false;')
+    : SOURCE;
+  win.eval(src);
+  return {
+    win,
+    sent,
+    fetchCalls,
+    page: win as unknown as Record<string, unknown>,
+  } as PgcSandbox;
+}
+
+/** 模拟页面给 `window.nano` 赋值（setter 会在 eval 时装好）。 */
+function installPgcNano(sb: PgcSandbox, player: unknown): { createPlayer: (c: any) => unknown } {
+  const nano = { createPlayer: (_c: any) => player };
+  sb.page.nano = nano;
+  return nano as { createPlayer: (c: any) => unknown };
+}
+
+/** PGC 页真实的 config 形状（S0 探针 §3.1：有 prefetch.playUrl + requestConfig 两键）。 */
+function pgcConfig(origImpl?: () => Promise<any>): any {
+  return {
+    prefetch: { playUrl: 'native-prefetch' },
+    requestConfig: {
+      reqHttpPlayUrlInfoScope: { kind: 'pgc' },
+      reqHttpPlayUrlInfo: origImpl ?? (() => Promise.resolve('orig')),
+    },
+  };
+}
+
+function trace(sb: PgcSandbox): Record<string, any> {
+  return sb.page.__PLUMA_PGC__ as Record<string, any>;
+}
+
 describe('S2+S3：PGC 回调接管（ADR 0041）', () => {
   const CID = 281989571;
-
-  interface PgcSandbox extends Sandbox {
-    fetchCalls: Array<{ url: string; init?: { credentials?: string } }>;
-  }
-
-  /**
-   * 与既有 `bootAt` 同构，但**必须在 eval 前替换 `window.fetch`**
-   * （主世界顶部就把 `window.fetch` 存进 `nativeFetch`），并支持：
-   * - `disableTakeover`：把源码里的 `PGC_CALLBACK_TAKEOVER` 改成 `false` 再 eval。
-   */
-  function bootPgc(
-    opts: {
-      fetchImpl?: (url: string) => any;
-      disableTakeover?: boolean;
-    } = {},
-  ): PgcSandbox {
-    const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
-      runScripts: 'outside-only',
-      url: PGC_URL,
-      pretendToBeVisual: true,
-    });
-    const win = dom.window as unknown as Record<string, any>;
-    const sent: Array<Record<string, unknown>> = [];
-    const fetchCalls: Array<{ url: string; init?: { credentials?: string } | undefined }> = [];
-
-    win.fetch = (url: string, _init?: { credentials?: string }) => {
-      fetchCalls.push({ url, init: _init });
-      const body = opts.fetchImpl ? opts.fetchImpl(url) : { code: 0, result: {} };
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve(body),
-        text: () => Promise.resolve(JSON.stringify(body)),
-      });
-    };
-
-    win.addEventListener('message', (ev: MessageEvent) => {
-      const d = ev.data as Record<string, unknown> | null;
-      if (d && d.__ns === '__PLUMA__') sent.push(d);
-    });
-
-    const src = opts.disableTakeover
-      ? SOURCE.replace('var PGC_CALLBACK_TAKEOVER = true;', 'var PGC_CALLBACK_TAKEOVER = false;')
-      : SOURCE;
-    win.eval(src);
-    return {
-      win,
-      sent,
-      fetchCalls,
-      page: win as unknown as Record<string, unknown>,
-    } as PgcSandbox;
-  }
-
-  /** 模拟页面给 `window.nano` 赋值（setter 会在 eval 时装好）。 */
-  function installPgcNano(sb: PgcSandbox, player: unknown): { createPlayer: (c: any) => unknown } {
-    const nano = { createPlayer: (_c: any) => player };
-    sb.page.nano = nano;
-    return nano as { createPlayer: (c: any) => unknown };
-  }
-
-  /** PGC 页真实的 config 形状（S0 探针 §3.1：有 prefetch.playUrl + requestConfig 两键）。 */
-  function pgcConfig(origImpl?: () => Promise<any>): any {
-    return {
-      prefetch: { playUrl: 'native-prefetch' },
-      requestConfig: {
-        reqHttpPlayUrlInfoScope: { kind: 'pgc' },
-        reqHttpPlayUrlInfo: origImpl ?? (() => Promise.resolve('orig')),
-      },
-    };
-  }
-
-  function trace(sb: PgcSandbox): Record<string, any> {
-    return sb.page.__PLUMA_PGC__ as Record<string, any>;
-  }
 
   it('开关关（PGC_CALLBACK_TAKEOVER=false）→ 一个字都不碰，cbHits=0', async () => {
     const sb = bootPgc({ disableTakeover: true });
@@ -1988,6 +1988,16 @@ describe('S2+S3：PGC 回调接管（ADR 0041）', () => {
     expect(t.lastRespCode).toBe(0);
     expect(t.tFirstCb).toBeGreaterThanOrEqual(0);
     expect(t.tGate).toBeGreaterThanOrEqual(0);
+
+    await flush(); // postMessage 异步派发
+    // S4：接管结果回传 ISOLATED（载荷是接口原文，非 SSR 骨架）
+    const posts = sb.sent.filter((m) => m.type === 'pgc-takeover-ok') as Array<Record<string, any>>;
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.json).toEqual({
+      code: 0,
+      result: expect.objectContaining({ quality: 120, dash: expect.anything() }),
+    });
+    expect(posts[0]!.json.result.arc).toBeUndefined(); // 不是 SSR 骨架
   });
 
   it('确定关着（热关闭）→ 不发 fetch、走原回调、prefetch 还原', async () => {
@@ -2150,5 +2160,92 @@ describe('S2+S3：PGC 回调接管（ADR 0041）', () => {
     // 标签与 XHR 观察路径一致（'playurl'），不是 'playinfo'
     expect(sb.sent.some((m) => m.type === 'pcdn-filter-stats' && m.where === 'playurl')).toBe(true);
     expect(trace(sb).takeoverOk).toBe(1);
+  });
+});
+
+/**
+ * S4（ADR 0041）：`pgcFetch` 成功后把接管结果回传 ISOLATED 侧。
+ *
+ * 面板画质卡的数据源是 `pageState.playback`（`content.ts` 收到 `pgc-takeover-ok`
+ * 后 `applyPlayback`），而 ISOLATED 侧自己这轮大概率没有取流 —— 不回传它就永远
+ * 显示「等待取流…」（S2/S3 真机验收实测）。载荷必须是 **PCDN 改写前**的原文。
+ */
+describe('S4：pgc-takeover-ok 回传', () => {
+  function takeoverPosts(sb: PgcSandbox): Array<Record<string, any>> {
+    return sb.sent.filter((m) => m.type === 'pgc-takeover-ok');
+  }
+
+  function mcdnResult() {
+    return {
+      quality: 120,
+      timelength: 3076000,
+      dash: {
+        duration: 3076,
+        video: [
+          {
+            id: 120,
+            height: 1080,
+            base_url: 'https://xy116.mcdn.example.com/edge/v.m4s',
+            backup_url: [],
+          },
+        ],
+      },
+    };
+  }
+
+  it('成功取流 → 发一次，载荷是 PCDN 改写前的原文快照；同 cid 不重复发', async () => {
+    const sb = bootPgc({ fetchImpl: () => ({ code: 0, result: mcdnResult() }) });
+    await ready(sb);
+    sendCfg(sb, {
+      pgcActive: true,
+      filterCandidates: true,
+      pcdnRules: { labels: ['mcdn'], domains: [] },
+      pcdnRewriteRules: {
+        mirrorHost: 'mirror.example',
+        proxyHost: 'proxy.example',
+        proxyPathPrefix: '/proxy/',
+      },
+    });
+    await flush();
+    sb.page.__playinfo__ = ssrPreview();
+    const config = pgcConfig();
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ season_id: 1 }, config);
+    await flush();
+
+    // 播放器拿到的是换过 authority 的版本
+    expect(out.data.result.video_info.dash.video[0].base_url).toContain('mirror.example');
+    // 面板拿到的是改写前原文（仍是 mcdn），且只有接口自己的 result（不是 SSR 骨架）
+    const posts = takeoverPosts(sb) as Array<Record<string, any>>;
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.json).toEqual({ code: 0, result: mcdnResult() });
+    expect(posts[0]!.json.result.arc).toBeUndefined();
+    expect(posts[0]!.token).toBe('test-token');
+    expect(trace(sb).takeoverOk).toBe(1);
+
+    // 同 cid 二次取流（重试 / 重开流）→ 不重复发
+    await cb({ season_id: 1, qn: 80 }, config);
+    await flush();
+    expect(takeoverPosts(sb)).toHaveLength(1);
+    expect(trace(sb).takeoverOk).toBe(2);
+  });
+
+  it('取流失败走 fallback → 不发 pgc-takeover-ok', async () => {
+    const sb = bootPgc({ fetchImpl: () => ({ code: -404, message: '啥都木有' }) });
+    await ready(sb);
+    sendCfg(sb, { pgcActive: true });
+    await flush();
+    sb.page.__playinfo__ = ssrPreview();
+    const config = pgcConfig();
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    await cb({ season_id: 1 }, config);
+    await flush();
+
+    expect(takeoverPosts(sb)).toHaveLength(0);
+    expect(trace(sb).takeoverOk).toBe(0);
   });
 });

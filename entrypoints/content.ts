@@ -220,6 +220,14 @@ const pgcReloadTrace = {
   reloadIssued: 0,
   /** 最后一次没刷 / 没取流的原因 */
   lastReason: '',
+  /**
+   * ## PGC 回调接管已经成功（S4，ADR 0041）
+   *
+   * 主世界 `pgcFetch` 取流 + 合并成功后会发 `pgc-takeover-ok`，这里置 `true`：
+   * `orchestratePgc` 的入口与 reload 决策点据此早退（不取流、不 reload）。
+   * 面板数据由同一条消息分支直接 `applyPlayback`，不依赖本标志的时序。
+   */
+  callbackTakeover: false as boolean,
   /** 最近一轮加载观测到的结果（ADR 0030 方案 c 的输入，2026-10-30） */
   lastGuardOutcome: null as PgcRoundOutcome | null,
   /** 由 `lastGuardOutcome` 得出的护栏动作（`clear` / `keep` / `retry`） */
@@ -261,6 +269,21 @@ try {
   (window as unknown as Record<string, unknown>).__PLUMA_PGC_ISOLATED__ = pgcReloadTrace;
 } catch {
   /* 挂不上就只是少了排查手段，不影响功能 */
+}
+
+/**
+ * S4（ADR 0041）：读回调接管标志。
+ *
+ * ## 为什么不直接写 `pgcReloadTrace.callbackTakeover === true`
+ *
+ * TS 对 `const` 对象的属性做**流收窄**：`orchestratePgc` 入口的检查会把
+ * `callbackTakeover` 收窄成 `false`，一路流到 cache-nosync 决策点 ——
+ * 那里的第二次检查就被判成 "'false' 与 'true' 无重叠"（TS2367，编译报错）。
+ * 而标志恰恰**会在两次检查之间**被 `pgc-takeover-ok` 消息分支改成 true。
+ * 函数读取绕过属性收窄，三处检查共用同一口径。
+ */
+function pgcCallbackTakeover(): boolean {
+  return pgcReloadTrace.callbackTakeover;
 }
 
 /**
@@ -1018,6 +1041,24 @@ function listenMainWorld(): void {
     }
 
     /**
+     * PGC 回调接管成功（S4，ADR 0041）：主世界 `pgcFetch` 取流 + 合并成功后回传。
+     *
+     * - **面板**：`applyPlayback` 直接喂 `{code:0,result}`（`parsePlayurl` 认识的形状；
+     *   载荷是主世界在 PCDN 改写**之前**留的原文快照），画质卡不再停在「等待取流…」。
+     * - **reload 决策**：`callbackTakeover = true` —— `orchestratePgc` 的入口与
+     *   reload 决策点都会据此早退（见各处的 S4 注释）。
+     * - **竞态覆盖**：若 `orchestratePgc` 已经跑完并记录了别的 `orchestrateExit`
+     *   （比如 `'not-truncated-early-return'`），这里**覆盖**成 `'callback-takeover'`
+     *   —— 埋点要反映"这一轮真正发生的事"：回调接管了，reload 决策已失效。
+     */
+    if (d.type === 'pgc-takeover-ok') {
+      pgcReloadTrace.callbackTakeover = true;
+      pgcReloadTrace.orchestrateExit = 'callback-takeover';
+      pageState.applyPlayback(d.json ?? null);
+      return;
+    }
+
+    /**
      * PGC 的 SPA 切集：主世界换完流后把新一集的能力送回来（ADR 0023 + 0024 的配套）。
      *
      * ## 为什么这条消息必须存在
@@ -1203,6 +1244,12 @@ function pgcPageKeyForCid(cid: string): string {
  * @returns `true` 表示已发起刷新（调用方该立刻 return）；`false` 表示不动
  */
 async function tryUpgradeForQuality(cid: string, ssrInfo: unknown): Promise<boolean> {
+  /**
+   * S4（ADR 0041）：回调接管已成功 → 画质补取（以及它可能触发的 reload）不再需要。
+   * 这是 orchestratePgc 决策点①的二次检查；决策点②在 cache-nosync 分支里。
+   */
+  if (pgcCallbackTakeover()) return false;
+
   const currentH = maxVideoHeight(ssrInfo);
 
   /**
@@ -1311,6 +1358,24 @@ async function orchestratePgc(
   ssrData?: unknown,
   ssrWasPatchedByUs: boolean = false,
 ): Promise<void> {
+  /**
+   * S4（ADR 0041）：回调接管已经成功 → 面板数据已由 `pgc-takeover-ok` 分支喂过，
+   * 这里不再取流、不再 reload（护栏计数也不动）。
+   *
+   * ## ⚠️ 时序：这条早退**常常接不住**，别指望它
+   *
+   * `orchestratePgc` 由 `ssr-playinfo` 触发（SSR 赋值，真机 ~673ms），而回调结果
+   * ~900ms 才到 —— 本标志此刻多半还是 `false`。真正兜底的是：
+   *   1. 下面 reload 决策点（`tryUpgradeForQuality` / cache-nosync 分支）的**第二次检查**；
+   *   2. 竞态语义：orchestratePgc 跑完之后消息才到 → 允许旧链路已完成的结果保留
+   *      （`prepareFullStream` 有 `alreadyTried` 护栏、`reloadWithGuard` 有 ADR 0030
+   *      护栏，重复一次 reload 不会坏数据），但消息分支会覆盖 `orchestrateExit`。
+   */
+  if (pgcCallbackTakeover()) {
+    pgcReloadTrace.orchestrateExit = 'callback-takeover';
+    return;
+  }
+
   const playInfo = parsePlayPage(location.href);
   const epId = playInfo?.kind === 'pgc' ? playInfo.epId : null;
 
@@ -1665,6 +1730,15 @@ async function orchestratePgc(
       pgcReloadTrace.shouldReloadArgs = { alreadyTried, hasStream: true };
       pgcReloadTrace.shouldReloadVerdict = verdict;
       if (verdict) {
+        /**
+         * S4 决策点②的二次检查（ADR 0041）：orchestratePgc 跑到一半时回调才成功
+         * —— 面板已由消息分支喂过，不必再刷。竞态语义：允许旧链路走到这里
+         * （护栏都还在），但此刻标志已真 → 直接早退，reload 不发。
+         */
+        if (pgcCallbackTakeover()) {
+          pgcReloadTrace.orchestrateExit = 'callback-takeover';
+          return;
+        }
         pgcReloadTrace.orchestrateExit = 'cache-nosync-reload';
         reloadWithGuard(cid, `同步缓存刚写好（cid=${cid}），刷新进第二趟`);
       } else {

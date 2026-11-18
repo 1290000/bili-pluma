@@ -2508,6 +2508,11 @@
   var pgcStashedPrefetch;
   /** 门控未知时正在等待的代理回调（与活动页 `festivalGateWaiters` 同一套队列写法）。 */
   var pgcGateWaiters = [];
+  /**
+   * 上一次向 ISOLATED 侧回传 `pgc-takeover-ok` 的 cid（`null` = 还没发过）。
+   * 按 cid 放行：同一次取流重试不重复发；换集不走回调（ADR 0023），通常一页只发一次。
+   */
+  var pgcPostedTakeoverCid = null;
 
   /** 与 Resource Timing 同一时基（与活动页 `festivalNow` 同一个实现；名字分开便于两侧阅读）。 */
   function pgcNow() {
@@ -2701,6 +2706,19 @@
             return pgcFallback(params, config);
           }
 
+          var apiResult = j.result;
+          /**
+           * 面板要的是播放账号真实拿到的**原文**（S4，ADR 0041）——
+           * 必须在 `filterDashOf` **之前**做显式快照：候选改写会（可能就地）改
+           * `merged.videoInfo` 的 `dash`，而它与 `apiResult.dash` 是同一个引用
+           * （`pgcMergeVideoInfo` 按引用搬字段），顺序反了面板算出的画质就是
+           * 换过线路的版本。写法照活动页 `playurl-raw` 的显式快照（同一条教训）。
+           */
+          var apiSnapshot = apiResult;
+          try {
+            apiSnapshot = JSON.parse(JSON.stringify(apiResult));
+          } catch (e) {}
+
           var ssr = window.__playinfo__;
           var inner =
             ssr && ssr.result ? ssr : ssr && ssr.data && ssr.data.result ? ssr.data : null;
@@ -2741,6 +2759,25 @@
 
           pgcTrace.takeoverOk += 1;
           pgcTrace.lastStage = 'callback-takeover';
+
+          /**
+           * 把接管结果回传 ISOLATED 侧（S4，ADR 0041）：`pgcFetch` 成功合并并返回时
+           * 上报一次，`content.ts` 收到后 `pageState.applyPlayback`（面板画质卡不再停在
+           * 「等待取流…」）并置 `pgcReloadTrace.callbackTakeover`（S4 的 reload 早退开关）。
+           *
+           * ⚠️ `json.result` 是 **PCDN 改写之前**的原文快照（上面 `apiSnapshot`），
+           * 不是我们换过 authority 的版本。
+           */
+          if (cid !== pgcPostedTakeoverCid) {
+            pgcPostedTakeoverCid = cid;
+            safePost({
+              __ns: NS,
+              type: 'pgc-takeover-ok',
+              token: token,
+              json: { code: 0, result: apiSnapshot },
+            });
+          }
+
           return { data: { code: 0, result: outResult }, headers: {}, status: r.status };
         });
       })
