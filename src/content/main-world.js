@@ -1026,7 +1026,10 @@
           return r.json().then(function (json) {
             festivalNoteResp(json);
             // 首波来源：只有真的走到 fetch 并拿到响应才算我们的流。
-            // 真机用 Resource Timing 的 initiator=fetch + rewritten>0 交叉佐证。
+            // ⚠️ 别拿 `rewritten` 当"接管成功"的判据：它只统计 PCDN 换 authority
+            // 的次数，响应本身就是官方线路时恒为 0（2026-11-18 真机踩过这个坑）。
+            // 判据是 `lastStage:'cb'` + `lastStatus:200` + `lastRespCode:0` 这三点；
+            // 想知道这次取流是不是 fetch 发的，看 Network 的 initiator 列。
             if (festivalTrace.firstWave === 'pending') {
               festivalTrace.firstWave = 'ours';
             }
