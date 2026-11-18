@@ -2,7 +2,7 @@
 
 - 作者：架构评审（team-lead 汇总）
 - 日期：2026-11-18
-- 状态：**进行中**（S0 探针待补；S1 已落地）
+- 状态：**进行中**（S0 已完成、S1 已落地 `99f8a2b`；S2/S3 待开工）
 - 依据：`poc/probe/pgc/REPORT-sync-callback.md`（真机探针，含四模式对照与返回体形状）
 - 关联：ADR 0019（PGC 异步取流注入）、0020（整页注入）、0021（试看标记）、0023（切集换流）、0030（reload 护栏）
 
@@ -78,20 +78,33 @@
 | `config.prefetch.playUrl` 是否也需要清 | 不清时回调是否仍被调用（活动页的经验是 `prefetch` 存在会抢跑）；若被抢跑，需在注入时 `delete config.prefetch.playUrl` |
 | 冷启动时门控到达时刻 | `tGate - tCreate` 分布；PGC 的 `page/activate` 要解密凭据，可能比活动页（p50 50ms）更晚，据此定等待上限 |
 
-**验收**：S0 先产出 `REPORT-dash-merge.md`（放在 `poc/probe/pgc/`，尚未生成），三项都要有数字，测不出就写测不出。
+**验收**：S0 已产出 `poc/probe/pgc/REPORT-dash-merge.md`，三项都有数字。
+
+**S0 实测结论（2026-11-18，已完成）**：
+
+| 项 | 结果 |
+|---|---|
+| Q1 番剧 dash 合并 | **通过**：`readyState=4`、`duration=3076s`、`currentSrc=blob:`（MSE）、`MediaError=null`、合并后 `hasDurl=false`。**PGC 的 duration 会跟 `video_info.timelength`/`dash.duration`**（与活动页不同，活动页由 SSR 分 P 锁定） |
+| Q2 `prefetch.playUrl` | **必须删**：保留时 `cbHits=0`、回调一次不被调用、播放器直接用 prefetch 流；`delete` 后 `cbHits=1`、我们的 fetch 生效 |
+| Q3 门控窗口 | `tGate - tCreate`：p50 76 / p90 119 / max 131ms；同步回调约 create+85ms，实际等待 p50 −9 / p90 34 / max 46ms → **`PGC_GATE_WAIT_MS = 300`** |
+
+⚠️ Q1 的证明手法要记住：该页 guest 的 SSR 与接口 `quality` 都是 32、播放高度都是 360，**单看高度分不清播放器吃的是谁的流**，只能给 `timelength`/`dash.duration` 加时长标记才能坐实。
+
+⚠️ Q2 的局限：本页 SSR 自身 `durlGroups=0`，所以「不删 `durl` 会不会回退 360s」在本页无法做反例，仍需 preview durl 页面（主账号无权益）才能验。
 
 ### S1 抽出"骨架合并"单一实现（`main-world.js`）
 
-现状 `pgcPatchPlayinfo` 内联了一份白名单裁剪（与 `src/core/playinfo/pgc-merge.ts` 同源但重复）。抽出：
+现状 `pgcPatchPlayinfo` 内联了一份白名单裁剪（与 `src/core/playinfo/pgc-merge.ts` 同源但重复）。已抽出（`99f8a2b`）：
 
 ```js
-function pgcMergeIntoResult(ssrResult, apiResult) → mergedResult | null
+pgcMergeVideoInfo(ssrVideoInfo, source) → { videoInfo: object|null, moved: number }
 ```
 
-- 只搬 `STREAM_FIELDS` 同源字段；有 `dash` 就删 `durl`/`durls`（这是"注入了却不生效"的历史坑）；不修改入参。
-- `pgcPatchPlayinfo` 改为调用它，**行为不变**（先跑现有单测确认零回归）。
+- 只搬 `STREAM_FIELDS` 同源字段；有 `dash` 就删 `durl`/`durls`；不修改入参。
+- 返回对象而非 `null`：`pgcPost` 里「缓存里没有可用的流字段（N 个元信息）」的 `N` 是真机排查依赖的信息，返回 `null` 会丢掉它。
+- `filterDashOf` / `reportPcdnFilter` **留在调用点**（回调路径的标签不同，抽进纯函数会串标签）。
 
-**验收**：既有 PGC 单测全绿；`check-patch-scope` 绿（写集仍落在被授权函数内）。
+**验收**：既有 PGC 的 55 条断言一条未改、全绿（零行为变化）；新增 6 条纯函数用例。
 
 ### S2 同步注入代理（`main-world.js`，仅供 PGC 分支）
 
@@ -101,24 +114,25 @@ function pgcMergeIntoResult(ssrResult, apiResult) → mergedResult | null
 var rc = config.requestConfig;          // ⚠️ 不替换对象
 if (rc && typeof rc.reqHttpPlayUrlInfo === 'function') origCb = rc.reqHttpPlayUrlInfo;
 rc.reqHttpPlayUrlInfo = pgcGateProxy;   // 只换这一个字段
+if (config.prefetch) delete config.prefetch.playUrl;   // ⚠️ S0 实测：不删则回调永不被调用
 ```
 
 `pgcGateProxy` 三态与活动页一致（复用 `festivalWaitGate` 的队列式等待，或抽公共函数）：
 - 门控开 → `pgcFetch`
 - 确定关（`cfgEnabled === false` / `pgcActive === false`）→ `origCb`（**不是** fallback 到我们自己的 XHR）
-- 未知 → 等 `PGC_GATE_WAIT_MS`，超时 `origCb`
+- 未知 → 等 `PGC_GATE_WAIT_MS = 300`，超时 `origCb`
 
 **内置开关**：常量 `PGC_CALLBACK_TAKEOVER = false` 先落地，S5 全绿后改 `true`。出现问题 revert 单个 commit 即可。
 
-**验收**：单测覆盖三态（含"确定关着时一次定时器都不起"）；真机上关开关时 `cbHits` 由原生接管、页面表现与今天完全一致。
+**验收**：单测覆盖三态（含"确定关着时一次定时器都不起"）+「`prefetch.playUrl` 被删」；真机上关开关时 `cbHits` 由原生接管、页面表现与今天完全一致。
 
 ### S3 取流与合并（`main-world.js`）
 
 - cid：`pgcCidOf(window.__playinfo__)`，取不到则不接管（交还 `origCb`），并记 `lastSkip`。
 - 请求：`/pgc/player/web/playurl`，参数形状照 `prepareFullStream`（`content.ts:1834`）与探针抓到的 `ep_id`/`cid`/`qn`/`fnval` 组合；`credentials:'include'`，走 `nativeFetch`（不要走被 hook 的 `fetch`，否则又进响应改写链）。
-- 合并：`pgcMergeIntoResult(ssrResult, apiResult)`；**再** `pgcPatchPreviewFlags(merged)`。
-- 返回：`{ data: { code: 0, result: merged }, headers: {}, status }`。
-- 失败/无流（`hasPlayableStream` 为假）：交还 `origCb`，记 `cbHits`/`lastSkip`，**不抛错**。
+- 合并：`pgcMergeVideoInfo(ssrResult && ssrResult.video_info, apiResult)`；**再** `pgcPatchPreviewFlags(merged)`。
+- 返回：`{ data: { code: 0, result: mergedResult }, headers: {}, status }`（`mergedResult` = SSR `result` 骨架 + 合并后的 `video_info`）。
+- 失败/无流（`videoInfo` 为 `null`）：交还 `origCb`，记 `cbHits`/`lastSkip`，**不抛错**。
 
 **验收**：真机番剧页首帧即完整流，Network 中**无** `/pgc/player/web/v2/playurl`，且 `<video>.currentSrc` 指向 dash。
 
@@ -174,7 +188,7 @@ if (pgcReloadTrace.callbackTakeover === true) {
 
 | 风险 | 处置 |
 |---|---|
-| 双路径重复取流（回调 + SSR 注入 + `prefetch.playUrl`） | S0 先测；必要时注入时清 `config.prefetch.playUrl`（活动页已有先例） |
+| 双路径重复取流（回调 + SSR 注入 + `prefetch.playUrl`） | **S0 已证实必须清**：保留 `prefetch.playUrl` 时 `cbHits=0`、回调永不被调用；注入时 `delete config.prefetch.playUrl` |
 | 合并白名单漂移（主世界 JS 版 vs `pgc-merge.ts`） | S1 只允许一处实现；单测比对两边字段集合 |
 | 试看集合并后仍被截断 | 保留 ADR 0021 补丁；S5 专门覆盖试看集 |
 | 冷启动门控晚于首波 | 埋点 `gateTimeouts`；超限就调等待上限或优化激活时序，**不许**降级成"用主账号身份取流" |
