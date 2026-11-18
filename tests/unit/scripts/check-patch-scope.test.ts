@@ -57,6 +57,8 @@ const NEEDED = [
   'docs/decisions/0038-filter-pcdn-candidates.md',
   // ADR 0039：换 authority 的授权（脚本会检查它还在）
   'docs/decisions/0039-rewrite-pcdn-authority.md',
+  // ADR 0041：PGC 回调接管（第 4 个候选过滤调用点 pgcFetch 的授权来源，脚本会检查它还在）
+  'docs/decisions/0041-pgc-callback-takeover.md',
 ];
 
 let box = '';
@@ -191,13 +193,13 @@ describe('check-patch-scope：PGC 换流与注入的写集判据（2026-11-17 �
  * | 判据里写死 `mcdn` | 约束 7：两处真相源必然漂移 |
  */
 describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => {
-  it('★ 现状：第七类的 ✅ 行在输出里，且写明"三处调用点全接 / 判据无写死域名"', () => {
+  it('★ 现状：第七类的 ✅ 行在输出里，且写明"四处调用点全接 / 判据无写死域名"', () => {
     const { status, out } = runIn(sandbox());
 
     expect(status).toBe(0);
     expect(out).toContain('✅ 候选过滤（ADR 0038）：写集 ⊆ 4 个候选字段');
     expect(out).toContain('✅ 候选改写（ADR 0039）：只换 authority、条数不变');
-    expect(out).toContain('三处调用点全接');
+    expect(out).toContain('四处调用点全接');
     expect(out).toContain('判据无写死域名');
   });
 

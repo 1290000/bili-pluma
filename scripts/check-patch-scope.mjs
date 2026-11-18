@@ -22,7 +22,7 @@
  * 5. `pgcSwapPlayviewBody()` 的**写集**必须落在 ADR 0023 的授权字段集内（2026-11-17 补）
  * 6. `pgcPatchPlayinfo()` 只能替换 `result.video_info`，不许碰同级键（2026-11-17 补）
  * 7. 候选过滤/改写（ADR 0038 + **ADR 0039**）的**写集 / 造 URL / 画质字段 / 权益字段 /
- *    授权字段派生 / 三处调用点 / 写死域名**七条判据（2026-11-17 补，2026-11-17 随 ADR 0039 升级）
+ *    授权字段派生 / 四处调用点 / 写死域名**七条判据（2026-11-17 补，2026-11-17 随 ADR 0039 升级；2026-11-18 随 ADR 0041 增至四处）
  *
  * ## 第七类（本脚本编号；`AGENTS.md` §5.5 里它是第五类改写）：候选改写（ADR 0038 → ADR 0039）
  *
@@ -41,7 +41,7 @@
  * | ③ | 写集里不许出现画质/带宽字段（`quality` / `height` / `codecid` / …）|
  * | ④ | 不许碰权益字段（`is_preview` / `play_check` / `user_status` / …）|
  * | ⑤ | 授权字段集从 `filter.ts` **派生**，不手抄第二份 |
- * | ⑥ | **三处调用点都调同一个函数**（少接一处 = 番剧切集整类漏过去）|
+ * | ⑥ | **四处调用点都调同一个函数**（少接一处 = 番剧切集整类漏过去）|
  * | ⑦ | 判据 / 改写函数体里不许写死域名/标签字面量（防两处真相源漂移）|
  *
  * ### ADR 0039 给"造 URL"开的唯一口子
@@ -177,6 +177,8 @@ const ADR_0038 = 'docs/decisions/0038-filter-pcdn-candidates.md';
  * 删掉任何一份都说明有人在绕过决策流程。
  */
 const ADR_0039 = 'docs/decisions/0039-rewrite-pcdn-authority.md';
+// ADR 0041：PGC 回调接管（第 4 个候选过滤调用点的授权来源，2026-11-18）
+const ADR_0041 = 'docs/decisions/0041-pgc-callback-takeover.md';
 
 /** 候选过滤的**实现**（授权字段名从这里派生，不手抄） */
 const FILTER_TS = 'src/core/cdn/filter.ts';
@@ -1232,6 +1234,8 @@ async function main() {
       ['patchPlayurlXhrProgress', '普通视频 playurl'],
       ['pgcPatchPlayinfo', 'PGC 整页注入'],
       ['pgcSwapPlayviewBody', 'PGC 切集换流'],
+      // ADR 0041：PGC 回调接管路径（createPlayer 同步注入的 pgcGateProxy -> pgcFetch）
+      ['pgcFetch', 'PGC 回调接管（ADR 0041）'],
     ];
     const unwired = [];
     for (const [fn, label] of callSites) {
@@ -1251,7 +1255,7 @@ async function main() {
         why: [
           unwired.join('、'),
           '→ 缺一处就有一整类场景漏过去：少接 playview = 番剧切集那条路整个漏掉（ADR 0038 背景 §二）',
-          '→ 三处都必须调 `pcdnFilterReady()` + `filterDashOf()`，不许在调用点自己写过滤',
+          '→ 四处都必须调 `pcdnFilterReady()` + `filterDashOf()`，不许在调用点自己写过滤',
         ].join('\n    '),
       });
     }
@@ -1287,6 +1291,16 @@ async function main() {
       why: '换 authority 这件事必须有 ADR 兜着，不能只剩代码 —— ADR 0038 只授权了删除。',
     });
   }
+
+  // ADR 0041（PGC 回调接管）必须还在 —— 第 4 个过滤调用点（pgcFetch）的授权来源
+  try {
+    await readFile(join(ROOT, ADR_0041), 'utf8');
+  } catch {
+    problems.push({
+      what: `找不到 ${ADR_0041}`,
+      why: '授权来源缺失。PGC 回调路径的候选过滤必须有 ADR 兜着，不能只剩代码。',
+    });
+  }
   if (adr0039Text) {
     const missingInAdr = ['encodeURIComponent', '不新增、不删候选', 'cfg'].filter(
       (f) => !adr0039Text.includes(f),
@@ -1306,6 +1320,7 @@ async function main() {
   console.log(`[patch] 授权来源：${ADR_0022}（PGC 试看提示条）`);
   console.log(`[patch] 授权来源：${ADR_0023}（PGC 切集换流）`);
   console.log(`[patch] 授权来源：ADR 0020 / AGENTS.md §5.5 第 5 行（PGC 整页注入）`);
+  console.log(`[patch] 授权来源：${ADR_0041}（PGC 回调接管）`);
 
   if (problems.length === 0) {
     console.log(
@@ -1322,7 +1337,7 @@ async function main() {
       `[patch] ✅ PGC 整页注入：pgcPatchPlayinfo 只写 result.${AUTHORIZED_PLAYINFO_RESULT_WRITES.join(' / result.')}`,
     );
     console.log(
-      `[patch] ✅ 候选过滤（ADR 0038）：写集 ⊆ ${String(authorizedFilterFields?.length ?? 0)} 个候选字段（从 filter.ts 派生）· 三处调用点全接 · 判据无写死域名`,
+      `[patch] ✅ 候选过滤（ADR 0038）：写集 ⊆ ${String(authorizedFilterFields?.length ?? 0)} 个候选字段（从 filter.ts 派生）· 四处调用点全接 · 判据无写死域名`,
     );
     console.log(
       `[patch] ✅ 候选改写（ADR 0039）：只换 authority、条数不变 · proxy 模板仅 ${REWRITE_TEMPLATE_LITERALS.size} 条字面量放行 · 镜像/proxy host 只来自 cfg`,
@@ -1362,7 +1377,7 @@ main().catch((err) => {
  * | ③ | 写集里**不许出现**画质/带宽字段 | 同 ①（`FORBIDDEN_FILTER_WRITES`） | 顺手改画质档位（边界 3） |
  * | ④ | **不许碰**权益字段 | 「④ 不许碰权益字段」 | 借过滤之名伪造权益（边界 4） |
  * | ⑤ | 授权字段集从 `filter.ts` **派生** | `authorizedFilterFields` | 手抄第二份 → 加第五种命名形态时漂移 |
- * | ⑥ | **三处调用点都调同一个函数** | 「⑥ 三处调用点都接了同一个函数」 | 只在 playurl 上过滤 → 番剧切集整类漏过去 |
+ * | ⑥ | **四处调用点都调同一个函数** | 「⑥ 四处调用点都接了同一个函数」 | 只在 playurl 上过滤 → 番剧切集整类漏过去 |
  * | ⑦ | 判据 / 改写函数体里**不许写死域名/标签** | 同 ②（`FORBIDDEN_RULE_LITERALS`） | 主世界自带一份域名表 → 开关开着却在走 PCDN |
  *
  * ## ② 为什么不再"一律不许造 URL"

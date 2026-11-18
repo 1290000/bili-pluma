@@ -818,10 +818,13 @@
   /**
    * 等门控打开，最多 `ms` 毫秒：resolve `true` = 打开了，`false` = 超时。
    *
+   * S2 抽出的**公共实现**（活动页 `festivalWaitGate` 与 PGC `pgcGateProxy` 共用）；
+   * `waiters` 由调用方持有，本函数只 push / 摘除，不重新赋值。
+   *
    * 为什么用队列而不是轮询：`cfg` 到达是事件驱动的，轮询会引入额外延迟且不好收尾。
    * 每个等待者只在首次结束时 resolve 一次；超时会把自己从队列里摘掉，避免泄漏。
    */
-  function festivalWaitGate(ms) {
+  function waitGate(waiters, ms) {
     return new Promise(function (resolve) {
       var done = false;
       var timer = null;
@@ -835,27 +838,40 @@
         }
         resolve(true);
       };
-      festivalGateWaiters.push(waiter);
+      waiters.push(waiter);
       timer = setTimeout(function () {
         if (done) return;
         done = true;
-        var i = festivalGateWaiters.indexOf(waiter);
-        if (i >= 0) festivalGateWaiters.splice(i, 1);
+        var i = waiters.indexOf(waiter);
+        if (i >= 0) waiters.splice(i, 1);
         resolve(false);
       }, ms);
     });
   }
 
-  /** 门控首次变真时放行所有等待者（只在这时调，别在"未知"时调）。 */
-  function festivalResolveGateWaiters() {
-    if (!festivalGateWaiters.length) return;
-    var list = festivalGateWaiters;
-    festivalGateWaiters = [];
+  /**
+   * 门控首次变真时放行所有等待者（只在这时调，别在"未知"时调）。
+   * ⚠️ 先 `splice` 摘下来再逐个调用：`var list = waiters` 只是复制引用，
+   * 直接 `waiters.length = 0` 会把 `list` 一起清空，等待者一个都放行不了
+   * （S2 落地时真踩过：等待者全部超时走兜底，门控明明已开）。
+   */
+  function resolveGateWaiters(waiters) {
+    var n = waiters.length;
+    if (!n) return;
+    var list = waiters.splice(0, n);
     for (var i = 0; i < list.length; i++) {
       try {
         list[i]();
       } catch (e) {}
     }
+  }
+
+  function festivalWaitGate(ms) {
+    return waitGate(festivalGateWaiters, ms);
+  }
+
+  function festivalResolveGateWaiters() {
+    resolveGateWaiters(festivalGateWaiters);
   }
 
   /**
@@ -1566,6 +1582,16 @@
                 }
               } catch (e) {}
             }
+            if (IS_PGC && PGC_CALLBACK_TAKEOVER) {
+              try {
+                // 必须在 orig.apply 之前：首波取流在 createPlayer 里就排好队
+                // （与活动页同一个坑，REPORT-sync-callback.md §2）。
+                pgcAttach(arguments[0]);
+              } catch (e) {
+                pgcTrace.errors += 1;
+                pgcTrace.lastSkip = 'attach: ' + String(e && e.message ? e.message : e);
+              }
+            }
             if (IS_FESTIVAL) {
               try {
                 festivalTrace.createCalls += 1;
@@ -2238,6 +2264,31 @@
     swapLastQ: -1,
     swapLastMaxH: 0,
     swapSkip: '',
+    /**
+     * PGC 回调接管（S2 / S3，ADR 0041）的埋点 —— 真机是唯一验收场。
+     *
+     * - `attached`：`pgcAttach` 是否真的把代理挂上了。`false` = 常量关着 /
+     *   确定门控关着 / config 形状不对，全都"什么都不碰"（fail-closed）。
+     * - `prefetchCleared`：是否摘掉了 `config.prefetch.playUrl`（S0 Q2：不删它
+     *   回调一次都不被调）。兜底时会还原，但这个标记不复位 —— 它回答"清过没有"。
+     * - `cbHits` / `tFirstCb`：代理被调用的次数与首次时刻（`performance.now` 时基）。
+     * - `tGate`：门控（`cfgEnabled && pgcActive`）首次为真的时刻。
+     * - `gateWaitedMs` / `gateTimeouts`：等待门控的耗时与超时次数（S0 实测等待极短）。
+     * - `takeoverOk`：取流 + 合并成功、把 SSR 骨架返回给播放器的次数（S4 靠它跳过 reload）。
+     * - `lastRespCode`：playurl 响应的业务码（`{code, result}` 形状，与 `/x/player` 不同）。
+     * - `lastSkip` / `errors`：最后一次没接管的原因 / 异常累计。
+     */
+    attached: false,
+    prefetchCleared: false,
+    cbHits: 0,
+    tFirstCb: -1,
+    tGate: -1,
+    gateWaitedMs: 0,
+    gateTimeouts: 0,
+    takeoverOk: 0,
+    lastRespCode: null,
+    lastSkip: '',
+    errors: 0,
   };
 
   if (IS_PGC) {
@@ -2425,6 +2476,286 @@
     }
 
     return { videoInfo: next, moved: moved };
+  }
+
+  // ── PGC 回调接管（S2 / S3，ADR 0041）──
+  //
+  // 目标：`createPlayer` 返回前同步把 `requestConfig.reqHttpPlayUrlInfo` 换成
+  // `pgcGateProxy`，让播放器**第一次取流**就吃扩展账号的流（省掉
+  // `prepareFullStream` 之后那次整页 reload，ADR 0030 的护栏也就用不上了）。
+  // SSR `__playinfo__` 注入（`pgcPatchPlayinfo`）继续保留：回调成功时两者内容
+  // 一致（双保险），失败时它就是兜底。
+
+  /**
+   * **唯一的回滚开关**：默认 `true`。出问题把这一个常量改成 `false` 就回到今天的
+   * SSR 注入行为 —— `pgcAttach` 一个字都不碰 config（不删 prefetch、不挂代理），
+   * 页面表现与启用前逐字一致，**不需要 revert 提交**。
+   */
+  var PGC_CALLBACK_TAKEOVER = true;
+  /**
+   * 门控等待上限（毫秒）。S0 实测（`poc/probe/pgc/REPORT-dash-merge.md`）：
+   * `tGate - tCreate` p50 76 / p90 119 / max 131ms，同步回调约 create+85ms，
+   * 实际需要等待 p50 -9 / p90 34 / max 46ms。300ms 仍在播放器原生取流之前。
+   */
+  var PGC_GATE_WAIT_MS = 300;
+
+  /** `createPlayer` 时捕获的**页面原回调**；兜底路径把它原样透传。 */
+  var pgcOrigReq = null;
+  /**
+   * 从 `config.prefetch` 上摘下来的 `playUrl`（S0 Q2 实测：不删它回调一次都不被调）。
+   * `undefined` = 没存过（页面本来没有，或已还原）。兜底时还原 —— 不还原就是把它永远丢了。
+   */
+  var pgcStashedPrefetch;
+  /** 门控未知时正在等待的代理回调（与活动页 `festivalGateWaiters` 同一套队列写法）。 */
+  var pgcGateWaiters = [];
+
+  /** 与 Resource Timing 同一时基（与活动页 `festivalNow` 同一个实现；名字分开便于两侧阅读）。 */
+  function pgcNow() {
+    return festivalNow();
+  }
+
+  /**
+   * PGC 的门控判据：`cfgEnabled`（总开关）+ `pgcActive`（页面级激活结果）。
+   *
+   * ⚠️ **不是** `rewriteGate`：那是"这次响应体改不改写"的开关，与"要不要
+   * 替换取流回调"语义不同。PGC 页 `hello` 那条 cfg 不带 `pgcActive`，
+   * 所以"未知"是常态（见 `pgcActive` 定义处的长注释），未知只能等，不能拒。
+   */
+  function pgcGateOpen() {
+    var open = cfgEnabled === true && pgcActive === true;
+    if (open && pgcTrace.tGate < 0) pgcTrace.tGate = pgcNow();
+    return open;
+  }
+
+  /** 确定关着：两个信号都是 ISOLATED 侧的明确回包；`null` 一律按"未知"等一等。 */
+  function pgcGateClosedDefinitively() {
+    return cfgEnabled === false || pgcActive === false;
+  }
+
+  /**
+   * 把门控等待代理挂进 `config.requestConfig`（`installCreatePlayerProbe` 的 PGC 分支调用）。
+   *
+   * ## 硬前提（每一条都是 S0/上一轮探针实测，违反任一条就静默失效）
+   *
+   * 1. **保留 `requestConfig` 原对象**（里面还有 `reqHttpPlayUrlInfoScope`），只替换
+   *    `reqHttpPlayUrlInfo` 这一个字段。整体替换 → `cbHits:0`，播放器转去
+   *    `/pgc/player/web/v2/playurl`（`enabled:false`），**无任何报错**。
+   * 2. **必须摘掉 `config.prefetch.playUrl`**（保留则播放器直接用 prefetch 流，
+   *    回调一次都不被调）。摘下来先存，兜底时还原。
+   * 3. `requestConfig` 不是对象 → **不接管、不新建**（PGC 原生有它；没有说明页面
+   *    形态变了，新建出来的空对象撑不起回调）。
+   *
+   * @param {object} config 页面传给 `createPlayer` 的配置
+   * @returns {boolean} 是否挂上了代理
+   */
+  function pgcAttach(config) {
+    if (!config || typeof config !== 'object') return false;
+
+    /**
+     * **确定关着就不碰任何东西** —— fail-closed 的关键一半。
+     * `pgcReadProxyOff()`（ADR 0028 的 `pluma:proxy-off` 标记）与 `cfgEnabled === false`
+     * 都是"用户明确不想用"，那时删 prefetch / 换回调等于无意义地改变页面行为。
+     * `null`（还没回包）不算关 —— 那是常态，交给 `pgcGateProxy` 去等。
+     */
+    if (pgcReadProxyOff() === true || cfgEnabled === false) return false;
+
+    if (!config.requestConfig || typeof config.requestConfig !== 'object') return false;
+
+    if (
+      typeof config.requestConfig.reqHttpPlayUrlInfo === 'function' &&
+      config.requestConfig.reqHttpPlayUrlInfo !== pgcGateProxy
+    ) {
+      pgcOrigReq = config.requestConfig.reqHttpPlayUrlInfo;
+    }
+    config.requestConfig.reqHttpPlayUrlInfo = pgcGateProxy;
+
+    if (config.prefetch && typeof config.prefetch === 'object') {
+      pgcStashedPrefetch = config.prefetch.playUrl;
+      try {
+        delete config.prefetch.playUrl;
+      } catch (e) {}
+      pgcTrace.prefetchCleared = true;
+    }
+
+    pgcTrace.attached = true;
+    return true;
+  }
+
+  /**
+   * 门控等待代理：挂进 `requestConfig.reqHttpPlayUrlInfo` 的那个函数。
+   *
+   * 三态（与活动页 `festivalGateProxy` 同构，判据不同）：
+   *   1. 门控开 → `pgcFetch`；
+   *   2. **确定**关着（用户关开关 / `page/activate` 明确未激活）→ `pgcFallback`；
+   *   3. **未知**（回包还没到）→ 最多等 `PGC_GATE_WAIT_MS`，开 → `pgcFetch`，
+   *      超时 / 等到变关 → `pgcFallback`。
+   *
+   * ⚠️ **等待期间一律不发任何请求**：门控未知时我们自己的 fetch 会带主账号 Cookie
+   * 打到 DNR 白名单路径上 —— 那正是这套门控要避免的事。超时兜底走的是页面原回调，
+   * 与"没接管"的行为完全一致。
+   */
+  function pgcGateProxy(params, config) {
+    pgcTrace.cbHits += 1;
+    if (pgcTrace.tFirstCb < 0) pgcTrace.tFirstCb = pgcNow();
+
+    if (pgcGateOpen()) return pgcFetch(params, config);
+
+    if (pgcGateClosedDefinitively()) {
+      pgcTrace.lastStage = 'callback-skip-gate';
+      return pgcFallback(params, config);
+    }
+
+    var t0 = pgcNow();
+    return waitGate(pgcGateWaiters, PGC_GATE_WAIT_MS).then(function (open) {
+      pgcTrace.gateWaitedMs = Math.max(0, pgcNow() - t0);
+      if (!open) pgcTrace.gateTimeouts += 1;
+      // 超时 / 等到了但门控又关上（热关闭）：都走兜底，不给无凭据的请求开门
+      if (open && pgcGateOpen()) return pgcFetch(params, config);
+      pgcTrace.lastStage = 'callback-skip-gate';
+      return pgcFallback(params, config);
+    });
+  }
+
+  /**
+   * 兜底出口：把首波**原样交还给页面**。顺序不能反：
+   *
+   * 1. **先还原 `prefetch.playUrl`**：摘掉它才能让回调被调用（S0 Q2），而兜底正是
+   *    "我们不接管"的时刻 —— 播放器可能懒读 prefetch，还原是一次免费的补救，
+   *    不还原就是把这个字段永远弄丢。
+   * 2. 有页面原回调 → **原样透传**（返回值是 Promise 也原样交回，绝不包一层）。
+   * 3. 没有原回调 → 返回**成功但无流**的壳。⚠️ **绝不 reject**：拒绝 promise 会让
+   *    播放器黑屏；`code:0 + 空 video_info` 会让它走自己的 `/pgc/player/web/v2/playurl`
+   *    兜底路径（虽然那条 `enabled:false`，但这是"没有原回调"这种异常形态下
+   *    唯一不会黑屏的选择 —— PGC 原生页 requestConfig 里必有回调，走到这里说明
+   *    页面形态已经变了）。
+   */
+  function pgcFallback(params, config) {
+    if (
+      pgcStashedPrefetch !== undefined &&
+      config &&
+      typeof config === 'object' &&
+      config.prefetch &&
+      typeof config.prefetch === 'object'
+    ) {
+      try {
+        config.prefetch.playUrl = pgcStashedPrefetch;
+      } catch (e) {}
+    }
+
+    if (typeof pgcOrigReq === 'function') {
+      try {
+        return pgcOrigReq(params, config);
+      } catch (e) {
+        pgcTrace.errors += 1;
+        pgcTrace.lastSkip = 'orig callback threw: ' + String(e && e.message ? e.message : e);
+      }
+    } else {
+      pgcTrace.lastSkip = 'no orig callback';
+    }
+
+    return Promise.resolve({
+      data: { code: 0, result: { video_info: {} } },
+      headers: {},
+      status: 200,
+    });
+  }
+
+  /**
+   * 真正的取流 + 合并（S3）：返回 `{data:{code:0, result: SSR 骨架 + 合并后的 video_info}}`。
+   *
+   * ## 与活动页 `festivalFetch` 的三点不同
+   *
+   * 1. **cid 只能来自 SSR**：探针实测回调 `params` 里 `avid`/`bvid`/`cid` 全为 `null`、
+   *    也没有 `ep_id`（REPORT-sync-callback.md §3.3），只能用 `pgcCidOf(__playinfo__)`。
+   * 2. **响应形状是 `{code, result}`**，不是 `/x/player` 的 `{code, data}`。
+   * 3. **进度不用还原**：PGC playurl 的 `result` 里没有 `last_play_time`，进度在 SSR
+   *    `watch_progress` —— 所以 `outResult` 整体保留骨架，一个进度字段都不碰。
+   */
+  function pgcFetch(params, config) {
+    var cid = pgcCidOf(window.__playinfo__);
+    if (!cid) {
+      pgcTrace.lastSkip = 'no cid';
+      pgcTrace.lastStage = 'callback-skip-cid';
+      return pgcFallback(params, config);
+    }
+
+    /**
+     * 参数与 `src/content/isolated/pgc-reload-plan.ts` 的 `buildPlayurlUrl` **逐字对齐**
+     * （只要 cid 就能调通，不需要 `ep_id` / WBI 签名）。main-world 是裸 JS 不能 import，
+     * 这里允许写死这一条 URL（与 `festivalPlayUrl` 同等对待）；⚠️ 改那边要改这边。
+     * 必须是 `nativeFetch`：走被 hook 的 `fetch` 会又进响应改写链；DNR 换 Cookie 在网络层生效。
+     */
+    var url =
+      'https://api.bilibili.com/pgc/player/web/playurl?cid=' +
+      encodeURIComponent(cid) +
+      '&avid=0&qn=80&fnval=4048&fnver=0&fourk=1';
+    pgcTrace.lastStage = 'callback-fetch';
+
+    return nativeFetch(url, { credentials: 'include' })
+      .then(function (r) {
+        return r.json().then(function (j) {
+          pgcTrace.lastRespCode = j && typeof j.code === 'number' ? j.code : null;
+          if (!r.ok || !j || j.code !== 0 || !j.result || typeof j.result !== 'object') {
+            pgcTrace.lastSkip = 'bad pgc playurl payload';
+            pgcTrace.lastStage = 'callback-skip-bad-payload';
+            return pgcFallback(params, config);
+          }
+
+          var ssr = window.__playinfo__;
+          var inner =
+            ssr && ssr.result ? ssr : ssr && ssr.data && ssr.data.result ? ssr.data : null;
+          var ssrResult = inner && inner.result ? inner.result : {};
+          var merged = pgcMergeVideoInfo(ssrResult.video_info, j.result);
+          if (!merged.videoInfo) {
+            // 无流时不注入空壳给播放器，交还原生回调 —— 宁可播试看，不要黑屏
+            pgcTrace.lastSkip = 'no usable stream in api result';
+            pgcTrace.lastStage = 'callback-skip-no-stream';
+            pgcPost(
+              'error',
+              'PGC 回调取到的流没有可用字段（' + merged.moved + ' 个元信息），交还原生回调',
+            );
+            return pgcFallback(params, config);
+          }
+
+          /**
+           * 组装返回体（顺序敏感）：骨架原样保留 `arc` / `play_check` /
+           * `watch_progress` / `user_status` —— **进度在 `watch_progress`，不许碰**；
+           * 只把 `video_info` 换成合并后的。
+           */
+          var outResult = Object.assign({}, ssrResult);
+          outResult.video_info = merged.videoInfo;
+          // 试看标记（ADR 0021）：不调它，合并成功播放器也会停在 360s（S0 现场实测）
+          pgcPatchPreviewFlags(outResult);
+
+          /**
+           * 候选过滤（ADR 0038/0039）—— **第 4 个调用点**，授权见 ADR 0041。
+           * 标签用 `'playurl'`，与 XHR 观察路径一致；条件与 `pgcPatchPlayinfo`
+           * 同一写法（`fallbackKept` 也要上报，那条是"删光后保留 fallback"的观测）。
+           */
+          if (pcdnFilterReady()) {
+            var stats = filterDashOf(outResult.video_info);
+            if (stats.changed || stats.fallbackKept > 0) {
+              reportPcdnFilter(stats, 'playurl');
+            }
+          }
+
+          pgcTrace.takeoverOk += 1;
+          pgcTrace.lastStage = 'callback-takeover';
+          return { data: { code: 0, result: outResult }, headers: {}, status: r.status };
+        });
+      })
+      .catch(function (err) {
+        pgcTrace.errors += 1;
+        pgcTrace.lastSkip = 'pgc fetch: ' + String(err && err.message ? err.message : err);
+        pgcTrace.lastStage = 'callback-fetch-failed';
+        return pgcFallback(params, config);
+      });
+  }
+
+  /** 门控到齐时放行等待中的 PGC 首波代理（cfg 处理器在门控赋值之后调用）。 */
+  function pgcResolveGateWaiters() {
+    if (!pgcGateOpen()) return;
+    resolveGateWaiters(pgcGateWaiters);
   }
 
   /**
@@ -5562,6 +5893,12 @@
     // 埋点：每收到一条 cfg 都记，用来区分"没收到 false"与"收到了但没触发"
     pgcTrace.cfgCount += 1;
     pgcTrace.lastCfgEnabled = cfgEnabled;
+
+    /**
+     * PGC 回调接管（ADR 0041）：门控这次可能到齐了，放行等待中的首波代理。
+     * 门控是 `cfgEnabled && pgcActive`，两个赋值都在上面完成了。
+     */
+    pgcResolveGateWaiters();
 
     /**
      * 活动页（方案 B）：门控这次到齐了就**放行等待中的首波代理**，并保留兜底补挂。

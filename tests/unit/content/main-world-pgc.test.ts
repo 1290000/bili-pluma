@@ -23,7 +23,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { JSDOM } from 'jsdom';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi as fakeClock } from 'vitest';
 
 const SOURCE = readFileSync(resolve(process.cwd(), 'src/content/main-world.js'), 'utf8');
 
@@ -76,6 +76,10 @@ function sendCfg(
     pgcActive?: boolean;
     pgcVideoInfo?: unknown;
     rewriteGate?: boolean;
+    /** ADR 0038/0039 的候选过滤配置（S2/S3 回调路径的 PCDN 用例用） */
+    filterCandidates?: boolean;
+    pcdnRules?: { labels: string[]; domains: string[] };
+    pcdnRewriteRules?: { mirrorHost: string; proxyHost: string; proxyPathPrefix: string };
   } = {},
 ): void {
   const enabled = opts.enabled ?? true;
@@ -88,6 +92,9 @@ function sendCfg(
       rewriteGate: opts.rewriteGate ?? enabled,
       ...(opts.pgcActive !== undefined ? { pgcActive: opts.pgcActive } : {}),
       ...(opts.pgcVideoInfo !== undefined ? { pgcVideoInfo: opts.pgcVideoInfo } : {}),
+      ...(opts.filterCandidates !== undefined ? { filterCandidates: opts.filterCandidates } : {}),
+      ...(opts.pcdnRules ? { pcdnRules: opts.pcdnRules } : {}),
+      ...(opts.pcdnRewriteRules ? { pcdnRewriteRules: opts.pcdnRewriteRules } : {}),
     },
     '*',
   );
@@ -1810,5 +1817,338 @@ describe('S1：pgcMergeVideoInfo 纯函数（骨架合并单一实现）', () =>
     expect(base).toEqual({ quality: 80 });
     expect(base).not.toHaveProperty('dash');
     expect(out.videoInfo).not.toBe(base);
+  });
+});
+
+/**
+ * S2 + S3（ADR 0041）：`createPlayer` 返回前同步注入门控等待代理 + 取流合并。
+ *
+ * 三份实测事实钉在这里（`poc/probe/pgc/REPORT-sync-callback.md` / `REPORT-dash-merge.md`）：
+ * 保留 `requestConfig` 原对象、必须摘 `prefetch.playUrl`、返回体必须合并进 SSR 骨架。
+ * jsdom 里没有真播放器与 DNR，这里守的是**结构性事实**；真机验收看 `__PLUMA_PGC__`。
+ */
+describe('S2+S3：PGC 回调接管（ADR 0041）', () => {
+  const CID = 281989571;
+
+  interface PgcSandbox extends Sandbox {
+    fetchCalls: Array<{ url: string; init?: { credentials?: string } }>;
+  }
+
+  /**
+   * 与既有 `bootAt` 同构，但**必须在 eval 前替换 `window.fetch`**
+   * （主世界顶部就把 `window.fetch` 存进 `nativeFetch`），并支持：
+   * - `disableTakeover`：把源码里的 `PGC_CALLBACK_TAKEOVER` 改成 `false` 再 eval。
+   */
+  function bootPgc(
+    opts: {
+      fetchImpl?: (url: string) => any;
+      disableTakeover?: boolean;
+    } = {},
+  ): PgcSandbox {
+    const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
+      runScripts: 'outside-only',
+      url: PGC_URL,
+      pretendToBeVisual: true,
+    });
+    const win = dom.window as unknown as Record<string, any>;
+    const sent: Array<Record<string, unknown>> = [];
+    const fetchCalls: Array<{ url: string; init?: { credentials?: string } | undefined }> = [];
+
+    win.fetch = (url: string, _init?: { credentials?: string }) => {
+      fetchCalls.push({ url, init: _init });
+      const body = opts.fetchImpl ? opts.fetchImpl(url) : { code: 0, result: {} };
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(body),
+        text: () => Promise.resolve(JSON.stringify(body)),
+      });
+    };
+
+    win.addEventListener('message', (ev: MessageEvent) => {
+      const d = ev.data as Record<string, unknown> | null;
+      if (d && d.__ns === '__PLUMA__') sent.push(d);
+    });
+
+    const src = opts.disableTakeover
+      ? SOURCE.replace('var PGC_CALLBACK_TAKEOVER = true;', 'var PGC_CALLBACK_TAKEOVER = false;')
+      : SOURCE;
+    win.eval(src);
+    return {
+      win,
+      sent,
+      fetchCalls,
+      page: win as unknown as Record<string, unknown>,
+    } as PgcSandbox;
+  }
+
+  /** 模拟页面给 `window.nano` 赋值（setter 会在 eval 时装好）。 */
+  function installPgcNano(sb: PgcSandbox, player: unknown): { createPlayer: (c: any) => unknown } {
+    const nano = { createPlayer: (_c: any) => player };
+    sb.page.nano = nano;
+    return nano as { createPlayer: (c: any) => unknown };
+  }
+
+  /** PGC 页真实的 config 形状（S0 探针 §3.1：有 prefetch.playUrl + requestConfig 两键）。 */
+  function pgcConfig(origImpl?: () => Promise<any>): any {
+    return {
+      prefetch: { playUrl: 'native-prefetch' },
+      requestConfig: {
+        reqHttpPlayUrlInfoScope: { kind: 'pgc' },
+        reqHttpPlayUrlInfo: origImpl ?? (() => Promise.resolve('orig')),
+      },
+    };
+  }
+
+  function trace(sb: PgcSandbox): Record<string, any> {
+    return sb.page.__PLUMA_PGC__ as Record<string, any>;
+  }
+
+  it('开关关（PGC_CALLBACK_TAKEOVER=false）→ 一个字都不碰，cbHits=0', async () => {
+    const sb = bootPgc({ disableTakeover: true });
+    await ready(sb);
+    sendCfg(sb, { pgcActive: true }); // 门控开着也不许接管
+    await flush();
+
+    const config = pgcConfig();
+    const orig = config.requestConfig.reqHttpPlayUrlInfo;
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+
+    const t = trace(sb);
+    expect(t.attached).toBe(false);
+    expect(t.prefetchCleared).toBe(false);
+    expect(t.cbHits).toBe(0);
+    expect(config.prefetch.playUrl).toBe('native-prefetch'); // prefetch 原样
+    expect(config.requestConfig.reqHttpPlayUrlInfo).toBe(orig); // 原回调还在
+    expect(config.requestConfig.reqHttpPlayUrlInfoScope).toEqual({ kind: 'pgc' });
+
+    // 播放器调"原生回调"：走它自己的路，与我们无关
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    await expect(cb({ season_id: 1 }, config)).resolves.toBe('orig');
+    expect(sb.fetchCalls).toHaveLength(0);
+  });
+
+  it('开关开 + 门控开 → 换回调 / 删 prefetch / 取流合并 SSR 骨架 / 试看标记生效', async () => {
+    const sb = bootPgc({
+      fetchImpl: () => ({
+        code: 0,
+        result: {
+          quality: 120,
+          timelength: 3076000,
+          dash: {
+            duration: 3076,
+            video: [{ id: 120, height: 1080, base_url: 'https://upos.example/v.m4s' }],
+          },
+          is_preview: true,
+        },
+      }),
+    });
+    await ready(sb);
+    sendCfg(sb, { pgcActive: true }); // 门控先到（cfgEnabled && pgcActive）
+    await flush();
+    sb.page.__playinfo__ = ssrPreview(); // SSR 骨架（arc / watch_progress / preview 标记）
+
+    const config = pgcConfig();
+    const orig = config.requestConfig.reqHttpPlayUrlInfo;
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+
+    const t = trace(sb);
+    expect(t.attached).toBe(true);
+    expect(t.prefetchCleared).toBe(true);
+    expect(config.prefetch.playUrl).toBeUndefined(); // S0 Q2：必须摘
+    expect(config.requestConfig.reqHttpPlayUrlInfo).not.toBe(orig);
+    // 硬前提 1：原 requestConfig 对象（含 scope）必须原样保留
+    expect(config.requestConfig.reqHttpPlayUrlInfoScope).toEqual({ kind: 'pgc' });
+
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ season_id: 1, qn: 0 }, config);
+
+    // URL 与 pgc-reload-plan.ts 的 buildPlayurlUrl 逐字对齐；cid 来自 SSR
+    expect(sb.fetchCalls).toHaveLength(1);
+    expect(sb.fetchCalls[0]!.url).toBe(
+      `https://api.bilibili.com/pgc/player/web/playurl?cid=${CID}&avid=0&qn=80&fnval=4048&fnver=0&fourk=1`,
+    );
+    expect(sb.fetchCalls[0]!.init).toEqual({ credentials: 'include' });
+
+    // 返回体：SSR 骨架 + 合并后的 video_info
+    const result = out.data.result;
+    expect(out.data.code).toBe(0);
+    expect(result.arc).toEqual(ssrPreview().result.arc); // 骨架原样
+    expect(result.watch_progress).toEqual({ current_progress: 42000 }); // 进度不许碰
+    expect(result.user_status).toEqual(ssrPreview().result.user_status);
+    expect(result.video_info.dash.video[0].height).toBe(1080); // 接口的 dash 进来了
+    expect(result.video_info.quality).toBe(120);
+    expect(result.video_info.durls).toBeUndefined(); // 有 dash 时 durl/durls 被删
+    // 试看标记（ADR 0021）：合并成功后播放器才会停 360s 的历史坑
+    expect(result.play_video_type).toBe('whole');
+    expect(result.play_check.play_detail).toBe('PLAY_WHOLE');
+    expect(result.video_info.is_preview).toBe(false);
+
+    expect(t.takeoverOk).toBe(1);
+    expect(t.lastRespCode).toBe(0);
+    expect(t.tFirstCb).toBeGreaterThanOrEqual(0);
+    expect(t.tGate).toBeGreaterThanOrEqual(0);
+  });
+
+  it('确定关着（热关闭）→ 不发 fetch、走原回调、prefetch 还原', async () => {
+    const sb = bootPgc();
+    await ready(sb);
+    sendCfg(sb); // 先开着（pgcActive 未知 = 未知，attach 允许）
+    await flush();
+    const config = pgcConfig();
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+    expect(trace(sb).attached).toBe(true);
+
+    sendCfg(sb, { enabled: false }); // 用户热关闭 → 确定关
+    await flush();
+
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ season_id: 1 }, config);
+
+    expect(sb.fetchCalls).toHaveLength(0); // 等待/关闭期间零请求（fail-closed）
+    expect(out).toBe('orig'); // 原样透传页面原回调
+    expect(config.prefetch.playUrl).toBe('native-prefetch'); // 兜底第一步：还原
+    expect(trace(sb).lastStage).toBe('callback-skip-gate');
+  });
+
+  it('门控未知 → 恰好一个定时器等 300ms，超时后走原回调，等待期间零请求', async () => {
+    const sb = bootPgc(); // 一条 cfg 都不发：cfgEnabled / pgcActive 都是 null
+    await ready(sb);
+    const config = pgcConfig();
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+
+    fakeClock.useFakeTimers();
+    try {
+      const pending = cb({ season_id: 1 }, config);
+      expect(sb.fetchCalls).toHaveLength(0); // 等待期间不发请求
+      await fakeClock.advanceTimersByTimeAsync(300);
+      const out = await pending;
+
+      expect(sb.fetchCalls).toHaveLength(0);
+      expect(out).toBe('orig');
+      expect(trace(sb).gateTimeouts).toBe(1);
+      expect(trace(sb).takeoverOk).toBe(0);
+    } finally {
+      fakeClock.useRealTimers();
+    }
+  });
+
+  it('pgcCidOf 取不到 cid → 不发请求、走原回调、lastSkip 记原因', async () => {
+    const sb = bootPgc();
+    await ready(sb);
+    sendCfg(sb, { pgcActive: true }); // 门控开着
+    await flush();
+    const config = pgcConfig();
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+
+    // 不设 __playinfo__ → SSR 里没有 cid（S0：params 里 cid 全为 null，只能靠 SSR）
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ season_id: 1 }, config);
+
+    expect(sb.fetchCalls).toHaveLength(0);
+    expect(out).toBe('orig');
+    expect(trace(sb).lastSkip).toBe('no cid');
+    expect(trace(sb).lastStage).toBe('callback-skip-cid');
+  });
+
+  it('接口无流 → 不给播放器空壳，交还原回调', async () => {
+    const sb = bootPgc({
+      fetchImpl: () => ({ code: 0, result: { quality: 120 } }), // 只有元信息
+    });
+    await ready(sb);
+    sendCfg(sb, { pgcActive: true });
+    await flush();
+    // 骨架里也不能有流（base 的 durl 也会被算进 hasStream，那是 S1 的既有语义）；
+    // 这里给一个干净的空骨架，才能命中「源里没有可用流」分支。
+    sb.page.__playinfo__ = {
+      code: 0,
+      result: { arc: { cid: CID }, watch_progress: { current_progress: 42000 }, video_info: {} },
+    };
+    const config = pgcConfig();
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ season_id: 1 }, config);
+
+    expect(sb.fetchCalls).toHaveLength(1); // 请求发了
+    expect(out).toBe('orig'); // 但结果交还原回调，不注入空壳
+    expect(trace(sb).takeoverOk).toBe(0);
+    expect(trace(sb).lastSkip).toBe('no usable stream in api result');
+  });
+
+  it('没有原回调 → 返回成功但无流的壳，绝不 reject', async () => {
+    const sb = bootPgc();
+    await ready(sb);
+    sendCfg(sb); // 先开（attach 允许）
+    await flush();
+    const config: any = {
+      prefetch: { playUrl: 'p' },
+      requestConfig: { reqHttpPlayUrlInfoScope: { kind: 'pgc' } }, // 没有原回调
+    };
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+    expect(trace(sb).attached).toBe(true);
+
+    sendCfg(sb, { enabled: false }); // 热关闭
+    await flush();
+
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    // resolve 而不是 reject：reject 会让播放器黑屏
+    await expect(cb({ season_id: 1 }, config)).resolves.toEqual({
+      data: { code: 0, result: { video_info: {} } },
+      headers: {},
+      status: 200,
+    });
+    expect(config.prefetch.playUrl).toBe('p'); // prefetch 也要还原
+    expect(trace(sb).lastSkip).toBe('no orig callback');
+  });
+
+  it('PCDN：第 4 个调用点接上，标签 playurl', async () => {
+    const sb = bootPgc({
+      fetchImpl: () => ({
+        code: 0,
+        result: {
+          quality: 120,
+          timelength: 3076000,
+          dash: {
+            duration: 3076,
+            video: [
+              {
+                id: 120,
+                height: 1080,
+                base_url: 'https://xy116.mcdn.example.com/edge/v.m4s',
+                backup_url: [],
+              },
+            ],
+          },
+        },
+      }),
+    });
+    await ready(sb);
+    sendCfg(sb, {
+      pgcActive: true,
+      filterCandidates: true,
+      pcdnRules: { labels: ['mcdn'], domains: [] },
+      pcdnRewriteRules: {
+        mirrorHost: 'mirror.example',
+        proxyHost: 'proxy.example',
+        proxyPathPrefix: '/proxy/',
+      },
+    });
+    await flush();
+    sb.page.__playinfo__ = ssrPreview();
+    const config = pgcConfig();
+    installPgcNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ season_id: 1 }, config);
+    await flush();
+
+    // 换 authority（ADR 0039）：候选条数不变
+    expect(out.data.result.video_info.dash.video[0].base_url).toContain('mirror.example');
+    expect(out.data.result.video_info.dash.video).toHaveLength(1);
+    // 标签与 XHR 观察路径一致（'playurl'），不是 'playinfo'
+    expect(sb.sent.some((m) => m.type === 'pcdn-filter-stats' && m.where === 'playurl')).toBe(true);
+    expect(trace(sb).takeoverOk).toBe(1);
   });
 });
