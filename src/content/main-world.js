@@ -646,6 +646,8 @@
    * - `firstWave` / `firstWaveSkipped`：首波是谁取的流；没接管（确定关闭 / 等待超时）时记数
    * - `tCreate` / `tFirstCb` / `tGate` / `gateWaitedMs` / `gateTimeouts`：门控等待窗口的时间线，
    *   真机验收首波接管是否在门控就绪后立刻发生（见 `REPORT-gate-window.md`）
+   * - `progressRestored` / `progressMisses` / `progressWaitedMs`：活动页 ADR 0017 进度还原
+   *   是否生效、等主账号进度等了多久（首屏正常应是 `restored:1 / misses:0`）
    * - `lastStage` / `lastSkip`：最后停在哪一步；`lastSkip` 记异常原文，便于真机抄回来
    */
   var festivalTrace = {
@@ -689,6 +691,20 @@
     tGate: 0,
     gateWaitedMs: 0,
     gateTimeouts: 0,
+    /**
+     * 活动页的**观看进度还原**（ADR 0017）—— 活动页没有 XHR 观察钩子，
+     * `patchPlayurlXhrProgress` 这条路在这里不存在，所以回调里单独补偿。
+     *
+     * 取流走 DNR 换 Cookie，playurl 返回的是**播放账号**的进度（`last_play_time=0`），
+     * 播放器据此从头播。主账号进度来自 `/x/player/wbi/v2`（不在旁路白名单 → 主账号身份）。
+     *
+     * - `progressRestored`：真正把主账号进度写回响应体的次数（首屏应为 1）。
+     * - `progressMisses`：拿不到主账号进度 / 超时 / 本 cid 已用过而跳过（只用一次）。
+     * - `progressWaitedMs`：本次等进度等了多久（与 playurl 并行，通常几十毫秒内）。
+     */
+    progressRestored: 0,
+    progressMisses: 0,
+    progressWaitedMs: 0,
     /**
      * 实际发出的 playurl 的 query 串（**脱敏视图**，2026-11-19 加）。
      *
@@ -748,6 +764,12 @@
    * 立即交还原生，不让用户白等。
    */
   var FESTIVAL_GATE_WAIT_MS = 300;
+  /**
+   * 等主账号进度的上限（毫秒）。`/x/player/wbi/v2` 与 playurl **并行**发出，
+   * 取流（4K dash）通常比这份小 JSON 慢得多，所以正常几乎不额外耗时；
+   * 超时只是放弃"这次续播"，绝不阻断取流（`patchPlayurlXhrProgress` 同样语义）。
+   */
+  var FESTIVAL_PROGRESS_WAIT_MS = 500;
   /** 正在等门控的代理回调：每个元素是 `resolve(true)` 的闭包，门控变真时统一放行。 */
   var festivalGateWaiters = [];
 
@@ -1076,6 +1098,22 @@
     });
   }
 
+  /** 从播放器 params 取 `aid|cid`，口径与 `playurlIds()` 一致（都字符串化）。 */
+  function festivalParamsIds(params) {
+    try {
+      if (!params || typeof params !== 'object') return null;
+      var rawAid = params.avid != null ? params.avid : params.aid;
+      var rawCid = params.cid;
+      if (rawAid == null || rawCid == null) return null;
+      var aid = String(rawAid);
+      var cid = String(rawCid);
+      if (!aid || !cid) return null;
+      return { aid: aid, cid: cid };
+    } catch (e) {
+      return null;
+    }
+  }
+
   /**
    * 真正的取流实现（原 `festivalRequestInfo` 的函数体抽出）。
    *
@@ -1108,13 +1146,36 @@
       return festivalFallback(params, config);
     }
 
+    /**
+     * 主账号进度预取（ADR 0017）—— 活动页**没有** XHR 观察钩子，
+     * `patchPlayurlXhrProgress()` 那条还原在这里不存在，必须由回调自己补上，
+     * 否则 playurl 返回的是播放账号的 `last_play_time=0`，播放器从头播（真机确认）。
+     *
+     * `/x/player/wbi/v2` 不在 DNR 白名单 → 天然主账号身份，正是我们要的数据源。
+     * **必须在 playurl fetch 之前发起**，让两个请求并行；下面用有界等待取结果。
+     */
+    var progressIds = festivalParamsIds(params);
+    if (progressIds) prefetchProgress(progressIds.aid, progressIds.cid);
+    var progressP = progressIds
+      ? festivalAwaitProgress(progressIds.aid, progressIds.cid, FESTIVAL_PROGRESS_WAIT_MS)
+      : Promise.resolve(null);
+
     // 必须是 `nativeFetch`：本文件后面 hook 了 window.fetch，
     // 走它自己的 hook 会把这次取流又喂进响应改写链，出问题分不清是哪一层。
     // DNR 换 Cookie 在网络层生效，用 nativeFetch 不影响身份代理。
     return nativeFetch(url, { credentials: 'include' })
       .then(function (r) {
         festivalTrace.lastStatus = r.status;
-        return r.json().then(function (json) {
+        // 用 text 而不是 json：进度还原的授权实现 `patchPlayurlBody()` 是**基于文本**的，
+        // 它一次 parse 同时管进度（ADR 0017）与候选改写（ADR 0038）。
+        return r.text().then(function (text) {
+          var json;
+          try {
+            json = JSON.parse(text);
+          } catch (e) {
+            // 与原 `r.json()` 失败走同一个出口（catch → 三级降级），不改错误语义
+            throw new Error('bad playurl payload');
+          }
           festivalNoteResp(json);
           // 首波来源：只有真的走到 fetch 并拿到响应才算我们的流。
           // ⚠️ 别拿 `rewritten` 当"接管成功"的判据：它只统计 PCDN 换 authority
@@ -1136,11 +1197,11 @@
            * 从不发出 → `pageState.playback` 恒 null → `describeUnlock()` 走
            * `!playback` 分支，标题恒为「等待取流…」（2026-11-18 真机）。
            *
-           * ⚠️ **必须是 `filterDashOf` 之前的原文**：上报的是播放账号真实拿到的
-           * 版本，不是我们换过 authority 的版本；`filterDashOf` 会就地改
-           * `json.data`，顺序反了画质会算偏。所以这里不仅先发，还**显式做一份
-           * 快照**——不依赖 `postMessage` 的结构化克隆时机（真机是调用时克隆，
-           * jsdom 是派发时才克隆，不赌这个差异）。一个 cid 只做一次，开销可忽略。
+           * ⚠️ **必须是进度还原 / `filterDashOf` 之前的原文**：上报的是播放账号
+           * 真实拿到的版本，不是我们换过 authority 或补过进度的版本；两者都会就地改
+           * `json.data`，顺序反了画质会算偏。所以这里不仅先发，还**显式做一份快照**
+           * ——不依赖 `postMessage` 的结构化克隆时机（真机是调用时克隆，jsdom 是
+           * 派发时才克隆，不赌这个差异）。一个 cid 只做一次，开销可忽略。
            */
           if (cid !== festivalPostedRawCid) {
             festivalPostedRawCid = cid;
@@ -1152,26 +1213,69 @@
           }
 
           /**
-           * PCDN 换 authority（ADR 0039）—— 与 `/video` 的 playurl 同一套函数、
-           * 同一道闸门。活动页返回体同样是 `{code, data:{dash}}`，
-           * 所以 holder 就是 `json.data`（与 `patchPlayurlBody` 里的 `d` 同层）。
-           * 这里不碰 quality / timelength / duration：画质由服务端决定，
-           * 而探针实测 activity 页的 duration 由 SSR 分 P 锁定，改了也不会变。
+           * 等到主账号进度（与上面的 playurl 并行，最多 `FESTIVAL_PROGRESS_WAIT_MS`），
+           * 再决定要不要把它写回响应。拿不到就原样返回，**绝不因进度让取流失败**。
            */
-          if (pcdnFilterReady()) {
-            var stats = filterDashOf(json.data);
-            if (stats.changed) {
-              festivalTrace.rewritten += stats.rewritten;
-              reportPcdnFilter(stats, 'festival');
+          return progressP.then(function (prog) {
+            var entry = progressIds
+              ? progressCache[progressIds.aid + '|' + progressIds.cid]
+              : null;
+            // 与 `patchPlayurlXhrProgress()` 同一纪律：`!entry.used` —— 进度只用一次
+            var usable = !!(prog && entry && entry.value && entry.value.cid && !entry.used);
+            if (usable) {
+              // 机会用掉即作废（放在改写之前）：切画质 / 重开流再拿到的还是页面打开时的
+              // 旧进度，写回去就是把播放位置往回拽 —— 比"不还原"更难接受。
+              markProgressUsed(entry);
+              var withProg = patchPlayurlBody(text, prog, false);
+              if (withProg !== null) {
+                try {
+                  var parsed = JSON.parse(withProg);
+                  if (parsed && typeof parsed === 'object') json = parsed;
+                } catch (e) {
+                  festivalTrace.lastSkip =
+                    'festival progress parse: ' + String(e && e.message ? e.message : e);
+                }
+              }
+              // 成功判据：返回给播放器的数据里确实带着主账号进度
+              if (
+                json &&
+                json.data &&
+                json.data.last_play_time === prog.time &&
+                json.data.last_play_cid === prog.cid
+              ) {
+                festivalTrace.progressRestored += 1;
+              } else {
+                festivalTrace.progressMisses += 1;
+              }
+            } else {
+              festivalTrace.progressMisses += 1;
             }
-          }
 
-          /**
-           * ⚠️ `data` 这一层不能少（探针 Q4）：内核 `requestDefault` 返回的是
-           * `{data: <完整 json>, headers, status}`，只返回 json 本身播放器解析不出流。
-           * 探针用 "裁 dash.video 6→3 后 videoHeight 480→360" 证明它吃的就是这份数据。
-           */
-          return { data: json, headers: {}, status: r.status };
+            /**
+             * PCDN 换 authority（ADR 0039）—— 与 `/video` 的 playurl 同一套函数、
+             * 同一道闸门。活动页返回体同样是 `{code, data:{dash}}`，
+             * 所以 holder 就是 `json.data`（与 `patchPlayurlBody` 里的 `d` 同层）。
+             * 这里不碰 quality / timelength / duration：画质由服务端决定，
+             * 而探针实测 activity 页的 duration 由 SSR 分 P 锁定，改了也不会变。
+             *
+             * ⚠️ 不要改成 `patchPlayurlBody(text, prog, true)`：那会把 PCDN 统计和
+             * `'festival'` 标签弄丢（统计要在本函数里汇总上报）。
+             */
+            if (pcdnFilterReady()) {
+              var stats = filterDashOf(json.data);
+              if (stats.changed) {
+                festivalTrace.rewritten += stats.rewritten;
+                reportPcdnFilter(stats, 'festival');
+              }
+            }
+
+            /**
+             * ⚠️ `data` 这一层不能少（探针 Q4）：内核 `requestDefault` 返回的是
+             * `{data: <完整 json>, headers, status}`，只返回 json 本身播放器解析不出流。
+             * 探针用 "裁 dash.video 6→3 后 videoHeight 480→360" 证明它吃的就是这份数据。
+             */
+            return { data: json, headers: {}, status: r.status };
+          });
         });
       })
       .catch(function (err) {
@@ -4654,7 +4758,7 @@
   // 等 playurl 下完（4K 响应通常比这个小 JSON 慢）时，值一般已经在手上了。
   // 拿不到就**什么都不做** —— 退化成"这次不续播"，绝不阻断视频。
 
-  /** key = `aid|cid` → { done, value: { time, cid } | null, used } */
+  /** key = `aid|cid` → { done, value: { time, cid } | null, used, waiters } */
   var progressCache = {};
 
   function playurlIds(url) {
@@ -4669,10 +4773,27 @@
     }
   }
 
+  /**
+   * 进度预取落定（成功 / 失败）时唤醒等待者。
+   *
+   * 事件驱动，和 `festivalWaitGate` 保持同一套写法：**不新起 `setInterval`**。
+   * 活动页回调需要"等这份进度就绪再决定要不要改写响应"，轮询会让首屏白等。
+   */
+  function festivalNotifyProgress(entry) {
+    if (!entry || !entry.waiters || !entry.waiters.length) return;
+    var list = entry.waiters;
+    entry.waiters = [];
+    for (var i = 0; i < list.length; i++) {
+      try {
+        list[i]();
+      } catch (e) {}
+    }
+  }
+
   function prefetchProgress(aid, cid) {
     var key = aid + '|' + cid;
     if (progressCache[key]) return;
-    var entry = { done: false, value: null, used: false };
+    var entry = { done: false, value: null, used: false, waiters: [] };
     progressCache[key] = entry;
 
     try {
@@ -4694,13 +4815,59 @@
             entry.value = { time: d.last_play_time, cid: d.last_play_cid };
           }
           entry.done = true;
+          festivalNotifyProgress(entry);
         })
         .catch(function () {
           entry.done = true;
+          festivalNotifyProgress(entry);
         });
     } catch (e) {
       entry.done = true;
+      festivalNotifyProgress(entry);
     }
+  }
+
+  /**
+   * 有界等待某个 `aid|cid` 的进度就绪，返回 `entry.value` 或 `null`（超时/拿不到）。
+   *
+   * ⚠️ 绝不 reject：进度只是"锦上添花"，失败要退化成"这次不续播"，不能拖垮取流。
+   */
+  function festivalAwaitProgress(aid, cid, ms) {
+    var t0 = festivalNow();
+    var key = aid + '|' + cid;
+    var entry = progressCache[key];
+    if (!entry) {
+      festivalTrace.progressWaitedMs = 0;
+      return Promise.resolve(null);
+    }
+    if (entry.done) {
+      festivalTrace.progressWaitedMs = 0;
+      return Promise.resolve(entry.value);
+    }
+    return new Promise(function (resolve) {
+      var settled = false;
+      var timer = null;
+      var finish = function (value) {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) {
+          try {
+            clearTimeout(timer);
+          } catch (e) {}
+        }
+        festivalTrace.progressWaitedMs = Math.max(0, festivalNow() - t0);
+        resolve(value);
+      };
+      var waiter = function () {
+        finish(entry.value);
+      };
+      entry.waiters.push(waiter);
+      timer = setTimeout(function () {
+        var i = entry.waiters.indexOf(waiter);
+        if (i >= 0) entry.waiters.splice(i, 1);
+        finish(null);
+      }, ms);
+    });
   }
 
   /**

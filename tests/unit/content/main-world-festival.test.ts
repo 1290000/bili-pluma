@@ -53,6 +53,8 @@ function okResponse(json: unknown, status = 200) {
     ok: status >= 200 && status < 300,
     status,
     json: () => Promise.resolve(json),
+    // 活动页回调现在用 r.text() 读正文（进度还原基于文本），替身两个都要给
+    text: () => Promise.resolve(JSON.stringify(json)),
   });
 }
 
@@ -151,10 +153,16 @@ function traceOf(sb: Sandbox): Record<string, any> {
   return sb.page.__PLUMA_FESTIVAL__ as Record<string, any>;
 }
 
-/** 取唯一一次 fetch 的记录；顺带钉住"回调只发一次请求"这个结构事实。 */
+/**
+ * 取**取流请求**的唯一记录。
+ *
+ * 活动页回调现在会并行预取 `/x/player/wbi/v2`（主账号进度），所以 `fetchCalls`
+ * 里可能同时有 v2 与 playurl 两条；这里只看 playurl。
+ */
 function onlyFetch(sb: Sandbox): FetchCall {
-  expect(sb.fetchCalls).toHaveLength(1);
-  return sb.fetchCalls[0]!;
+  const playurl = sb.fetchCalls.filter((c) => c.url.includes('/x/player/wbi/playurl'));
+  expect(playurl).toHaveLength(1);
+  return playurl[0]!;
 }
 
 interface FakeNano {
@@ -920,5 +928,133 @@ describe('playurl query 序列化与 -400 埋点（34a8286 回归修复）', () 
     expect(sp.get('dm_img_inter')).toBe(JSON.stringify(richParams().dm_img_inter));
     expect(sp.get('w_rid')).toBe(W_RID);
     expect(fallbackUrl).not.toContain('[object Object]');
+  });
+});
+
+/**
+ * 活动页的观看进度还原（ADR 0017）。
+ *
+ * 活动页没有 XHR 观察钩子，`patchPlayurlXhrProgress()` 这条还原在这里不存在，
+ * 所以回调必须自己补：playurl 走 DNR 换 Cookie，返回的是**播放账号**的
+ * `last_play_time=0`；主账号进度要从 `/x/player/wbi/v2` 并行取回并写进响应。
+ */
+describe('活动页进度还原（ADR 0017）', () => {
+  const CID = 42141027046;
+
+  function playurlBody() {
+    return {
+      code: 0,
+      data: {
+        last_play_time: 0,
+        last_play_cid: 0,
+        dash: { video: [], audio: [] },
+      },
+    };
+  }
+
+  /** v2 返回主账号进度，playurl 返回播放账号的 body。 */
+  function progressAwareFetch(primary: unknown) {
+    return (url: string) => {
+      if (url.includes('/x/player/wbi/v2')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(primary),
+          text: () => Promise.resolve(JSON.stringify(primary)),
+        });
+      }
+      return okResponse(playurlBody());
+    };
+  }
+
+  async function bootHooked(sb: Sandbox) {
+    sendCfg(sb); // 门控先到，代理直接取流
+    await flush();
+    const config: any = { cid: CID, bvid: 'BV1ydeX65Edn' };
+    installNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    return { config, cb };
+  }
+
+  it('播放账号 0 / 主账号 15000 → 播放器拿到 15000，progressRestored=1', async () => {
+    const primary = { code: 0, data: { last_play_time: 15000, last_play_cid: CID } };
+    const sb = bootAt(FESTIVAL_URL, progressAwareFetch(primary));
+    await ready(sb);
+    const { config, cb } = await bootHooked(sb);
+
+    const out = await cb({ avid: 1, cid: CID, qn: 120 }, config);
+
+    expect(out.data.data.last_play_time).toBe(15000);
+    expect(out.data.data.last_play_cid).toBe(CID);
+    const t = traceOf(sb);
+    expect(t.progressRestored).toBe(1);
+    expect(t.progressMisses).toBe(0);
+    expect(t.progressWaitedMs).toBeGreaterThanOrEqual(0);
+
+    await flush(); // playurl-raw 是 postMessage，jsdom 里异步派发
+    // playurl-raw 仍然是**进度还原前**的播放账号原文
+    const raw = sb.sent.filter((m) => m.type === 'playurl-raw') as Array<Record<string, any>>;
+    expect(raw).toHaveLength(1);
+    expect(raw[0]!.json.data.last_play_time).toBe(0);
+  });
+
+  it('同一 cid 第二次取流（切画质）→ 不再还原，不把旧进度拽回来', async () => {
+    const primary = { code: 0, data: { last_play_time: 15000, last_play_cid: CID } };
+    const sb = bootAt(FESTIVAL_URL, progressAwareFetch(primary));
+    await ready(sb);
+    const { config, cb } = await bootHooked(sb);
+
+    const first = await cb({ avid: 1, cid: CID, qn: 120 }, config);
+    expect(first.data.data.last_play_time).toBe(15000);
+
+    // 模拟切画质：服务端仍是播放账号的 0；这次**不许**再写回 15000
+    const second = await cb({ avid: 1, cid: CID, qn: 80 }, config);
+    expect(second.data.data.last_play_time).toBe(0);
+    expect(second.data.data.last_play_time).not.toBe(15000);
+
+    const t = traceOf(sb);
+    expect(t.progressRestored).toBe(1); // 只还原一次
+    expect(t.progressMisses).toBe(1); // 第二次因"已用掉"跳过
+  });
+
+  it('主账号进度取不到 → 原样返回，取流不失败，progressMisses=1', async () => {
+    const sb = bootAt(FESTIVAL_URL, (url) => {
+      if (url.includes('/x/player/wbi/v2')) return Promise.reject(new Error('offline'));
+      return okResponse(playurlBody());
+    });
+    await ready(sb);
+    const { config, cb } = await bootHooked(sb);
+
+    const out = await cb({ avid: 1, cid: CID, qn: 120 }, config);
+
+    expect(out.data.code).toBe(0); // 取流本身没有失败
+    expect(out.data.data.last_play_time).toBe(0); // 原样
+    const t = traceOf(sb);
+    expect(t.progressRestored).toBe(0);
+    expect(t.progressMisses).toBe(1);
+    expect(t.errors).toBe(0); // 进度失败不是取流错误
+  });
+
+  it('主账号进度超时 → 原样返回，取流不失败', async () => {
+    const sb = bootAt(FESTIVAL_URL, (url) => {
+      if (url.includes('/x/player/wbi/v2')) return new Promise(() => {}); // 永不作答
+      return okResponse(playurlBody());
+    });
+    await ready(sb);
+    const { config, cb } = await bootHooked(sb);
+
+    vi.useFakeTimers();
+    try {
+      const pending = cb({ avid: 1, cid: CID, qn: 120 }, config);
+      await vi.advanceTimersByTimeAsync(500); // FESTIVAL_PROGRESS_WAIT_MS
+      const out = await pending;
+
+      expect(out.data.code).toBe(0); // 超时不影响取流
+      expect(out.data.data.last_play_time).toBe(0);
+      expect(traceOf(sb).progressRestored).toBe(0);
+      expect(traceOf(sb).progressMisses).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

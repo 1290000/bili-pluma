@@ -136,6 +136,19 @@
 `currentTime` 归 0，从中间续播时进度被拽回开头，用户明确否掉。`updateRequestConfig` 补挂保留，
 只作为兜底（钩子晚装 / config 非对象 / SPA 换片），不再承担抢首波。
 
+**观看进度续播（ADR 0017，2026-11-18 补充）**
+
+活动页 playurl 走 DNR 换 Cookie，返回的 `last_play_time / last_play_cid` 是**取流账号**的
+（实测 `0 / 0`），播放器据此从头播。`/video/` 靠 `patchPlayurlXhrProgress()` 还原成主账号进度，
+但活动页**没装 XHR 观察钩子**，那条路不存在，所以在 `festivalFetch` 里补偿：
+
+- 与 playurl **并行**预取 `/x/player/wbi/v2`（不在 DNR 白名单 → 主账号身份），最多等 500ms；
+- 复用 `patchPlayurlBody(raw, prog, false)` 改写响应 —— 不自己写字段，进度字段的授权写集只认它
+  （`check-patch-scope` 会校验）；
+- **每个 cid 只还原一次**（`markProgressUsed`，与 `/video` 同一纪律）：切画质 / 重开流不再把
+  播放位置拽回"进页面时"的旧进度；
+- 进度拿不到 / 超时一律原样返回，绝不阻断取流。
+
 ### 第 4 步 · 真机验收（机器守卫盖不到的部分）
 
 审计明确：最可能的真机症状是"面板有却判未生效 / 显示接管但既不换 Cookie 也不注入流 / 黑屏"，
