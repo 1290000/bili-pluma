@@ -2,7 +2,7 @@
 
 - 作者：架构评审（team-lead 汇总）
 - 日期：2026-11-18
-- 状态：**进行中**（S0/S1/S2/S3 已落地；S4（跳过 reload）与 S5（真机回归矩阵）待做；授权见 ADR 0041）
+- 状态：**进行中**（S0-S4 已落地；仅剩 S5 真机回归矩阵；授权见 ADR 0041）
 - 依据：`poc/probe/pgc/REPORT-sync-callback.md`（真机探针，含四模式对照与返回体形状）
 - 关联：ADR 0019（PGC 异步取流注入）、0020（整页注入）、0021（试看标记）、0023（切集换流）、0030（reload 护栏）
 
@@ -135,6 +135,37 @@ if (config.prefetch) delete config.prefetch.playUrl;   // ⚠️ S0 实测：不
 - 失败/无流（`videoInfo` 为 `null`）：交还 `origCb`，记 `cbHits`/`lastSkip`，**不抛错**。
 
 **验收**：真机番剧页首帧即完整流，Network 中**无** `/pgc/player/web/v2/playurl`，且 `<video>.currentSrc` 指向 dash。
+
+### S4 回传接管结果并关掉 reload 决策（2026-11-18 落地）
+
+S2/S3 真机验收通过后暴露的遗留：回调取的流只喂给了播放器，ISOLATED 侧不知道这次取流发生
+（`pageState.playback` 恒 null → 面板画质卡「已接管 · 等待取流…」）。落地两件事：
+
+1. **回传**：`pgcFetch` 成功合并返回时发 `pgc-takeover-ok`，载荷 `{code:0, result: <接口原文>}`。
+   ⚠️ 是 **PCDN 改写之前**的显式快照（`apiSnapshot`，照活动页 `playurl-raw` 的同一条教训——
+   `filterDashOf` 可能就地改 `merged.videoInfo.dash`，而它与 `apiResult.dash` 是同一引用）；
+   按 cid 放行（`pgcPostedTakeoverCid`），同 cid 重试不重复发。
+2. **reload 决策早退**：`content.ts` 收到消息 → `pgcReloadTrace.callbackTakeover = true` +
+   `applyPlayback(载荷)`；`orchestratePgc` **入口**早退（`orchestrateExit='callback-takeover'`），
+   reload 决策点（`tryUpgradeForQuality` 入口 / cache-nosync 分支）**再查一次**。
+
+   竞态语义（按时序写死的，不是偷懒）：回调结果（~900ms）必然晚于 `ssr-playinfo`（~673ms），
+   所以入口早退**常常接不住**；标志仍 false 时旧链路照跑（`prepareFullStream` 有
+   `alreadyTried` 护栏、`reloadWithGuard` 有 ADR 0030 护栏，重复一次 reload 不会坏数据）；
+   消息分支会**覆盖** `orchestrateExit` 为 `'callback-takeover'`，保证埋点反映实际结局。
+
+   实现注意：TS 对 `const` 对象属性做流收窄——入口检查会把 `callbackTakeover` 收窄成
+   `false` 流到决策点②，二次检查报 TS2367。三处检查统一走 `pgcCallbackTakeover()` 函数读取。
+
+3. **那轮验收的实际出口（读代码后的结论）**：ep373924 这轮 `orchestratePgc` 走的是
+   `canSkipPgcInjection` 早退分支（`orchestrateExit='not-truncated-early-return'`）——
+   SSR 本来就是完整流，且 `applyPlayback` 没喂出去的原因是 `readSsrVideoInfo(d.data)`
+   拿到 null（`ssr-playinfo.data` 为 null：`ssrPlayinfo` 没捕获到 SSR 赋值；若走了
+   `gateSsrPlayinfo` 的 skip 分支则连 `orchestratePgc` 都没进，可用
+   `pgcReloadTrace.orchestrateCalls` 区分两种可能）。无论哪种，S4 的消息分支都直接喂面板。
+
+**验收**：消息分派 / 入口早退 / 竞态覆盖 / 快照语义均有单测（`pgc-takeover-wiring.test.ts`
+用真实代码文本 + stubs 注入执行；`main-world-pgc.test.ts` 补回传快照与 cid 放行）。
 
 ### S4 让编排层跳过 reload（`entrypoints/content.ts`）
 
