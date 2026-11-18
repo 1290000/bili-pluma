@@ -643,6 +643,7 @@
    * - `rewritten` / `lastStatus` / `fallbacks` / `errors`：PCDN 是否换到官方线路、取流成败
    * - `lastQuery` / `paramTypes` / `lastRespCode` / `lastRespMsg`：2026-11-19 为 -400 加的
    *   取流现场快照（见各字段注释）。**只写内存，不 postMessage、不落盘**。
+   * - `firstWave` / `firstWaveSkipped`：首波是谁取的流；漏接管时只记一次，不主动 reload
    * - `lastStage` / `lastSkip`：最后停在哪一步；`lastSkip` 记异常原文，便于真机抄回来
    */
   var festivalTrace = {
@@ -663,18 +664,20 @@
     lastStage: 'boot',
     lastSkip: '',
     /**
-     * 首波接管时序竞争（2026-11-20，REPORT-handoff.md）：首波常被播放器原生 XHR
-     * 抢走（门控要等 cfg + page/activate 两个回包），补挂回调后必须主动重开一次流。
+     * 首波接管时序竞争（2026-11-20 埋点，REPORT-handoff.md）：首波常被播放器原生
+     * XHR 抢走（门控要等 cfg + page/activate 两个回包），补挂回调后**不主动换流**。
      *
-     * - `reloadIssued`：我们主动调用 `player.reload()` 的次数，正常 0 或 1。
-     *   一次性硬上限：达到 1 后永不复位（SPA 切换 / 播放器重建都不再触发）。
      * - `firstWave`：`pending` = 未判定；`ours` = 回调真的走到 fetch 并拿到响应；
-     *   `native` = 补挂时确认首波没被我们接管（门控晚到）。reload 前重置回 pending，
-     *   让新一波重新判定。判据**不用 cbHits**（门控关闭时回调也可能被调一次，
-     *   cbHits=1 却根本没 fetch），只看 lastQuery / lastRespCode + 结构性事实。
+     *   `native` = 补挂时确认首波没被我们接管（门控晚到）。判据**不用 cbHits**
+     *   （门控关闭时回调也可能被调一次，cbHits=1 却根本没 fetch），只看
+     *   lastQuery / lastRespCode + 结构性事实。
+     * - `firstWaveSkipped`：确认首波漏接管、接受原生流继续播的次数（正常 0 或 1）。
+     *   2026-11-18 真机验证过"补挂后主动 `player.reload()` 换流"确实能让首波变成
+     *   我们的流，但它重建 MediaSource 会把 `currentTime` 归 0 —— 用户从中间续播时
+     *   进度被拽回开头。用户明确否掉，故此处只记数、不补救（见 `festivalMaybeActivate`）。
      */
-    reloadIssued: 0,
     firstWave: 'pending',
+    firstWaveSkipped: 0,
     /**
      * 实际发出的 playurl 的 query 串（**脱敏视图**，2026-11-19 加）。
      *
@@ -716,6 +719,15 @@
   var festivalHooked = false;
   var festivalGeneration = 0;
   var festivalWatchStarted = false;
+  /**
+   * 上一次向 ISOLATED 侧回传 `playurl-raw` 的 cid（`null` = 还没发过）。
+   *
+   * 活动页没装 fetch/XHR 观察钩子（见 `installCreatePlayerProbe` 的调用点），
+   * 我们的回调是 ISOLATED 侧唯一能拿到"播放账号实际取到什么"的来源，所以这里
+   * **不能**复用装了钩子的页面那个一次性布尔 `rawPlayurlPosted`。用 cid 做键：
+   * 同一次取流重试不重复发，SPA 换片（cid 变）必须再发一次，否则画质卡会停在上一片。
+   */
+  var festivalPostedRawCid = null;
 
   /**
    * 活动页能不能接管：与 PGC 同一套**双门控**，缺一不可。
@@ -1023,6 +1035,29 @@
             }
 
             /**
+             * 把这份响应原文回传 ISOLATED 侧（修「画质卡永久停在等待取流…」）。
+             *
+             * 活动页只在 `:1987` 装了 `createPlayer` 探针，**fetch/XHR 响应观察钩子
+             * 没装**，所以 `capturePlayurlJson()` 在活动页从不执行 → `playurl-raw`
+             * 从不发出 → `pageState.playback` 恒 null → `describeUnlock()` 走
+             * `!playback` 分支，标题恒为「等待取流…」（2026-11-18 真机）。
+             *
+             * ⚠️ **必须是 `filterDashOf` 之前的原文**：上报的是播放账号真实拿到的
+             * 版本，不是我们换过 authority 的版本；`filterDashOf` 会就地改
+             * `json.data`，顺序反了画质会算偏。所以这里不仅先发，还**显式做一份
+             * 快照**——不依赖 `postMessage` 的结构化克隆时机（真机是调用时克隆，
+             * jsdom 是派发时才克隆，不赌这个差异）。一个 cid 只做一次，开销可忽略。
+             */
+            if (cid !== festivalPostedRawCid) {
+              festivalPostedRawCid = cid;
+              var postedJson = json;
+              try {
+                postedJson = JSON.parse(JSON.stringify(json));
+              } catch (e) {}
+              safePost({ __ns: NS, type: 'playurl-raw', token: token, json: postedJson });
+            }
+
+            /**
              * PCDN 换 authority（ADR 0039）—— 与 `/video` 的 playurl 同一套函数、
              * 同一道闸门。活动页返回体同样是 `{code, data:{dash}}`，
              * 所以 holder 就是 `json.data`（与 `patchPlayurlBody` 里的 `d` 同层）。
@@ -1160,11 +1195,23 @@
    * cfg 晚到的补齐路径：`createPlayer` 可能早于 `page/activate` 回包。
    * 此时 player 已经建好但回调没挂；我们靠已创建的空 requestConfig 走
    * `updateRequestConfig`（或直接在同一个 config 对象上补）把回调装上去。
+   *
+   * ## 为什么不在这里主动换掉首波（2026-11-18 真机否掉）
+   *
+   * 补挂之后确实能让首波换成我们的流：真机验证过 `festivalPlayer.reload()` 一调，
+   * `firstWave` 变 `ours`、Resource Timing 的 initiator 变 `fetch`、`rewritten` 增长。
+   * 但它重建 MediaSource 时 `currentTime` 归 0 —— **用户从视频中间位置进来，进度被
+   * 拽回开头**，每次续播都能感知。而活动页这条线两个账号的画质本来就相同，首波换流的
+   * 收益接近于零，伤害却是确定的，所以用户拍板撤销。
+   *
+   * 想真正让首波就归我们，只能让播放器等门控（`page/activate` 往返）之后再建，
+   * 那会把起播整体往后拖，代价更大，不做。于是这里只保留补挂：让**后续**的
+   * 切画质 / SPA 换片请求走我们的回调，首波原生流就让播放器自己播完。
    */
   function festivalMaybeActivate() {
     if (!IS_FESTIVAL || !festivalGateOpen()) return;
     if (!festivalPlayer) return; // createPlayer 还没来 -> 由包装函数负责
-    if (festivalHooked) return; // 已经接管（含首波 A）-> 绝不 reload
+    if (festivalHooked) return; // 已经接管（含首波 A）-> 无需补挂
 
     /**
      * 首波来源判定（REPORT-handoff §4）：能走到这里说明 createPlayer 时门控未开，
@@ -1195,35 +1242,15 @@
       }
 
       /**
-       * 核心补救：首波漏接管时主动重开一次流，让新一波走刚挂好的回调。
+       * 首波漏接管只**记数**，不补救：接受播放器原生流继续播。
        *
-       * - 只在补挂真正成功（updateRequestConfig 没抛）时做：没挂上就 reload 只会
-       *   再产生一波原生 XHR，白花一次机会。
-       * - `reloadIssued` 是硬上限，达到 1 后永不再次 reload（防 SPA 切换 / 播放器
-       *   重建导致的循环）；它同时是一次性标记，不需要额外的复位路径。
-       * - 只调播放器级 `reload()`，**绝不 location.reload()**：整页重载会丢进度。
-       * - 不在这里碰 `last_play_time` / progressCache：续播机会"用掉即作废"的保护
-       *   由原路径负责，reload 不得绕过它往回写旧进度。
+       * 这里曾经主动 `player.reload()` 一次把首波换成我们的流，真机确认有效，但
+       * 会重建 MediaSource 把 `currentTime` 归 0（续播进度回拽），已撤销 —— 理由
+       * 见本函数头注释。补挂本身仍然有价值：`updateRequestConfig` 之后的切画质 /
+       * SPA 换片请求会走刚挂上的回调。
        */
-      if (
-        remountOk &&
-        festivalTrace.firstWave === 'native' &&
-        festivalTrace.reloadIssued === 0
-      ) {
-        festivalTrace.reloadIssued += 1;
-        // 先重置再 reload：若 reload 内部同步触发我们的回调取流，不能被旧值吞掉。
-        festivalTrace.firstWave = 'pending';
-        try {
-          if (typeof festivalPlayer.reload !== 'function') {
-            throw new Error('no reload method');
-          }
-          festivalPlayer.reload();
-          festivalTrace.lastStage = 'reload-issued';
-        } catch (e) {
-          // 最坏只是没补救成功：回调已经挂上，播放器原样继续播，不黑屏。
-          festivalTrace.errors += 1;
-          festivalTrace.lastSkip = 'late reload: ' + String(e && e.message ? e.message : e);
-        }
+      if (remountOk && festivalTrace.firstWave === 'native') {
+        festivalTrace.firstWaveSkipped += 1;
       }
     }
   }

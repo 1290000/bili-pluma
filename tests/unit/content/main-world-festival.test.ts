@@ -505,12 +505,14 @@ describe('SPA 换片：createPlayer 不再调，靠 updateRequestConfig 重挂',
 });
 
 /**
- * 首波接管时序竞争（REPORT-handoff.md）：门控晚到 → 补挂成功 → 主动 reload 一次。
+ * 首波接管时序竞争（REPORT-handoff.md）：门控晚到 → 只补挂回调，**不换流**。
  *
- * 这里只钉住**结构性事实**（reload 次数、埋点、回调仍在、不写进度）；
- * "首波 initiator 真的变 fetch / 起播是否变慢 / 进度是否对"只能真机验。
+ * 2026-11-18 真机否掉了"补挂后 `player.reload()` 换首波"：它重建 MediaSource 会把
+ * `currentTime` 归 0，用户从中间续播时进度被拽回开头。所以这里钉住的是结构性事实
+ * ——不调 reload、只记 `firstWaveSkipped`、并把取流原文回传 ISOLATED。
+ * "首波 initiator 是否 fetch / 起播耗时 / 进度"仍只能真机验。
  */
-describe('首波漏接管的主动补救：补挂后 reload 一次', () => {
+describe('首波漏接管：只补挂、不换流，并回传取流原文', () => {
   interface LateSetup {
     config: any;
     reloads: number[];
@@ -518,7 +520,7 @@ describe('首波漏接管的主动补救：补挂后 reload 一次', () => {
   }
 
   /** 门控**未开**就 createPlayer（复现首波被播放器原生 XHR 抢走的前置条件）。 */
-  function lateCreatePlayer(sb: Sandbox, reloadImpl?: () => void): LateSetup {
+  function lateCreatePlayer(sb: Sandbox): LateSetup {
     const config: any = { cid: 42141027046, bvid: 'BV1ydeX65Edn' };
     const reloads: number[] = [];
     const patches: Array<{ reqHttpPlayUrlInfo?: unknown }> = [];
@@ -527,60 +529,60 @@ describe('首波漏接管的主动补救：补挂后 reload 一次', () => {
         patches.push(patch);
       },
       reload() {
-        reloads.push(reloads.length + 1);
-        if (reloadImpl) reloadImpl();
+        reloads.push(1); // 只要被调用就记下来：本组用例断言它永不发生
       },
     };
     installNano(sb, player).createPlayer(config); // 此时还没 sendCfg
     return { config, reloads, patches };
   }
 
-  it('门控晚到 → 补挂 + 恰好一次 player.reload()，埋点 reloadIssued=1', async () => {
+  function rawPosts(sb: Sandbox): Array<Record<string, any>> {
+    return sb.sent.filter((m) => m.type === 'playurl-raw');
+  }
+
+  it('门控晚到 → 补挂回调但绝不 reload，firstWaveSkipped=1', async () => {
     const sb = bootAt(FESTIVAL_URL);
     await ready(sb);
     const s = lateCreatePlayer(sb);
-    expect(traceOf(sb).reloadIssued).toBe(0);
+    expect(traceOf(sb).firstWaveSkipped).toBe(0);
     expect(traceOf(sb).firstWave).toBe('pending');
 
     sendCfg(sb); // cfg + page/activate 回包到齐
     await flush();
 
-    expect(s.reloads).toEqual([1]);
+    expect(s.reloads).toHaveLength(0); // 换流已撤销
     const t = traceOf(sb);
-    expect(t.reloadIssued).toBe(1);
-    expect(t.firstWave).toBe('pending'); // reload 后重置，让新一波重新判定
+    expect(t.firstWaveSkipped).toBe(1);
+    expect(t.firstWave).toBe('native'); // 首波是原生流，如实记录
     expect(t.remounts).toBe(1);
-    expect(t.lastStage).toBe('reload-issued');
     expect(t.errors).toBe(0);
-    // 回调真的挂上了，reload 只是让播放器重新取流
+    // 回调仍然挂上：后续切画质 / SPA 换片走它
     expect(typeof s.config.requestConfig.reqHttpPlayUrlInfo).toBe('function');
     expect(s.patches).toHaveLength(1);
     expect(s.patches[0]!.reqHttpPlayUrlInfo).toBe(s.config.requestConfig.reqHttpPlayUrlInfo);
   });
 
-  it('reload 后播放器重建 / SPA 切换 / 再来一条 cfg → 都不再 reload', async () => {
+  it('重复 cfg / SPA 换片 → firstWaveSkipped 不增长、仍不 reload', async () => {
     const sb = bootAt(FESTIVAL_URL);
     await ready(sb);
     const s = lateCreatePlayer(sb);
     sendCfg(sb);
     await flush();
-    expect(s.reloads).toHaveLength(1);
+    expect(traceOf(sb).firstWaveSkipped).toBe(1);
 
-    // 再来一条 cfg：festivalMaybeActivate 会被再次调用，但已经 hooked
-    sendCfg(sb);
+    sendCfg(sb); // 再来一条 cfg
     await flush();
-    // SPA 换片走 festivalRemount，不经过补挂分支
     sb.win.history.replaceState({}, '', '/festival/COLMO2026?bvid=BV1eoZ7BnEGy');
     sb.win.dispatchEvent(new sb.win.PopStateEvent('popstate'));
     await flush();
 
-    expect(s.reloads).toEqual([1]); // 一次性硬上限
-    expect(traceOf(sb).reloadIssued).toBe(1);
+    expect(s.reloads).toHaveLength(0);
+    expect(traceOf(sb).firstWaveSkipped).toBe(1);
     expect(traceOf(sb).spaSwaps).toBe(1);
     expect(traceOf(sb).remounts).toBe(2); // 只有补挂 + SPA 那次重挂
   });
 
-  it('首波已被我们接管（festivalHooked=true）→ 不进补挂分支、不 reload', async () => {
+  it('首波已被我们接管（festivalHooked=true）→ 不进补挂分支、不记 skipped', async () => {
     const sb = bootAt(FESTIVAL_URL, () =>
       okResponse({ code: 0, data: { dash: { video: [], audio: [] } } }),
     );
@@ -605,52 +607,110 @@ describe('首波漏接管的主动补救：补挂后 reload 一次', () => {
     await flush();
 
     expect(reloads).toHaveLength(0);
-    expect(traceOf(sb).reloadIssued).toBe(0);
+    expect(traceOf(sb).firstWaveSkipped).toBe(0);
     expect(traceOf(sb).remounts).toBe(0);
     expect(traceOf(sb).firstWave).toBe('ours');
   });
 
-  it('reload 抛错 → 吞掉，回调仍挂着，lastSkip 记异常', async () => {
+  it('补挂失败（updateRequestConfig 抛）→ 记 error，不记 skipped', async () => {
     const sb = bootAt(FESTIVAL_URL);
     await ready(sb);
-    const s = lateCreatePlayer(sb, () => {
-      throw new TypeError('reload boom');
-    });
+    const config: any = { cid: 42141027046, bvid: 'BV1ydeX65Edn' };
+    const player = {
+      updateRequestConfig() {
+        throw new TypeError('Cannot convert undefined or null to object');
+      },
+      reload() {
+        throw new Error('must not be called');
+      },
+    };
+    installNano(sb, player).createPlayer(config); // 门控未开
 
     expect(() => sendCfg(sb)).not.toThrow();
     await flush();
 
-    expect(s.reloads).toEqual([1]); // 调用前计数，失败也不重试
-    expect(traceOf(sb).reloadIssued).toBe(1);
-    expect(traceOf(sb).lastSkip).toContain('late reload');
-    expect(traceOf(sb).lastSkip).toContain('reload boom');
+    expect(traceOf(sb).firstWaveSkipped).toBe(0); // 没挂上就不算"放弃换流"
+    expect(traceOf(sb).lastSkip).toContain('late activate');
     expect(traceOf(sb).errors).toBeGreaterThanOrEqual(1);
-    // 最坏只是没补救：回调仍在，播放器照常播
-    expect(typeof s.config.requestConfig.reqHttpPlayUrlInfo).toBe('function');
-    expect(s.patches).toHaveLength(1);
+    // 回调仍挂在 config 上，下一次 SPA 换片还有机会重挂
+    expect(typeof config.requestConfig.reqHttpPlayUrlInfo).toBe('function');
   });
 
-  it('reload 后的新一波取流不写 last_play_time（不绕过进度只用一次的保护）', async () => {
+  it('成功取流 → 上报未改写的 playurl-raw（必须在 filterDashOf 之前）', async () => {
     const payload = {
       code: 0,
-      data: { last_play_time: 0, last_play_cid: 0, dash: { video: [], audio: [] } },
+      data: {
+        dash: {
+          video: [
+            {
+              id: 120,
+              height: 2160,
+              base_url: 'https://xy116.mcdn.example.com/edge/v.m4s',
+              backup_url: [],
+            },
+          ],
+        },
+      },
     };
     const sb = bootAt(FESTIVAL_URL, () => okResponse(payload));
     await ready(sb);
     const s = lateCreatePlayer(sb);
+    sendCfg(sb, {
+      filterCandidates: true,
+      pcdnRules: { labels: ['mcdn'], domains: [] },
+      pcdnRewriteRules: {
+        mirrorHost: 'mirror.example',
+        proxyHost: 'proxy.example',
+        proxyPathPrefix: '/proxy/',
+      },
+    });
+    await flush();
+    expect(s.reloads).toHaveLength(0);
+
+    const cb = s.config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ avid: 1, cid: 42141027046, qn: 120 }, s.config);
+    await flush();
+
+    // 播放器拿到的是换过 authority 的版本
+    expect(out.data.data.dash.video[0].base_url).toContain('mirror.example');
+    // ISOLATED 侧拿到的是播放账号真实原文（仍是 PCDN 候选），顺序证明没被改写污染
+    const posts = rawPosts(sb);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]!.json.data.dash.video[0].base_url).toContain('mcdn.example.com');
+    expect(posts[0]!.token).toBe('test-token');
+    expect(traceOf(sb).firstWave).toBe('native'); // 首波仍是原生
+  });
+
+  it('SPA 换片后 playurl-raw 必须再发一次（按 cid 放行，不用布尔）', async () => {
+    const sb = bootAt(FESTIVAL_URL, () =>
+      okResponse({ code: 0, data: { dash: { video: [], audio: [] } } }),
+    );
+    await ready(sb);
+    const s = lateCreatePlayer(sb);
     sendCfg(sb);
     await flush();
-    expect(s.reloads).toEqual([1]);
 
-    // 播放器 reload 后重新取流：走刚挂上的回调（nativeFetch，绕过响应改写链）
-    const cb = s.config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
-    const out = await cb({ avid: 1, cid: 42141027046, qn: 64 }, s.config);
+    const cb1 = s.config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    await cb1({ avid: 1, cid: 42141027046, qn: 120 }, s.config);
+    await flush();
+    expect(rawPosts(sb)).toHaveLength(1);
 
-    expect(out.data.data.last_play_time).toBe(0); // 不被改写成任何"历史进度"
-    expect(out.data.data.last_play_cid).toBe(0);
-    expect(sb.sent.some((m) => m.__PLUMA_EXT_PATCH__ === true)).toBe(false);
-    expect(traceOf(sb).firstWave).toBe('ours');
-    expect(traceOf(sb).reloadIssued).toBe(1);
+    // 同一 cid 的重试不重复上报
+    await cb1({ avid: 1, cid: 42141027046, qn: 120 }, s.config);
+    await flush();
+    expect(rawPosts(sb)).toHaveLength(1);
+
+    // SPA 换片 → cid 变 → 必须再发一次，否则画质卡停在上一片
+    sb.win.history.replaceState({}, '', '/festival/COLMO2026?bvid=BV1eoZ7BnEGy');
+    sb.win.dispatchEvent(new sb.win.PopStateEvent('popstate'));
+    await flush();
+    const cb2 = s.config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    expect(cb2).not.toBe(cb1);
+    await cb2({ avid: 1, cid: 36059286363, qn: 120 }, s.config);
+    await flush();
+
+    expect(rawPosts(sb)).toHaveLength(2);
+    expect(rawPosts(sb)[1]!.json.data.dash).toBeDefined();
   });
 });
 
