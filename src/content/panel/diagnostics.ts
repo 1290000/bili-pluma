@@ -32,7 +32,7 @@ import type { CdnKind } from '@core/cdn/classify';
 import type { FilterSkipReason } from '@core/cdn/filter';
 import { currentSegment, detectSwitches } from '@core/loading/timeline';
 import { el, iconChevron } from './dom';
-import { playingEvent, type LoadingOutcome } from './loading-pane';
+import { playingEvent, renderedKind, type LoadingOutcome } from './loading-pane';
 
 /**
  * 一次「读诊断日志」这件事本身**成没成**。
@@ -195,7 +195,9 @@ export function sanitizeHost(host: unknown): string {
 /** 导出里允许出现的线路类别（`CdnKind` 的全集，逐个列出以防上游漂移） */
 const EXPORT_CLASSES: readonly CdnKind[] = ['official', 'pcdn', 'third-party', 'unknown'];
 
-/** 导出里允许出现的官方二级分类；`null` 是合法值（认不出机型） */
+/**
+ * 导出里允许出现的官方二级分类；`null` 是合法值（认不出机型）
+ */
 const EXPORT_FLAVORS: readonly ('self-built' | 'partner')[] = ['self-built', 'partner'];
 
 /**
@@ -323,8 +325,29 @@ export interface LoadingExport {
   status: 'ok' | 'absent' | 'unanswered';
   present: boolean;
   confidence: 'measured' | 'none';
-  actual: { host: string; cls: string; flavor: string | null } | null;
-  hosts: Array<{ host: string; cls: string; flavor: string | null; count: number }>;
+  /**
+   * 主要线路（argmax）。
+   *
+   * ⚠️ `hostCls`（2026-11-18，ADR 0042）是**导出里唯一能分辨**「主机是官方镜像、
+   * 只因资源标记 `os=mcdn` 才判 pcdn」的东西：`cls === 'pcdn'` 且
+   * `hostCls === 'official'` 就是改写后的产物。没有它，读导出的人只会看到
+   * 一堆 PCDN，然后去查一个已经被修好的问题。
+   *
+   * 它仍是一个**枚举**（走 `pickOne` + `EXPORT_CLASSES`），不含任何 query。
+   */
+  actual: {
+    host: string;
+    cls: string;
+    flavor: string | null;
+    hostCls: string;
+  } | null;
+  hosts: Array<{
+    host: string;
+    cls: string;
+    flavor: string | null;
+    hostCls: string;
+    count: number;
+  }>;
   /** 截断**之前**的 host 总数 */
   hostCount: number;
   hostsTruncated: boolean;
@@ -380,8 +403,13 @@ export interface LoadingExport {
  * | --- | --- |
  * | 剥 `note` | `LoadEvent.note` 可能是 `MediaError.code=3` 这类自由文本，只挑四个键输出 |
  * | host 白名单 | `sanitizeHost()`，认不出一律 `'invalid'` |
- * | 枚举化 | `status` / `confidence` / `cls` / `flavor` / `stage` / `kind` 只可能是固定值 |
+ * | 枚举化 | `status` / `confidence` / `cls` / `flavor` / `hostCls` / `stage` / `kind` 只可能是固定值 |
  * | 无 query / 无 path | host 走白名单之后，本来就没有 `/` 与 `?` 能进来 |
+ *
+ * ⚠️ `hostCls`（2026-11-18，ADR 0042）：导出里唯一能分辨「主机是官方镜像、
+ * 只因资源标记 `os=mcdn` 才判 pcdn」的字段。它是个**枚举**，不携带 query 内容
+ * —— 那正是它能进导出的原因（`loading-trace.ts` 边界 5）。`EXPORT_CLASSES`
+ * 的四个值一个字没动。
  *
  * 不接时刻参数：这一块**没有**任何时间戳字段（见 `LoadingExport` 的注释），
  * 顶层 `exportedAt` 已经表达了导出时刻。
@@ -419,6 +447,15 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
             snapshot.actual.flavor === null
               ? null
               : pickOne(snapshot.actual.flavor, EXPORT_FLAVORS, 'partner'),
+          /**
+           * ADR 0042：`cls` 与 `hostCls` 的差异就是「官方镜像 + `os=mcdn`」的证据。
+           * 旧快照没有这个字段时退回 `cls`（不是在猜，只是"只有一个类别可用"）。
+           */
+          hostCls: pickOne(
+            snapshot.actual.hostCls ?? snapshot.actual.cls,
+            EXPORT_CLASSES,
+            'unknown',
+          ),
         };
 
   const allHosts = Array.isArray(snapshot.hosts) ? snapshot.hosts : [];
@@ -426,6 +463,7 @@ export function buildLoadingExport(outcome: LoadingOutcome): LoadingExport {
     host: sanitizeHost(h.host),
     cls: pickOne(h.cls, EXPORT_CLASSES, 'unknown'),
     flavor: h.flavor === null ? null : pickOne(h.flavor, EXPORT_FLAVORS, 'partner'),
+    hostCls: pickOne(h.hostCls ?? h.cls, EXPORT_CLASSES, 'unknown'),
     count: finite(h.count),
   }));
 
@@ -777,7 +815,15 @@ export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
     (c) => `${CLASS_SHORT[c]} ${String(byClass.get(c) ?? 0)}`,
   );
   const hostsValue = `${String(snapshot.hosts.length)} 条${breakdown.length > 0 ? `（${breakdown.join(' · ')}）` : ''}`;
-  const hasPcdn = (byClass.get('pcdn') ?? 0) > 0;
+  /**
+   * 有没有**真实** PCDN 主机（ADR 0042）。
+   *
+   * `byClass` 数的是 `cls` —— 那批「官方镜像 + `os=mcdn`」的 `cls` 是 `pcdn`，
+   * 但主机在官方镜像上。若拿它决定警告色，这一行会与技术值里的
+   * `official` / `third-party` 一起出现时自相矛盾（"有 PCDN"却没有一条 pcdn host）。
+   * 所以另算一份，判据与面板同一份（`renderedKind()`）。
+   */
+  const hasRealPcdn = snapshot.hosts.some((h) => renderedKind(h.cls, h.hostCls) === 'pcdn');
 
   /**
    * ## 两行线路，别二选一（2026-11-17，T13/P0-2）
@@ -802,23 +848,35 @@ export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
   const currentStat =
     currentHost === null ? undefined : snapshot.hosts.find((h) => h.host === currentHost);
   const currentCls = currentStat?.cls ?? current?.kind ?? null;
+  /**
+   * `hostCls`：只看主机时的类别（ADR 0042）。**只用来决定警告色**，
+   * 不参与上面的技术值 —— 这一栏是**给排查者看的原始枚举**
+   * （`official · self-built · cn-…`），把它换成用户文案才是错位。
+   *
+   * 为什么要管颜色：官方镜像 + `os=mcdn` 的那一行，`cls` 仍是 `pcdn`。
+   * 若照旧上黄色，同一份面板里会出现「本次加载：官方镜像 · ok」与
+   * 「当前线路：pcdn · 黄」并存 —— 正是 `describePcdnCaveat()` 头部记的那次
+   * 真机矛盾，只是搬到了诊断页。判据与结论卡同一份（`renderedKind()`）。
+   */
+  const currentShown = renderedKind(currentCls ?? 'unknown', currentStat?.hostCls);
   const currentValue =
     currentHost === null
       ? '未记录'
       : `${String(currentCls)} · ${flavorText(currentStat?.flavor ?? null)} · ${currentHost}`;
+  const actualShown = actual === null ? null : renderedKind(actual.cls, actual.hostCls);
 
   if (actual !== null && actual.host === currentHost) {
     const only = factRow({ label: '当前线路', value: currentValue });
-    if (currentCls === 'pcdn') only.classList.add('warn');
+    if (currentShown === 'pcdn') only.classList.add('warn');
     nodes.push(only);
   } else {
     const mainRow = factRow({ label: '主要线路（按请求数）', value: actualValue });
     // 走了 PCDN 就给警告色：那是这个功能唯一想让人看见的事
-    if (actual?.cls === 'pcdn') mainRow.classList.add('warn');
+    if (actualShown === 'pcdn') mainRow.classList.add('warn');
 
     const currentRow = factRow({ label: '当前线路（最后一次请求）', value: currentValue });
     // 当前线路是 P2P 时更要紧：用户**此刻**正在被切走
-    if (currentCls === 'pcdn') currentRow.classList.add('warn');
+    if (currentShown === 'pcdn') currentRow.classList.add('warn');
 
     nodes.push(mainRow, currentRow);
   }
@@ -826,7 +884,7 @@ export function loadingSectionNodes(outcome: LoadingOutcome): HTMLElement[] {
   const hostsRow = factRow({ label: '本次线路', value: hostsValue });
   // ⚠️ 只给 `.diag-value` 上色（`.diag-row.warn`），不动状态点 ——
   // 点这一列表示的是"自检项成没成"，与"线路是哪种"不是一回事
-  if (hasPcdn) hostsRow.classList.add('warn');
+  if (hasRealPcdn) hostsRow.classList.add('warn');
 
   const playing = playingEvent(snapshot.events);
 

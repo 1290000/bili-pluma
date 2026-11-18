@@ -85,6 +85,7 @@ describe('resolveMediaHost —— 媒体域判据只有 classifyCdn 一份', () 
       host: 'cn-cq-gd-bcache-19.bilivideo.com',
       cls: 'official',
       flavor: 'self-built',
+      hostCls: 'official',
     });
   });
 
@@ -93,6 +94,11 @@ describe('resolveMediaHost —— 媒体域判据只有 classifyCdn 一份', () 
       host: 'xy116x196x140x25xy.mcdn.bilivideo.cn',
       cls: 'pcdn',
       flavor: null,
+      /**
+       * 只看主机也是 pcdn —— 它是**真实 PCDN 主机**（`mcdn` 独立标签），
+       * 不是「官方镜像 + os=mcdn」那种改写产物。面板据此继续画橙色 P2P（ADR 0042）。
+       */
+      hostCls: 'pcdn',
     });
   });
 
@@ -117,6 +123,7 @@ describe('resolveMediaHost —— 媒体域判据只有 classifyCdn 一份', () 
       host: 'evil-mcdn.attacker.test',
       cls: 'unknown',
       flavor: null,
+      hostCls: 'unknown',
     });
     // 不是媒体分片 → 仍然不收（`isMediaPath` 是前置门，一个字没改）
     expect(resolveMediaHost('https://api.bilibili.com/x/player/playurl')).toBeNull();
@@ -126,7 +133,17 @@ describe('resolveMediaHost —— 媒体域判据只有 classifyCdn 一份', () 
     // 只看域名会把这条判成 official，等于对用户陈述错误事实
     expect(
       resolveMediaHost('https://cn-bj-ct-01-01.bilivideo.com/v.m4s?upsig=AA&uparams=BB&os=mcdn'),
-    ).toEqual({ host: 'cn-bj-ct-01-01.bilivideo.com', cls: 'pcdn', flavor: null });
+    ).toEqual({
+      host: 'cn-bj-ct-01-01.bilivideo.com',
+      cls: 'pcdn',
+      flavor: null,
+      /**
+       * ★ **ADR 0042 的关键一格**：主机是官方自建边缘，只因资源标记 `os=mcdn`
+       * 才被判成 pcdn。`cls` 不变（过滤链路仍看它，边界 2），
+       * 新增的 `hostCls` 让面板如实说"走的是官方镜像"。
+       */
+      hostCls: 'official',
+    });
   });
 
   it('`os=mcdn` 必须整段相等，`os=mcdnx` / `xos=mcdn` 不算', () => {
@@ -140,6 +157,117 @@ describe('resolveMediaHost —— 媒体域判据只有 classifyCdn 一份', () 
   });
 });
 
+/**
+ * ## ADR 0042：`hostCls` —— 只看主机时的类别
+ *
+ * 这一组钉的是**改写后的真实形态**。候选项的 authority 被换到官方镜像、
+ * `search` 一字不动（签名参数 `uparams` 含 `os`，删了 403），于是：
+ *
+ * ```
+ * 改写前：x5zy69j.edge.mountaintoys.cn/...?os=mcdn    → cls=pcdn / hostCls=pcdn
+ * 改写后：upos-sz-mirrorhw.bilivideo.com/...?os=mcdn  → cls=pcdn / hostCls=official
+ * ```
+ *
+ * `cls` 不变（过滤链路仍看它，ADR 0042 边界 2）；`hostCls` 是新增的那一格，
+ * 面板靠它把"已经是官方镜像"如实显示出来，而不是继续画橙色 P2P。
+ *
+ * ⚠️ 反例：把 `hostCls` 改成 `resolveMediaHost()` 里也传 `search`
+ * （即 `classifyCdn(host, parsed.search)` 两次）→ 两条用例的 `hostCls`
+ * 都会变成 `pcdn`，面板退回旧 bug。
+ */
+describe('resolveMediaHost —— hostCls：只看主机（ADR 0042）', () => {
+  it('★ 改写后的真实形态：官方镜像 + os=mcdn → cls=pcdn **但 hostCls=official**', () => {
+    expect(resolveMediaHost('https://upos-sz-mirrorhw.bilivideo.com/x.m4s?os=mcdn')).toEqual({
+      host: 'upos-sz-mirrorhw.bilivideo.com',
+      // 过滤链路看的仍是这个：官方镜像代理 mcdn 源，判据不许收窄（边界 4）
+      cls: 'pcdn',
+      flavor: null,
+      // 面板看的是这个：这台机器本身就是官方服务商镜像
+      hostCls: 'official',
+    });
+  });
+
+  it('★ 真实 PCDN 主机：两个都是 pcdn（面板继续画橙色 P2P，一个字不改）', () => {
+    expect(resolveMediaHost('https://x5zy69j.edge.mountaintoys.cn/x.m4s?os=mcdn')).toEqual({
+      host: 'x5zy69j.edge.mountaintoys.cn',
+      cls: 'pcdn',
+      flavor: null,
+      // 只看主机也判 pcdn ⇒ 不是改写产物 ⇒ 不许折回官方
+      hostCls: 'pcdn',
+    });
+  });
+
+  it('`mcdn` 标签主机同样两个都是 pcdn（官方域下的 mcdn 子域）', () => {
+    // 这条最容易出错：host 是 `bilivideo.cn` 的子域，但第 3 条先命中
+    expect(resolveMediaHost('https://xy180x129x222x41xy.mcdn.bilivideo.cn/x.m4s')).toEqual({
+      host: 'xy180x129x222x41xy.mcdn.bilivideo.cn',
+      cls: 'pcdn',
+      flavor: null,
+      hostCls: 'pcdn',
+    });
+  });
+
+  it('没有 query 时两个字段恒相等（`hostCls` 不是另一次判定）', () => {
+    for (const url of [
+      'https://cn-jsnt-ct-01-06.bilivideo.com/v.m4s',
+      'https://upos-sz-mirrorcos.bilivideo.com/v.m4s',
+      'https://x.akamaized.net/v.m4s',
+      'https://xyz.example-cdn.com/v/abc.m4s',
+    ]) {
+      const got = resolveMediaHost(url);
+      expect(got, url).not.toBeNull();
+      expect(got?.hostCls, url).toBe(got?.cls);
+    }
+  });
+
+  it('★ `hostCls` 是个枚举，不是 query：快照里仍然搜不到任何凭据片段', () => {
+    /**
+     * ADR 0042 边界 5：`search` 不进快照，而 `hostCls` 是枚举 —— 两者不冲突。
+     * 这条把边界两边一起钉住：多问了一次 `classifyCdn(host)`，但没有多留一个字符串。
+     */
+    const state = createTraceState();
+    recordResource(state, {
+      name: 'https://upos-sz-mirrorhw.bilivideo.com/x.m4s?upsig=SECRETSIG&uparams=e,os&os=mcdn',
+      startTime: 1,
+      responseEnd: 2,
+    });
+
+    const snapshot = snapshotOf(state, null);
+    expect(snapshot.hosts).toEqual([
+      {
+        host: 'upos-sz-mirrorhw.bilivideo.com',
+        cls: 'pcdn',
+        flavor: null,
+        hostCls: 'official',
+        count: 1,
+      },
+    ]);
+
+    const serialized = JSON.stringify(snapshot);
+    for (const marker of CREDENTIAL_MARKERS) {
+      expect(serialized).not.toContain(marker);
+    }
+    expect(serialized).not.toContain('SECRETSIG');
+    expect(serialized).not.toContain('os=mcdn');
+  });
+
+  it('★ `actual` 也带 `hostCls`（结论大字要靠它，缺了就只能显示 P2P）', () => {
+    const state = createTraceState();
+    recordResource(state, {
+      name: 'https://upos-sz-mirrorhw.bilivideo.com/x.m4s?os=mcdn',
+      startTime: 1,
+      responseEnd: 2,
+    });
+
+    expect(snapshotOf(state, null).actual).toEqual({
+      host: 'upos-sz-mirrorhw.bilivideo.com',
+      cls: 'pcdn',
+      flavor: null,
+      hostCls: 'official',
+    });
+  });
+});
+
 describe('resolveMediaHost —— 路径判据：只认媒体分片（2026-11-19 真机假阳性）', () => {
   it('`.m4s` + `/upgcxcode/` → 计入', () => {
     // `cn-x-1.…` 命中自建边缘正则，所以 flavor 是 `self-built`（不是 null）
@@ -147,6 +275,7 @@ describe('resolveMediaHost —— 路径判据：只认媒体分片（2026-11-19
       host: 'cn-x-1.bilivideo.com',
       cls: 'official',
       flavor: 'self-built',
+      hostCls: 'official',
     });
   });
 
@@ -155,6 +284,7 @@ describe('resolveMediaHost —— 路径判据：只认媒体分片（2026-11-19
       host: 'cn-x-1.bilivideo.com',
       cls: 'official',
       flavor: 'self-built',
+      hostCls: 'official',
     });
   });
 
@@ -533,6 +663,7 @@ describe('snapshotOf —— actual 取 count 最大的真实线路', () => {
       host: 'xy116x196x140x25xy.mcdn.bilivideo.cn',
       cls: 'pcdn',
       flavor: null,
+      hostCls: 'pcdn',
     });
     // hosts 按 count 降序
     expect(snapshot.hosts.map((h) => [h.host, h.count])).toEqual([
@@ -565,10 +696,24 @@ describe('snapshotOf —— actual 取 count 最大的真实线路', () => {
       responseEnd: 2,
     });
 
+    /**
+     * ## ADR 0042 的关键一条：这个 host 就是改写后的形态
+     *
+     * `hostCls: 'official'` ⇒ 它是官方自建边缘，只因资源标记 `os=mcdn` 才判 pcdn。
+     * 面板靠这一格不再画橙色 P2P（见 `loading-pane.ts` 的 `renderedKind()`）。
+     * `os=mcdn` 这个**字符串**仍然不进快照（下面几条断言），
+     * 进快照的只是一个枚举 —— 那正是 `loading-trace.ts` 边界 5 允许的。
+     */
     const snapshot = snapshotOf(state, null);
     // 分类用到了 query（因此是 pcdn），但 query 本身没被留下
     expect(snapshot.hosts).toEqual([
-      { host: 'cn-bj-ct-01-01.bilivideo.com', cls: 'pcdn', flavor: null, count: 1 },
+      {
+        host: 'cn-bj-ct-01-01.bilivideo.com',
+        cls: 'pcdn',
+        flavor: null,
+        hostCls: 'official',
+        count: 1,
+      },
     ]);
 
     const serialized = JSON.stringify(snapshot);
@@ -721,7 +866,7 @@ describe('P0-1 · unknown 不再被丢弃', () => {
     recordResource(state, { name: UNKNOWN_URL, startTime: 300, responseEnd: 400 });
 
     const stat = state.hosts.get('xyz.example-cdn.com');
-    expect(stat).toEqual({ cls: 'unknown', flavor: null, count: 2 });
+    expect(stat).toEqual({ cls: 'unknown', flavor: null, hostCls: 'unknown', count: 2 });
   });
 
   it('★ `actual` **不**取它（结论只在已知类别里挑）', () => {

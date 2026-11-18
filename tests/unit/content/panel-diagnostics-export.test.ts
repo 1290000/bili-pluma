@@ -634,6 +634,127 @@ describe('★ loading：四条硬裁剪（每条一个用例）', () => {
   });
 });
 
+/**
+ * ─────────────── ADR 0042：导出里带上 `hostCls` ───────────────
+ *
+ * ## 为什么导出必须有这个字段
+ *
+ * 诊断包是**离机排查**用的。读完导出的人看到一堆 `cls: 'pcdn'`，
+ * 只会去查"为什么没屏蔽掉 PCDN" —— 而那批里有一部分**其实已经在官方镜像上**，
+ * 只是资源的源标记是 `os=mcdn`。没有 `hostCls`，导出就在误导排查方向
+ * （这正是 ADR 0042 §1 那条"自相矛盾的链路"在导出侧的翻版）。
+ *
+ * ## 它为什么可以进导出（凭据边界）
+ *
+ * 它是个**枚举**（`official` / `pcdn` / `third-party` / `unknown`），
+ * 走 `pickOne()` 白名单，不携带任何 query 内容 ——
+ * `loading-trace.ts` 边界 5 允许的正是这种"枚举进快照"。
+ * `EXPORT_CLASSES` 的四个值**一个字没动**。
+ */
+describe('★★ ADR 0042：导出的 hostCls', () => {
+  it('★ 官方镜像 + os=mcdn 在导出里分得清（cls=pcdn / hostCls=official）', () => {
+    const rewritten = loadingSnapshot({
+      actual: {
+        host: 'upos-sz-mirrorhw.bilivideo.com',
+        cls: 'pcdn',
+        flavor: null,
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'upos-sz-mirrorhw.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 19,
+        },
+      ],
+    });
+    const out = loadingOf({ kind: 'ok', snapshot: rewritten });
+
+    expect(out.actual?.cls).toBe('pcdn');
+    expect(out.actual?.hostCls).toBe('official');
+    expect(out.hosts[0]?.cls).toBe('pcdn');
+    expect(out.hosts[0]?.hostCls).toBe('official');
+  });
+
+  it('★ 真实 PCDN 主机两个字段一致（读导出的人不会误以为"都被改写了"）', () => {
+    const real = loadingSnapshot({
+      actual: { host: 'x5zy69j.edge.mountaintoys.cn', cls: 'pcdn', flavor: null, hostCls: 'pcdn' },
+      hosts: [
+        {
+          host: 'x5zy69j.edge.mountaintoys.cn',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'pcdn',
+          count: 3,
+        },
+      ],
+    });
+    const out = loadingOf({ kind: 'ok', snapshot: real });
+    expect(out.actual?.hostCls).toBe('pcdn');
+    expect(out.hosts[0]?.hostCls).toBe('pcdn');
+  });
+
+  it('★ `hostCls` 也是枚举化白名单：垃圾值只落 `unknown`，原串不外泄', () => {
+    const junk = loadingSnapshot({
+      actual: { host: 'a.bilivideo.com', cls: 'pcdn', flavor: null, hostCls: 'wat' as never },
+      hosts: [
+        { host: 'a.bilivideo.com', cls: 'pcdn', flavor: null, hostCls: 'weird' as never, count: 1 },
+      ],
+    });
+    const out = loadingOf({ kind: 'ok', snapshot: junk });
+
+    expect(out.actual?.hostCls).toBe('unknown');
+    expect(out.hosts[0]?.hostCls).toBe('unknown');
+    const text = JSON.stringify(out);
+    expect(text).not.toContain('wat');
+    expect(text).not.toContain('weird');
+    // 只可能是那四个值之一 —— 与 `cls` 共用同一份白名单
+    for (const row of [out.actual, ...out.hosts]) {
+      expect(['official', 'pcdn', 'third-party', 'unknown']).toContain(row?.hostCls);
+    }
+  });
+
+  it('★ 旧快照没这个字段 → 退回 `cls`（不编第三种类别）', () => {
+    /**
+     * 跨 world 的 DTO 里 `hostCls` 是可选的（见 `LoadingSnapshotLite` 的注释）。
+     * 缺席时唯一诚实的做法是"只有一个类别可用" —— 退回 `cls`。
+     */
+    const legacy = loadingSnapshot({
+      actual: { host: 'a.bilivideo.com', cls: 'official', flavor: null },
+      hosts: [{ host: 'a.bilivideo.com', cls: 'official', flavor: null, count: 2 }],
+    });
+    const out = loadingOf({ kind: 'ok', snapshot: legacy });
+    expect(out.actual?.hostCls).toBe('official');
+    expect(out.hosts[0]?.hostCls).toBe('official');
+  });
+
+  it('★ 导出里仍然一个 `?` / `/` 都没有（hostCls 没引入 query 通道）', () => {
+    const rewritten = loadingSnapshot({
+      actual: {
+        host: 'upos-sz-mirrorhw.bilivideo.com',
+        cls: 'pcdn',
+        flavor: null,
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'upos-sz-mirrorhw.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 1,
+        },
+      ],
+    });
+    const text = JSON.stringify(loadingOf({ kind: 'ok', snapshot: rewritten }));
+    expect(text).not.toContain('?');
+    expect(text).not.toContain('/');
+    expect(text).not.toContain('os=mcdn');
+  });
+});
+
 describe('★ loading：三态不许合并', () => {
   it('ok → status=ok，其余字段是真数据', () => {
     const out = loadingOf({ kind: 'ok', snapshot: loadingSnapshot() });
@@ -903,6 +1024,119 @@ describe('★★ 诊断页「本次加载」（T7）', () => {
     );
     // 本次线路里有 PCDN 1 条 → 至少那行要黄
     expect(warns).toContain('本次线路');
+  });
+
+  /**
+   * ## ADR 0042：警告色与大字结论必须同一口径
+   *
+   * 诊断页那一栏的**技术值**照旧是原始枚举（`official · self-built · host`）——
+   * 它是给排查者看的。但**颜色**是在对用户表态："这条线路有问题"。
+   *
+   * 官方镜像 + `os=mcdn` 的 `cls` 仍是 `pcdn`，若照旧上黄色，
+   * 同一份面板里就会出现「本次加载：官方镜像 · ok」与「当前线路：pcdn · 黄」并存
+   * —— 正是 `describePcdnCaveat()` 头部记的那次真机矛盾搬到了诊断页。
+   *
+   * ⚠️ 反例：把 `hasRealPcdn` 改回 `(byClass.get('pcdn') ?? 0) > 0` → 下面两条红。
+   */
+  it('★ 只有官方镜像 + os=mcdn → 「本次线路」不上警告色', () => {
+    const onlyMirror = loadingSnapshot({
+      actual: {
+        host: 'upos-sz-mirrorhw.bilivideo.com',
+        cls: 'pcdn',
+        flavor: null,
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'upos-sz-mirrorhw.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 19,
+        },
+      ],
+      events: [{ t: 100, stage: 'seg-req', host: 'upos-sz-mirrorhw.bilivideo.com', kind: 'pcdn' }],
+    });
+    const box = pane({ kind: 'ok', snapshot: onlyMirror });
+    const warns = [...box.querySelectorAll('.diag-row.warn')].map(
+      (n) => n.querySelector('.diag-label')?.textContent,
+    );
+    expect(warns).not.toContain('本次线路');
+    expect(warns).not.toContain('当前线路');
+    // 技术值仍是原始枚举（这一栏给排查者，不换成人话）
+    const values = [...box.querySelectorAll('.diag-value')].map((n) => n.textContent);
+    expect(values).toContain('pcdn · — · upos-sz-mirrorhw.bilivideo.com');
+  });
+
+  it('★ 真 PCDN 主机混在里面 → 「本次线路」照样要黄（原行为不变）', () => {
+    const mixed = loadingSnapshot({
+      actual: {
+        host: 'cn-jsnt-ct-01-07.bilivideo.com',
+        cls: 'official',
+        flavor: 'self-built',
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'cn-jsnt-ct-01-07.bilivideo.com',
+          cls: 'official',
+          flavor: 'self-built',
+          hostCls: 'official',
+          count: 9,
+        },
+        {
+          host: 'x5zy69j.edge.mountaintoys.cn',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'pcdn',
+          count: 1,
+        },
+      ],
+      events: [
+        { t: 100, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+      ],
+    });
+    const box = pane({ kind: 'ok', snapshot: mixed });
+    const warns = [...box.querySelectorAll('.diag-row.warn')].map(
+      (n) => n.querySelector('.diag-label')?.textContent,
+    );
+    expect(warns).toContain('本次线路');
+  });
+
+  it('★ 当前那条是官方镜像（kind 仍是 pcdn）→ 那一行不上警告色', () => {
+    const nowMirror = loadingSnapshot({
+      actual: {
+        host: 'cn-jsnt-ct-01-07.bilivideo.com',
+        cls: 'official',
+        flavor: 'self-built',
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'cn-jsnt-ct-01-07.bilivideo.com',
+          cls: 'official',
+          flavor: 'self-built',
+          hostCls: 'official',
+          count: 9,
+        },
+        {
+          host: 'upos-sz-mirrorhw.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 5,
+        },
+      ],
+      events: [
+        { t: 100, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+        { t: 200, stage: 'seg-req', host: 'upos-sz-mirrorhw.bilivideo.com', kind: 'pcdn' },
+      ],
+    });
+    const box = pane({ kind: 'ok', snapshot: nowMirror });
+    const warns = [...box.querySelectorAll('.diag-row.warn')].map(
+      (n) => n.querySelector('.diag-label')?.textContent,
+    );
+    expect(warns).not.toContain('当前线路（最后一次请求）');
   });
 
   it('★ absent：一行中性色，且**不出现**「读取失败」', () => {

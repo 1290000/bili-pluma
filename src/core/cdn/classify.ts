@@ -14,8 +14,8 @@
  *
  * 第二种是"静默失败"，没有任何东西会报错，只能靠这里的判据正确。所以：
  *
- * 1. **先命中先返回，顺序即语义。** 下面 `classifyCdn()` 里的 if 顺序不是随意排的，
- *    改顺序 = 改行为。
+ * 1. **先命中先返回，顺序即语义。** 下面 `explainCdn()` 里的 if 顺序不是随意排的，
+ *    改顺序 = 改行为。（判据只有这一份实现，`classifyCdn()` 委托它 —— ADR 0042。）
  * 2. **域名匹配一律按标签边界**（`h === d || h.endsWith('.' + d)`），
  *    绝不用 `includes` / `endsWith(d)` 裸判 —— 否则 `evil-mcdn.attacker.test`
  *    会被当成 `mcdn`，攻击者只要注册个带关键词的域就能骗过屏蔽。
@@ -51,6 +51,57 @@ export interface CdnClass {
   cls: CdnKind;
   /** 仅 `cls === 'official'` 时可能非 `null`；认不出机型时为 `null`（不猜） */
   flavor: OfficialFlavor;
+}
+
+/**
+ * 判据命中的**来源** —— 只是"哪一条先命中"，**不参与过滤决策**（ADR 0042）。
+ *
+ * ## 为什么需要它（这条判据同时干了两件相反的事）
+ *
+ * 第 5 条（query 里的 `os=mcdn`）同时承担了「识别 PCDN 主机」与「识别 PCDN 资源内容」。
+ * 候选过滤（ADR 0039）把候选的 authority 换成官方镜像、**保留 `search`**（签名参数
+ * `uparams` 含 `os`，删了 403），于是改写后的 URL 是「官方镜像 + `os=mcdn`」→
+ * 第 5 条照旧命中 → 面板把已经切到官方镜像的线路标成 P2P。
+ *
+ * 修法不是收窄判据（那会让"官方镜像代理 mcdn 源"漏判，属静默失败），而是**把命中来源
+ * 说出来**：显示侧拿到 `rule === 'os-mcdn'` 就能如实说"主机是官方镜像、资源标记是 mcdn"。
+ *
+ * 取值与下面 `explainCdn()` 的十步一一对应（第 1 / 10 条共用 `unknown`）：
+ *
+ * | 值 | 第几条 | 判据 |
+ * | --- | --- | --- |
+ * | `unknown` | 1 / 10 | 不是主机名 / 没实测过的域 |
+ * | `ip` | 2 | 裸 IP 或 IPv6 字面量 |
+ * | `label` | 3 | 任一标签是 `mcdn` / `pcdn` / `gotcha` |
+ * | `domain` | 4 | 供应商自有域 |
+ * | `os-mcdn` | 5 | query 里整段 `os=mcdn` |
+ * | `self-built` | 6 | `cn-<单标签>.bilivideo.*` |
+ * | `partner` | 7 | `upos-<单标签>.bilivideo.*` |
+ * | `official` | 8 | 官方域兜底 |
+ * | `third-party` | 9 | `akamaized.net` |
+ */
+export type CdnRule =
+  | 'ip'
+  | 'label'
+  | 'domain'
+  | 'os-mcdn'
+  | 'self-built'
+  | 'partner'
+  | 'official'
+  | 'third-party'
+  | 'unknown';
+
+/**
+ * `explainCdn()` 的返回值 = 分类结果 + 命中来源。
+ *
+ * ⚠️ **不要给 `CdnClass` 加这个字段**：仓库里有 30 处 `toEqual({ cls, flavor })`
+ * 精确深比较（`classify.test.ts` / `baseline.test.ts` / `pcdn-filter-wiring.test.ts` /
+ * `loading-trace.test.ts`），多一个字段会让它们全部转红 —— 而那些断言钉的是
+ * **分类语义**，不是返回形状的完整性。所以解释走一个并列的新函数。
+ */
+export interface CdnExplanation extends CdnClass {
+  /** 最先命中的那条判据；不参与过滤（过滤只问 `cls`） */
+  rule: CdnRule;
 }
 
 /**
@@ -248,46 +299,75 @@ function hasOsMcdn(search: string | undefined): boolean {
 }
 
 /**
- * 判定一个主机名（及其 query）属于哪条线路。
+ * 判定一个主机名（及其 query）属于哪条线路，**并说出是哪条判据先命中**。
  *
  * **顺序即语义**：先命中先返回。特别是 `mcdn` 标签 / 供应商域必须排在
  * `bilivideo.*` 官方域兜底之前，否则 `mcdn.bilivideo.com` 会被官方域抢答。
  *
+ * ## ⚠️ 这里**是**唯一一份判据实现
+ *
+ * 以前这段逻辑在 `classifyCdn()` 里。搬过来只是为了每步多返回一个 `rule`，
+ * **判据本身一个字没改**（顺序、边界、正则全部原样）。`classifyCdn()` 现在只剩
+ * 三行委托 —— 若要改判据，改这里，**不要**在别处再写一份：
+ * 两份判据必然漂移，而漂移的表现是「开关开着却在走 PCDN」（文件头第 1 条）。
+ *
  * @param host 主机名，可带端口、可大写（内部会归一）；`<video src>` 的 `blob:` 串也可直接传
  * @param search 可选 query 串（含或含前导 `?` 均可）：任何 host 命中 `os=mcdn` 即判 PCDN
- * @returns 分类结果；`flavor` 只在 `cls === 'official'` 时可能非 `null`
+ * @returns 分类结果 + 命中来源；`flavor` 只在 `cls === 'official'` 时可能非 `null`
  */
-export function classifyCdn(host: string, search?: string): CdnClass {
+export function explainCdn(host: string, search?: string): CdnExplanation {
   const h = normalizeHost(host);
   // 1. 不是主机名：没有线路可判，直接 unknown（不是 pcdn —— 别替用户拦来源不明的东西）
-  if (h === null) return { cls: 'unknown', flavor: null };
+  if (h === null) return { cls: 'unknown', flavor: null, rule: 'unknown' };
 
   // 2. 裸 IP：PCDN 节点多是 IP 直连，域名层面没有任何可识别特征
-  if (IPV4_RE.test(h) || h.includes(':')) return { cls: 'pcdn', flavor: null };
+  if (IPV4_RE.test(h) || h.includes(':')) return { cls: 'pcdn', flavor: null, rule: 'ip' };
 
   // 3. 标签级关键词（`xy1.mcdn.bilivideo.cn` / `a.pcdn.foo`）—— 必须在第 8 条之前
   if (h.split('.').some((label) => PCDN_LABELS.includes(label))) {
-    return { cls: 'pcdn', flavor: null };
+    return { cls: 'pcdn', flavor: null, rule: 'label' };
   }
 
   // 4. 已知 PCDN 供应商自有域 —— 同样必须在第 8 条之前
-  if (matchAnyDomain(h, PCDN_DOMAINS)) return { cls: 'pcdn', flavor: null };
+  if (matchAnyDomain(h, PCDN_DOMAINS)) return { cls: 'pcdn', flavor: null, rule: 'domain' };
 
   // 5. query 命中 `os=mcdn`（对任何 host 生效）：正规镜像也会代理 mcdn 资源，只看域名会漏判
-  if (hasOsMcdn(search)) return { cls: 'pcdn', flavor: null };
+  if (hasOsMcdn(search)) return { cls: 'pcdn', flavor: null, rule: 'os-mcdn' };
 
   // 6. B站自建边缘
-  if (SELF_BUILT_RE.test(h)) return { cls: 'official', flavor: 'self-built' };
+  if (SELF_BUILT_RE.test(h)) return { cls: 'official', flavor: 'self-built', rule: 'self-built' };
 
   // 7. 服务商镜像
-  if (PARTNER_RE.test(h)) return { cls: 'official', flavor: 'partner' };
+  if (PARTNER_RE.test(h)) return { cls: 'official', flavor: 'partner', rule: 'partner' };
 
   // 8. 官方域兜底：认不出机型就给 null，**不猜**
-  if (matchAnyDomain(h, OFFICIAL_DOMAINS)) return { cls: 'official', flavor: null };
+  if (matchAnyDomain(h, OFFICIAL_DOMAINS))
+    return { cls: 'official', flavor: null, rule: 'official' };
 
   // 9. 第三方 CDN
-  if (matchAnyDomain(h, THIRD_PARTY_DOMAINS)) return { cls: 'third-party', flavor: null };
+  if (matchAnyDomain(h, THIRD_PARTY_DOMAINS)) {
+    return { cls: 'third-party', flavor: null, rule: 'third-party' };
+  }
 
   // 10. 其余：没实测过的域一律 unknown（不擅自当成 pcdn 去拦）
-  return { cls: 'unknown', flavor: null };
+  return { cls: 'unknown', flavor: null, rule: 'unknown' };
+}
+
+/**
+ * 判定一个主机名（及其 query）属于哪条线路。
+ *
+ * **返回形状与语义一个字都没变**（ADR 0042 边界 1）：实现委托给 `explainCdn()`
+ * 并只取 `{ cls, flavor }`，`rule` 不外露。仓库里的 30 处精确深比较因此一条都不用改 ——
+ * 它们跑绿就是"契约没变"的证明。
+ *
+ * 过滤链路只问 `cls`（`rewriteOne()` 的判据仍是 `cls === 'pcdn'`），
+ * 所以这次重构对"拦不拦"零影响。
+ *
+ * @param host 主机名，可带端口、可大写（内部会归一）
+ * @param search 可选 query 串：任何 host 命中 `os=mcdn` 即判 PCDN
+ * @returns 分类结果；`flavor` 只在 `cls === 'official'` 时可能非 `null`
+ */
+export function classifyCdn(host: string, search?: string): CdnClass {
+  const { cls, flavor } = explainCdn(host, search);
+  return { cls, flavor };
 }

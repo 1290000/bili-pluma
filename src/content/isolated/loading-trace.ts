@@ -30,6 +30,9 @@
  *    `URL.pathname`（后者用于"是不是媒体分片"的布尔判断）**各被判读一次**、
  *    用完随局部变量消失 —— 都不进 `hosts` / `events` / 快照 / 存储 / console。
  *    禁止的是**留存**，不是**判读**。
+ *
+ *    2026-11-18（ADR 0042）起还多问一次 `classifyCdn(host)`（**不传 search**），
+ *    得到 `hostCls`：枚举，不是 query，所以仍未留下任何 query 内容。
  * 2. **事件驱动，绝不轮询。** 没有 `setInterval`，也没有"每 N 毫秒看一眼"的
  *    `setTimeout`。`<video>` 的出现靠 `MutationObserver` 等，播放靠浏览器自己的
  *    `canplay` / `playing` / `waiting` / `error`。
@@ -85,6 +88,13 @@ export interface HostStat {
   cls: CdnKind;
   /** 官方线路的二级分类；非 `official` 恒为 `null` */
   flavor: OfficialFlavor;
+  /**
+   * 只看主机时的类别（`classifyCdn(host)`，不传 search）—— ADR 0042。
+   *
+   * 与 `cls` 的差异只有一个含义：`hostCls === 'official' && cls === 'pcdn'` 就是
+   * 「主机是官方镜像，只因资源标记 `os=mcdn` 被判成 pcdn」。语义见 `MediaHost.hostCls`。
+   */
+  hostCls: CdnKind;
   /** 这个 host 上观测到的 resource 条目数（**每次真实累加**） */
   count: number;
 }
@@ -95,10 +105,47 @@ export interface LoadingSnapshotLite {
   present: boolean;
   /** 置信度。见 `LoadingConfidence` */
   confidence: LoadingConfidence;
-  /** 实际在用的那条线路：`hosts` 里 `count` 最大的真实线路；为空时 `null` */
-  actual: { host: string; cls: CdnKind; flavor: OfficialFlavor } | null;
+  /**
+   * 实际在用的那条线路：`hosts` 里 `count` 最大的真实线路；为空时 `null`
+   *
+   * ⚠️ 带 `hostCls`（ADR 0042）：面板靠 `hostCls === 'official' && cls === 'pcdn'`
+   * 分辨"主机是官方镜像、只因 `os=mcdn` 被判 pcdn"，从而不再把它画成橙色 P2P。
+   */
+  actual: {
+    host: string;
+    cls: CdnKind;
+    flavor: OfficialFlavor;
+    /** 只看主机时的类别。见下面的「为什么可选」 */
+    hostCls?: CdnKind;
+  } | null;
   /** 全部 host 的统计，按 `count` 降序（同 count 按 host 升序，保证稳定） */
-  hosts: Array<{ host: string; cls: CdnKind; flavor: OfficialFlavor; count: number }>;
+  hosts: Array<{
+    host: string;
+    cls: CdnKind;
+    flavor: OfficialFlavor;
+    /** 只看主机时的类别。见下面的「为什么可选」 */
+    hostCls?: CdnKind;
+    count: number;
+  }>;
+  /**
+   * ## 为什么 `hostCls` 在**快照**里是可选的（而在 `HostStat` 里是必填的）
+   *
+   * 这份快照要跨 world 传输（`page: loading-snapshot` → `panel-data.ts`），
+   * 而且被**几十个测试**当作 fixture 手工构造。做成必填会让所有与 `hostCls`
+   * 无关的断言（时间轴行、换线次数、导出白名单……）因为一个缺字段而全部变红 ——
+   * 那会让"契约没变"的证据被淹没在噪音里。同一条理由写在上面 `filter?` 那里。
+   *
+   * 分工因此是：
+   *
+   * | 结构 | 必填？ | 谁填 |
+   * | --- | --- | --- |
+   * | `HostStat`（采集侧内部） | **必填** | `recordResource()` —— 漏存会让面板永远退回橙色 P2P |
+   * | `MediaHost`（`resolveMediaHost` 产出） | **必填** | `classifyCdn(host)` 多问一次 |
+   * | `LoadingSnapshotLite`（跨 world DTO） | 可选 | `snapshotOf()` 恒填；fixture 可不填 |
+   *
+   * 消费方**必须自己兜底**：`renderedKind(cls, hostCls)` 在 `hostCls` 缺席时
+   * 按 `cls` 处理 —— 也就是保留旧行为（宁可显示橙色 P2P：误报"官方"才是静默失败）。
+   */
   /** 归一后的时间轴（来自 `core/loading/buildTimeline`） */
   events: LoadEvent[];
   /** 是否因超出 200 条上限而丢过较早的事件 */
@@ -294,9 +341,34 @@ export function hostFromUrl(url: string): string | null {
 
 /** `resolveMediaHost()` 的结果 */
 export interface MediaHost {
+  /** 纯 hostname（唯一被保留下来的字符串，见文件头第 1 条） */
   host: string;
+  /** 带上 query 后的线路分类（第 5 条 `os=mcdn` 会影响它） */
   cls: CdnKind;
+  /** 官方线路的二级分类；非 `official` 恒为 `null` */
   flavor: OfficialFlavor;
+  /**
+   * **只看主机（不传 `search`）时**判成什么 —— ADR 0042。
+   *
+   * ## 为什么需要第二个类别
+   *
+   * 候选过滤（ADR 0039）把 PCDN 候选的 authority 换成官方镜像、`search` 一字不动
+   * （签名参数 `uparams` 含 `os`，删了 403）。改写后是「官方镜像 + `os=mcdn`」，
+   * 第 5 条仍命中 → `cls` 还是 `pcdn`，但它**已经不在 PCDN 上取流了**。
+   *
+   * 推导（面板据此选文案）：
+   *
+   * | `hostCls` | `cls` | 含义 |
+   * | --- | --- | --- |
+   * | `official` | `pcdn` | 主机本身是官方镜像，只因**资源标记**是 mcdn 才判成 pcdn |
+   * | `pcdn` | `pcdn` | 真实 PCDN 主机（标签 / 供应商域 / IP） |
+   * | 其余 | 与 `hostCls` 相同 | `os=mcdn` 对它没起作用 |
+   *
+   * ⚠️ **语义仍由 `classify.ts` 定义**：这里只是多问一次同一个纯函数。
+   * 面板**不许**自己写一份官方域表 —— `classify.ts` 第 2 条纪律明确禁止。
+   * ⚠️ 边界 5：这是个枚举，不是 query，所以进快照不违反"`search` 不进快照"。
+   */
+  hostCls: CdnKind;
 }
 
 /** 媒体分片的扩展名（实测 20 个视频的 `.m4s` 全集；`.mp4` / `.flv` 兜住非 DASH 场景） */
@@ -470,8 +542,19 @@ export function resolveMediaHost(url: string): MediaHost | null {
 
   // query 在这一行被判读，之后不再被任何结构引用（见上面的边界说明）
   const { cls, flavor } = classifyCdn(host, parsed.search);
+  /**
+   * ## 第二个类别：只看主机（ADR 0042）
+   *
+   * `classifyCdn(host)` 不传 `search` ⇒ 第 5 条（`os=mcdn`）不可能命中 ⇒ 得到的是
+   * 「这台机器本身属于哪条线路」。改写后的官方镜像在这一格是 `official`，
+   * 而带 query 的 `cls` 仍是 `pcdn` —— 那一个差异正是面板要如实说出来的事实。
+   *
+   * ⚠️ 仍然只是**问同一个纯函数**（不是另写一份域名表，见 `MediaHost.hostCls`）。
+   * ⚠️ 返回值里只有枚举，没有 query：`host` 仍是唯一被保留下来的字符串。
+   */
+  const hostCls = classifyCdn(host).cls;
   // ⚠️ 不再因为 `unknown` 返回 null —— 见函数头 P0-1 那一段
-  return { host, cls, flavor };
+  return { host, cls, flavor, hostCls };
 }
 
 /**
@@ -575,7 +658,16 @@ export function recordResource(state: LoadingTraceState, entry: ResourceEntryLik
   if (known !== undefined) {
     known.count += 1;
   } else {
-    state.hosts.set(resolved.host, { cls: resolved.cls, flavor: resolved.flavor, count: 1 });
+    /**
+     * ⚠️ `hostCls` 必须一起存（ADR 0042）：面板要区分"官方镜像 + `os=mcdn`"与
+     * "真实 PCDN 主机"，判据就是这个字段。漏存会让面板永远退回橙色 P2P。
+     */
+    state.hosts.set(resolved.host, {
+      cls: resolved.cls,
+      flavor: resolved.flavor,
+      hostCls: resolved.hostCls,
+      count: 1,
+    });
   }
 
   // 同一线路类别的连续分片（含同类别内换机器）：计数已加过，事件不再发
@@ -757,7 +849,14 @@ export function snapshotOf(
   video: LoadingSnapshotLite['video'],
 ): LoadingSnapshotLite {
   const hosts = Array.from(state.hosts.entries())
-    .map(([host, stat]) => ({ host, cls: stat.cls, flavor: stat.flavor, count: stat.count }))
+    .map(([host, stat]) => ({
+      host,
+      cls: stat.cls,
+      flavor: stat.flavor,
+      // ADR 0042：摊出来，面板与导出都要靠它分辨"官方镜像 + os=mcdn"
+      hostCls: stat.hostCls,
+      count: stat.count,
+    }))
     .sort((a, b) => (a.count === b.count ? (a.host < b.host ? -1 : 1) : b.count - a.count));
 
   // 排序后第一条真实线路就是 count 最大的那条；`unknown` 不参与（它没有线路）
@@ -767,7 +866,10 @@ export function snapshotOf(
   return {
     present: hosts.length > 0 || timeline.events.length > 0,
     confidence: hosts.length > 0 ? 'measured' : 'none',
-    actual: top === undefined ? null : { host: top.host, cls: top.cls, flavor: top.flavor },
+    actual:
+      top === undefined
+        ? null
+        : { host: top.host, cls: top.cls, flavor: top.flavor, hostCls: top.hostCls },
     hosts,
     events: timeline.events,
     truncated: state.truncated || timeline.truncated,

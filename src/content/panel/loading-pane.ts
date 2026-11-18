@@ -163,7 +163,9 @@ const TITLE_UNREADABLE = '读取失败 · 刷新页面后重试';
 /** 官方线路的主干；括号部分由 `flavor` 拼，认不出时不加括号 */
 const TITLE_OFFICIAL = 'B站官方线路';
 
-/** 官方线路的两种括号后缀。`flavor === null` 时**一个都不选**（不猜） */
+/**
+ * 官方线路的两种括号后缀。`flavor === null` 时**一个都不选**（不猜）
+ */
 const OFFICIAL_SUFFIX: Record<'self-built' | 'partner', string> = {
   'self-built': '（自建 CDN）',
   partner: '（服务商 CDN）',
@@ -173,19 +175,69 @@ const TITLE_PCDN = '第三方加速线路（PCDN）';
 const TITLE_THIRD = '第三方线路';
 
 /**
+ * 「主机是官方镜像、只因资源标记才是 mcdn」那一档的文案（ADR 0042）。
+ *
+ * ## 为什么必须**同时**说两件事
+ *
+ * 用户看到的那条线路有两个互相独立的事实：
+ *
+ * | 事实 | 来自 | 结论 |
+ * | --- | --- | --- |
+ * | 请求落在 `upos-sz-mirrorhw.bilivideo.com`（官方镜像） | 实际请求的 host | 流量**不走** PCDN |
+ * | 资源的源标记是 `os=mcdn` | URL 的 query（`classifyCdn()` 第 5 条） | 不是"完全干净的官方资源" |
+ *
+ * 只说前一件是在夸功（"已经全好了"），只说后一件是沿用旧错误（"还是 P2P"）。
+ *
+ * ## ⚠️ 不许写成「已回退」/「已修复」
+ *
+ * 我们没有"源站到底是谁"的观测 —— 只有「改写了 authority」与「首块字节与官方基线
+ * 完全相同」这两条证据（ADR 0042 §1）。写"已回退"就是把推断说成观测。
+ *
+ * ## ⚠️ 也**不是**「B站官方线路（服务商 CDN）」
+ *
+ * 走 `pcdn` 分支时 `flavor` 恒为 `null`（第 5 条不给机型），编一个机型等于替分类器
+ * 下结论 —— 与 `flavor === null` 不加括号是同一条纪律。
+ */
+const TITLE_MIRROR_MCDN = '官方镜像（资源标记为 mcdn）';
+
+/**
+ * 这条线路**实际走的是哪条线**（ADR 0042 的核心判据）。
+ *
+ * `cls === 'pcdn'` 但 `hostCls === 'official'` ⇒ 主机本身是官方镜像，
+ * 只因资源的源标记 `os=mcdn` 才被判成 pcdn —— 那正是候选过滤（ADR 0039）改写后的产物。
+ *
+ * @param cls 带 query 判出的类别（`hosts[].cls` / `events[].kind`）
+ * @param hostCls 只看主机判出的类别（`hosts[].hostCls`）；缺席（旧快照）时按 `cls` 处理
+ * @returns 用于显示与图例的类别：这一档折回 `'official'`
+ */
+export function renderedKind(cls: CdnKind, hostCls: CdnKind | undefined): CdnKind {
+  return cls === 'pcdn' && hostCls === 'official' ? 'official' : cls;
+}
+
+/**
  * 线路 → 文案 + 色调 + 形状。
  *
  * 七种情况里的前六种在这里（第七种"没人应答"在 `buildLoadingQuick` 里，
  * 因为它不是"线路"，是"没读到"）。
  *
+ * ## 2026-11-18（ADR 0042）：`pcdn` 分两档
+ *
+ * | 条件 | 文案 | 为什么 |
+ * | --- | --- | --- |
+ * | `cls === 'pcdn'` 且 `hostCls !== 'official'` | 「第三方加速线路（PCDN）」橙色菱形 | **真实 PCDN 主机**，一个字不改 |
+ * | `cls === 'pcdn'` 且 `hostCls === 'official'` | 「官方镜像（资源标记为 mcdn）」官方色实心圆 | 主机已是官方镜像，那句 P2P 是**显示错误** |
+ *
+ * 判据由 `renderedKind()` 一处给出 —— 面板**不自己**写官方域表
+ * （`classify.ts` 第 2 条纪律：另写一份域名表必然漂移）。
+ *
  * @param actual 快照里的 `actual`；`null` 表示还没识别出任何线路
  */
 export function describeLine(
-  actual: { cls: CdnKind; flavor: OfficialFlavor } | null,
+  actual: { cls: CdnKind; flavor: OfficialFlavor; hostCls?: CdnKind } | null,
 ): LineDescription {
   if (actual === null) return { title: TITLE_UNKNOWN, tone: 'muted', marker: 'ring' };
 
-  switch (actual.cls) {
+  switch (renderedKind(actual.cls, actual.hostCls)) {
     case 'official': {
       /**
        * ⚠️ `flavor === null` 时**不加括号**。
@@ -195,6 +247,13 @@ export function describeLine(
        * 用户会拿这句话去对照播放页右键的「视频统计信息」，说错就被抓。
        */
       const suffix = actual.flavor === null ? '' : OFFICIAL_SUFFIX[actual.flavor];
+      /**
+       * `cls` 是 pcdn 却被折回官方的那一档（`os=mcdn` 误判）：走镜像文案，
+       * **不**去拼 flavor 括号 —— 第 5 条判据不给机型，编一个就是替分类器下结论。
+       */
+      if (actual.cls === 'pcdn') {
+        return { title: TITLE_MIRROR_MCDN, tone: 'ok', marker: 'disc' };
+      }
       return { title: `${TITLE_OFFICIAL}${suffix}`, tone: 'ok', marker: 'disc' };
     }
     case 'pcdn':
@@ -233,11 +292,21 @@ export function describeSnapshotLine(snapshot: LoadingSnapshotLite): LineDescrip
   return { title: describeUnknownSource(unknownCount), tone: 'muted', marker: 'dashed' };
 }
 
-/** 结论卡里那个小胶囊。`null` = 没有线路可标（不编一个「未知」标签） */
+/**
+ * 结论卡里那个小胶囊。`null` = 没有线路可标（不编一个「未知」标签）。
+ *
+ * ⚠️ ADR 0042：胶囊与大字结论必须**同一口径**。大字说「官方镜像」而胶囊还写「PCDN」，
+ * 就是卡里自己打架 —— 所以这里也走 `renderedKind()`，不另判一次。
+ *
+ * @param cls `actual.cls`
+ * @param hostCls `actual.hostCls`；旧快照缺席时按 `cls` 处理
+ */
 export function describeKindPill(
   cls: CdnKind | null,
+  hostCls?: CdnKind,
 ): { text: string; tone: 'good' | 'warn' | 'neutral' } | null {
-  switch (cls) {
+  if (cls === null) return null;
+  switch (renderedKind(cls, hostCls)) {
     case 'official':
       return { text: '官方 CDN', tone: 'good' };
     case 'pcdn':
@@ -374,21 +443,50 @@ export function describeCounts(snapshot: LoadingSnapshotLite): string[] {
  *
  * ⚠️ 仍然**不许**写"已回退"：我们没有"什么时候被踢下来"的观测。
  *
+ * ## 2026-11-18（ADR 0042 §5.4）：计数**排除**「官方镜像 + os=mcdn」那批
+ *
+ * 那批的 `cls` 是 `pcdn`、但 `hostCls` 是 `official` —— 它们都在官方镜像上，
+ * 与同一张卡上「官方 CDN」的大字结论一致。把它们算进"其中 N 条是 P2P"会让
+ * 结论卡自己打架（正是本函数头部记的那次真机矛盾），而且那个数字是用户判断
+ * "是不是被切走了"的主要依据。
+ *
  * @returns `null` = 不需要这句（没有 P2P，或者结论本身就是 P2P）
  */
 export function describePcdnCaveat(snapshot: LoadingSnapshotLite): string | null {
   const actual = snapshot.actual;
   // 结论已经是 P2P 了："其中 N 条是 P2P，未占主导"会与大字结论打架
-  if (actual === null || actual.cls === 'pcdn') return null;
+  if (actual === null) return null;
+  // ⚠️ 走 `renderedKind()`：结论大字是「官方镜像」时，这句同样不该出现
+  if (renderedKind(actual.cls, actual.hostCls) === 'pcdn') return null;
 
-  const pcdnHosts = snapshot.hosts.filter((h) => h.cls === 'pcdn').length;
+  /**
+   * 只看**真实 PCDN 主机**：`hostCls === 'official'` 的那批走的是官方镜像，
+   * 把它们的 `cls: 'pcdn'` 算进来就是让结论卡自相矛盾（ADR 0042 §5.4）。
+   * `hostCls` 缺席（旧快照）时按 `cls` 处理 —— 与 `renderedKind()` 同一口径。
+   */
+  const pcdnHosts = snapshot.hosts.filter((h) => renderedKind(h.cls, h.hostCls) === 'pcdn').length;
   if (pcdnHosts === 0) return null;
 
   /**
    * 结论看的是**整次加载**（argmax），这句补充的是**此刻**。
    * 两者不同时以"此刻"为准 —— 那才是用户正在经历的事。
+   *
+   * ⚠️ 此刻那条若是「官方镜像 + os=mcdn」，`kind` 仍是 `pcdn`，但此刻的**主机**
+   * 是官方镜像 —— 说"现在正在用 P2P 线路"就是旧错误复发。所以判据不能只看 `kind`，
+   * 还要看这个 host 在 `hosts` 里的 `hostCls`。
    */
-  if (currentSegment(snapshot.events)?.kind === 'pcdn') return '现在正在用 P2P 线路';
+  const current = currentSegment(snapshot.events);
+  if (current?.kind === 'pcdn') {
+    const currentHost = current.host ?? null;
+    const currentStat =
+      currentHost === null ? undefined : snapshot.hosts.find((h) => h.host === currentHost);
+    if (
+      currentStat === undefined ||
+      renderedKind(currentStat.cls, currentStat.hostCls) === 'pcdn'
+    ) {
+      return '现在正在用 P2P 线路';
+    }
+  }
 
   return `其中 ${String(pcdnHosts)} 条是 P2P 线路，未占主导`;
 }
@@ -604,12 +702,30 @@ export function timelineFootnote(snapshot: LoadingSnapshotLite): string {
  *
  * `ext-patch` 是例外：它**保留**空心圆 + `accent` —— 它不是里程碑，是"扩展动了
  * 这一次取流"这一刻，而且图例里已经有一条「○ 扩展介入」与它对应。
+ *
+ * ## 2026-11-18（ADR 0042）：`kind: 'pcdn'` 分两档
+ *
+ * | 条件 | 画什么 |
+ * | --- | --- |
+ * | 真实 PCDN 主机 | 橙色菱形（不变） |
+ * | 官方镜像 + `os=mcdn` | **官方实心圆 + ok 色** —— 请求确实落在官方镜像上 |
+ *
+ * 判据同样走 `renderedKind()`：`events` 里只有 `kind`（带 query 的类别），
+ * `hostCls` 由调用方从 `hosts` 里按 host 查出来传进来（事故现场那份快照的
+ * `hosts` 一定有它；查不到就按 `kind` 处理，宁可按旧行为显示橙色 P2P ——
+ * 误报"P2P"是可感知的假警报，误报"官方"才是静默失败）。
+ *
+ * @param event 一条已归一的事件
+ * @param hostCls 该事件 host 的「只看主机」类别；`undefined` = 查不到 / 旧快照
  */
-export function describeEventMarker(event: LoadEvent): { tone: LoadingTone; marker: MarkerShape } {
+export function describeEventMarker(
+  event: LoadEvent,
+  hostCls?: CdnKind,
+): { tone: LoadingTone; marker: MarkerShape } {
   if (event.stage === 'ext-patch') return { tone: 'accent', marker: 'ring' };
   if (event.stage === 'error') return { tone: 'bad', marker: 'ring' };
 
-  switch (event.kind) {
+  switch (event.kind === undefined ? undefined : renderedKind(event.kind, hostCls)) {
     case 'official':
       return { tone: 'ok', marker: 'disc' };
     case 'pcdn':
@@ -705,8 +821,24 @@ function eventDetail(event: LoadEvent): string | null {
  * `stage` 为 `null`、`marker` 为 `null`、`meta` 为空，文案见 `gapText()`。
  * 参数用**上一条行覆盖到的结束时刻**（配对行是返回时刻），所以只会把间隔算小、
  * 不会把一段正在下载的时间说成"没有事件"。
+ *
+ * ## ⚠️ `hostCls` 从哪来（ADR 0042）
+ *
+ * 事件里只有 `kind`（**带 query** 判出的类别），没有「只看主机」的那一档。
+ * 而「官方镜像 + `os=mcdn`」的事件 `kind` 是 `pcdn`、真实主机却是官方镜像 ——
+ * 不给它 `hostCls`，时间轴就会继续画橙色 P2P（那正是本次要修的病）。
+ *
+ * 所以调用方把快照里的 `hosts` 摊成 `host → hostCls` 传进来（`loadingDetailPane` 做）。
+ * **不传**时按 `kind` 处理 —— 保留旧行为，且宁可显示橙色 P2P：
+ * 误报"P2P"是可感知的假警报，误报"官方"才是静默失败（`classify.ts` 文件头第 1 条）。
+ *
+ * @param events 归一后的事件序列（`buildTimeline()` 已排好序）
+ * @param hostClsByHost `host → 只看主机时的类别`；`undefined` = 调用方没给（按 `kind` 画）
  */
-export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
+export function buildTimelineRows(
+  events: readonly LoadEvent[],
+  hostClsByHost?: ReadonlyMap<string, CdnKind>,
+): TimelineRow[] {
   const pairByKey = new Map<string, SegmentPair>();
   for (const pair of pairSegments(events)) pairByKey.set(segKey(pair.t, pair.host), pair);
 
@@ -768,7 +900,14 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
       pushGapBefore(pair.t);
 
       const unmatched = pair.doneAt === null || pair.ms === null;
-      const look = describeEventMarker(event);
+      /**
+       * ⚠️ 传 `hostCls`：这一行画的是「这条线路」，官方镜像那一档必须画成官方圆点
+       * （ADR 0042 §5.3 第二行）。查不到时按 `kind` 画。
+       */
+      const look = describeEventMarker(
+        event,
+        pair.host === null ? undefined : hostClsByHost?.get(pair.host),
+      );
       rows.push({
         kind: 'segment',
         stage: event.stage,
@@ -794,7 +933,10 @@ export function buildTimelineRows(events: readonly LoadEvent[]): TimelineRow[] {
       pushGapBefore(event.t);
 
       const line = isLineRow(event);
-      const look = describeEventMarker(event);
+      const look = describeEventMarker(
+        event,
+        event.host === undefined ? undefined : hostClsByHost?.get(event.host),
+      );
       /**
        * 要不要画圆点。
        *
@@ -1076,14 +1218,28 @@ const LEGEND_ORDER: readonly ('official' | 'pcdn' | 'third-party')[] = [
  * 只看 hosts 会漏掉"请求发生过但统计没记到"的边角，只看 events 会漏掉
  * 那些只出现在 hosts 里的线路（事件被环形缓冲挤掉时就是这样）。
  * `unknown` 不算线路，不进图例。
+ *
+ * ## 2026-11-18（ADR 0042）：按 `renderedKind()` 归一
+ *
+ * 「官方镜像 + `os=mcdn`」的 `cls` 是 `pcdn`，但时间轴上画的是官方实心圆 ——
+ * 图例若还列「P2P」，就出现了一个**画面上不存在的形状**（图例只承诺出现过的样子，
+ * 见 `LEGEND_LOOK` 的注释）。所以这里折回 `official`。
+ *
+ * @param snapshot 快照
  */
 export function legendKinds(
   snapshot: LoadingSnapshotLite,
 ): Array<'official' | 'pcdn' | 'third-party'> {
+  /** host → 只看主机的类别；`events` 只有 `kind`，得靠它还原 */
+  const hostClsByHost = new Map<string, CdnKind | undefined>();
   const seen = new Set<string>();
-  for (const h of snapshot.hosts) seen.add(h.cls);
+  for (const h of snapshot.hosts) {
+    hostClsByHost.set(h.host, h.hostCls);
+    seen.add(renderedKind(h.cls, h.hostCls));
+  }
   for (const e of snapshot.events) {
-    if (e.kind !== undefined) seen.add(e.kind);
+    if (e.kind === undefined) continue;
+    seen.add(renderedKind(e.kind, e.host === undefined ? undefined : hostClsByHost.get(e.host)));
   }
   return LEGEND_ORDER.filter((k) => seen.has(k));
 }
@@ -1193,7 +1349,10 @@ function conclusionCard(snapshot: LoadingSnapshotLite): HTMLElement {
   const body = el('div', 'ld-conclusion-body');
   body.appendChild(el('span', 'ld-conclusion-kicker', '本次加载'));
   body.appendChild(el('span', 'ld-conclusion-title', line.title));
-  const tag = describeKindPill(known ? (snapshot.actual?.cls ?? null) : null);
+  const tag = describeKindPill(
+    known ? (snapshot.actual?.cls ?? null) : null,
+    known ? snapshot.actual?.hostCls : undefined,
+  );
   // 认不出来就没有胶囊 —— 不编一个「未知」标签（那看起来像一种线路）
   if (tag !== null) {
     const holder = el('div', 'ld-conclusion-tag');
@@ -1277,6 +1436,23 @@ function timelineRow(row: TimelineRow, isLast: boolean): HTMLElement {
 }
 
 /**
+ * `host → 只看主机时的类别`（ADR 0042）。
+ *
+ * 时间轴与 `events` 只带 `kind`（带 query 的类别），而「官方镜像 + `os=mcdn`」
+ * 要靠 `hostCls` 才认得出来。唯一的数据源是同一个快照的 `hosts` ——
+ * 这个 map 只是把它换个形状，**不做任何判定**（判定在 `classify.ts`）。
+ *
+ * @param snapshot 快照
+ */
+export function hostClsOf(snapshot: LoadingSnapshotLite): Map<string, CdnKind> {
+  const map = new Map<string, CdnKind>();
+  for (const h of snapshot.hosts) {
+    if (h.hostCls !== undefined) map.set(h.host, h.hostCls);
+  }
+  return map;
+}
+
+/**
  * 二级浮层「本次加载」。
  *
  * ## 结构（自上而下）
@@ -1348,7 +1524,7 @@ export function loadingDetailPane(
 
   box.appendChild(el('p', 'diag-section', '时间轴'));
 
-  const rows = buildTimelineRows(snapshot.events);
+  const rows = buildTimelineRows(snapshot.events, hostClsOf(snapshot));
   if (rows.length === 0) {
     box.appendChild(el('p', 'pane-note', '还没有加载事件。'));
   } else {

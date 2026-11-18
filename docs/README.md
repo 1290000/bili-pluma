@@ -105,6 +105,7 @@
 | [0039](./decisions/0039-rewrite-pcdn-authority.md) | **把 PCDN 候选的 authority 换成官方镜像**（升级 ADR 0038 的删除路线）：只换 host、不增删候选、path/query 一字不动；`/v1/resource/upgcxcode/` 走 proxy 包装，清单经 `cfg` 下发；验证门通过前保持默认关闭 |
 | [0040](./decisions/0040-festival-page-injection.md) | **注入面扩大到活动专区页**：两个 content 入口各加一条精确 `/festival/*` 模式，`parsePlayPage()` 认活动页（bvid 在 query）；不改 DNR / 白名单 / Cookie 读取，流接管另属第 3 步 |
 | [0041](./decisions/0041-pgc-callback-takeover.md) | **PGC 页回调接管**：`createPlayer` 返回前同步替换 `reqHttpPlayUrlInfo`（保留 requestConfig 原对象 / 摘 prefetch 并兜底还原 / 门控未知不发请求 / 失败交还原回调）；取流结果合并进 SSR 骨架（`STREAM_FIELDS` 白名单）；`PGC_CALLBACK_TAKEOVER` 常量是唯一回滚开关 |
+| [0042](./decisions/0042-explain-cdn-hit-rule.md) | **把 `os=mcdn` 判据的命中来源结构化输出**：新增 `explainCdn()` 返回 `rule`，`classifyCdn()` 委托它、返回形状与语义一个字不改（30 处精确断言零改动）；采集侧补 `hostCls`（只看主机时的类别）；面板据此把「官方镜像 + 资源标记 mcdn」如实说出来，不再画橙色 P2P。判据不收窄（收窄会漏判真实 PCDN） |
 
 > ⚠️ **这张表必须与实际 `docs/decisions/` 对账** —— 2026-10-30 发现它漏了 0029/0030
 > （新增 ADR 时忘了登记）。现在由 `check-adr-index` 自动断言，漏登记会红。

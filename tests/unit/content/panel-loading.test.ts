@@ -40,6 +40,7 @@ import {
   describePcdnCaveat,
   describeSnapshotLine,
   gapText,
+  hostClsOf,
   hostCountText,
   legendEntries,
   legendHasExtPatch,
@@ -47,6 +48,7 @@ import {
   loadingDetailPane,
   loadingQuickRow,
   pageOriginAnchor,
+  renderedKind,
   stageLabel,
   timelineFootnote,
   TIMELINE_FOOTNOTE,
@@ -868,6 +870,388 @@ describe('「扩展介入」事件（ext-patch）', () => {
   it('⛔ 没有 ext-patch 事件时，时间轴上不出现「扩展介入」', () => {
     const rows = buildTimelineRows(snapshot().events);
     expect(rows.map((r) => r.label)).not.toContain('扩展介入');
+  });
+});
+
+// ─────────────────── ADR 0042：官方镜像 + os=mcdn 不许画成 P2P ───────────────────
+
+/**
+ * ## 这一组修的是什么（真机报的「P2P 绕过屏蔽 PCDN 开关」）
+ *
+ * 候选过滤把 PCDN 候选的 authority 换成官方镜像，`search` 一字不动（签名参数
+ * `uparams` 含 `os`，删了 403）。改写后是「官方镜像 + `os=mcdn`」→
+ * `classifyCdn()` 第 5 条照旧命中 → 面板画橙色 P2P、结论卡说「其中 N 条是 P2P」。
+ *
+ * 那是**显示错误**，不是取流错误（首块字节与官方基线完全相同）。
+ *
+ * ## 判据只有一个：`hostCls`
+ *
+ * | `cls` | `hostCls` | 文案 |
+ * | --- | --- | --- |
+ * | `pcdn` | `official` | 「官方镜像（资源标记为 mcdn）」+ 官方色实心圆 |
+ * | `pcdn` | `pcdn` | 「第三方加速线路（PCDN）」+ 橙色菱形（**一个字不改**） |
+ * | `official` | `official` | 「B站官方线路…」+ 官方色实心圆（不变） |
+ *
+ * 文案必须**同时**说两件事：走的是官方镜像（host 事实）、资源的源标记是 mcdn
+ * （query 事实）。只说一半就是要么夸功、要么沿用旧错误。
+ *
+ * ⛔ 不许出现「已回退」/「已修复」：没有"源站到底是谁"的观测。
+ */
+describe('ADR 0042 · 三行表：真实 PCDN / 官方镜像 + os=mcdn / 纯官方', () => {
+  it('① 真实 PCDN 主机（hostCls=pcdn）→ 文案与形状**一个字不改**', () => {
+    const line = describeLine({ cls: 'pcdn', flavor: null, hostCls: 'pcdn' });
+    expect(line.title).toBe('第三方加速线路（PCDN）');
+    expect(line.tone).toBe('warn');
+    expect(line.marker).toBe('diamond');
+  });
+
+  it('★ ② 官方镜像 + os=mcdn（cls=pcdn / hostCls=official）→ 官方文案 + 官方形状', () => {
+    const line = describeLine({ cls: 'pcdn', flavor: null, hostCls: 'official' });
+    /**
+     * 必须同时说两件事：
+     * - 「官方镜像」= host 事实（所以流量不走 PCDN）
+     * - 「资源标记为 mcdn」= query 事实（所以不是"完全干净的官方资源"）
+     */
+    expect(line.title).toContain('官方镜像');
+    expect(line.title).toContain('mcdn');
+    // 不许再说 P2P / 加速线路 —— 那句就是本次要修的病
+    expect(line.title).not.toContain('P2P');
+    expect(line.title).not.toContain('加速');
+    // 形状与色调必须折回官方：橙色菱形在时间轴上表示"正在走 P2P"
+    expect(line.marker).toBe('disc');
+    expect(line.tone).toBe('ok');
+  });
+
+  it('⛔ ② 档的文案里不许出现「已回退」/「已修复」', () => {
+    /**
+     * 我们没有"源站到底是谁"的观测，只有「改写了 authority」与
+     * 「首块字节与官方基线相同」两条证据（ADR 0042 §1）。
+     * 把推断写成"已修复"就是编事实。
+     */
+    const title = describeLine({ cls: 'pcdn', flavor: null, hostCls: 'official' }).title;
+    expect(title).not.toContain('已回退');
+    expect(title).not.toContain('已修复');
+    expect(title).not.toContain('回退');
+    expect(title).not.toContain('修复');
+  });
+
+  it('③ 纯官方（official / hostCls=official）→ 与原来一样', () => {
+    const line = describeLine({
+      cls: 'official',
+      flavor: 'self-built',
+      hostCls: 'official',
+    });
+    expect(line.title).toBe('B站官方线路（自建 CDN）');
+    expect(line.tone).toBe('ok');
+    expect(line.marker).toBe('disc');
+  });
+
+  it('★ `hostCls` 缺席（旧快照）→ 按 `cls` 处理，保留旧行为（宁可显示橙色 P2P）', () => {
+    /**
+     * 误报"P2P"是可感知的假警报；误报"官方"才是静默失败
+     * （`classify.ts` 文件头第 1 条）。所以兜底方向只能是"继续画橙色"。
+     */
+    const line = describeLine({ cls: 'pcdn', flavor: null });
+    expect(line.title).toBe('第三方加速线路（PCDN）');
+    expect(line.marker).toBe('diamond');
+  });
+
+  it('★ 结论卡胶囊同一口径：官方镜像那一档不许还写 PCDN', () => {
+    // 大字说「官方镜像」而胶囊写「PCDN」，就是卡里自己打架
+    expect(describeKindPill('pcdn', 'official')).toEqual({ text: '官方 CDN', tone: 'good' });
+    // 真实 PCDN 主机不变
+    expect(describeKindPill('pcdn', 'pcdn')).toEqual({ text: 'PCDN', tone: 'warn' });
+    // 缺席时退回旧行为
+    expect(describeKindPill('pcdn')).toEqual({ text: 'PCDN', tone: 'warn' });
+  });
+
+  it('★ `renderedKind()` 是唯一判据（三行表都走它）', () => {
+    expect(renderedKind('pcdn', 'official')).toBe('official');
+    expect(renderedKind('pcdn', 'pcdn')).toBe('pcdn');
+    expect(renderedKind('pcdn', undefined)).toBe('pcdn');
+    // 非 pcdn 的类别一律原样返回 —— 这个函数**只**折那一档
+    expect(renderedKind('official', 'official')).toBe('official');
+    expect(renderedKind('third-party', 'third-party')).toBe('third-party');
+    expect(renderedKind('unknown', 'unknown')).toBe('unknown');
+    // 反例守卫：`hostCls === 'official'` 但 `cls === 'official'` 时不该被"折"出别的值
+    expect(renderedKind('official', 'official')).toBe('official');
+  });
+});
+
+describe('ADR 0042 · 时间轴节点：官方镜像 + os=mcdn 不画橙色 P2P', () => {
+  /**
+   * 改写后的真实形态：`kind` 仍是 `pcdn`（带 query 判的），但那个 host 的
+   * `hostCls` 是 `official`。时间轴靠 `hostClsByHost` 把它还原成官方圆点。
+   */
+  const REWRITTEN_SNAPSHOT = snapshot({
+    actual: {
+      host: 'upos-sz-mirrorhw.bilivideo.com',
+      cls: 'pcdn',
+      flavor: null,
+      hostCls: 'official',
+    },
+    hosts: [
+      {
+        host: 'upos-sz-mirrorhw.bilivideo.com',
+        cls: 'pcdn',
+        flavor: null,
+        hostCls: 'official',
+        count: 3,
+      },
+    ],
+    events: [
+      { t: 1000, stage: 'seg-req', host: 'upos-sz-mirrorhw.bilivideo.com', kind: 'pcdn' },
+      { t: 1100, stage: 'seg-res', host: 'upos-sz-mirrorhw.bilivideo.com', kind: 'pcdn' },
+    ],
+  });
+
+  it('★ 时间轴那一行是**官方实心圆 + ok 色**，不是橙色菱形', () => {
+    const rows = buildTimelineRows(REWRITTEN_SNAPSHOT.events, hostClsOf(REWRITTEN_SNAPSHOT));
+    const line = rows.find((r) => r.kind === 'segment');
+    expect(line, '找不到分片行').toBeDefined();
+    expect(line?.marker).toBe('disc');
+    expect(line?.tone).toBe('ok');
+    expect(line?.marker).not.toBe('diamond');
+  });
+
+  it('★ 真实 PCDN 主机的时间轴行仍是橙色菱形（一个字不改）', () => {
+    // 实测快照里 `xy220…mcdn.bilivideo.cn` 的 hostCls 是 pcdn
+    const real = snapshot({
+      hosts: [
+        {
+          host: 'xy220x180x77x45xy.mcdn.bilivideo.cn',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'pcdn',
+          count: 1,
+        },
+      ],
+      events: [
+        { t: 1000, stage: 'seg-req', host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', kind: 'pcdn' },
+      ],
+    });
+    const line = buildTimelineRows(real.events, hostClsOf(real)).find((r) => r.kind === 'segment');
+    expect(line?.marker).toBe('diamond');
+    expect(line?.tone).toBe('warn');
+  });
+
+  it('★ 不传 `hostClsByHost` 时按 `kind` 画（旧行为，宁可显示橙色 P2P）', () => {
+    const rows = buildTimelineRows(REWRITTEN_SNAPSHOT.events);
+    const line = rows.find((r) => r.kind === 'segment');
+    expect(line?.marker).toBe('diamond');
+  });
+
+  it('★ 图例里不许出现一个画面上不存在的形状', () => {
+    /**
+     * 官方镜像那一档的 `cls` 是 `pcdn`，但画的都是官方圆点 ——
+     * 图例若还列「P2P」，用户会去找那些橙色菱形，然后找不到。
+     */
+    expect(legendKinds(REWRITTEN_SNAPSHOT)).toEqual(['official']);
+    expect(legendKinds(REWRITTEN_SNAPSHOT)).not.toContain('pcdn');
+  });
+
+  it('★ `loadingDetailPane()` 真的把 `hostCls` 传进去了（接线不是摆设）', () => {
+    /**
+     * 源码级断言：`buildTimelineRows(snapshot.events)` 单参数调用会让上面那条
+     * "画成官方圆点"失效 —— 而那正是最容易漏的一处（改完函数忘了改调用点）。
+     */
+    const src = readFileSync(
+      join(process.cwd(), 'src', 'content', 'panel', 'loading-pane.ts'),
+      'utf8',
+    );
+    expect(src).toContain('buildTimelineRows(snapshot.events, hostClsOf(snapshot))');
+    // `hostClsOf` 本身真的读的是 `hosts[].hostCls`
+    expect(src).toContain('h.hostCls');
+  });
+});
+
+describe('ADR 0042 · describePcdnCaveat 的口径：排除官方镜像那批', () => {
+  it('★ 「只有官方镜像 + os=mcdn」→ 返回 null（不再说"其中 N 条是 P2P"）', () => {
+    /**
+     * 那批的 `cls` 是 `pcdn`、但 `hostCls` 是 `official` —— 它们都在官方镜像上，
+     * 与同一张卡上「官方 CDN」的大字结论一致。算进"其中 N 条是 P2P"会让结论卡
+     * 自己打架（正是 `describePcdnCaveat()` 头部记的那次真机矛盾）。
+     */
+    const onlyMirror = snapshot({
+      actual: {
+        host: 'upos-sz-mirrorhw.bilivideo.com',
+        cls: 'pcdn',
+        flavor: null,
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'upos-sz-mirrorhw.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 5,
+        },
+        {
+          host: 'upos-sz-mirrorcos.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 3,
+        },
+      ],
+      events: [{ t: 1000, stage: 'seg-req', host: 'upos-sz-mirrorhw.bilivideo.com', kind: 'pcdn' }],
+    });
+    expect(describePcdnCaveat(onlyMirror)).toBeNull();
+  });
+
+  it('★ 真 PCDN 与官方镜像混在一起 → **只数真 PCDN**', () => {
+    const mixed = snapshot({
+      actual: {
+        host: 'cn-jsnt-ct-01-07.bilivideo.com',
+        cls: 'official',
+        flavor: 'self-built',
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'cn-jsnt-ct-01-07.bilivideo.com',
+          cls: 'official',
+          flavor: 'self-built',
+          hostCls: 'official',
+          count: 12,
+        },
+        {
+          host: 'upos-sz-mirrorhw.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 4,
+        },
+        {
+          host: 'x5zy69j.edge.mountaintoys.cn',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'pcdn',
+          count: 2,
+        },
+      ],
+      events: [
+        { t: 1000, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+      ],
+    });
+    // 3 条里只有 1 条是真实 PCDN 主机（另外两条：官方 + 官方镜像）
+    expect(describePcdnCaveat(mixed)).toBe('其中 1 条是 P2P 线路，未占主导');
+  });
+
+  it('★ 此刻那条是官方镜像（kind 仍是 pcdn）→ 不许说「现在正在用 P2P 线路」', () => {
+    /**
+     * `currentSegment()?.kind === 'pcdn'` 单独不够：官方镜像那一档的 `kind`
+     * 也是 `pcdn`。说"现在正在用 P2P 线路"就是旧错误复发。
+     * 判据要再问一次"这个 host 的 hostCls 是什么"。
+     */
+    const nowMirror = snapshot({
+      actual: {
+        host: 'cn-jsnt-ct-01-07.bilivideo.com',
+        cls: 'official',
+        flavor: 'self-built',
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'cn-jsnt-ct-01-07.bilivideo.com',
+          cls: 'official',
+          flavor: 'self-built',
+          hostCls: 'official',
+          count: 9,
+        },
+        {
+          host: 'upos-sz-mirrorhw.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 5,
+        },
+        {
+          host: 'x5zy69j.edge.mountaintoys.cn',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'pcdn',
+          count: 1,
+        },
+      ],
+      events: [
+        { t: 1000, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+        // 最后一条落在**官方镜像**上（kind 仍是 pcdn）
+        { t: 2000, stage: 'seg-req', host: 'upos-sz-mirrorhw.bilivideo.com', kind: 'pcdn' },
+      ],
+    });
+    const caveat = describePcdnCaveat(nowMirror);
+    expect(caveat).not.toBe('现在正在用 P2P 线路');
+    expect(caveat).toBe('其中 1 条是 P2P 线路，未占主导');
+  });
+
+  it('★ 此刻那条是真 PCDN 主机 → 仍换那句更强的话（既有行为不变）', () => {
+    const nowReal = snapshot({
+      actual: {
+        host: 'cn-jsnt-ct-01-07.bilivideo.com',
+        cls: 'official',
+        flavor: 'self-built',
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'cn-jsnt-ct-01-07.bilivideo.com',
+          cls: 'official',
+          flavor: 'self-built',
+          hostCls: 'official',
+          count: 9,
+        },
+        {
+          host: 'x5zy69j.edge.mountaintoys.cn',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'pcdn',
+          count: 1,
+        },
+      ],
+      events: [
+        { t: 1000, stage: 'seg-req', host: 'cn-jsnt-ct-01-07.bilivideo.com', kind: 'official' },
+        { t: 2000, stage: 'seg-req', host: 'x5zy69j.edge.mountaintoys.cn', kind: 'pcdn' },
+      ],
+    });
+    expect(describePcdnCaveat(nowReal)).toBe('现在正在用 P2P 线路');
+  });
+
+  it('结论本身就是官方镜像 → 与「其中 N 条是 P2P」不同时出现', () => {
+    /**
+     * `actual` 折回 official 之后，那句"其中 N 条"仍可能被真 PCDN 触发 ——
+     * 但结论卡的大字已经是「官方镜像」，两者同时出现会让人以为大字说错了。
+     * 这里钉的是：**只有**真 PCDN 存在时才出现那句，而且不出现"现在正在用"。
+     */
+    const mirrorTop = snapshot({
+      actual: {
+        host: 'upos-sz-mirrorhw.bilivideo.com',
+        cls: 'pcdn',
+        flavor: null,
+        hostCls: 'official',
+      },
+      hosts: [
+        {
+          host: 'upos-sz-mirrorhw.bilivideo.com',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'official',
+          count: 9,
+        },
+        {
+          host: 'x5zy69j.edge.mountaintoys.cn',
+          cls: 'pcdn',
+          flavor: null,
+          hostCls: 'pcdn',
+          count: 1,
+        },
+      ],
+      events: [{ t: 1000, stage: 'seg-req', host: 'upos-sz-mirrorhw.bilivideo.com', kind: 'pcdn' }],
+    });
+    // 大字是「官方镜像」（走 renderedKind），所以这句说"其中 1 条"是自洽的
+    expect(describeLine(mirrorTop.actual).title).toContain('官方镜像');
+    expect(describePcdnCaveat(mirrorTop)).toBe('其中 1 条是 P2P 线路，未占主导');
   });
 });
 
