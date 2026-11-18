@@ -38,6 +38,7 @@ import {
   describeLine,
   describeKindPill,
   describePcdnCaveat,
+  describeFilterFailure,
   describeSnapshotLine,
   FOOTNOTE_TIMEBASE_CLAUSE,
   gapText,
@@ -1482,6 +1483,127 @@ describe('尾注的锚点（PGC 换集后时间轴没有 nav）', () => {
     expect(clockText(59_999)).toBe('1:00.00');
     // 非法输入不拼出 NaN
     expect(clockText(Number.NaN)).toBe('0:00.00');
+  });
+});
+
+// ─────────────────── 屏蔽「开着却没换成」必须在结论卡说出来（2026-11-19）───────────────────
+
+/**
+ * 这一组守的是本项目最容易静默的那件事：**屏蔽开着、一条候选都没换掉，
+ * 而界面上一句话都没有**。
+ *
+ * 为什么它以前是空的：`describePcdnCaveat()` 的第一条判据是
+ * `renderedKind(actual) === 'pcdn' → return null`（为了不让「未占主导」与大字
+ * 结论打架）。可屏蔽全部失败时，结论大字几乎必然落在 P2P —— 于是那条判据
+ * 在最该说话的时候闭嘴。`describeFilterFailure()` 因此**排在那两条 return 之前**。
+ *
+ * 判据的反面同样重要：`applied: false` 在"这页压根没有 PCDN 候选"时也成立，
+ * 那种情形不许报警（否则每个没开屏蔽的用户都会被指责一次）。
+ */
+describe('屏蔽失败要说出来：describeFilterFailure', () => {
+  /** 构造一份带 `filter` 的快照；其余字段走默认 fixture */
+  const withFilter = (filter: Partial<NonNullable<LoadingSnapshotLite['filter']>>) =>
+    snapshot({ filter: { applied: false, rewritten: 0, proxied: 0, fallbackKept: 0, ...filter } });
+
+  it('★ 开关开着但规则没下发（rulesMissing）→ 明说是错配，不是"没换"', () => {
+    const text = describeFilterFailure(withFilter({ reason: 'rulesMissing' }));
+    expect(text).not.toBeNull();
+    expect(text).toContain('规则没下发');
+    // 不许把原因说成"换不了吧" —— 两件事的处理方向完全不同（一个是配置错配）
+    expect(text).not.toContain('换不了');
+  });
+
+  it('★ 开关开着、有候选却一条都没换成（fallbackKept>0 且 rewritten=0）→ 说出条数', () => {
+    const text = describeFilterFailure(withFilter({ fallbackKept: 3, rewritten: 0 }));
+    expect(text).not.toBeNull();
+    expect(text).toContain('3 条候选换不了');
+    expect(text).toContain('开关开着');
+  });
+
+  it('⛔ 用户自己关着（reason=off）→ 不许报警', () => {
+    // 那是他的选择，不是失败。这里报警等于指责一个他根本没要求的动作。
+    expect(describeFilterFailure(withFilter({ reason: 'off' }))).toBeNull();
+  });
+
+  it('★ 矛盾数据（off 与 fallbackKept 并存）→ 宁可不说，也不指错原因', () => {
+    /**
+     * 这条守的是 `off` 判据的**存在理由**。修复 `recordPcdnFilter()` 之前，
+     * 正常时序就能产出一份这样的快照；修复之后它仍可由**错配**产生：
+     *
+     * - 旧版 content script（只在加载时写一次 `off`）配新版主世界
+     * - 页面脚本伪造 `pcdn-filter-stats`（消息入口对页面开放、无来源校验，
+     *   见 `content.ts` 的 window listener 注释：那是**有意**的设计，因为它不驱动任何行为）
+     *
+     * 两种情况下 `reason: 'off'` 都可能与 `fallbackKept > 0` 同时出现。
+     * 此时说"开关开着但换不了"是**替用户断言一个他没做过的动作** ——
+     * 宁可什么都不说（那才是缺失信息的诚实表达），也不指着一个错的原因。
+     */
+    expect(describeFilterFailure(withFilter({ reason: 'off', fallbackKept: 3 }))).toBeNull();
+  });
+
+  it('⛔ 这页压根没有 PCDN 候选（三者皆 0、无 reason）→ 不许报警', () => {
+    /**
+     * `applied: false` 在这里同样成立，但它意味着"没什么可换"，不是"换失败"。
+     * 判据必须有"确实有候选换不了"（`fallbackKept > 0`）或"规则没到"，
+     * 否则会把"这页没 PCDN"说成"屏蔽失败"。
+     */
+    expect(describeFilterFailure(withFilter({ applied: false }))).toBeNull();
+  });
+
+  it('⛔ 已经换成过（rewritten>0）→ 不算失败，即使同时有 fallbackKept', () => {
+    // 换成过一条就不算"什么都没成"；此时「未占主导」会照常说，两条各说各的事
+    expect(describeFilterFailure(withFilter({ rewritten: 5, fallbackKept: 2 }))).toBeNull();
+    expect(describeFilterFailure(withFilter({ applied: true, rewritten: 5 }))).toBeNull();
+  });
+
+  it('⛔ 旧快照没有 filter 字段 → 不猜（既不说关着，也不说失败）', () => {
+    // 没有观测就不能断言 —— 与 `logsMeta.ok`、桥的三态同一条纪律
+    expect(describeFilterFailure(snapshot())).toBeNull();
+  });
+
+  it('★★ 屏蔽全部失败时，结论卡那句必须出现（哪怕结论大字落在 P2P）', () => {
+    /**
+     * 这是本组最关键的一条。它守的是**判据顺序**：
+     * 失败判据若排在 `renderedKind(actual) === 'pcdn' → null` 之后，
+     * 这个用例就会拿到 `null` —— 而那正是"最该说话时闭嘴"。
+     */
+    const allFailed = snapshot({
+      actual: { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null },
+      hosts: [
+        { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 4 },
+      ],
+      events: [
+        { t: 900, stage: 'seg-req', host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', kind: 'pcdn' },
+      ],
+      filter: { applied: false, rewritten: 0, proxied: 0, fallbackKept: 2 },
+    });
+    // 先证明前置条件成立：结论大字**确实**是 P2P（否则这条用例就没测到顺序）
+    expect(renderedKind(allFailed.actual?.cls ?? 'unknown', allFailed.actual?.hostCls)).toBe(
+      'pcdn',
+    );
+    expect(describePcdnCaveat(allFailed)).toContain('2 条候选换不了');
+  });
+
+  it('★ 失败那句给警示色（ld-tone-warn），普通补充句保持中性', () => {
+    /** `spyActions()` 定义在文件后面那组的作用域里，这里用等价的内联对象 */
+    const acts = { back: () => undefined, refresh: () => undefined, openDiagnostics: () => undefined };
+    const failed = loadingDetailPane(
+      ok({
+        actual: { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null },
+        hosts: [
+          { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 4 },
+        ],
+        filter: { applied: false, rewritten: 0, proxied: 0, fallbackKept: 2 },
+      }),
+      acts,
+    );
+    expect(failed.querySelector('.ld-conclusion-note')?.className).toContain('ld-tone-warn');
+
+    const normal = loadingDetailPane(ok(), acts);
+    const note = normal.querySelector('.ld-conclusion-note');
+    // 默认 fixture 是"1 条 P2P 未占主导"，不是失败 ⇒ 中性
+    expect(note?.textContent).toContain('未占主导');
+    expect(note?.className).not.toContain('ld-tone-warn');
   });
 });
 

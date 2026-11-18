@@ -918,6 +918,32 @@ export function recordPcdnFilter(
      * 而读的人会去查一个已经不存在的问题。
      */
     delete state.filter.reason;
+  } else if (payload.reason === undefined) {
+    /**
+     * ## 一条**真的发生过**的过滤上报，本身就否证了「开关关着」（2026-11-19 修）
+     *
+     * 以前这里只在 `applied === true` 时清 `reason`，于是下面这条时序会留下一个
+     * **过期的 `off`**：
+     *
+     * 1. 页面加载时开关关着 → `notePcdnFilterOff()` 写 `reason: 'off'`
+     * 2. 用户中途把开关打开（`content.ts` 的 storage 监听只重发 `cfg`，**不清 reason**
+     *    —— 那里也不能清：那一刻还没人真的过滤过，清了就等于断言"生效了"）
+     * 3. 主世界开始过滤，但候选全部 `fallbackKept`（解析失败 / 规则缺项），
+     *    报 `applied: false, fallbackKept: N, reason: undefined`
+     * 4. 结果：`filter` 变成 `{ fallbackKept: 3, reason: 'off' }` ——
+     *    **既有换不了的证据，又说这是因为"关着"**
+     *
+     * 后果是结论卡那句「屏蔽开着却没换成」被 `describeFilterFailure()` 的
+     * `off` 判据放过，**该说话时闭嘴**（那正是本轮要修的那个缺口）。
+     *
+     * 判据为什么是"这次上报没带 reason"：主世界只在 `pcdnFilterReady()` 为真时
+     * 才调 `filterDashOf()`，所以**能收到一条不带 reason 的统计，就说明闸是开的**。
+     * 带 `reason` 的那条（`rulesMissing`）说明闸没开成，那是新的事实，下面一行会写。
+     *
+     * ⚠️ 不清 `rulesMissing` 以外的东西：`applied` 一旦置真就**永不复位**
+     * （"这一次页面里真的过滤过"是历史事实，不是当前状态）。
+     */
+    delete state.filter.reason;
   }
 
   if (payload.reason !== undefined) state.filter.reason = payload.reason;

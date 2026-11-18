@@ -525,6 +525,20 @@ export function describeCounts(snapshot: LoadingSnapshotLite): string[] {
  * @returns `null` = 不需要这句（没有 P2P，或者结论本身就是 P2P）
  */
 export function describePcdnCaveat(snapshot: LoadingSnapshotLite): string | null {
+  /**
+   * ## 2026-11-19 新增：「开关开着却没换成」必须排在最前面
+   *
+   * 这个判据**必须早于下面两条 `return null`**，否则会在最该说话的时候闭嘴：
+   * 屏蔽全部失败时，结论大字几乎必然落在 P2P（`actual` 是 argmax，P2P 还在用就
+   * 还是它），而下面第一条 `renderedKind(actual) === 'pcdn' → return null` 正是
+   * 为此设的 —— 于是"你开了屏蔽但这页没换成"这句话一行都不会出现。
+   *
+   * 用户看到的只有「P2P 线路」，而他的开关是开着的。这与本项目
+   * 「读失败不许画成没有记录」是同一条纪律的反面（见 `panel.ts` 的通道三态）。
+   */
+  const failed = describeFilterFailure(snapshot);
+  if (failed !== null) return failed;
+
   const actual = snapshot.actual;
   // 结论已经是 P2P 了："其中 N 条是 P2P，未占主导"会与大字结论打架
   if (actual === null) return null;
@@ -561,6 +575,65 @@ export function describePcdnCaveat(snapshot: LoadingSnapshotLite): string | null
   }
 
   return `其中 ${String(pcdnHosts)} 条是 P2P 线路，未占主导`;
+}
+
+/**
+ * 「候选屏蔽开着，这一次却没换成」—— 结论卡里那一句实话（2026-11-19 新增）。
+ *
+ * ## 为什么需要它
+ *
+ * 屏蔽是本扩展**唯一一个会静默失败**的功能：开关开着、界面一切正常、结论卡
+ * 照常写「P2P 线路」，而实际一条候选都没换掉。用户唯一的线索是"怎么还在走
+ * P2P"，而这句话恰好被上一条判据（`renderedKind(actual) === 'pcdn' → null`）
+ * 挡住了 —— 那条判据是为了避免"未占主导"与大字结论打架，但它也让**失败**无处可说。
+ *
+ * ## 三种「没换成」必须分开说，不能都说成同一个原因
+ *
+ * `snapshot.filter` 是三个取流点累加出来的，字段含义（`loading-trace.ts` 的
+ * `PcdnFilterStats`）：
+ *
+ * | 情形 | 判据 | 说不说 |
+ * | --- | --- | --- |
+ * | 用户自己关着开关 | `reason === 'off'` | **不说** —— 那是他的选择，不是失败 |
+ * | 开关开着、规则没下发到主世界 | `reason === 'rulesMissing'` | 说：这是**错配**，用户无从知道 |
+ * | 开关开着、候选换不了（解析失败 / 规则缺项） | `fallbackKept > 0` 且 `rewritten === 0` | 说：判得了却没换成 |
+ * | 开关开着、这条流里压根没有 PCDN 候选 | `applied === false` 且三者皆 0 且无 reason | **不说** —— 没什么可换，不是失败 |
+ *
+ * 最后一行是要害：`applied: false` 在"没有 PCDN 候选"时也成立，而这种情形
+ * **不该报警**。判据里必须有"确实有候选换不了"（`fallbackKept > 0`）或
+ * "规则没到"（`reason === 'rulesMissing'`），否则会把"这页没 PCDN"说成"屏蔽失败"。
+ *
+ * ## 为什么不判断 `hosts` 里还有没有 P2P
+ *
+ * 判过一次就够了：`fallbackKept` / `rulesMissing` 本身就是"没换成"的直接证据，
+ * 再加一层 `hosts` 推断会让同一件事有两个真相源（本项目反复踩过的漂移坑）。
+ *
+ * @returns `null` = 没什么可说的（关着 / 没有候选 / 已全部换掉 / 旧快照没这字段）
+ */
+export function describeFilterFailure(snapshot: LoadingSnapshotLite): string | null {
+  const filter = snapshot.filter;
+  // 旧版采集器 / 手工 fixture：没有观测就不能断言（不猜"关着"，也不猜"失败"）
+  if (filter === undefined) return null;
+
+  /**
+   * `off` 是**用户的选择**。这里必须放过，否则每个没开屏蔽的用户都会看到
+   * 一句"屏蔽没生效" —— 那既是骚扰，也是在指责一个他根本没要求的动作。
+   */
+  if (filter.reason === 'off') return null;
+
+  if (filter.reason === 'rulesMissing') {
+    return '屏蔽开关开着，但规则没下发到页面 —— 这一页没换掉 PCDN 候选';
+  }
+
+  /**
+   * `rewritten === 0` 是必要条件：只要换成过一条，就不算"什么都没成"
+   * （此时下面那条 `未占主导` 会照常说，两条各说各的事）。
+   */
+  if (filter.fallbackKept > 0 && filter.rewritten === 0) {
+    return `屏蔽开关开着，但 ${String(filter.fallbackKept)} 条候选换不了 —— 这一次没换掉 PCDN`;
+  }
+
+  return null;
 }
 
 // ─────────────────────────── 时间轴行 ───────────────────────────
@@ -1520,9 +1593,20 @@ function conclusionCard(snapshot: LoadingSnapshotLite): HTMLElement {
   /**
    * 结论与时间轴自洽（裁决 ②）：结论说官方、时间轴上却有橙色 P2P 节点时，
    * 在这一行说清"那几条没占主导"。没有 P2P 就整句不出现。
+   *
+   * 色调（2026-11-19）：屏蔽**没换成**的那句要给警示色，因为那是要用户注意的
+   * 异常；而「未占主导」「现在正在用 P2P」只是同义补充，保持中性灰。
+   *
+   * ⚠️ 这里再调一次 `describeFilterFailure()` 只为取色调，**不是**第二份判据：
+   * 它是同一个纯函数，两次调用必然同结论（入参是同一份快照、无副作用）。
+   * 之所以不把 `describePcdnCaveat()` 改成返回 `{text, tone}`，是因为它有十几条
+   * 既有断言直接比对字符串 —— 为了一个颜色去动那个契约不划算。
    */
   const caveat = describePcdnCaveat(snapshot);
-  if (caveat !== null) card.appendChild(el('span', 'ld-conclusion-note', caveat));
+  if (caveat !== null) {
+    const failed = describeFilterFailure(snapshot) !== null;
+    card.appendChild(el('span', `ld-conclusion-note${failed ? ' ld-tone-warn' : ''}`, caveat));
+  }
 
   return card;
 }

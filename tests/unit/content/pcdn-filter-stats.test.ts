@@ -130,6 +130,47 @@ describe('采集侧：累加、`applied` 粘性、reason 的生命周期', () =>
     expect(lite.filter).toMatchObject({ applied: true, rewritten: 4, fallbackKept: 0 });
     expect(lite.filter).not.toHaveProperty('reason');
   });
+
+  it('★★ 开局关着 → 中途打开 → 主世界报"换不了"，过期的 off 必须消失', () => {
+    /**
+     * 这条时序留下过一个**真的 bug**（2026-11-19 修）：
+     *
+     * 1. 页面加载时开关关着 → `reason: 'off'`
+     * 2. 用户中途打开（`content.ts` 的 storage 监听只重发 `cfg`，**不清 reason**
+     *    —— 那里也不能清：那一刻还没人真的过滤过）
+     * 3. 主世界开始过滤，但候选全部 `fallbackKept`，报 `applied: false, reason: 无`
+     * 4. 旧实现只在 `applied: true` 时清 reason ⇒ 结果成了
+     *    `{ fallbackKept: 3, reason: 'off' }`
+     *
+     * 于是结论卡那句「屏蔽开着却没换成」被 `describeFilterFailure()` 的 `off`
+     * 判据放过 —— **最该说话时闭嘴**。
+     *
+     * 判据的正确性：主世界只在 `pcdnFilterReady()` 为真时才过滤，所以能收到一条
+     * **不带 reason** 的统计，本身就证明闸是开的。
+     */
+    notePcdnFilterOff();
+    expect(getLoadingSnapshot().filter?.reason).toBe('off');
+
+    // 打开开关后，主世界报了一条"3 条换不了"（不带 reason）
+    notePcdnFilter({ applied: false, ...ZERO, fallbackKept: 3 });
+
+    const lite = getLoadingSnapshot();
+    // `filter` 在 DTO 上是可选字段；能走到这里说明采集侧已经填过
+    expect(lite.filter?.fallbackKept).toBe(3);
+    // ⚠️ 这是要害：不许还挂着 off
+    expect(lite.filter).not.toHaveProperty('reason');
+  });
+
+  it('★ 但 `rulesMissing` 不许被一次普通上报顺手抹掉（那是**当前**事实）', () => {
+    // 带 reason 的那条说明闸没开成，是多条上报里最新的一条事实 —— 它要留着
+    notePcdnFilter({ applied: false, ...ZERO, reason: 'rulesMissing' });
+    expect(getLoadingSnapshot().filter?.reason).toBe('rulesMissing');
+
+    // 再来一条不带 reason 的（闸开了）→ 此时 reason 该消失
+    notePcdnFilter({ applied: false, ...ZERO, fallbackKept: 1 });
+    expect(getLoadingSnapshot().filter).not.toHaveProperty('reason');
+    expect(getLoadingSnapshot().filter?.fallbackKept).toBe(1);
+  });
 });
 
 describe('导出侧：`filter` 字段的四种读法', () => {
