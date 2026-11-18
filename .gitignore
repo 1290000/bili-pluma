@@ -133,7 +133,10 @@ poc/probe/pcdn-diag/proxy-throughput-candidates.json
 poc/probe/pcdn-diag/proxy-throughput.json
 
 # 2026-11-19 「长窗口限速」探针：16 MiB 按 2 MiB 分桶，检验短窗口是否漏掉限速拐点。
+# 三份都是同一探针的分片跑（按目标镜像/快慢筛选），含带签名 URL，全部只留本地。
 poc/probe/pcdn-diag/long-window.json
+poc/probe/pcdn-diag/long-window-coso1.json
+poc/probe/pcdn-diag/long-window-fast.json
 
 # 例外：这些是**结论**不是原始数据，必须入库
 !poc/verify/result-q2-summary.json
