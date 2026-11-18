@@ -5129,6 +5129,54 @@
           pgcTrace.swapLastMaxH = pgcMaxHeight(full);
           pgcTrace.swapSkip = '';
 
+          /**
+           * ## 上报「扩展介入」—— PGC 第三条介入路径（2026-11-18 补）
+           *
+           * ### 守的是什么：`reportExtPatch()` 必须覆盖**三条**介入路径
+           *
+           * | # | 路径 | 上报位置 | 场景 |
+           * | --- | --- | --- | --- |
+           * | ① | XHR 改写 playurl 响应体 | `patchPlayurlXhrProgress()` 两处 | 普通视频还原进度 |
+           * | ② | `__playinfo__` setter 同步注入 | `pgcPatchPlayinfo()` 成功点 | 番剧**首屏进页** |
+           * | ③ | `/ogv/player/playview` fetch 换流 | **这里** | 番剧**点右侧换集** |
+           *
+           * 少任何一条，对应场景下时间轴都会说「扩展没介入」。
+           *
+           * **③ 尤其容易漏**：真机探针实测（2026-11-18），换集时页面发的是
+           * `GET /ogv/player/playview?ep_id=…`（`initiatorType: fetch`），
+           * 它的 pathname **不含 `/playurl`** —— 所以 ISOLATED 侧 `recordPlayurl()`
+           * 在这条路上永远不命中，`recordPlayurl()` 里那条 `接管取流` 分支也就不会触发。
+           * ②那次补丁只修了首屏，换集这条一直没人喂。
+           *
+           * ### 为什么必须放在「换流成功」之后，而不是分支入口
+           *
+           * `pgcSwapPlayviewBody()` 有多道失败早退，**一个字节都没换**：
+           * 响应里没有 `arc.cid` / `fnval=4048` 取流结果为空（`j.result` 缺失）/
+           * dash 时长太短（`< 600s`，拿到的不是完整集）/ `isBetterSwap` 判定
+           * 画质不更高（`not-better`）/ 既无 dash 也无可用 durl。
+           * 在那些分支上报就是"扩展介入了却什么都没改"的假事件 ——
+           * 正是 `reportExtPatch()` 函数头（"只在真的改了字段时调用"）要挡的东西。
+           *
+           * 所以位置定在这里：走到这一行就意味着 `vi.dash = full.dash` 与
+           * `delete vi.durl` / `delete vi.durls` 都已落地，响应体是真的换了。
+           *
+           * ### 重复调用是安全的，不要在这里再去重
+           *
+           * `reportExtPatch()` 内部走 `safePost()` 兜底；真正的去重在 ISOLATED 侧
+           * （`loading-trace.ts` 的 `recordExtPatch()`，判据 `state.extPatchRecorded`）。
+           * 主世界的职责只是"我改了就说"，"只显示一次"是显示层的事 ——
+           * 两边各维护一份"报过了"的状态迟早会不一致。
+           *
+           * ⚠️ 那份去重是**每次 `resetLoadingTrace()` 后重置**的（换成 `createTraceState()`）。
+           * 所以换集后再换一集会**再报一条** —— 这是期望行为：新的一集就是一次新的介入。
+           * **不要**改成"整个页面生命周期只报一次"。
+           *
+           * ⚠️ **本函数还有第二个成功出口**（durl 降级，见下方 `已换流 durl(降级)`
+           * 之前的注释）。两处上报**都不是重复**，各有各的 return，删任何一处都会
+           * 让对应形态的换集漏报。
+           */
+          reportExtPatch();
+
           pgcPost(
             'playview',
             '已换流 dash cid=' + cid + ' q=' + full.quality + ' 高度=[' + heights.join(',') + ']' +
@@ -5195,6 +5243,35 @@
         if (data.play_check && data.play_check.play_detail === 'PLAY_PREVIEW') {
           data.play_check.play_detail = PGC_PREVIEW_FLAGS['play_check.play_detail'];
         }
+
+        /**
+         * ## 上报「扩展介入」—— 同一个函数的**第二个**成功出口
+         *
+         * ⚠️ 先说清楚一件事，免得下一个人以为这是重复粘贴：
+         * 上面 `已换流 dash` 之前那段注释讲的是「③ 为什么容易漏」，
+         * 这一段讲的是**另一件事** —— `pgcSwapPlayviewBody()` 有两个成功 return，
+         * 语义完全相同（都是"扩展真的把这次取流换掉了"），所以**两处都必须报**。
+         * 两段注释互相指向，删任何一处都会让对应形态的换集漏报。
+         *
+         * ### 这条出口什么时候走
+         *
+         * `fnval=4048` 取回来的响应里**没有 dash**（`full.dash.video` 不是非空数组）
+         * 时才落到这里 —— ADR 0023 记的那批只拿得到 durl 的集数（老番 / 限免）。
+         * 概率低于 dash 路径，但恰恰是用户最需要知道"扩展动过手"的场景：
+         * 画质没升级，唯一的变化就是"能看完整集"，肉眼几乎看不出来。
+         *
+         * ### 位置同样必须在成功之后
+         *
+         * 走到这一行，`vi.durl = full.durl` / `delete vi.dash` / `vi.is_preview = 0`
+         * 都已经落地；而上面 `fullLen < 600000`（完整流太短）等早退一个字节都没换，
+         * 那种分支不报 —— 理由与 dash 出口那段一致，不重复。
+         *
+         * ### 去重
+         *
+         * 同上：`safePost()` 兜底 + ISOLATED 侧 `recordExtPatch()` 的
+         * `state.extPatchRecorded` 收口，这里**不要**自己判重。
+         */
+        reportExtPatch();
 
         pgcPost('playview', '已换流 durl(降级) cid=' + cid + ' len=' + fullLen);
         return JSON.stringify(body);

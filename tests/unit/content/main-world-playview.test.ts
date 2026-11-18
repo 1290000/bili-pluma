@@ -67,11 +67,19 @@ interface RespStub {
   clone?: () => unknown;
 }
 
-/** 建页面 + 装 fetch 替身 + eval 真源码 + 开 enabled */
+/**
+ * 建页面 + 装 fetch 替身 + eval 真源码 + 开 enabled。
+ *
+ * @returns `pageFetch` 页面的 fetch；`sent` 主世界**发出去**的消息（`__ns === '__PLUMA__'`），
+ *   用来断言「扩展介入」上报。
+ */
 async function boot(
   onPlayview: () => RespStub,
   onSwapFetch: () => Promise<unknown>,
-): Promise<{ pageFetch: (u: string, o?: unknown) => Promise<Response> }> {
+): Promise<{
+  pageFetch: (u: string, o?: unknown) => Promise<Response>;
+  sent: Array<Record<string, unknown>>;
+}> {
   const dom = new JSDOM('<!doctype html><html><body><video></video></body></html>', {
     runScripts: 'outside-only',
     url: 'https://www.bilibili.com/bangumi/play/ep341217',
@@ -87,11 +95,30 @@ async function boot(
   win.Headers = Headers;
   win.Request = Request;
 
+  /**
+   * 捕获主世界发出去的消息。
+   *
+   * 必须装在 `eval` **之前**：`safePost()` 每次调用都重新取 `window.postMessage`
+   * （刻意不缓存的，见那里的注释），所以这里换掉的包装器能被它用上。
+   * 只收 `__ns === '__PLUMA__'` 的，把本文件自己发进去的 `cfg` 一起收进来也无妨 ——
+   * 断言时按字段名筛。
+   */
+  const sent: Array<Record<string, unknown>> = [];
+  const postToWindow = win.postMessage.bind(win);
+
   win.fetch = (url: string) => {
     if (String(url).includes('/ogv/player/playview')) {
       return Promise.resolve(onPlayview());
     }
     return onSwapFetch();
+  };
+
+  win.postMessage = (message: unknown, targetOrigin: string): void => {
+    if (message !== null && typeof message === 'object') {
+      const payload = message as Record<string, unknown>;
+      if (payload.__ns === '__PLUMA__') sent.push(payload);
+    }
+    postToWindow(message, targetOrigin);
   };
 
   win.eval(SOURCE);
@@ -104,6 +131,7 @@ async function boot(
 
   return {
     pageFetch: (win as unknown as { fetch: (u: string, o?: unknown) => Promise<Response> }).fetch,
+    sent,
   };
 }
 
@@ -190,6 +218,115 @@ describe('PGC P2 · playview 换流降级行为', () => {
       const text = await resp.text();
       expect(text).toBe(body);
       expect(text.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('换流成功必须上报「扩展介入」', () => {
+    /**
+     * ## 为什么这两条必须存在（2026-11-19 补）
+     *
+     * `pgcSwapPlayviewBody()` 有**两个成功 return**，各自前面有一次
+     * `reportExtPatch()`：
+     *
+     * | 出口 | 形态 | 位置 |
+     * | --- | --- | --- |
+     * | dash | `vi.dash = full.dash` | `已换流 dash …` 之前 |
+     * | durl 降级 | `vi.durl = full.durl` | `已换流 durl(降级) …` 之前 |
+     *
+     * ## 为什么原先一条都没红
+     *
+     * 本文件此前**根本没有 dash 换流成功的用例**（只有降级分支），而
+     * 降级分支也没有断言过消息。于是删掉这两行 `reportExtPatch()`，
+     * 81 个文件 1560 条测试**全绿** —— 这不是"测试已经够了"，
+     * 是这一处代码根本没人守。
+     *
+     * 两条用例按出口一一对应，删掉任一处就会有一条红。
+     */
+    /** 一份"截断"的 playview：dash 120s < 600 → 会去取完整流 */
+    const truncated = (): string =>
+      JSON.stringify({
+        data: {
+          arc: { cid: 123456789 },
+          video_info: {
+            accept_quality: [80, 116],
+            dash: { duration: 120, video: [{ id: 80, height: 1080 }] },
+          },
+        },
+      });
+
+    const jsonResp = (payload: unknown): Promise<unknown> =>
+      Promise.resolve(
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+
+    const extPatches = (sent: Array<Record<string, unknown>>): Array<Record<string, unknown>> =>
+      sent.filter((m) => m.__PLUMA_EXT_PATCH__ === true);
+
+    it('dash 出口换流成功 → 必须发一条 __PLUMA_EXT_PATCH__', async () => {
+      const { pageFetch, sent } = await boot(
+        () => realResp(truncated()),
+        () =>
+          jsonResp({
+            result: {
+              dash: {
+                duration: 1440,
+                video: [{ id: 120, height: 2160, baseUrl: 'https://x/1.m4s', backupUrl: [] }],
+              },
+              accept_quality: [120, 80],
+              quality: 120,
+              type: 'DASH',
+              format: 'hdflv2',
+              timelength: 1440000,
+            },
+          }),
+      );
+
+      const resp = await pageFetch(PLAYVIEW, { credentials: 'include' });
+      const vi = JSON.parse(await resp.text()).data.video_info as Record<string, unknown>;
+
+      // 先确认这一趟**真的换了流**（dash 从 120s 变 1440s，durl 被删），否则下面的断言没意义
+      expect((vi.dash as { duration?: number } | undefined)?.duration).toBe(1440);
+      expect(vi.durl).toBeUndefined();
+
+      const patches = extPatches(sent);
+      expect(patches, 'dash 出口换流成功却没有报「扩展介入」').toHaveLength(1);
+      // 时间戳与采集侧同一时基（`performance.now()`），必须是有限数
+      expect(typeof patches[0]?.at).toBe('number');
+      expect(Number.isFinite(patches[0]?.at as number)).toBe(true);
+      expect(patches[0]?.__ns).toBe('__PLUMA__');
+    });
+
+    it('durl 降级出口换流成功 → 也必须发一条 __PLUMA_EXT_PATCH__', async () => {
+      const { pageFetch, sent } = await boot(
+        () => realResp(truncated()),
+        () =>
+          // 没有 dash，只有一段够长的 durl → 走降级出口
+          jsonResp({
+            result: {
+              durl: [{ length: 1440000, url: 'https://x/a.mp4' }],
+              quality: 64,
+              type: 3,
+              format: 'mp4720',
+              timelength: 1440000,
+            },
+          }),
+      );
+
+      const resp = await pageFetch(PLAYVIEW, { credentials: 'include' });
+      const vi = JSON.parse(await resp.text()).data.video_info as Record<string, unknown>;
+
+      // 确认走的是降级形态：durl 装上、dash 被删、试看标记清掉
+      expect(Array.isArray(vi.durl)).toBe(true);
+      expect(vi.dash).toBeUndefined();
+      expect(vi.is_preview).toBe(0);
+
+      const patches = extPatches(sent);
+      expect(patches, 'durl 降级出口换流成功却没有报「扩展介入」').toHaveLength(1);
+      expect(typeof patches[0]?.at).toBe('number');
+      expect(Number.isFinite(patches[0]?.at as number)).toBe(true);
     });
   });
 
