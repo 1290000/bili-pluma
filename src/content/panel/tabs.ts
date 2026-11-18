@@ -543,18 +543,24 @@ export function displayTab(
   /**
    * ## 播放线路：屏蔽 PCDN（ADR 0038 授权 → ADR 0039 换 authority）
    *
-   * ### hint 为什么必须同时说收益和代价
+   * ### hint 为什么现在只讲"能干什么"，不再讲"代价"
    *
    * ADR 0039 把"删除 PCDN 候选"升级为"把候选的 authority 换成官方镜像"，
    * **候选条数不变**（4K 验证 33/33 = 206，`REPORT-rewrite-4k.md`）。
    * 所以旧文案"剔除后只剩一条线路、弱网更容易卡"**不再成立** —— 那是删时代的代价。
    *
-   * 现在的代价是另一处：少数 `mcdn` + `/v1/resource/upgcxcode/` 的候选必须经官方代理
-   * 包装（直连换 host 稳定 403，18/18 实测），首块会略慢一些。不写秒数 —— ADR 0038
-   * 「价值判断」节明确禁止承诺收益数字，这里对代价也一样。
+   * 之后曾写"部分起播会变慢"（代价是少数 `mcdn` + `/v1/resource/upgcxcode/` 的候选
+   * 必须经官方代理包装）。**这句 2026-11-19 撤掉**，依据是三轮实测（ADR 0039
+   * 「proxy 代价的结案」）：
    *
-   * 只写"屏蔽 PCDN"会让用户以为白得一个优化；把已经过时的代价写出来则更糟 ——
-   * 用户会按一个不存在的风险做判断。两头都要说准。
+   * - TTFB 是两档波动值（同一批候选测出 949 / 220 / 297 ms），**不是稳定属性**，
+   *   写"变慢"既可能夸大也可能低估；
+   * - 吞吐才是可靠口径：36 对配对（各下 2 MiB、交替 × 3 轮）proxy 中位 7.78 MB/s
+   *   vs 直连 5.27 MB/s，**stall 0/36**，36/36 满足轨码率 1.5 倍余量；
+   * - 慢的是**某个官方镜像本身**（`mirrorcoso1` 直连中位 1.21 MB/s），与代理无关。
+   *
+   * 用户要的是一眼看懂能干什么。代理包装属于诊断面板该说的事，不是开关描述。
+   * 不写收益数字的纪律不变 —— ADR 0038「价值判断」节。
    *
    * ### 可点性
    *
@@ -566,7 +572,7 @@ export function displayTab(
   box.appendChild(
     switchRow({
       label: '屏蔽 PCDN 线路',
-      hint: '把 PCDN 线路换成官方线路，部分起播会变慢',
+      hint: '把 PCDN 线路换成官方线路',
       checked: actions.pcdnFilterEnabled === true,
       disabled: actions.pcdnFilterEnabled === null,
       onToggle: actions.togglePcdnFilter,
