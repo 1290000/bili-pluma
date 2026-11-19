@@ -803,22 +803,36 @@ async function main() {
   // 有 28 个条目、表里只有 27 行，漏的就是复制到 staging 之后才写的安装说明。
   // 下面那条断言是给未来的自己留的绊线：少一个就红，别调回去。
   const provenance = await buildProvenance({ version, commit, extDir: staging });
-  const provenanceRows = provenance.split('\n').filter((l) => /^\| [0-9a-f]{64} \| /.test(l));
+  const tableNames = provenance
+    .split('\n')
+    .map((l) => /^\| [0-9a-f]{64} \| (.+) \|$/.exec(l))
+    .filter((m) => m !== null)
+    .map((m) => m[1]);
 
-  // 表行数 = zip 中央目录条目数。相等才说明「表覆盖了真正进包的每一个字节」。
-  // 这条只有真的能拦住问题才有意义 —— 所以它比对的是 `zipDir()` 的返回值
-  // （从 zip 里解析出来的条目名），不是 staging 的文件数：后者两边都改错时能一起错。
-  if (provenanceRows.length !== zipNames.length) {
+  // 表行数必须等于 zip 中央目录条目数 —— 相等才说明「表覆盖了真正进包的每一个字节」。
+  // 这条只有真的能拦住问题才有意义，所以它比的是 `zipDir()` 的返回值
+  // （从压好的 zip 里解析出来的条目名），不是 staging 的文件数：
+  // 后者在「写 staging 和扫 staging 两边一起改错」时会一起错，等于没守。
+  //
+  // 顺带按**条目名**比，不只看条数：将来若有人让表里多一个 `foo.txt`、
+  // 少一个 `bar.txt`（条数正好相等），逐条核对的第三方同样会以为包被篡改。
+  // 表里记的是**相对路径**（`walkFiles` 相对 staging），zip 条目名可能带 `TOP_DIR` 前缀。
+  // 现在 TOP_DIR 是空串（理由见上），两者逐字相同；但把前缀剥掉的写法让这条断言
+  // 在将来真的加回顶层目录时不会假红 —— 假红会让人把断言删掉，那就什么都没守住。
+  const stripTop = (n) => (TOP_DIR ? n.slice(TOP_DIR.length + 1) : n);
+  const zipRel = zipNames.map(stripTop);
+
+  const missingFromTable = zipRel.filter((n) => !tableNames.includes(n));
+  const extraInTable = tableNames.filter((n) => !zipRel.includes(n));
+
+  if (missingFromTable.length > 0 || extraInTable.length > 0) {
     fail(
-      'BUILD.md 的哈希表与 zip 条目数不一致',
-      `表内 ${String(provenanceRows.length)} 行，zip 里 ${String(zipNames.length)} 个条目。\n` +
+      'BUILD.md 的哈希表与 zip 条目不一致',
+      `表内 ${String(tableNames.length)} 行，zip 里 ${String(zipNames.length)} 个条目。\n` +
         '    表必须覆盖 zip 内的**每一个**条目，否则第三方逐条核对时会以为包被篡改。\n' +
         '    `buildProvenance()` 的 extDir 必须传 staging（含安装说明），且在 zipDir 之后、rm(staging) 之前调用。\n' +
-        `    表里有、zip 里没有：${provenanceRows.length > zipNames.length ? '有（表多了）' : '无'}\n` +
-        `    zip 里有、表里没有：${
-          zipNames.filter((n) => !provenanceRows.some((r) => r.endsWith(`| ${n} |`))).join('、') ||
-          '无'
-        }`,
+        `    zip 里有、表里漏掉：${missingFromTable.join('、') || '无'}\n` +
+        `    表里有、zip 里没有：${extraInTable.join('、') || '无'}`,
     );
     console.error(`\n[package] ❌ ${String(problems.length)} 项自检未通过\n`);
     for (const p of problems) console.error(`  ${p.what}\n    ${p.why}\n`);
