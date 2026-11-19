@@ -1229,13 +1229,24 @@ async function main() {
       });
     }
 
-    // ⑥ 三处调用点都接了**同一个函数**
+    // ⑥ 调用点都接了**同一个函数**
     const callSites = [
       ['patchPlayurlXhrProgress', '普通视频 playurl'],
       ['pgcPatchPlayinfo', 'PGC 整页注入'],
       ['pgcSwapPlayviewBody', 'PGC 切集换流'],
       // ADR 0041：PGC 回调接管路径（createPlayer 同步注入的 pgcGateProxy -> pgcFetch）
       ['pgcFetch', 'PGC 回调接管（ADR 0041）'],
+      /**
+       * ADR 0040：活动页 nano 回调取流（2026-11-19 纳入）。
+       *
+       * ⚠️ 这一处**一直在过滤、只是从没被这条判据盯过** —— 它和另外四处
+       * 长得不一样（在 `festivalFetch` 的 `progressP.then` 里、变量名是
+       * `json.data` 而不是 `video_info`），所以当年写这条判据时漏掉了。
+       * 漏掉的代价：有人在 festival 上把 `filterDashOf()` 删掉（比如改成
+       * `patchPlayurlBody(text, prog, true)` 那条更省事的写法），
+       * 活动页的 PCDN 屏蔽会**静默失效**，而这条守卫全绿。
+       */
+      ['festivalFetch', '活动页 nano 回调取流（ADR 0040）'],
     ];
     const unwired = [];
     for (const [fn, label] of callSites) {
@@ -1255,7 +1266,7 @@ async function main() {
         why: [
           unwired.join('、'),
           '→ 缺一处就有一整类场景漏过去：少接 playview = 番剧切集那条路整个漏掉（ADR 0038 背景 §二）',
-          '→ 四处都必须调 `pcdnFilterReady()` + `filterDashOf()`，不许在调用点自己写过滤',
+          '→ 五处都必须调 `pcdnFilterReady()` + `filterDashOf()`，不许在调用点自己写过滤',
         ].join('\n    '),
       });
     }
@@ -1337,7 +1348,7 @@ async function main() {
       `[patch] ✅ PGC 整页注入：pgcPatchPlayinfo 只写 result.${AUTHORIZED_PLAYINFO_RESULT_WRITES.join(' / result.')}`,
     );
     console.log(
-      `[patch] ✅ 候选过滤（ADR 0038）：写集 ⊆ ${String(authorizedFilterFields?.length ?? 0)} 个候选字段（从 filter.ts 派生）· 四处调用点全接 · 判据无写死域名`,
+      `[patch] ✅ 候选过滤（ADR 0038）：写集 ⊆ ${String(authorizedFilterFields?.length ?? 0)} 个候选字段（从 filter.ts 派生）· 五处调用点全接 · 判据无写死域名`,
     );
     console.log(
       `[patch] ✅ 候选改写（ADR 0039）：只换 authority、条数不变 · proxy 模板仅 ${REWRITE_TEMPLATE_LITERALS.size} 条字面量放行 · 镜像/proxy host 只来自 cfg`,

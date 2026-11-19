@@ -1058,3 +1058,282 @@ describe('活动页进度还原（ADR 0017）', () => {
     }
   });
 });
+
+/**
+ * 活动页的「扩展介入」上报（2026-11-19 补，`reportExtPatch()` 的第 4 条路径）。
+ *
+ * ## 为什么这条必须有
+ *
+ * `reportExtPatch()` 的调用点清单此前只覆盖 ① XHR 改写 playurl、
+ * ② `pgcPatchPlayinfo()` 注入、③ `playview` 换流。活动页走的是 nano 回调里
+ * 自己的 `nativeFetch` —— ① 那条路在活动页**不存在**（活动页没有 XHR 观察钩子），
+ * 所以时间轴上「扩展介入」在活动页永远是空的：扩展明明接管了整份取流，
+ * 界面却说它没动手。这与 PGC 换集（③ 补之前）是同一个漏洞形态。
+ *
+ * ## 为什么不能靠 ISOLATED 侧的 `recordPlayurl()` 兜
+ *
+ * 它在 `streamingProxied` 为真时也会补一条，但 ① 它要求 `page/activate` 回包
+ *（~400ms）已经置真，首波取流常在窗内；② 它取的是 `startTime`（请求发出那一刻），
+ * 而"我们真的改过响应"发生在**响应回来之后**。主世界是唯一知道答案的一方。
+ */
+describe('活动页上报「扩展介入」（reportExtPatch 第 4 条路径）', () => {
+  const CID = 42141027046;
+
+  function playurlBody() {
+    return {
+      code: 0,
+      data: { last_play_time: 0, last_play_cid: 0, dash: { video: [], audio: [] } },
+    };
+  }
+
+  /** v2 返回主账号进度，playurl 返回播放账号的 body（独立造一份，不复用上面的 describe） */
+  function fetchWith(primary: unknown) {
+    return (url: string) => {
+      if (url.includes('/x/player/wbi/v2')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve(primary),
+          text: () => Promise.resolve(JSON.stringify(primary)),
+        });
+      }
+      return okResponse(playurlBody());
+    };
+  }
+
+  async function bootHooked(sb: Sandbox) {
+    sendCfg(sb);
+    await flush();
+    const config: any = { cid: CID, bvid: 'BV1ydeX65Edn' };
+    installNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    return { config, cb };
+  }
+
+  /** `__PLUMA_EXT_PATCH__` 消息条数（`at` 必须是有限数，否则 ISOLATED 侧会丢弃） */
+  function extPatchCount(sb: Sandbox): number {
+    return sb.sent.filter((m) => m.__PLUMA_EXT_PATCH__ === true).length;
+  }
+
+  it('★★ 进度真的还原了 → 报一条「扩展介入」', async () => {
+    const primary = { code: 0, data: { last_play_time: 15000, last_play_cid: CID } };
+    const sb = bootAt(FESTIVAL_URL, fetchWith(primary));
+    await ready(sb);
+    const { config, cb } = await bootHooked(sb);
+
+    const out = await cb({ avid: 1, cid: CID, qn: 120 }, config);
+    expect(out.data.data.last_play_time).toBe(15000); // 前置条件：真的写进去了
+    await flush();
+
+    expect(traceOf(sb).progressRestored).toBe(1);
+    expect(extPatchCount(sb)).toBe(1);
+    // 时间戳必须是有限数 —— 否则 ISOLATED 侧那条判据会直接丢弃，等于没报
+    const msg = sb.sent.find((m) => m.__PLUMA_EXT_PATCH__ === true)!;
+    expect(Number.isFinite(msg.at)).toBe(true);
+  });
+
+  it('⛔ 什么都没改（无进度可还原、也没换候选）→ **不许**报（假事件）', async () => {
+    /**
+     * 这是本组最关键的反例。`reportExtPatch()` 函数头的纪律是
+     * "只在真的改了字段时调用"—— 走到 `progressP.then` 尾部只说明**跑过了**，
+     * 不说明改了什么。没有这一条，把 `reportExtPatch()` 无条件放在分支入口
+     * 也能让上一条通过。
+     */
+    const sb = bootAt(FESTIVAL_URL, () => okResponse(playurlBody()));
+    await ready(sb);
+    const { config, cb } = await bootHooked(sb);
+
+    // 不带 avid → 拿不到 progressIds → 进度预取根本不发，也没有候选过滤
+    const out = await cb({ cid: CID, qn: 120 }, config);
+    await flush();
+
+    expect(out.data.data.last_play_time).toBe(0); // 原样返回
+    const t = traceOf(sb);
+    expect(t.progressRestored).toBe(0);
+    expect(extPatchCount(sb)).toBe(0);
+  });
+
+  it('★ 进度取不到（v2 失败）→ 取流不失败，也不报「介入」', async () => {
+    const sb = bootAt(FESTIVAL_URL, (url: string) => {
+      if (url.includes('/x/player/wbi/v2')) return Promise.reject(new Error('offline'));
+      return okResponse(playurlBody());
+    });
+    await ready(sb);
+    const { config, cb } = await bootHooked(sb);
+
+    const out = await cb({ avid: 1, cid: CID, qn: 120 }, config);
+    await flush();
+
+    expect(out.data.code).toBe(0); // 取流照常成功
+    expect(traceOf(sb).progressRestored).toBe(0);
+    // 我们确实跑过这段、但一个字节都没改 —— 不许报
+    expect(extPatchCount(sb)).toBe(0);
+  });
+
+  it('★★ 只在候选过滤真的换了 authority 时也报（这一路径不碰进度）', async () => {
+    /**
+     * 活动页的第二个"真改了"来源：PCDN 候选被换掉。这里构造一个含 PCDN
+     * 候选的 dash，`filterCandidates` 打开 → 期望 `stats.changed` 为真，
+     * 于是即使进度那条不成立，也要报「介入」。
+     */
+    const pcdnDash = {
+      code: 0,
+      data: {
+        last_play_time: 0,
+        last_play_cid: 0,
+        dash: {
+          video: [
+            {
+              id: 80,
+              baseUrl: 'https://xy1x2x3x4xy.mcdn.bilivideo.cn/video.m4s',
+              backupUrl: [],
+            },
+          ],
+          audio: [],
+        },
+      },
+    };
+
+    const sb = bootAt(FESTIVAL_URL, () => okResponse(pcdnDash));
+    await ready(sb);
+    sendCfg(sb, {
+      filterCandidates: true,
+      pcdnRules: { labels: ['mcdn'], domains: ['mcdn.bilivideo.cn'] },
+      pcdnRewriteRules: {
+        mirrorHost: 'upos-sz-mirrorhw.bilivideo.com',
+        proxyHost: 'proxy-tf-all-ws.bilivideo.com',
+        proxyPathPrefix: '/v1/',
+      },
+    });
+    await flush();
+
+    const config: any = { cid: CID, bvid: 'BV1ydeX65Edn' };
+    installNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ avid: 1, cid: CID, qn: 120 }, config);
+    await flush();
+
+    // 前置条件：候选真的被换成官方镜像了（否则这条用例什么都没测到）
+    const url = out.data.data.dash.video[0].baseUrl as string;
+    expect(url).not.toContain('mcdn.bilivideo.cn');
+    expect(traceOf(sb).progressRestored).toBe(0); // 进度没动，报的是过滤那条
+    expect(extPatchCount(sb)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+/**
+ * 活动页的 `fallbackKept` 也要上报（2026-11-19 补齐第 6 个调用点）。
+ *
+ * ## 为什么这条必须单独测
+ *
+ * `reportPcdnFilter()` 有六处调用点，其中五处写的是
+ * `changed || fallbackKept > 0`，**只有 festival 那处原先只写 `changed`**。
+ * 这半边的后果很具体：候选全被删光、只留了一条 fallback 时 `changed` 为假，
+ * 于是活动页**一条统计都不发** —— 而结论卡 A 那两句失败判据正是读
+ * `fallbackKept` / `rewritten`（`describeFilterFailure()`）。
+ * 也就是说：活动页的屏蔽失败在诊断页上会完全不可见，恰好是 A 要治的病。
+ *
+ * ## 怎么造出"只有 fallbackKept、changed 为假"
+ *
+ * 用一个**能过 `isPcdnUrl()`、但改写时抛错**的 `mirrorHost`（`main-world.js:354`
+ * 会执行 `new URL('https://' + rules.mirrorHost + '/')`）。
+ * 不能靠"规则缺项"——那样 `pcdnFilterReady()` 会先判 `rulesMissing`
+ * 并走 `where: 'none'` 那条完全不同的分支（实测抓到的就是这个）。
+ */
+describe('活动页的 fallbackKept 上报（与另外五处对齐）', () => {
+  const CID = 42141027046;
+
+  /** 造一个判据认得出、但改写会抛错的场景 → 纯 fallbackKept */
+  function fallbackOnlyFetch() {
+    const body = {
+      code: 0,
+      data: {
+        last_play_time: 0,
+        last_play_cid: 0,
+        dash: {
+          video: [
+            { id: 80, baseUrl: 'https://xy1x2x3x4xy.mcdn.bilivideo.cn/video.m4s', backupUrl: [] },
+          ],
+          audio: [],
+        },
+      },
+    };
+    return () => okResponse(body);
+  }
+
+  it('★★ 改写抛错 → changed 假但 fallbackKept>0，仍必须上报', async () => {
+    const sb = bootAt(FESTIVAL_URL, fallbackOnlyFetch());
+    await ready(sb);
+    sendCfg(sb, {
+      filterCandidates: true,
+      pcdnRules: { labels: ['mcdn'], domains: ['mcdn.bilivideo.cn'] },
+      /**
+       * `mirrorHost` 里带一个非法字符（空格），`new URL()` 会抛 →
+       * 走 `main-world.js:360` 的 `fallbackKept += 1` 分支。
+       * ⚠️ 不能用空串 —— 那会让 `pcdnFilterReady()` 判成"规则没下发"。
+       */
+      pcdnRewriteRules: {
+        mirrorHost: 'bad host',
+        proxyHost: 'proxy-tf-all-ws.bilivideo.com',
+        proxyPathPrefix: '/v1/',
+      },
+    });
+    await flush();
+
+    const config: any = { cid: CID, bvid: 'BV1ydeX65Edn' };
+    installNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    const out = await cb({ avid: 1, cid: CID, qn: 120 }, config);
+    await flush();
+
+    // 前置条件：一个字符都没换（否则这不是 fallbackKept 那一档）
+    expect(out.data.data.dash.video[0].baseUrl).toContain('mcdn.bilivideo.cn');
+
+    const stats = sb.sent.filter((m) => m.type === 'pcdn-filter-stats');
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!).toMatchObject({
+      where: 'festival',
+      applied: false, // changed 为假
+      fallbackKept: 1, // 但确实判得了、换不了 —— 这一档必须让界面看得到
+      rewritten: 0,
+    });
+  });
+
+  it('★ 与 `statically` 一致：`applied` 只认 changed，不认 fallbackKept', async () => {
+    /**
+     * 守住载荷语义：`fallbackKept > 0` 时 `applied` 必须是 **false**。
+     * 若有人把 `applied` 改成 `changed || fallbackKept > 0`，
+     * `recordPcdnFilter()` 会把它当成功、把 `reason` 清掉，
+     * 于是"换不了"的真相被一次成功的假象盖掉（A 修的正是这个）。
+     */
+    const body = {
+      code: 0,
+      data: {
+        last_play_time: 0,
+        last_play_cid: 0,
+        dash: {
+          video: [{ id: 80, baseUrl: 'https://aa.mcdn.bilivideo.cn/v.m4s', backupUrl: [] }],
+          audio: [],
+        },
+      },
+    };
+    const sb = bootAt(FESTIVAL_URL, () => okResponse(body));
+    await ready(sb);
+    sendCfg(sb, {
+      filterCandidates: true,
+      pcdnRules: { labels: ['mcdn'], domains: ['mcdn.bilivideo.cn'] },
+      pcdnRewriteRules: { mirrorHost: 'm.bilivideo.com', proxyHost: '', proxyPathPrefix: '/v1/' },
+    });
+    await flush();
+
+    const config: any = { cid: CID, bvid: 'BV1ydeX65Edn' };
+    installNano(sb, { updateRequestConfig() {} }).createPlayer(config);
+    const cb = config.requestConfig.reqHttpPlayUrlInfo as (p: any, c?: any) => Promise<any>;
+    await cb({ avid: 1, cid: CID, qn: 120 }, config);
+    await flush();
+
+    const stats = sb.sent.filter((m) => m.type === 'pcdn-filter-stats');
+    expect(stats).toHaveLength(1);
+    expect(stats[0]!.applied).toBe(false);
+  });
+});

@@ -193,13 +193,18 @@ describe('check-patch-scope：PGC 换流与注入的写集判据（2026-11-17 �
  * | 判据里写死 `mcdn` | 约束 7：两处真相源必然漂移 |
  */
 describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => {
-  it('★ 现状：第七类的 ✅ 行在输出里，且写明"四处调用点全接 / 判据无写死域名"', () => {
+  it('★ 现状：第七类的 ✅ 行在输出里，且写明"五处调用点全接 / 判据无写死域名"', () => {
     const { status, out } = runIn(sandbox());
 
     expect(status).toBe(0);
     expect(out).toContain('✅ 候选过滤（ADR 0038）：写集 ⊆ 4 个候选字段');
     expect(out).toContain('✅ 候选改写（ADR 0039）：只换 authority、条数不变');
-    expect(out).toContain('四处调用点全接');
+    /**
+     * ⚠️ 2026-11-19 从"四处"改成"五处"：`festivalFetch`（ADR 0040 活动页
+     * nano 回调取流）一直有过滤、但从没被这条判据盯过。详见
+     * `scripts/check-patch-scope.mjs` 里 `callSites` 那段注释。
+     */
+    expect(out).toContain('五处调用点全接');
     expect(out).toContain('判据无写死域名');
   });
 
@@ -289,6 +294,37 @@ describe('check-patch-scope：候选过滤（ADR 0038）的七条判据', () => 
     expect(status).toBe(1);
     expect(out).toContain('有取流点没接候选过滤');
     expect(out).toContain('PGC 整页注入（pgcPatchPlayinfo 没接）');
+  });
+
+  it('⛔ 删掉 `festivalFetch` 里的过滤调用 → 红，并点名"活动页 nano 回调取流"', () => {
+    /**
+     * 这一处**一直在过滤、只是从没被判据盯过**（2026-11-19 才纳入）。
+     * 它的形状与另外四处都不同：在 `progressP.then` 的尾部、变量是 `json.data`。
+     *
+     * 漏掉它的真实代价：有人图省事把这里改成 `patchPlayurlBody(text, prog, true)`
+     * （把过滤折进那条通用路径），活动页的 PCDN 屏蔽会**静默失效**，
+     * 而这条守卫在旧版里全绿 —— 因为它根本不看这个函数。
+     */
+    const FESTIVAL_CALL = [
+      '            var festivalStatsChanged = false;',
+      '            if (pcdnFilterReady()) {',
+      '              var stats = filterDashOf(json.data);',
+    ].join('\n');
+
+    const dir = sandbox((src) => {
+      if (!src.includes(FESTIVAL_CALL)) {
+        throw new Error('夹具失效：main-world.js 里找不到 festival 的过滤调用块（判据会假绿）');
+      }
+      return src.replace(
+        '              var stats = filterDashOf(json.data);',
+        '              var stats = { changed: false, rewritten: 0, proxied: 0, fallbackKept: 0 };',
+      );
+    });
+    const { status, out } = runIn(dir);
+
+    expect(status).toBe(1);
+    expect(out).toContain('有取流点没接候选过滤');
+    expect(out).toContain('活动页 nano 回调取流（ADR 0040）（festivalFetch 没接）');
   });
 
   it('⛔ 判据里写死 `mcdn` → 红，并说清"两处真相源必然漂移"', () => {

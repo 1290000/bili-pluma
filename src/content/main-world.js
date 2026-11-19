@@ -142,13 +142,24 @@
    *
    * ## 只在**真的改了字段**时调用
    *
-   * 调用点只有两处，都在 `patchPlayurlXhrProgress()` 里，而且都在
-   * **确认改写成功**（`return true`）之前的那一行：
+   * 调用点现有**四处**（2026-11-19 补了 ③ 与 ④；本段原写"只有两处"，
+   * 那是 T11 刚上线时的状态，早已过期）：
+   *
+   * | # | 路径 | 位置 | 场景 |
+   * | --- | --- | --- | --- |
+   * | ① | XHR 改写 playurl 响应体 | `patchPlayurlXhrProgress()` 两处 | 视频页还原进度 / 换候选 |
+   * | ② | `__playinfo__` setter 同步注入 | `pgcPatchPlayinfo()` 成功点 | 番剧**首屏进页** |
+   * | ③ | `/ogv/player/playview` fetch 换流 | `pgcSwapPlayviewBody()` 两个成功出口 | 番剧**点右侧换集** |
+   * | ④ | festival 取流回调 | `festivalFetch()` 的 `progressP.then` 尾部 | 活动页 `nano` 回调取流 |
+   *
+   * ① 内部两个分支的判据：
    *
    * | 分支 | 判据 | 为什么这样判 |
    * | --- | --- | --- |
    * | `responseType === 'json'` | `wrote`（两个字段**确实变了**） | 这一段是无条件赋值，值本来就相等时赋值什么也没改 |
    * | 文本 / 访问器 | `patched !== null` 且两个 `defineProperty` 都装上 | 值相等时 `applyProgressToJson` 已经返回 null，根本走不到这里 |
+   *
+   * ③ 是"换流成功"（`vi.dash = full.dash` 已落地）；④ 是"进度增量 > 0 或候选真被换"。
    *
    * 跳过（`rewriteGate` 关 / `currentTime > 3` / 不是 playurl / 没有可还原进度）/
    * 失败 / `last_play_time` 本来就对 —— 那些分支一律不发：
@@ -1304,6 +1315,14 @@
            * 再决定要不要把它写回响应。拿不到就原样返回，**绝不因进度让取流失败**。
            */
           return progressP.then(function (prog) {
+            /**
+             * 进度还原的**成功计数器基线**。下面用"增量 > 0"回答"这次真的写进去了吗"，
+             * 而不是拿 `json.data.last_play_time === prog.time` 去比 —— 后者在
+             * `prog.time === 0` 且响应本来就是 0 时会假真（什么都没写却相等）。
+             * 增量只认 `progressRestored` 那一处自增，与上面的成功判据是同一条。
+             */
+            var restoredBefore = festivalTrace.progressRestored;
+
             var entry = progressIds
               ? progressCache[progressIds.aid + '|' + progressIds.cid]
               : null;
@@ -1347,14 +1366,70 @@
              *
              * ⚠️ 不要改成 `patchPlayurlBody(text, prog, true)`：那会把 PCDN 统计和
              * `'festival'` 标签弄丢（统计要在本函数里汇总上报）。
+             *
+             * ## 上报条件补齐 `fallbackKept`（2026-11-19）
+             *
+             * 与另外五处（`:2827` / `:3149` / `:5092` / `:5516` / `:5672`）对齐：
+             * `fallbackKept > 0` 是"候选全被删光、只留了一条 fallback"的观测，
+             * 那时 `changed` 为假但**确实动过**。缺这一半，屏蔽失败在诊断页上
+             * 就永远读不到（结论卡 A 那条判据正是读 `fallbackKept`）。
              */
+            var festivalStatsChanged = false;
             if (pcdnFilterReady()) {
               var stats = filterDashOf(json.data);
-              if (stats.changed) {
+              if (stats.changed || stats.fallbackKept > 0) {
+                festivalStatsChanged = true;
                 festivalTrace.rewritten += stats.rewritten;
                 reportPcdnFilter(stats, 'festival');
               }
             }
+
+            /**
+             * ## 上报「扩展介入」—— festival 是第**四**条取流路径（2026-11-19 补）
+             *
+             * ### 守的是什么
+             *
+             * `reportExtPatch()` 的调用点清单（见函数头）此前只覆盖三条：
+             * ① XHR 改写 playurl 响应体、② `__playinfo__` setter 注入、
+             * ③ `/ogv/player/playview` 换流。**活动页不在其中** ——
+             * 它走的是 `nano` 回调里自己发的 `nativeFetch`，
+             * `patchPlayurlXhrProgress()` 那条路在活动页根本不存在
+             *（`festivalTrace` 的注释里写着"活动页没有 XHR 观察钩子"）。
+             *
+             * 后果：活动页上扩展明明把整份取流接了过来（换 Cookie / 还原进度 /
+             * 换 PCDN authority），时间轴却说"扩展没介入" —— 与 PGC 换集那条
+             * （③ 补之前）是**同一个漏洞形态**。
+             *
+             * ### 为什么 ISOLATED 侧那条 `recordPlayurl()` 兜不住
+             *
+             * `recordPlayurl()` 在 `streamingProxied` 为真时也会补一条，
+             * 但它的判据是 `isPlayurlApi()` 命中 **resource 条目**。活动页这次
+             * 请求由主世界自己用 `nativeFetch` 发出，pathname 含 `/playurl` ——
+             * 表面看能命中，实际**不能依赖它**：
+             * ① 它要求 `streamingProxied` 已经置真（`page/activate` 回包 ~400ms，
+             * 首波取流常在窗内，那时还是 false）；
+             * ② 它取的是 `startTime`（请求发出那一刻），而"我们真的改过响应"这件事
+             * 发生在**响应回来之后** —— 混用会让"介入失败"也显示成"介入成功"。
+             *
+             * 主世界是唯一知道"这次到底改没改"的一方，所以由这里报。
+             *
+             * ### 判据：必须看"真的落地了"，不是"走到了这里"
+             *
+             * 走到这一行只说明进度还原与候选过滤都**跑过了**，各自成没成功还不一定。
+             * 两个真实信号：
+             *   - `festivalTrace.progressRestored` 的**增量 > 0**（与上面的成功判据
+             *     同一条自增）—— 用增量而不是 `usable`：`usable` 只说明"我们打算写"，
+             *     `patchPlayurlBody` 可能因 `JSON.parse` 失败而一个字节没落地
+             *     （那条路只记 `festivalTrace.lastSkip`）。用意图冒充结果，
+             *     正是 `reportExtPatch()` 函数头要挡的东西。
+             *   - `festivalStatsChanged`：候选真的被换了（含 `fallbackKept` 那一档，
+             *     与 `reportPcdnFilter` 同一口径）
+             *
+             * ⚠️ 重复调用是安全的、**不要**在这里去重：真正的去重在 ISOLATED 侧
+             *（`recordExtPatch()` 的 `state.extPatchRecorded`），主世界只负责"改了就说"。
+             */
+            var progressWrote = festivalTrace.progressRestored > restoredBefore;
+            if (progressWrote || festivalStatsChanged) reportExtPatch();
 
             /**
              * ⚠️ `data` 这一层不能少（探针 Q4）：内核 `requestDefault` 返回的是
