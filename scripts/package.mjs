@@ -570,8 +570,10 @@ async function checkHistorySecrets() {
       stdio: ['ignore', 'ignore', 'pipe'],
       timeout: 180_000,
     });
+    process.stdout.write('✅\n');
     return true;
   } catch (err) {
+    process.stdout.write('❌\n');
     const e = /** @type {{ status?: number, stderr?: Buffer|string, killed?: boolean }} */ (err);
     const detail = typeof e.stderr === 'string' ? e.stderr : (e.stderr?.toString('utf8') ?? '');
 
@@ -693,7 +695,13 @@ async function main() {
   //
   // 放在 clean-tree 门之后：工作区脏的时候本来就不该继续，
   // 让它先报更具体的那条错（脏文件列表），不要用 29 秒的历史扫描盖住它。
-  if (commit !== null) await checkHistorySecrets();
+  //
+  // 先打一行进度：这步要扫 404 个提交 / 约 5000 个 blob，实测 29 秒。
+  // 不打的话终端会静默半分钟，人以为挂了（2026-11-19 实跑发现）。
+  if (commit !== null) {
+    process.stdout.write('[package] 扫描提交历史（404 个提交，约 30 秒）… ');
+    await checkHistorySecrets();
+  }
 
   // ── 4. 产物命名 ──
   const lightName = `pluma-${version}.zip`;
