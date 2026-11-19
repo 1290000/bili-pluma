@@ -253,6 +253,14 @@ const PATH_REF_ALLOWED = {
     'src/background/index.ts',
     'src/platform/runtime/messaging.ts',
   ],
+  'docs/guides/security-notes.md': [
+    // 这份文档的核心就是**记录哪些文件曾经泄漏、什么时候移出的**。
+    // 那两个文件已经被 `git rm --cached` 并从磁盘删掉，正文用表格记它们
+    // 「入库日期 / 移出提交」—— 路径必须照写原样，改成占位符就读不出是哪一份了。
+    // 它们不是死链，是证据。
+    'poc/verify/bg-ssr.json',
+    'poc/verify/bg.html',
+  ],
 };
 
 /**

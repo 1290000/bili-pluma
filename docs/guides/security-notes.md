@@ -172,11 +172,12 @@ git push origin --force --all && git push origin --force --tags
 | 防线 | 位置 | 抓什么 |
 | --- | --- | --- |
 | pre-commit 钩子 | `.githooks/pre-commit` → `check-secrets.mjs --staged` | 暂存区里的凭据 + `upsig` 签名 |
-| 发布时历史门 | `scripts/package.mjs` 的 **G6.5** → `check-secrets.mjs --history` | 全部历史（29s） |
+| 发布时历史门 | `scripts/package.mjs` 的 **G6.5** → `check-secrets.mjs --history` | 增量 0.3–0.9s / 全量 29s（见下） |
 | `verify` 静态项 | `scripts/verify.mjs` 的 `secrets` 项 → `check-secrets.mjs` | 当前索引里的已跟踪文件 |
 | 忽略规则 | `.gitignore` 的「含真实取流签名的探针产物」一段 | 从源头挡住 |
 
-⚠️ **钩子挡不住 `--no-verify`**，也挡不住 "先 commit 再发现" 这类。
+⚠️ 钩子挡不住 `--no-verify`，也挡不住 `cherry-pick` / `merge` / `rebase`
+（这四种都实测过，见下方「为什么不能只靠 pre-commit 钩子」）。
 它只是第一道；真正的防线是**入库前想一下这份数据里有没有 `upsig`**。
 
 ### 2026-11-19：检查器本身三层都是坏的
@@ -211,8 +212,38 @@ git push origin --force --all && git push origin --force --tags
 | 逐提交 `git show` | **40 分钟未完成** | 无结论 |
 | 逐 blob 起进程 | 6 分钟未完成 | 无结论 |
 | **`cat-file --batch` 批量** | **29 秒** | 91 处（全部在基线内） |
+| **增量（水印 `w..HEAD`）** | **0.3–0.9 秒** | 扫到的都是新提交 |
 
 同一个 blob 在 400 个提交里只会被检查一次 —— 旧实现每个提交都重跑一遍。
+
+### 增量水印：把「重复劳动」也去掉
+
+29 秒仍然是每次发版都在做同一件事：那 91 处是**静态**的既有基线，
+文件内容一个字没变，重扫只是把它们原样再报一次。
+
+于是加了水印机制：把「上次已验证的提交」记进
+`.git/pluma-secrets-watermark`，之后只扫 `水印..HEAD`。
+
+| 场景 | 范围 | 实测 |
+| --- | --- | --- |
+| 有水印，无新提交 | `w..HEAD` = 0 对象 | **0.34 秒** |
+| 有水印，1 个新提交 | 3–9 个对象 | **0.55 秒** |
+| 无水印 / 历史被 rewrite | 全量 5098 对象 | 29 秒 |
+
+**为什么增量不会漏**：`git rev-list w..HEAD --objects` 能捞到「加了又删」的 blob。
+专门验过，因为那正是本次事故的形态（`bg-ssr.json` 10-25 入库、10-27 移出）：
+
+```
+$ git rev-list <watermark>..HEAD --objects | grep leak
+911bcc9… leak.json        ← 加了又删，照样能捞到
+```
+
+**保守降级**：水印缺失、或水印不是 HEAD 的祖先（历史被 rewrite / force-push），
+一律退回全量并在输出里说明原因。宁可白跑 29 秒，不能静默漏扫。
+
+**为什么水印不放版本控制**：它是本地验证状态，不该随 clone 传播 ——
+每个 clone 各自扫自己的全量、打自己的水印，谁也不替别人担保。
+强制全量：`--full`。
 
 ### 基线：已确认并接受的历史泄漏
 
@@ -220,11 +251,36 @@ git push origin --force --all && git push origin --force --tags
 （`check-secrets.mjs` 的 `HISTORY_BASELINE`），打印为 ⚠️ 并放行；
 **基线外**的命中仍然 ❌ 硬红。
 
+⚠️ **增量模式下基线一律不生效**。理由：水印是在「历史已知」的前提下打的，
+那之后出现的任何命中都是新的。反例（实测过）：`poc/verify/bg-ssr.json` 在基线里，
+若有人在新提交里**又把它加回去**，按路径匹配会被判成「已知」而放过 ——
+那恰恰是最该报的一次。
+
 为什么必须这样：一个永远红的检查项**等于没有检查项**，它迟早被
 `--no-verify` 或改代码绕过，那之后就什么也拦不住了。
 
 ⚠️ 基线**只增不减** —— 洗了历史之后才能删对应条目。基线不是"安全"，
 是"知道并接受"。
+
+### 为什么不能只靠 pre-commit 钩子
+
+钩子是最快的一道，但它**不是全覆盖**的。实测四个绕过路径：
+
+| 操作 | 跑 pre-commit？ | 实测 |
+| --- | --- | --- |
+| `git commit`（正常） | ✅ 跑 | 含签名 json → 270 处，`exit 1` |
+| `git commit --amend` | ✅ 跑 | 同样拦住 |
+| `git cherry-pick <含泄漏的提交>` | ❌ **不跑** | `leak.txt` 静默进 main |
+| `git merge --no-ff <分支>` | ❌ **不跑** | `leak.txt` 静默进 main |
+| `git rebase <分支>` | ❌ **不跑** | 泄漏跟着进了新提交 |
+| 新 `git clone` 之后 | ❌ **一个钩子都没有** | `core.hooksPath` 是空的 |
+
+最后一行是根因：`core.hooksPath` 是**本地配置，不进版本控制**
+（见 `.githooks/README.md:12`），换机器 / 重 clone 都要重设。
+`README.md:70` 与 `AGENTS.md:222` 都写着"clone 后跑一次"——**靠自觉**。
+
+所以打包门不能省：它是这条链上唯一**跟着代码走**、且**没有 `--no-verify` 后门**的一环。
+钩子管"未来的每一次提交"，打包门管"这一次要发出去的东西连同它的历史"。
 
 ---
 

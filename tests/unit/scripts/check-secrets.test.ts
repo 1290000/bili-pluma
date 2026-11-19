@@ -26,7 +26,7 @@
  * 不把逻辑抄一份进测试（抄一份只能证明抄得像）。
  */
 
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -64,17 +64,15 @@ function sandbox(files: Record<string, string>): string {
 }
 
 function runIn(dir: string, args: string[] = []): { status: number; out: string } {
-  try {
-    const out = execFileSync('node', [SCRIPT, ...args], {
-      cwd: dir,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
-    return { status: 0, out };
-  } catch (err) {
-    const e = err as { status?: number; stdout?: string; stderr?: string };
-    return { status: e.status ?? -1, out: `${e.stdout ?? ''}${e.stderr ?? ''}` };
-  }
+  /**
+   * 结果合并 stdout + stderr。
+   *
+   * `--history` 的进度行（"增量扫 …"/"全量扫 …"）走 stderr，结论走 stdout ——
+   * 只看 stdout 会漏掉"它到底扫了多大范围"这个关键信息，
+   * 而增量水印的正确性恰恰体现在那句话上。
+   */
+  const r = spawnSync('node', [SCRIPT, ...args], { cwd: dir, encoding: 'utf8' });
+  return { status: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 }
 
 /** 把沙盒里的文件纳入版本控制（「已跟踪文件」模式靠它） */
@@ -284,5 +282,118 @@ describe('check-secrets：历史扫描能跑完（性能是防线的必要条件
     expect(status).toBe(1);
     expect(out).toContain('不在基线内');
     expect(out).toContain('src/leak.ts');
+  }, 180_000);
+});
+
+describe('check-secrets：历史增量水印（2026-11-19 加，避免每次重扫静态基线）', () => {
+  /** 在沙盒里造一个带提交历史的仓库；返回 git 调用器 */
+  function repoWithHistory(files: Record<string, string>): {
+    dir: string;
+    g: (args: string[]) => string;
+    commit: (msg: string) => void;
+  } {
+    const dir = sandbox(files);
+    const g = (args: string[]): string =>
+      execFileSync('git', args, { cwd: dir, encoding: 'utf8', stdio: 'pipe' });
+    const commit = (msg: string): void => {
+      g(['add', '-A']);
+      execFileSync(
+        'git',
+        ['-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', msg],
+        {
+          cwd: dir,
+          stdio: 'pipe',
+        },
+      );
+    };
+    commit('init');
+    return { dir, g, commit };
+  }
+
+  it('★ 第二次扫走增量（水印生效），且扫得到水印之后的**新**泄漏', () => {
+    /**
+     * 全量 29 秒里有 91 处是静态基线，每次原样再报一遍 —— 纯重复劳动。
+     * 水印机制把范围收窄到 `w..HEAD`。
+     *
+     * 但**变快本身不是目的**：必须同时证明增量扫得到新泄漏，
+     * 否则"快"只意味着"漏"。
+     */
+    const { dir, commit } = repoWithHistory({ 'src/a.ts': 'export const a = 1;\n' });
+
+    // 第一次：无水印 → 全量，并写下水印
+    const first = runIn(dir, ['--history']);
+    expect(first.status).toBe(0);
+    expect(first.out).toContain('**全量**扫');
+    expect(first.out).toContain('水印已更新');
+
+    // 第二次：已经有水印，且 HEAD 没动 → 增量 0 提交
+    const second = runIn(dir, ['--history']);
+    expect(second.status).toBe(0);
+    expect(second.out).toContain('**增量**扫');
+
+    // 水印之后**新提交**一个泄漏 —— 增量必须抓到
+    writeFileSync(
+      join(dir, 'src/leak2.ts'),
+      `export const u = 'https://x.bilivideo.com/v.m4s?upsig=${REAL_SIG}';\n`,
+      'utf8',
+    );
+    commit('add leak2');
+
+    const third = runIn(dir, ['--history']);
+    expect(third.status).toBe(1);
+    expect(third.out).toContain('src/leak2.ts');
+  }, 180_000);
+
+  it('⛔ 增量模式下**不认基线**：基线文件被重新加回也要报', () => {
+    /**
+     * `poc/verify/bg-ssr.json` 在 `HISTORY_BASELINE` 里（2026-11-19 那批已接受的
+     * 既有泄漏）。如果有人在新提交里**又把它加回去**，按路径匹配会被判成
+     * "已知"而放过 —— 那恰恰是最该报的一次。
+     *
+     * 判据：增量扫的范围是"水印之后的提交"，这个范围内出现的任何命中都是新的，
+     * 所以基线一律不适用。
+     */
+    const { dir, commit } = repoWithHistory({ 'src/a.ts': 'export const a = 1;\n' });
+    expect(runIn(dir, ['--history']).status).toBe(0); // 先打水印
+
+    // 把基线里的那个路径重新造出来并提交
+    mkdirSync(join(dir, 'poc/verify'), { recursive: true });
+    writeFileSync(
+      join(dir, 'poc/verify/bg-ssr.json'),
+      `{"url":"https://x.bilivideo.com/v.m4s?upsig=${REAL_SIG}"}`,
+      'utf8',
+    );
+    commit('re-add baseline file');
+
+    const { status, out } = runIn(dir, ['--history']);
+    expect(status).toBe(1);
+    expect(out).toContain('poc/verify/bg-ssr.json');
+  }, 180_000);
+
+  it('★ 水印无效时退回全量（宁可白跑，不能漏扫）', () => {
+    /**
+     * 两种失效：水印指向不存在的提交、或不是 HEAD 的祖先（历史被 rewrite）。
+     * 任一情况下都不能静默按"增量"扫 —— 那会漏。
+     */
+    const { dir } = repoWithHistory({ 'src/a.ts': 'export const a = 1;\n' });
+    expect(runIn(dir, ['--history']).status).toBe(0);
+
+    // 造一个有效格式但不存在的水印
+    writeFileSync(join(dir, '.git/pluma-secrets-watermark'), '0'.repeat(40) + '\n', 'utf8');
+
+    const { status, out } = runIn(dir, ['--history']);
+    expect(status).toBe(0);
+    expect(out).toContain('**全量**扫');
+    expect(out).toContain('不是 HEAD 的祖先');
+  }, 180_000);
+
+  it('★ --full 强制全量（不信任水印）', () => {
+    const { dir } = repoWithHistory({ 'src/a.ts': 'export const a = 1;\n' });
+    expect(runIn(dir, ['--history']).status).toBe(0); // 打上水印
+
+    const { status, out } = runIn(dir, ['--history', '--full']);
+    expect(status).toBe(0);
+    expect(out).toContain('**全量**扫');
+    expect(out).toContain('本次显式要求全量');
   }, 180_000);
 });

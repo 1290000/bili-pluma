@@ -41,7 +41,8 @@
 | `node scripts/check-page-gate.mjs` | 「这是不是播放页」判据只走 `parsePlayPage()` | 改 popup / `tabs.handler.ts` / `page-state-client.ts` |
 | `node scripts/check-secrets.mjs` | 测试账号标识 / 凭据形态 / **取流签名 `upsig`** | 提交前（pre-commit 自动跑 `--staged`） |
 | `node scripts/check-secrets.mjs --all` | 同上，**含被 `.gitignore` 忽略的文件**（会区分「已入库」与「仅本地」） | 收工前 / 想确认本地抓包没漏出去 |
-| `node scripts/check-secrets.mjs --history` | 同上，**扫全部提交历史**（29s，按 blob 去重） | 发版前（`package.mjs` 的 G6.5 门自动跑） |
+| `node scripts/check-secrets.mjs --history` | 同上，**扫提交历史**（增量，约 1s；全量 29s） | 发版前（`package.mjs` 的 G6.5 门自动跑） |
+| `node scripts/check-secrets.mjs --history --full` | 同上，**强制全量**（不信水印） | 怀疑水印失效 / 刚 rewrite 过历史 |
 | `node scripts/check-artifact.mjs` | 产物与源码一致性 | 改 `package.mjs` 或发版 |
 | `node scripts/check-docs.mjs` | 文档死链 / 篇幅上限 / 章节连号 / 换行符 | 改任何 `docs/**`（`verify --fast` 已含） |
 | `node scripts/check-workflow-logs.mjs` | CI 日志泄露（只抓 `set -x` / `printenv` 这类必泄露写法） | 改 `.github/workflows/**`，**仍须人工过每个打印点**（§4.3） |
