@@ -154,8 +154,14 @@ mid 不是密钥，可它能直接打开一个人的 B 站主页。
 
 - [ ] **提交历史**：`git log -S "<敏感值>" --oneline --all`，确认历史里也没有
   —— 只改文件不够，旧值仍能从历史翻出来
+  > 2026-11-19 起这项有机器门了：`package.mjs` 的 **G6.5** 会自动跑
+  > `check-secrets --history`（29s），基线外的命中直接拒打包。
+  > 手工的 `git log -S` 仍值得跑 —— 它查的是**具体某个值**，机器门查的是**形态**。
 - [ ] **抓包产物**：`poc/verify/` 下的 `bg-ssr.json`、`result-*.json` 不进仓库
   （已在 `.gitignore` 里，但新增文件时容易漏）
+  > 2026-11-19 起 `check-secrets --all` 能查这类文件了（原来被 `--exclude-standard`
+  > 挡在扫描范围外）。收工前跑一次 `node scripts/check-secrets.mjs --all`，
+  > 它会区分「已入库」与「仅本地」。
 
 ---
 
@@ -174,7 +180,13 @@ node scripts/package.mjs
 
 产出 `dist/pluma-<版本>.zip`。
 脚本会自检：`manifest.json` 在根、版本号一致、不含被排除的目录、工作区干净、
-`.output` 不比源码旧。任一不符直接报错退出。
+`.output` 不比源码旧、**历史里没有基线外的敏感值**。任一不符直接报错退出。
+
+> **G6.5 历史泄漏门（2026-11-19 加）**：`check-secrets --history` 扫全部提交，
+> 约 29 秒。它答的是 `verify` 答不了的问题 —— `verify` 只看**当前索引**，
+> 看不见「已经在历史里、但已经被 `git rm --cached` 掉」的东西。
+> 2026-11-19 的事故正是后者（4 个文件 78 处签名，当前索引干净、历史不干净）。
+> 基线内的命中放行并打印为 ⚠️；**基线外**直接拒打包。详见 [security-notes.md](./security-notes.md)。
 
 同时会写一个 **`dist/BUILD.md`**：记录版本、commit、构建命令、Node/wxt/lockfile、
 以及产物逐文件 sha256。它**不进 zip、不上传**，只留给维护者核对「用户装的到底是哪一版」。

@@ -535,6 +535,74 @@ async function checkProvenanceInputs() {
 }
 
 /**
+ * G6.5：**历史泄漏门**（2026-11-19 加）。
+ *
+ * ## 为什么这一项必须在这里，而不能只在 verify 里
+ *
+ * `verify` 跑的 `secrets` 只看**当前已跟踪文件**（`--staged` 看 diff，`--tracked` 看索引）。
+ * 它答的问题是"**现在**仓库里有没有敏感值"，答不了"**历史**里有没有"。
+ *
+ * 而 2026-11-19 的真实事故正是后者：4 个文件、78 处完整 `upsig` 签名
+ * 早在 v1.3.0 之前就进了历史，当前索引里**一个都不剩**（都 `git rm --cached` 了），
+ * 所以 `verify` 一直是绿的 —— 只要有人 `git show <旧提交>` 就能取出它们。
+ *
+ * ## 为什么放在打包时，不放进 verify
+ *
+ * `--history` 实测 **29 秒**（404 提交 / 5079 个对象）。放进 `verify --fast`
+ * 会让"改一行文档"也等半分钟，最后必然被人 `--no-verify` 掉 —— 那就又回到"防线形同虚设"。
+ *
+ * 打包是**不可逆的节点**：zip 一旦上传到 Release，用户就开始下载，
+ * 此时再发现历史里有凭据，代价已经不是成本问题而是"东西已经出去了"。
+ * 所以在这里等 29 秒是划算的，每次日常提交都等就不是。
+ *
+ * ## 为什么红了必须是 hard fail
+ *
+ * 历史泄漏无法靠"改文件"补救 —— 它要么接受，要么重写历史
+ * （见 `docs/guides/security-notes.md`）。这是**用户决策，不是打包脚本能替的**。
+ * 所以要停下来让人明确选择，不能给一个"跳过继续"的软提醒。
+ *
+ * @returns {Promise<boolean>} 通过返回 true；失败已记入 problems 并返回 false
+ */
+async function checkHistorySecrets() {
+  try {
+    execFileSync(process.execPath, ['scripts/check-secrets.mjs', '--history'], {
+      cwd: ROOT,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      timeout: 180_000,
+    });
+    return true;
+  } catch (err) {
+    const e = /** @type {{ status?: number, stderr?: Buffer|string, killed?: boolean }} */ (err);
+    const detail = typeof e.stderr === 'string' ? e.stderr : (e.stderr?.toString('utf8') ?? '');
+
+    if (e.killed) {
+      fail(
+        '历史泄漏扫描超时（180s）',
+        '`check-secrets --history` 没在 180 秒内结束。\n' +
+          '    先单独跑一次看它卡在哪：node scripts/check-secrets.mjs --history',
+      );
+      return false;
+    }
+
+    fail(
+      '历史里含敏感信息（G6.5 门）',
+      '当前索引是干净的，但**历史提交里仍能取出来** —— 改文件修不好这个。\n' +
+        '    两条路，选一条（都要人决策，脚本不替你选）：\n' +
+        '      · 接受现状：在 docs/guides/security-notes.md 的「触发条件」里记下这一次，\n' +
+        '        并确认签名已过期（读 deadline 与当前时间比）\n' +
+        '      · 洗历史：按 security-notes.md 里已验证过的 filter-branch 脚本走，代价要认\n' +
+        '    扫描输出：\n' +
+        detail
+          .split('\n')
+          .filter((l) => l.trim() !== '')
+          .map((l) => `      ${l}`)
+          .join('\n'),
+    );
+    return false;
+  }
+}
+
+/**
  * 生成 `BUILD.md` —— 构建凭证（这份 zip 由哪个 commit、哪些字节构成）。
  *
  * ## 它现在去哪（2026-11-17）
@@ -620,6 +688,12 @@ async function main() {
 
   // ── 3b. G6 provenance 前置：git 可用 + 工作区干净 + .output 不比源码旧 ──
   const commit = await checkProvenanceInputs();
+
+  // ── 3c. G6.5 历史泄漏门：当前索引干净 ≠ 历史干净 ──
+  //
+  // 放在 clean-tree 门之后：工作区脏的时候本来就不该继续，
+  // 让它先报更具体的那条错（脏文件列表），不要用 29 秒的历史扫描盖住它。
+  if (commit !== null) await checkHistorySecrets();
 
   // ── 4. 产物命名 ──
   const lightName = `pluma-${version}.zip`;
