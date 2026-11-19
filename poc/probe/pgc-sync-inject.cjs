@@ -14,10 +14,13 @@ const path = require('node:path');
 const TARGET = process.env.POC_TARGET || 'https://www.bilibili.com/bangumi/play/ss48001';
 const MODE = process.env.MODE || 'stub';
 const KEEP = process.env.KEEP === '1';
-const OUT = path.join(__dirname, `result-pgc-sync-${MODE}${KEEP ? '-keep' : ''}.json`);
+const FILTER_Q = process.env.FILTER_Q ? Number(process.env.FILTER_Q) : 0;
+const KEEP_PREFETCH = process.env.KEEP_PREFETCH === '1';
+const MARK_MS = process.env.MARK_MS ? Number(process.env.MARK_MS) : 0;
+const OUT = path.join(__dirname, `result-pgc-sync-${MODE}${KEEP ? '-keep' : ''}${KEEP_PREFETCH ? '-prefetch' : ''}.json`);
 const HEADLESS = process.env.POC_HEADLESS !== '0';
 
-const INIT = ({ mode, keep }) => {
+const INIT = ({ mode, keep, filterQ, keepPrefetch, markMs }) => {
   const P = { mode, events: [], nano: 0, createCalls: 0, cbHits: 0, params: [], xhr: [], errors: [], playerCalls: [] };
   window.__PGC_SYNC__ = P;
   const log = (m) => P.events.push({ t: Math.round(performance.now()), m });
@@ -69,6 +72,7 @@ const INIT = ({ mode, keep }) => {
 
         // 同步替换整个 requestConfig（不是只改一个字段）
         try {
+          const ssrAtCreate = window.__playinfo__;
           const rc = config.requestConfig && typeof config.requestConfig === 'object' ? config.requestConfig : {};
           const cb = async function (params) {
               P.cbHits += 1;
@@ -122,12 +126,44 @@ const INIT = ({ mode, keep }) => {
                   };
                 }
 
-                // merged：以 SSR 为骨架合并流字段（历史 PoC）
-                const ssr = window.__playinfo__;
+                // merged / merged-dash：以 SSR 为骨架合并流字段
+                const ssr = ssrAtCreate || window.__playinfo__;
                 const base = ssr && ssr.data ? ssr : { code: 0, message: '0', ttl: 1, result: {} };
                 const ssrResult = base.result || {};
                 const vi = (base.result && base.result.video_info) || {};
                 const api = j.result;
+                P.videoInfoBeforeKeys = Object.keys(vi);
+                P.ssrDurlGroups = vi.durls ? vi.durls.length : (vi.durl ? 1 : 0);
+                P.apiDurlGroups = api.durls ? api.durls.length : (api.durl ? 1 : 0);
+                P.apiDashDuration = api.dash ? api.dash.duration : null;
+                P.apiDashHeights = api.dash ? api.dash.video.map((x) => x.height) : [];
+                const nextVi = Object.assign({}, vi);
+                const whitelist = ['quality', 'timelength', 'format', 'dash', 'durl', 'durls', 'accept_quality', 'accept_description', 'support_formats', 'video_codecid', 'fnval'];
+                for (const k of whitelist) {
+                  const val = api[k];
+                  if (val === undefined || val === null) continue;
+                  if (Array.isArray(val) && val.length === 0) continue;
+                  nextVi[k] = val;
+                }
+                // 方案要求：有 dash 时删掉 SSR 的 durl/durls，避免播放器优先走试看 durl
+                if (nextVi.dash) {
+                  delete nextVi.durl;
+                  delete nextVi.durls;
+                }
+                if (markMs) {
+                  nextVi.timelength = (nextVi.timelength || 0) + markMs;
+                  if (nextVi.dash && typeof nextVi.dash.duration === 'number') nextVi.dash = Object.assign({}, nextVi.dash, { duration: nextVi.dash.duration + Math.round(markMs / 1000) });
+                  P.markMs = markMs;
+                }
+                if (filterQ && nextVi.dash) {
+                  const before = nextVi.dash.video.length;
+                  nextVi.dash = Object.assign({}, nextVi.dash, {
+                    video: nextVi.dash.video.filter((x) => (x.height || 0) <= filterQ),
+                  });
+                  nextVi.quality = filterQ;
+                  nextVi.accept_quality = (nextVi.accept_quality || []).filter((x) => x <= filterQ);
+                  P.filteredDash = { before, after: nextVi.dash.video.length, filterQ };
+                }
                 const merged = {
                   ...base,
                   data: {
@@ -135,19 +171,7 @@ const INIT = ({ mode, keep }) => {
                     code: 0,
                     result: {
                       ...ssrResult,
-                      video_info: {
-                        ...vi,
-                        quality: api.quality ?? vi.quality,
-                        timelength: api.timelength ?? vi.timelength,
-                        format: api.format ?? vi.format,
-                        dash: api.dash ?? vi.dash,
-                        durl: api.durl ?? (api.durls && api.durls[0] && api.durls[0].durl) ?? vi.durl,
-                        durls: api.durls ?? vi.durls,
-                        accept_quality: api.accept_quality ?? vi.accept_quality,
-                        accept_description: api.accept_description ?? vi.accept_description,
-                        support_formats: api.support_formats ?? vi.support_formats,
-                        is_preview: api.is_preview ?? false,
-                      },
+                      video_info: nextVi,
                       accept_quality: api.accept_quality ?? ssrResult.accept_quality,
                       accept_description: api.accept_description ?? ssrResult.accept_description,
                     },
@@ -155,10 +179,14 @@ const INIT = ({ mode, keep }) => {
                 };
                 P.mergedInfo = {
                   hasDash: !!merged.data.result.video_info.dash,
+                  hasDurl: !!merged.data.result.video_info.durl,
                   durlGroups: (merged.data.result.video_info.durls || []).length,
                   timelength: merged.data.result.video_info.timelength,
+                  videoInfoKeys: Object.keys(merged.data.result.video_info),
+                  dashDuration: merged.data.result.video_info.dash ? merged.data.result.video_info.dash.duration : null,
+                  dashVideoCount: merged.data.result.video_info.dash ? merged.data.result.video_info.dash.video.length : 0,
                 };
-                log('merged 骨架返回');
+                log('merged 骨架返回（dash=' + P.mergedInfo.hasDash + ', durl=' + P.mergedInfo.hasDurl + '）');
                 return merged;
               } catch (e) {
                 P.errors.push('cb: ' + e.message);
@@ -173,7 +201,7 @@ const INIT = ({ mode, keep }) => {
             config.requestConfig = { reqHttpPlayUrlInfo: cb };
           }
           // 预取会短路回调，必须删
-          try { delete config.prefetch.playUrl; } catch (e) {}
+          if (!keepPrefetch) { try { delete config.prefetch.playUrl; } catch (e) {} }
           P.injected = true;
           P.keptObject = keep;
           log('已同步' + (keep ? '替换函数字段（保留 scope）' : '替换整个 requestConfig') + '（mode=' + mode + '）');
@@ -207,7 +235,7 @@ const INIT = ({ mode, keep }) => {
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(e.message.slice(0, 200)));
   page.on('console', (m) => { if (m.type() === 'error') pageErrors.push('console: ' + m.text().slice(0, 180)); });
-  await page.addInitScript(INIT, { mode: MODE, keep: KEEP });
+  await page.addInitScript(INIT, { mode: MODE, keep: KEEP, filterQ: FILTER_Q, keepPrefetch: KEEP_PREFETCH, markMs: MARK_MS });
 
   const out = { mode: MODE, target: TARGET, at: new Date().toISOString() };
   try {
@@ -235,7 +263,7 @@ const INIT = ({ mode, keep }) => {
     });
     out.state = await page.evaluate(() => {
       const v = document.querySelector('video');
-      return { t: Math.round(v?.currentTime ?? 0), dur: Math.round(v?.duration ?? 0), h: v?.videoHeight ?? 0, w: v?.videoWidth ?? 0, ready: v?.readyState ?? null, paused: v?.paused ?? null, err: v?.error?.code ?? null };
+      return { t: Math.round(v?.currentTime ?? 0), dur: Math.round(v?.duration ?? 0), h: v?.videoHeight ?? 0, w: v?.videoWidth ?? 0, ready: v?.readyState ?? null, paused: v?.paused ?? null, err: v?.error?.code ?? null, src: (v?.currentSrc || '').slice(0, 100) };
     });
     out.pageErrors = pageErrors.slice(0, 12);
   } catch (e) {
