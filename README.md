@@ -85,7 +85,7 @@ AES-GCM 加密存在本地，密钥也在本地，不上传服务器。
 | **BiliPai**（GPLv3） | 多账号设计；PCDN 规则清单与其同源 |
 | **Bili Dual Account Helper** | 请求级身份代理思路 |
 
-Bilibili-Evolved 与 DSH 有实质复用（前者是选择器代码，后者是材质与结构配方）；其余四家**均未使用源代码**，只借鉴设计、清单或界面形态。逐项出处与许可原文见 [NOTICE.md](./NOTICE.md)。
+Bilibili-Evolved 与 DSH 有实质复用，其余未用其代码。逐项出处见 [NOTICE.md](./NOTICE.md)。
 
 ## 许可证与声明
 
