@@ -696,10 +696,13 @@ async function main() {
   // 放在 clean-tree 门之后：工作区脏的时候本来就不该继续，
   // 让它先报更具体的那条错（脏文件列表），不要用 29 秒的历史扫描盖住它。
   //
-  // 先打一行进度：这步要扫 404 个提交 / 约 5000 个 blob，实测 29 秒。
+  // 先打一行进度：这步要扫全部提交的 blob，实测 29 秒（Windows）。
   // 不打的话终端会静默半分钟，人以为挂了（2026-11-19 实跑发现）。
+  //
+  // ⚠️ 不要在这里写死提交数。我最初写了「404 个提交」，两个提交之后就过期了。
+  // 准确数字由 check-secrets 自己打印（它扫完会报「N 个提交 / M 个唯一对象」）。
   if (commit !== null) {
-    process.stdout.write('[package] 扫描提交历史（404 个提交，约 30 秒）… ');
+    process.stdout.write('[package] 扫描提交历史（约 30 秒）… ');
     await checkHistorySecrets();
   }
 
