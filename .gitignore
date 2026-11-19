@@ -171,4 +171,29 @@ poc/probe/**/BrowserMetrics/
 poc/probe/**/*.pma
 poc/probe/**/*.dmp
 
+# ── 含真实取流签名的探针产物（2026-11-19）─────────────────────────
+#
+# 这些 json 是 playurl / 候选探测的**原始响应**，里面带 `upsig` + `uparams`
+# 的**完整签名 URL**。签名在有效期内可直接取流 —— 等同于把一次会话的取流凭据
+# 摊开。它们**不入库**。
+#
+# 结论与数字已经写进对应的 `REPORT-*.md`（那才是要留的证据），
+# 原始响应只在本机留档：
+#   poc/probe/pcdn-diag/*.json   → REPORT-pcdn-*.md / REPORT-remaining.md
+#   poc/probe/festival/result-*  → REPORT-nano.md / REPORT-gate-window.md
+#   poc/probe/pgc/result-*       → REPORT-dash-merge.md
+#   poc/verify/bg-ssr.json       → 当时那份 SSR 基线快照
+#
+# ⚠️ 需要复核某条结论时，**重跑探针**，不要把旧响应捞回来入库。
+poc/probe/**/*.json
+poc/verify/*.json
+# 这三份是 v1.3.0 之前误入库的 console 快照（含 14/22/22 处完整 upsig），
+# 2026-11-19 从索引移除。⚠️ 历史里仍可取出，见 docs/guides/security-notes.md
+poc/probe/logout-login-round2/raw/repro5/*.json
+
+# 例外：不含签名的结构化结果（纯布尔/计数/分类），要留作回归基线。
+# 加例外时必须先确认文件里没有 `upsig=` / `uparams=` / 长 `search` 串。
+!poc/probe/loading-trace/*.json
+
+# bsk 探针临时快照
 sync.json
