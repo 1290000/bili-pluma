@@ -216,7 +216,7 @@ async function releaseNotes(version) {
 
   return `## Pluma ${version}
 
-B站助手 · 画质与净化。
+画质 · 净化 · 线路诊断 —— B站 网页扩展（Chrome / Edge）。
 
 ### 本版内容
 

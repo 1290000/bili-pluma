@@ -62,7 +62,12 @@ describe('inspectAdClean：三种结论必须分开', () => {
     expect(changed).toBe(1);
 
     const ad = inspectAdClean(document);
-    expect(ad).toMatchObject({ candidates: 1, marked: 1, containerMissing: false, verdict: 'working' });
+    expect(ad).toMatchObject({
+      candidates: 1,
+      marked: 1,
+      containerMissing: false,
+      verdict: 'working',
+    });
   });
 
   it('★★ 有候选、但一处都没命中判据 → suspect（不是失效）', () => {
@@ -85,7 +90,12 @@ describe('inspectAdClean：三种结论必须分开', () => {
     document.body.innerHTML = '<div class="something-else"></div>';
 
     const ad = inspectAdClean(document);
-    expect(ad).toMatchObject({ candidates: 0, marked: 0, containerMissing: false, verdict: 'dead' });
+    expect(ad).toMatchObject({
+      candidates: 0,
+      marked: 0,
+      containerMissing: false,
+      verdict: 'dead',
+    });
   });
 
   it('⛔ 「没有广告」与「判据失效」不许落进同一个结论', () => {
@@ -143,13 +153,18 @@ describe('countMarkedAds：只数"被标记的"，不数"候选"', () => {
 
 describe('adCleanVerdictText：文案不许把"没命中"说成"坏了"', () => {
   it('★ working → 说出隐藏了几处', () => {
-    expect(adCleanVerdictText({ candidates: 3, marked: 3, containerMissing: false, verdict: 'working' })).toContain(
-      '已隐藏 3 处',
-    );
+    expect(
+      adCleanVerdictText({ candidates: 3, marked: 3, containerMissing: false, verdict: 'working' }),
+    ).toContain('已隐藏 3 处');
   });
 
   it('★ suspect → 说清"通常是这一页本来就没有广告"', () => {
-    const text = adCleanVerdictText({ candidates: 2, marked: 0, containerMissing: false, verdict: 'suspect' });
+    const text = adCleanVerdictText({
+      candidates: 2,
+      marked: 0,
+      containerMissing: false,
+      verdict: 'suspect',
+    });
     expect(text).toContain('2 个候选位置');
     expect(text).toContain('本来就没有广告');
     // ⛔ 不许说成失效
@@ -157,7 +172,12 @@ describe('adCleanVerdictText：文案不许把"没命中"说成"坏了"', () => 
   });
 
   it('★ dead → 说"可能已失效"，**不许**说成"已失效"（我们没观测到因果）', () => {
-    const text = adCleanVerdictText({ candidates: 0, marked: 0, containerMissing: false, verdict: 'dead' });
+    const text = adCleanVerdictText({
+      candidates: 0,
+      marked: 0,
+      containerMissing: false,
+      verdict: 'dead',
+    });
     expect(text).toContain('找不到任何广告位结构');
     // 观测到的是"整页没有广告位结构"，不是"B 站改版了"
     expect(text).toContain('可能已因');
@@ -165,9 +185,24 @@ describe('adCleanVerdictText：文案不许把"没命中"说成"坏了"', () => 
   });
 
   it('⛔ 三档文案互不相同（合成一句就分不出"没广告"和"坏了"）', () => {
-    const a = adCleanVerdictText({ candidates: 1, marked: 1, containerMissing: false, verdict: 'working' });
-    const b = adCleanVerdictText({ candidates: 1, marked: 0, containerMissing: false, verdict: 'suspect' });
-    const c = adCleanVerdictText({ candidates: 0, marked: 0, containerMissing: false, verdict: 'dead' });
+    const a = adCleanVerdictText({
+      candidates: 1,
+      marked: 1,
+      containerMissing: false,
+      verdict: 'working',
+    });
+    const b = adCleanVerdictText({
+      candidates: 1,
+      marked: 0,
+      containerMissing: false,
+      verdict: 'suspect',
+    });
+    const c = adCleanVerdictText({
+      candidates: 0,
+      marked: 0,
+      containerMissing: false,
+      verdict: 'dead',
+    });
     expect(new Set([a, b, c]).size).toBe(3);
   });
 

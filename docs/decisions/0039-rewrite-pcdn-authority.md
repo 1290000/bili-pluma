@@ -4,7 +4,7 @@
 - 状态：**已采纳**（用户 2026-11-17 明确批准推翻 ADR 0038 的相关边界，**以本次要求优先**）
 - 取代范围：[ADR 0038](./0038-filter-pcdn-candidates.md) 的**边界 2**（不许新增/换成不在当次响应里的 host）与**边界 5**（全 PCDN 轨原样保留）；边界 1 从"删除或重排"改为"替换 authority"。ADR 0038 作为"第五类响应体改写"的**授权本身继续有效**，本 ADR 是它的**升级**，不是撤销
 - 继承：[ADR 0013](./0013-patch-player-info-response.md) / [ADR 0017](./0017-restore-primary-progress-in-playurl.md) 的"不伪造权益"原则**继续有效**（见本 ADR 边界 3/4）
-- 设计来源：bdFun（GPL-3.0）、BiliPai（GPLv3）—— **只借鉴设计，未使用其源代码**（`pkg-verify/README.md` 立场）；两者均为 Kotlin
+- 设计来源：bdFun（GPL-3.0）、BiliPai（GPLv3）—— **只借鉴设计，未使用其源代码**（立场登记在 [NOTICE.md](../../NOTICE.md) 的「项目立场」一段）；两者均为 Kotlin
 - 相关：`docs/plans/2026-11-17-pcdn-diag-plan.md` §2（原否决换 host 的地方，本 ADR 取代该否决）、F6（签名实测）
 
 ---
@@ -360,7 +360,7 @@ W1/W2 是决定性对照：同 host、同签名、同对象，**只差路径前�
 | 项 | 决定 | 理由 |
 | --- | --- | --- |
 | 抄 bdFun 的"自动测速" | **不做** | 扩展里逐 host 拉 1 MiB 会产生真实流量、污染我们自己的时间轴、拖慢起播；它是安卓 App 可以随便发请求，我们不行 |
-| 搬 Kotlin 源代码 | **不做** | 许可虽兼容（GPL），但项目立场是只借鉴设计（`pkg-verify/README.md`） |
+| 搬 Kotlin 源代码 | **不做** | 许可虽兼容（GPL），但项目立场是只借鉴设计（[NOTICE.md](../../NOTICE.md)「项目立场」） |
 | 健康度记忆 / pinnedHost | **本期不做** | 那是 BiliPai 的增量；先把手艺做对，再谈优化 |
 | 按测速重排官方候选 | **不做** | F7：响应无 `Timing-Allow-Origin`，拿不到 TTFB/字节数，排了也是猜 |
 | 改 `quality` / 权益字段 | **不做** | 边界 3/4；本 ADR 不松动 |
@@ -372,4 +372,4 @@ W1/W2 是决定性对照：同 host、同签名、同对象，**只差路径前�
 - [ADR 0038](./0038-filter-pcdn-candidates.md)：本 ADR 取代其边界 2/5、升级边界 1；其余授权继续有效
 - `docs/plans/2026-11-17-pcdn-diag-plan.md` F6：签名不绑 host 的实测
 - `poc/probe/pcdn-diag/REPORT-remaining.md`：24 条 4K 轨的剩余候选分布（删路线的代价）
-- `pkg-verify/README.md`：只借鉴设计、不使用竞品源代码的项目立场
+- [NOTICE.md](../../NOTICE.md)：只借鉴设计、不使用竞品源代码的项目立场（**2026-11-19 前这里写的是 `pkg-verify/README.md`，该文件不在版本控制、外部读不到，已改指向**）

@@ -2,7 +2,7 @@
   "name": "bili-pluma",
   "private": true,
   "version": "1.3.0",
-  "description": "B站助手 · 画质与净化",
+  "description": "画质 · 净化 · 线路诊断 —— B站 网页扩展（Chrome / Edge）",
   "license": "GPL-3.0-only",
   "repository": {
     "type": "git",

@@ -24,7 +24,7 @@ export default defineConfig({
 
   manifest: {
     name: 'Pluma',
-    description: 'B站助手 · 画质与净化',
+    description: '画质 · 净化 · 线路诊断 —— B站 网页扩展（Chrome / Edge）',
     /**
      * ⚠️ **每段上限 65535**（Chrome 扩展版本号规范）。
      * 别把日期往里塞（`20261026` 超限，装不上）。

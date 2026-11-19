@@ -1576,9 +1576,7 @@ describe('屏蔽失败要说出来：describeFilterFailure', () => {
      */
     const allFailed = snapshot({
       actual: { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null },
-      hosts: [
-        { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 4 },
-      ],
+      hosts: [{ host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null, count: 4 }],
       events: [
         { t: 900, stage: 'seg-req', host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', kind: 'pcdn' },
       ],
@@ -1593,7 +1591,11 @@ describe('屏蔽失败要说出来：describeFilterFailure', () => {
 
   it('★ 失败那句给警示色（ld-tone-warn），普通补充句保持中性', () => {
     /** `spyActions()` 定义在文件后面那组的作用域里，这里用等价的内联对象 */
-    const acts = { back: () => undefined, refresh: () => undefined, openDiagnostics: () => undefined };
+    const acts = {
+      back: () => undefined,
+      refresh: () => undefined,
+      openDiagnostics: () => undefined,
+    };
     const failed = loadingDetailPane(
       ok({
         actual: { host: 'xy220x180x77x45xy.mcdn.bilivideo.cn', cls: 'pcdn', flavor: null },

@@ -53,7 +53,7 @@
 | 判断该写在哪 | **[§6.1 权威位置表](./AGENTS.md)** | 两处写同一件事 → 删一处改引用 |
 | 写跨文档引用 | [§6.2](./AGENTS.md) | **必须写文件名**，不写"见 §7.2" |
 | 知道改完跑什么 | [§6.3](./AGENTS.md) | `node scripts/verify.mjs --fast` |
-| 知道篇幅上限 | [§6.4](./AGENTS.md) | README 95 行 / 单节 80 行 / AGENTS.md 260 行 |
+| 知道篇幅上限 | [§6.4](./AGENTS.md) | README 105 行 / 单节 80 行 / AGENTS.md 260 行 |
 
 ### 收尾
 

@@ -76,7 +76,12 @@ vi.mock('../../../src/content/site-clean/ads', () => ({
    * ⚠️ 不桩会直接抛 "No inspectAdClean export is defined on the mock"，
    * 那是 mock 不全，不是被测代码的问题。
    */
-  inspectAdClean: () => ({ candidates: 0, marked: 0, containerMissing: false, verdict: 'dead' as const }),
+  inspectAdClean: () => ({
+    candidates: 0,
+    marked: 0,
+    containerMissing: false,
+    verdict: 'dead' as const,
+  }),
 }));
 vi.mock('../../../src/content/site-clean/home-clean', () => ({ applyHomeClean: () => undefined }));
 

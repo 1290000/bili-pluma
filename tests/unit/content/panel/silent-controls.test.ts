@@ -93,7 +93,12 @@ vi.mock('@platform/storage/diag-store', () => ({
 vi.mock('../../../../src/content/site-clean/ads', () => ({
   applyAdClean: () => undefined,
   // 诊断页渲染时会问一次广告命中数；本文件测的是静默失败提示，与它无关
-  inspectAdClean: () => ({ candidates: 0, marked: 0, containerMissing: false, verdict: 'dead' as const }),
+  inspectAdClean: () => ({
+    candidates: 0,
+    marked: 0,
+    containerMissing: false,
+    verdict: 'dead' as const,
+  }),
 }));
 vi.mock('../../../../src/content/site-clean/home-clean', () => ({
   applyHomeClean: () => undefined,
