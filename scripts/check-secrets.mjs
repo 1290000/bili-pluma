@@ -52,7 +52,7 @@
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 /** 哈希盐。公开无妨 —— 作用是防彩虹表，不是防解密 */
 const SALT = 'pluma-secrets-v1';
@@ -369,6 +369,73 @@ function scanFileText(file, text, findings) {
 // ─────────────────────────────────────────────
 
 const argv = process.argv.slice(2);
+
+/**
+ * ## 历史扫描的起点：增量水印（2026-11-19 加）
+ *
+ * ### 为什么不再每次全量
+ *
+ * 全量扫描每次重扫全部 400+ 提交 / 约 5100 个对象，实测 29 秒。
+ * 但其中 **91 处是静态的既有基线**：那些文件 2026-10-25 / 11-15 就入库了，
+ * 内容一个字都没变。每次发版重扫一遍，除了把这 91 处原样再报一次，
+ * 什么新信息都不产生 —— 纯粹的重复劳动。
+ *
+ * ### 增量为什么够用
+ *
+ * 只需扫「**上次验证过之后新增的提交**」。关键在于
+ * `git rev-list <w>..HEAD --objects` **能捞到「加了又删」的 blob** ——
+ * 专门验过，因为那正是本次事故的形态（`bg-ssr.json` 10-25 入库、10-27 移出）：
+ * ```
+ * $ git rev-list <watermark>..HEAD --objects | grep leak
+ * 911bcc9… leak.json        ← 加了又删，照样能捞到
+ * ```
+ * 实测 265 个对象 / **0.8 秒**（vs 全量 5095 个对象 / 29 秒）。
+ *
+ * ### 保守降级（宁可白跑，不能漏扫）
+ *
+ * 两种情况自动退回全量：
+ *  - **水印文件不存在**（首次、或 clone 后没扫过）
+ *  - **水印不是 HEAD 的祖先**（历史被 rewrite / force-push 过；
+ *    此时差集语义不可信）
+ *
+ * 水印放 `.git/pluma-secrets-watermark` 是**有意的**：本地状态，
+ * 不进版本控制、不随 clone 传播。每个 clone 各自打自己的水印，谁也不替别人担保。
+ * 想强制全量：加 `--full`。
+ */
+const WATERMARK_FILE = '.git/pluma-secrets-watermark';
+
+/**
+ * 读水印并校验是否仍可用。
+ *
+ * @returns {{ sha: string | null, reason: string }} sha 为 null 时 reason 说明为何退回全量
+ */
+function readWatermark() {
+  let sha = '';
+  try {
+    sha = readFileSync(WATERMARK_FILE, 'utf8').trim();
+  } catch {
+    return { sha: null, reason: '还没有水印（首次扫描或 clone 后未扫过）' };
+  }
+  if (sha === '') return { sha: null, reason: '水印文件是空的' };
+
+  // 水印必须是真实 commit 且是 HEAD 的祖先；不是祖先说明历史被 rewrite 过
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', sha, 'HEAD'], { stdio: 'ignore' });
+  } catch {
+    return {
+      sha: null,
+      reason: `水印 ${sha.slice(0, 7)} 不是 HEAD 的祖先（历史可能被 rewrite 过）`,
+    };
+  }
+  return { sha, reason: '' };
+}
+
+/** 增量起点。只在 `--history` 模式下读水印，其它模式不白跑 git */
+const WM =
+  argv.includes('--history') && !argv.includes('--full')
+    ? readWatermark()
+    : { sha: null, reason: '本次显式要求全量（--full）' };
+
 const MODE = argv.includes('--commit-msg')
   ? 'commit-msg'
   : argv.includes('--staged')
@@ -378,6 +445,12 @@ const MODE = argv.includes('--commit-msg')
       : argv.includes('--all')
         ? 'all'
         : 'tracked';
+
+/** 历史扫描范围：有水印走 `w..HEAD`，否则 `--all` */
+const HISTORY_RANGE = MODE === 'history' && WM.sha !== null ? [`${WM.sha}..HEAD`] : ['--all'];
+
+/** 本次是否为增量（供基线判定用） */
+const incremental = MODE === 'history' && WM.sha !== null;
 
 const findings = [];
 
@@ -478,7 +551,9 @@ if (MODE === 'commit-msg') {
    * 这是有意的取舍 —— 排查时真正要的是"哪个文件、多少处、现在还在不在"，
    * 精确到提交可以用 `git log --all -- <path>` 单独查。
    */
-  const lines = git(['rev-list', '--all', '--objects']).split('\n').filter(Boolean);
+  const lines = git(['rev-list', ...HISTORY_RANGE, '--objects'])
+    .split('\n')
+    .filter(Boolean);
 
   /** blob sha → 出现过的路径（同一个 blob 可能有多个路径/多个历史名字） */
   const blobs = new Map();
@@ -497,11 +572,9 @@ if (MODE === 'commit-msg') {
   }
 
   process.stderr.write(
-    '[secrets] 历史：' +
-      String(commitShas.length) +
-      ' 个提交 / ' +
-      String(blobs.size) +
-      ' 个唯一对象（按 blob 去重，不再逐提交重扫）…\n',
+    incremental
+      ? `[secrets] 历史：**增量**扫 ${WM.sha.slice(0, 7)}..HEAD（${String(commitShas.length)} 个提交 / ${String(blobs.size)} 个对象）…\n`
+      : `[secrets] 历史：**全量**扫（${String(commitShas.length)} 个提交 / ${String(blobs.size)} 个对象，原因：${WM.reason || '无可用水印'}）…\n`,
   );
 
   // ── 1. 提交信息（这个必须逐条，量小） ──
@@ -597,9 +670,19 @@ if (MODE === 'commit-msg') {
   const unexpected = [];
   for (const f of findings) {
     const path = f.file.replace(/^历史: /, '');
-    // tag 对象的"路径"是 tag 名（如 `v1.2.0`），它们装的是 tag 消息，
-    // 里面出现过主账号昵称 —— 属于同一批已接受的既有泄漏。
-    if (HISTORY_BASELINE.has(path) || /^v\d+\.\d+\.\d+$/.test(path)) {
+    /**
+     * ## 增量模式下**不认基线**（2026-11-19）
+     *
+     * 基线说的是"2026-11-19 之前那批文件已经入库、我们接受现状"。
+     * 增量扫的范围是**水印之后的新提交** —— 水印就是在"历史已知"的前提下打的，
+     * 所以这个范围里出现的任何命中**都是新的**。
+     *
+     * 反例（实测过，不得不防）：`poc/verify/bg-ssr.json` 在基线里。
+     * 如果有人在新提交里**又把它加回去**，按路径匹配就被判成"已知"而放过 ——
+     * 那恰恰是最该报的一次。
+     */
+    const inBaseline = HISTORY_BASELINE.has(path) || /^v\d+\.\d+\.\d+$/.test(path);
+    if (!incremental && inBaseline) {
       known++;
       continue;
     }
@@ -608,15 +691,20 @@ if (MODE === 'commit-msg') {
 
   if (unexpected.length === 0) {
     console.log(
-      '[secrets] ✅ 历史已扫完（' +
-        String(commitShas.length) +
-        ' 个提交 / ' +
-        String(blobs.size) +
-        ' 个唯一对象，按 blob 去重）：' +
-        String(known) +
-        ' 处命中全部落在**已记录的基线**里（见 security-notes.md）',
+      `[secrets] ✅ 历史已扫完（${incremental ? `增量 ${WM.sha.slice(0, 7)}..HEAD` : '全量'}，` +
+        `${String(commitShas.length)} 个提交 / ${String(blobs.size)} 个对象，按 blob 去重）：` +
+        `${String(known)} 处命中全部落在**已记录的基线**里（见 security-notes.md）`,
     );
     console.log('  基线不是"安全"，是"知道并接受"。要处置请读 docs/guides/security-notes.md');
+
+    // 扫到 HEAD 且无新命中 → 推进水印（全量退化时同样适用，HEAD 已在范围内）
+    try {
+      const head = git(['rev-parse', 'HEAD']).trim();
+      writeFileSync(WATERMARK_FILE, head + '\n');
+      console.log(`[secrets] 水印已更新 → ${head.slice(0, 7)}（下次只扫这之后的提交）`);
+    } catch {
+      /* 打不上水印不影响本次结论 */
+    }
     process.exit(0);
   }
 
