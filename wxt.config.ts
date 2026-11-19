@@ -32,9 +32,11 @@ export default defineConfig({
      * `1.0.0` = 首个稳定版：番剧 / 国创 / 电影已进发行包，六条验收与 PGC 三条
      * 都在 1.0.0 的构建上真机重跑过（`docs/guides/v1-acceptance-checklist.md`）。
      * `0.9.0` 曾表示「v1 范围已落地但仍在观察期」。
+     * `1.4.0` = MINOR：新增活动专区页与屏蔽 PCDN，番剧改用回调接管取流
+     * （ADR 0041）。权限与白名单**零变化**，所以不是 MAJOR。
      * 与白名单修订号（`ROUTES_REVISION`）**是两个号，不同步变化**。
      */
-    version: '1.3.0',
+    version: '1.4.0',
     minimum_chrome_version: '120',
     // ⚠️ 声明 action 是必须的，否则工具栏图标不绑定任何行为、点了毫无反应也不报错。
     // P2 起加了 default_popup：**有 popup 时 `chrome.action.onClicked` 不再触发**，

@@ -171,3 +171,4 @@ poc/probe/**/BrowserMetrics/
 poc/probe/**/*.pma
 poc/probe/**/*.dmp
 
+sync.json
