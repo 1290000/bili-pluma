@@ -628,7 +628,21 @@ async function checkHistorySecrets() {
  * 这份记录对维护者排查"用户装的到底是哪一版"仍然有用。
  * 代价（第三方失去"一眼看到 commit"的入口）写在 ADR 0018 的 2026-11-17 修订里。
  *
- * @param opts.extDir 要计算哈希的产物目录（就是 `.output/chrome-mv3`，即 zip 的内容）
+ * ## ⚠️ 为什么 `extDir` 传 staging，而不是 `.output/chrome-mv3`（2026-11-19 修）
+ *
+ * 1.4.0 的包实测是 28 个 zip 条目，这张表只有 27 行 —— 少的正是 `安装说明.txt`。
+ * 原因不在哈希，在**执行顺序**：说明文件是在 `cp` 到 staging **之后**才写进去的，
+ * `.output/chrome-mv3` 里从来没有它。那时这里扫的是 `BUILD_DIR`，于是下面那句
+ * 「针对 zip 内相对路径（真正进包的字节）」是假的：第三方拿这张表逐条核 zip，
+ * 会得出「有一个文件不在表内」，看起来像包被篡改。
+ *
+ * 现在扫 staging —— 它就是要被压进 zip 的那棵目录树（`.output` 的内容 + 安装说明），
+ * 表和 zip 条目因此天然一一对应。调用点还有一条断言把这件事钉死
+ * （表行数必须等于 `zipDir()` 返回的条目数），别再把它改回去吧。
+ *
+ * @param opts.extDir 要计算哈希的目录 —— **传 staging，不要传 `.output/chrome-mv3`**。
+ *   安装说明是在复制到 staging 之后才写的，`.output/` 里没有它；只扫 `.output/`
+ *   必然漏掉一个真正进包的文件，而漏掉的那个恰恰是用户第一眼会打开的那个。
  * @returns {Promise<string>} Markdown 文本
  */
 async function buildProvenance({ version, commit, extDir }) {
@@ -649,8 +663,9 @@ async function buildProvenance({ version, commit, extDir }) {
   return [
     '# BUILD PROVENANCE',
     '',
-    '> 由 `scripts/package.mjs` 生成。逐文件哈希针对 **zip 内相对路径**（真正进包的字节）；',
-    '> `BUILD.md` 自身与 zip 容器的时间戳不在表内。',
+    '> 由 `scripts/package.mjs` 生成。逐文件哈希覆盖 **zip 内的全部条目**（含 `安装说明.txt`），',
+    '> 表里的相对路径与 zip 内路径逐字相同；下方「zip 条目数」等于表行数，也等于 zip 的中央目录条目数。',
+    '> 不在表内的只有两样，都不是 zip 条目：`BUILD.md` 自身，以及 zip 容器的时间戳。',
     '',
     `- 版本：${version}`,
     `- 提交：${commit}`,
@@ -659,7 +674,7 @@ async function buildProvenance({ version, commit, extDir }) {
     `- Node：${process.version}`,
     `- wxt：${wxtVersion}`,
     `- pnpm-lock.yaml sha256：${lockHash}`,
-    `- 产物文件数：${String(files.length)}`,
+    `- zip 条目数：${String(files.length)}`,
     '',
     '## 产物逐文件 sha256',
     '',
@@ -778,15 +793,40 @@ async function main() {
     process.exit(1);
   }
   await writeFile(join(staging, '安装说明.txt'), readmeText, 'utf8');
-  await zipDir(staging, join(DIST_DIR, lightName), TOP_DIR);
-  await rm(staging, { recursive: true, force: true });
+  const zipNames = await zipDir(staging, join(DIST_DIR, lightName), TOP_DIR);
 
   // ── 6. 构建凭证：只写 dist/，不进 zip、不上传（见文件头） ──
-  await writeFile(
-    join(DIST_DIR, 'BUILD.md'),
-    await buildProvenance({ version, commit, extDir: BUILD_DIR }),
-    'utf8',
-  );
+  //
+  // ⚠️ 顺序是硬要求，不是风格问题（2026-11-19 修）：必须在 `zipDir` 之后、
+  // `rm(staging)` 之前，且**扫 staging**。
+  // 原来的顺序是「压完 zip → 删 staging → 扫 `.output`」，于是 1.4.0 的包
+  // 有 28 个条目、表里只有 27 行，漏的就是复制到 staging 之后才写的安装说明。
+  // 下面那条断言是给未来的自己留的绊线：少一个就红，别调回去。
+  const provenance = await buildProvenance({ version, commit, extDir: staging });
+  const provenanceRows = provenance.split('\n').filter((l) => /^\| [0-9a-f]{64} \| /.test(l));
+
+  // 表行数 = zip 中央目录条目数。相等才说明「表覆盖了真正进包的每一个字节」。
+  // 这条只有真的能拦住问题才有意义 —— 所以它比对的是 `zipDir()` 的返回值
+  // （从 zip 里解析出来的条目名），不是 staging 的文件数：后者两边都改错时能一起错。
+  if (provenanceRows.length !== zipNames.length) {
+    fail(
+      'BUILD.md 的哈希表与 zip 条目数不一致',
+      `表内 ${String(provenanceRows.length)} 行，zip 里 ${String(zipNames.length)} 个条目。\n` +
+        '    表必须覆盖 zip 内的**每一个**条目，否则第三方逐条核对时会以为包被篡改。\n' +
+        '    `buildProvenance()` 的 extDir 必须传 staging（含安装说明），且在 zipDir 之后、rm(staging) 之前调用。\n' +
+        `    表里有、zip 里没有：${provenanceRows.length > zipNames.length ? '有（表多了）' : '无'}\n` +
+        `    zip 里有、表里没有：${
+          zipNames.filter((n) => !provenanceRows.some((r) => r.endsWith(`| ${n} |`))).join('、') ||
+          '无'
+        }`,
+    );
+    console.error(`\n[package] ❌ ${String(problems.length)} 项自检未通过\n`);
+    for (const p of problems) console.error(`  ${p.what}\n    ${p.why}\n`);
+    process.exit(1);
+  }
+
+  await rm(staging, { recursive: true, force: true });
+  await writeFile(join(DIST_DIR, 'BUILD.md'), provenance, 'utf8');
 
   // ── 7. Release 说明 ──
   await writeFile(join(DIST_DIR, 'release-notes.md'), await releaseNotes(version), 'utf8');
